@@ -1,0 +1,21 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MassiveSlicer.App.Views.StatusBarView"
+             x:CompileBindings="False">
+
+    <Border Background="{DynamicResource Bg1}"
+            BorderBrush="{DynamicResource Border1}"
+            BorderThickness="0,1,0,0">
+        <Grid Margin="8,0">
+            <TextBlock Text="{Binding FileStatus}"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Left"
+                       Classes="LabelMuted"/>
+            <TextBlock Text="{Binding OperationFeedback}"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Right"
+                       Classes="LabelMuted"/>
+        </Grid>
+    </Border>
+
+</UserControl>

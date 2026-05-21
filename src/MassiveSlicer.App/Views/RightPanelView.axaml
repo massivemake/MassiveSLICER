@@ -1,0 +1,359 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MassiveSlicer.App.Views.RightPanelView"
+             x:CompileBindings="False">
+
+    <Border Background="{DynamicResource Bg2}"
+            BorderBrush="{DynamicResource Border1}"
+            BorderThickness="1,0,0,0">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="36"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- Tab bar -->
+            <Border Grid.Row="0"
+                    Background="{DynamicResource Bg3}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1">
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="ADDITIVE"    Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
+                    <Button Content="SUBTRACTIVE" Classes="TabButton" Command="{Binding ShowSubtractiveCommand}"/>
+                    <Button Content="ROBOT"       Classes="TabButton" Command="{Binding ShowSettingsCommand}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ADDITIVE tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="{DynamicResource Bg2}"
+                          IsVisible="{Binding IsAdditiveTab}">
+                <StackPanel Margin="0,8">
+
+                    <TextBlock Text="SLICING METHOD" Classes="SectionHeader"/>
+
+                    <Border Margin="8,0,8,8" Background="{DynamicResource Bg3}" CornerRadius="4" Padding="2">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="PLANAR"   Classes="ToolbarButton" Padding="10,4"/>
+                            <Button Content="ANGLED"   Classes="ToolbarButton" Padding="10,4"/>
+                            <Button Content="GEODESIC" Classes="ToolbarButton" Padding="10,4"/>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    <TextBlock Text="GEOMETRY" Classes="SectionHeader"/>
+
+                    <Grid Margin="8,0,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerHeight}"/>
+                    </Grid>
+
+                    <Grid Margin="8,4,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Bead width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BeadWidth}"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    <TextBlock Text="MOTION" Classes="SectionHeader"/>
+
+                    <Grid Margin="8,0,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Feed rate (m/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.FeedRate}"/>
+                    </Grid>
+
+                    <Grid Margin="8,4,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Acceleration (%)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.Acceleration}"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    <TextBlock Text="KUKA KRC4" Classes="SectionHeader"/>
+
+                    <Grid Margin="8,0,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
+                    </Grid>
+
+                    <Grid Margin="8,4,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,12"/>
+
+                    <Button Content="Generate Slice"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="8,0,8,4"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"
+                            IsEnabled="{Binding !$parent[Window].DataContext.Viewport.IsSlicing}"/>
+                    <Button Content="Export KRL"
+                            Classes="ToolbarButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="8,0,8,0"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- SUBTRACTIVE tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="{DynamicResource Bg2}"
+                          IsVisible="{Binding IsSubtractiveTab}">
+                <StackPanel Margin="0,8">
+                    <TextBlock Text="SUBTRACTIVE" Classes="SectionHeader"/>
+                    <TextBlock Text="Coming soon." Classes="LabelMuted" Margin="12,4"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ROBOT tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="{DynamicResource Bg2}"
+                          IsVisible="{Binding IsSettingsTab}">
+                <StackPanel Margin="0,8">
+
+                    <TextBlock Text="TOOL" Classes="SectionHeader"/>
+                    <ComboBox Margin="8,0,8,8"
+                              ItemsSource="{Binding Settings.Robot.ToolNames}"
+                              SelectedIndex="{Binding Settings.Robot.SelectedToolIndex, Mode=TwoWay}"
+                              HorizontalAlignment="Stretch"/>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    <TextBlock Text="JOINT ANGLES" Classes="SectionHeader"/>
+
+                    <!-- A1 -->
+                    <Grid Margin="8,4,8,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A1" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA1}"
+                                   Maximum="{Binding Settings.Robot.MaxA1}"
+                                   Value="{Binding Settings.Robot.A1, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A1, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <!-- A2 -->
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A2" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA2}"
+                                   Maximum="{Binding Settings.Robot.MaxA2}"
+                                   Value="{Binding Settings.Robot.A2, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A2, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <!-- A3 -->
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A3" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA3}"
+                                   Maximum="{Binding Settings.Robot.MaxA3}"
+                                   Value="{Binding Settings.Robot.A3, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A3, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <!-- A4 -->
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A4" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA4}"
+                                   Maximum="{Binding Settings.Robot.MaxA4}"
+                                   Value="{Binding Settings.Robot.A4, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A4, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <!-- A5 -->
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A5" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA5}"
+                                   Maximum="{Binding Settings.Robot.MaxA5}"
+                                   Value="{Binding Settings.Robot.A5, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A5, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <!-- A6 -->
+                    <Grid Margin="8,2,8,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="56"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A6" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <Slider    Grid.Column="1"
+                                   Minimum="{Binding Settings.Robot.MinA6}"
+                                   Maximum="{Binding Settings.Robot.MaxA6}"
+                                   Value="{Binding Settings.Robot.A6, Mode=TwoWay}"
+                                   VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                   Text="{Binding Settings.Robot.A6, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                   TextAlignment="Right" Padding="4,2"
+                                   VerticalContentAlignment="Center"
+                                   KeyDown="JointAngle_KeyDown"/>
+                    </Grid>
+
+                    <Button Content="GO TO BED CENTER"
+                            Command="{Binding Settings.Robot.GoToBedCenterCommand}"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="8,4,8,8"/>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                    <!-- Flange position readout -->
+                    <TextBlock Text="FLANGE POSITION (ROBROOT)" Classes="SectionHeader"/>
+                    <Grid Margin="8,4,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.FlangeX, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.FlangeY, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.FlangeZ, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                    <!-- Solver FK readout -->
+                    <TextBlock Text="SOLVER FK (ROBROOT)" Classes="SectionHeader"/>
+                    <Grid Margin="8,4,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.SolverFkX, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.SolverFkY, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.SolverFkZ, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                    <!-- TCP world position readout -->
+                    <TextBlock Text="TCP WORLD POSITION" Classes="SectionHeader"/>
+                    <Grid Margin="8,4,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpX, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpY, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpZ, StringFormat={}{0:F1} mm}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpA, StringFormat={}{0:F1}°}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,2">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="B" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpB, StringFormat={}{0:F1}°}" Classes="LabelMuted"/>
+                    </Grid>
+                    <Grid Margin="8,2,8,8">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="C" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpC, StringFormat={}{0:F1}°}" Classes="LabelMuted"/>
+                    </Grid>
+
+                </StackPanel>
+            </ScrollViewer>
+
+        </Grid>
+    </Border>
+
+</UserControl>

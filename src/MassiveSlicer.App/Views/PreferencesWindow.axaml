@@ -1,0 +1,193 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:conv="using:MassiveSlicer.Converters"
+        x:Class="MassiveSlicer.App.Views.PreferencesWindow"
+        x:CompileBindings="False"
+        Title="Preferences"
+        Width="620" Height="480"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg0}">
+
+    <Window.Resources>
+        <conv:EqualityConverter x:Key="EqualityConverter"/>
+    </Window.Resources>
+
+    <Window.Styles>
+        <Style Selector="Button.NavBtn">
+            <Setter Property="Background"                 Value="Transparent"/>
+            <Setter Property="BorderThickness"            Value="2,0,0,0"/>
+            <Setter Property="BorderBrush"                Value="Transparent"/>
+            <Setter Property="Foreground"                 Value="{DynamicResource TextSecondary}"/>
+            <Setter Property="FontSize"                   Value="12"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding"                    Value="14,9"/>
+        </Style>
+        <Style Selector="Button.NavBtn:pointerover">
+            <Setter Property="Background" Value="{DynamicResource Bg4}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+        <Style Selector="Button.NavBtn.Active">
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+            <Setter Property="Foreground"  Value="{DynamicResource Accent}"/>
+            <Setter Property="Background"  Value="{DynamicResource Bg3}"/>
+        </Style>
+    </Window.Styles>
+
+    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="44"/>
+            </Grid.RowDefinitions>
+
+            <!-- Title bar (draggable) -->
+            <Border Grid.Row="0" x:Name="TitleBar"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1"
+                    Cursor="SizeAll">
+                <Grid Margin="14,0">
+                    <TextBlock Text="Preferences"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Button Content="✕"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Classes="ToolbarButton"
+                            Padding="6,2"
+                            Click="OnClose"/>
+                </Grid>
+            </Border>
+
+            <!-- Body -->
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="160"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Nav -->
+                <Border Grid.Column="0"
+                        Background="{DynamicResource Bg1}"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="0,0,1,0">
+                    <StackPanel Margin="0,8">
+                        <Button x:Name="BtnNavigation"  Content="⊙  Navigation"  Classes="NavBtn Active" Click="NavNavigation_Click"/>
+                        <Button x:Name="BtnPerformance" Content="▫  Performance" Classes="NavBtn"        Click="NavPerformance_Click"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Content -->
+                <ScrollViewer Grid.Column="1"
+                              VerticalScrollBarVisibility="Auto"
+                              Background="{DynamicResource Bg2}"
+                              Padding="24,20,24,20">
+                    <StackPanel>
+
+                        <!-- NAVIGATION section -->
+                        <StackPanel x:Name="SectionNavigation">
+                            <TextBlock Text="NAVIGATION SETTINGS"
+                                       Classes="SectionHeader"
+                                       Margin="0,0,0,12"/>
+                            <CheckBox Content="Auto Depth  —  orbit pivot follows geometry under cursor"
+                                      IsChecked="{Binding AutoDepth}"
+                                      Margin="0,0,0,10"/>
+                            <CheckBox Content="Orbit around selection"
+                                      IsChecked="{Binding OrbitAroundSelection}"
+                                      Margin="0,0,0,10"/>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,6,0,16"/>
+
+                            <TextBlock Text="NAVIGATION PRESET"
+                                       Classes="SectionHeader"
+                                       Margin="0,0,0,12"/>
+
+                            <ItemsControl x:Name="PresetList" ItemsSource="{Binding NavigationPresets}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Classes="NavPresetBtn"
+                                                HorizontalAlignment="Stretch"
+                                                HorizontalContentAlignment="Stretch"
+                                                Padding="0"
+                                                Margin="0,0,0,2"
+                                                Command="{Binding DataContext.SelectPresetCommand,
+                                                          RelativeSource={RelativeSource AncestorType={x:Type ItemsControl}}}"
+                                                CommandParameter="{Binding Id}">
+                                            <Panel>
+                                                <!-- Active state: green rounded border + lighter bg -->
+                                                <Border BorderBrush="{DynamicResource Accent}"
+                                                        Background="{DynamicResource Bg4}"
+                                                        BorderThickness="1"
+                                                        CornerRadius="4"
+                                                        IsHitTestVisible="False">
+                                                    <Border.IsVisible>
+                                                        <MultiBinding Converter="{StaticResource EqualityConverter}">
+                                                            <Binding Path="Id"/>
+                                                            <Binding Path="DataContext.ActivePreset"
+                                                                     RelativeSource="{RelativeSource AncestorType={x:Type ItemsControl}}"/>
+                                                        </MultiBinding>
+                                                    </Border.IsVisible>
+                                                </Border>
+                                                <!-- Content -->
+                                                <StackPanel Orientation="Horizontal"
+                                                            VerticalAlignment="Center"
+                                                            Margin="10,7">
+                                                    <TextBlock Text="{Binding Name}"
+                                                               Foreground="{DynamicResource TextPrimary}"
+                                                               FontSize="12"
+                                                               MinWidth="110"
+                                                               VerticalAlignment="Center"/>
+                                                    <TextBlock Text="Orbit: " Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding OrbitBinding}" Classes="LabelMuted" FontSize="11" Margin="0,0,10,0" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="Pan: "   Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="{Binding PanBinding}"   Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
+                                                </StackPanel>
+                                            </Panel>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- PERFORMANCE section -->
+                        <StackPanel x:Name="SectionPerformance" IsVisible="False">
+                            <TextBlock Text="RENDERING" Classes="SectionHeader" Margin="0,0,0,12"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Anti-aliasing (MSAA)" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
+                                    <TextBlock Text="Requires restart to take effect." Classes="LabelMuted" FontSize="11" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" IsChecked="{Binding AntiAliasing}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- Footer -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,1,0,0">
+                <Button Content="Done"
+                        Classes="PrimaryButton"
+                        Padding="16,6"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Margin="0,0,16,0"
+                        Click="OnDone"/>
+            </Border>
+        </Grid>
+    </Border>
+
+</Window>

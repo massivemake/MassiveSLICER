@@ -1,0 +1,64 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MassiveSlicer.App.Views.ToolbarView"
+             x:CompileBindings="False">
+
+    <Border Background="{DynamicResource Bg1}"
+            BorderBrush="{DynamicResource Border1}"
+            BorderThickness="0,0,0,1">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ── Left: brand + file menu ──────────────────────────────────── -->
+            <StackPanel Grid.Column="0" Orientation="Horizontal"
+                        VerticalAlignment="Center" Margin="12,0">
+                <TextBlock Text="MASSIVE"
+                           FontWeight="Bold" FontSize="14"
+                           Foreground="{DynamicResource Accent}"
+                           VerticalAlignment="Center"/>
+                <TextBlock Text="SLICER"
+                           FontWeight="Light" FontSize="14"
+                           Foreground="{DynamicResource TextSecondary}"
+                           VerticalAlignment="Center"
+                           Margin="2,0,16,0"/>
+
+                <Button Content="Open Model"   Classes="ToolbarButton" Command="{Binding OpenModelCommand}"       Margin="0,0,4,0"/>
+                <Button Content="Import KRL"   Classes="ToolbarButton" Command="{Binding ImportKrlCommand}"       Margin="0,0,4,0"/>
+<Button Content="Preferences"  Classes="ToolbarButton" Command="{Binding OpenPreferencesCommand}"/>
+            </StackPanel>
+
+            <!-- ── Centre: mode toggle ──────────────────────────────────────── -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+
+                <Border Background="{DynamicResource Bg3}" CornerRadius="4" Padding="2"
+                        VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="PREPARE" Classes="ToolbarButton" Command="{Binding SetPrepareModeCommand}" Padding="10,4"/>
+                        <Button Content="PREVIEW" Classes="ToolbarButton" Command="{Binding SetPreviewModeCommand}" Padding="10,4"/>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+
+            <!-- ── Right: camera presets + units + toggles ───────────────────── -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center" Margin="0,0,12,0">
+
+                <Button Content="Frame All" Classes="ToolbarButton" Command="{Binding FrameAllCommand}"      Margin="0,0,4,0"/>
+                <Button Content="Top"       Classes="ToolbarButton" Command="{Binding TopViewCommand}"       Margin="0,0,4,0"/>
+                <Button Content="Front"     Classes="ToolbarButton" Command="{Binding FrontViewCommand}"     Margin="0,0,4,0"/>
+                <Button Content="Iso"       Classes="ToolbarButton" Command="{Binding IsometricViewCommand}" Margin="0,0,12,0"/>
+
+                <Button Content="Sync Robot" Classes="ToolbarButton" Command="{Binding SyncRobotCommand}"        Margin="0,0,8,0"/>
+                <Button Content="&gt;_"      Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}"    ToolTip.Tip="Toggle Console"         Margin="0,0,4,0"/>
+                <Button Content="&#x2630;"   Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+
+</UserControl>

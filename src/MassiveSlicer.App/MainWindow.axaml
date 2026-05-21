@@ -1,0 +1,77 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+        xmlns:views="clr-namespace:MassiveSlicer.App.Views"
+        x:Class="MassiveSlicer.App.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Title="MassiveSlicer"
+        Height="900" Width="1440"
+        MinHeight="600" MinWidth="900"
+        Background="{DynamicResource Bg0}">
+
+    <Window.DataContext>
+        <vm:MainWindowViewModel/>
+    </Window.DataContext>
+
+    <!--
+        Root layout: three rows.
+          Row 0 — Toolbar (48 px, fixed)
+          Row 1 — Main work area (grows to fill)
+          Row 2 — Status bar (24 px, fixed)
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="48"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="24"/>
+        </Grid.RowDefinitions>
+
+        <!-- ── Toolbar ──────────────────────────────────────────────────── -->
+        <views:ToolbarView Grid.Row="0"
+                           DataContext="{Binding Toolbar}"/>
+
+        <!-- ── Main area: left panel | viewport | right panel ───────────── -->
+        <Grid x:Name="WorkAreaGrid" Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" MinWidth="0"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="*" MinWidth="200"/>
+                <ColumnDefinition Width="4"/>
+                <ColumnDefinition Width="300" MinWidth="0"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Left panel -->
+            <views:LeftPanelView Grid.Column="0"
+                                 DataContext="{Binding LeftPanel}"/>
+
+            <GridSplitter Grid.Column="1"
+                          Background="{DynamicResource Border0}"/>
+
+            <!-- Viewport -->
+            <views:ViewportView Grid.Column="2"
+                                DataContext="{Binding Viewport}"/>
+
+            <GridSplitter Grid.Column="3"
+                          Background="{DynamicResource Border0}"/>
+
+            <!-- Right panel — visibility toggled from code-behind -->
+            <views:RightPanelView x:Name="RightPanel"
+                                  Grid.Column="4"
+                                  DataContext="{Binding RightPanel}"/>
+        </Grid>
+
+        <!-- ── Status bar ────────────────────────────────────────────────── -->
+        <views:StatusBarView Grid.Row="2"
+                             DataContext="{Binding StatusBar}"/>
+
+        <!-- ── Command console (floating overlay, anchored bottom-left) ──── -->
+        <views:ConsoleView x:Name="ConsoleOverlay"
+                           Grid.Row="1"
+                           DataContext="{Binding Console}"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Bottom"
+                           Margin="8,0,0,8"
+                           ZIndex="10"/>
+    </Grid>
+
+</Window>

@@ -1,0 +1,68 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:MassiveSlicer.App.Views"
+             x:Class="MassiveSlicer.App.Views.ViewportView">
+
+    <Grid Background="#07090f">
+
+        <!-- OpenGL surface (fills the grid) -->
+        <local:GlHostControl x:Name="GlCanvas"/>
+
+        <!-- Selection toolbar — bottom-left overlay -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="4">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="V" Classes="ToolbarButton" ToolTip.Tip="Vertex (1)" Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="E" Classes="ToolbarButton" ToolTip.Tip="Edge (2)"   Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="F" Classes="ToolbarButton" ToolTip.Tip="Face (3)"   Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="O" Classes="ToolbarButton" ToolTip.Tip="Object (4)" Padding="6,4" Margin="0,0,8,0"/>
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="0,4"/>
+                <Button Content="Q" Classes="ToolbarButton" ToolTip.Tip="Select (Q)" Padding="6,4" Margin="4,0,2,0"/>
+                <Button x:Name="BtnMove"   Content="G" Classes="ToolbarButton" ToolTip.Tip="Move (G)"   Padding="6,4" Margin="0,0,2,0" Click="OnModeMove"/>
+                <Button x:Name="BtnRotate" Content="R" Classes="ToolbarButton" ToolTip.Tip="Rotate (R)" Padding="6,4" Margin="0,0,2,0" Click="OnModeRotate"/>
+                <Button x:Name="BtnScale"  Content="S" Classes="ToolbarButton" ToolTip.Tip="Scale (S)"  Padding="6,4"                  Click="OnModeScale"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Focus overlay — top-left, visible only when an object is selected -->
+        <Border x:Name="FocusOverlay"
+                IsVisible="False"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="4">
+            <Button Content="Focus"
+                    Classes="ToolbarButton"
+                    Padding="10,4"
+                    Click="OnFocusClick"
+                    ToolTip.Tip="Focus camera on selected object (F)"/>
+        </Border>
+
+        <!-- Coordinate readout — bottom-right overlay -->
+        <Border HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,4">
+            <TextBlock x:Name="CoordReadout"
+                       Text="X: 0.0   Y: 0.0   Z: 0.0"
+                       Classes="Readout"
+                       FontSize="11"/>
+        </Border>
+
+    </Grid>
+
+</UserControl>

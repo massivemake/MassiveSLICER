@@ -1,0 +1,80 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:av="using:Avalonia.Styling"
+             x:Class="MassiveSlicer.App.App"
+             RequestedThemeVariant="Dark">
+
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="avares://MassiveSlicer.App/Resources/Themes/Obsidian.axaml"/>
+            </ResourceDictionary.MergedDictionaries>
+
+            <!-- Override SimpleTheme's Dark variant keys with the Obsidian palette.   -->
+            <!-- Must be in ThemeDictionaries to beat SimpleTheme's own Dark entries.  -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="{x:Static av:ThemeVariant.Dark}">
+
+                    <!-- Background / window surface -->
+                    <Color x:Key="ThemeBackgroundColor">#0e1119</Color>
+                    <SolidColorBrush x:Key="ThemeBackgroundBrush" Color="#0e1119"/>
+
+                    <!-- Primary text -->
+                    <Color x:Key="ThemeForegroundColor">#e8eaf0</Color>
+                    <SolidColorBrush x:Key="ThemeForegroundBrush" Color="#e8eaf0"/>
+                    <Color x:Key="ThemeForegroundLowColor">#8890a8</Color>
+                    <SolidColorBrush x:Key="ThemeForegroundLowBrush" Color="#8890a8"/>
+
+                    <!-- Accent — lime green -->
+                    <Color x:Key="ThemeAccentColor">#76b82a</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush" Color="#76b82a"/>
+
+                    <!-- Borders -->
+                    <Color x:Key="ThemeBorderHighColor">#2a2f42</Color>
+                    <SolidColorBrush x:Key="ThemeBorderHighBrush" Color="#2a2f42"/>
+                    <Color x:Key="ThemeBorderMidColor">#1e2233</Color>
+                    <SolidColorBrush x:Key="ThemeBorderMidBrush" Color="#1e2233"/>
+                    <Color x:Key="ThemeBorderLowColor">#0a0c14</Color>
+                    <SolidColorBrush x:Key="ThemeBorderLowBrush" Color="#0a0c14"/>
+
+                    <!-- Control surfaces (darkest → lightest) -->
+                    <Color x:Key="ThemeControlLowColor">#131720</Color>
+                    <SolidColorBrush x:Key="ThemeControlLowBrush" Color="#131720"/>
+                    <Color x:Key="ThemeControlMidColor">#1a1f2c</Color>
+                    <SolidColorBrush x:Key="ThemeControlMidBrush" Color="#1a1f2c"/>
+                    <Color x:Key="ThemeControlMidHighColor">#1a1f2c</Color>
+                    <SolidColorBrush x:Key="ThemeControlMidHighBrush" Color="#1a1f2c"/>
+                    <Color x:Key="ThemeControlHighColor">#21273a</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighBrush" Color="#21273a"/>
+                    <Color x:Key="ThemeControlVeryHighColor">#21273a</Color>
+                    <SolidColorBrush x:Key="ThemeControlVeryHighBrush" Color="#21273a"/>
+                    <SolidColorBrush x:Key="ThemeControlTransparentBrush" Color="Transparent"/>
+
+                    <!-- Highlights (selection, focus, active states) -->
+                    <Color x:Key="ThemeControlHighlightHighColor">#90d436</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightHighBrush" Color="#90d436"/>
+                    <Color x:Key="ThemeControlHighlightMidColor">#76b82a</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#76b82a"/>
+                    <Color x:Key="ThemeControlHighlightLowColor">#1e3800</Color>
+                    <SolidColorBrush x:Key="ThemeControlHighlightLowBrush" Color="#1e3800"/>
+
+                    <!-- Disabled state -->
+                    <x:Double x:Key="ThemeDisabledOpacity">0.38</x:Double>
+
+                    <!-- System selection/highlight — overrides platform blue used by CheckBox/ComboBox -->
+                    <Color x:Key="HighlightColor">#76b82a</Color>
+                    <SolidColorBrush x:Key="HighlightBrush" Color="#76b82a"/>
+                    <Color x:Key="HighlightForegroundColor">#e8eaf0</Color>
+                    <SolidColorBrush x:Key="HighlightForegroundBrush" Color="#e8eaf0"/>
+
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <SimpleTheme/>
+        <StyleInclude Source="avares://MassiveSlicer.App/Resources/Styles/BaseStyles.axaml"/>
+    </Application.Styles>
+
+</Application>

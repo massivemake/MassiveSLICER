@@ -1,0 +1,66 @@
+{
+  "name": "LFAM 3",
+  "robot": {
+    "modelPath": "assets/cells/LFAM3/LFAM3Robot.glb",
+    "worldPosition": { "x": 0, "y": 0, "z": 1000 },
+    "homePosition": [ 0, -90, 90, 0, 15, 0 ],
+    "joints": [
+      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg":  -60, "maxDeg":   60 },
+      { "axis": "X", "krlSign": -1, "krlOffset":  90, "minDeg": -120, "maxDeg":   70 },
+      { "axis": "X", "krlSign": -1, "krlOffset": -90, "minDeg": -120, "maxDeg":  168 },
+      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg": -350, "maxDeg":  350 },
+      { "axis": "X", "krlSign": -1, "krlOffset":   0, "minDeg": -125, "maxDeg":  125 },
+      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg": -350, "maxDeg":  350 }
+    ],
+    "flangeDisplayRoll": -15
+  },
+  "bed": {
+    "modelPath": "assets/cells/LFAM3/LFAM3Bed.stl",
+    "origin": { "x": 2133.45, "y": -55.28, "z": 910.7 },
+    "gridOrigin": { "x": 1233.45, "y": -955.28, "z": 910.7 },
+    "width": 1800,
+    "depth": 1800,
+    "baseData": { "x": 2133.45, "y": -55.28, "z": -89.30 }
+  },
+  "boosterFrame": {
+    "modelPath": "assets/cells/LFAM3/booster_frame.stl",
+    "worldPosition": { "x": 0, "y": 0, "z": 0 }
+  },
+  "tools": [
+    {
+      "name": "HV Extruder",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/hv_extruder.stl",
+      "tcpX":  694.73,
+      "tcpY": 18.95,
+      "tcpZ":  314.44,
+      "tcpA":  15,
+      "tcpB":  0,
+      "tcpC":  0,
+      "toolFrameRoll": -90
+    },
+    {
+      "name": "Scanner",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/scanner.glb",
+      "tcpX":  0,
+      "tcpY":  0,
+      "tcpZ":  0,
+      "tcpA":  0,
+      "tcpB":  0,
+      "tcpC":  0,
+      "toolFrameRoll": 0
+    },
+    {
+      "name": "Spindle",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/spindle.glb",
+      "tcpX":  0,
+      "tcpY":  0,
+      "tcpZ":  0,
+      "tcpA":  0,
+      "tcpB":  0,
+      "tcpC":  0,
+      "toolFrameRoll": 0
+    }
+  ],
+  "bridgeIp": "192.168.0.153",
+  "bridgePort": 7000
+}

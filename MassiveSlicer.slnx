@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MassiveSlicer.App/MassiveSlicer.App.csproj" />
+    <Project Path="src/MassiveSlicer.Core/MassiveSlicer.Core.csproj" />
+    <Project Path="src/MassiveSlicer.Tests/MassiveSlicer.Tests.csproj" />
+    <Project Path="src/MassiveSlicer.Viewport/MassiveSlicer.Viewport.csproj" />
+  </Folder>
+</Solution>
