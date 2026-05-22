@@ -1,3 +1,4 @@
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.Rendering;
 using MassiveSlicer.Viewport.Scene;
@@ -20,7 +21,14 @@ public sealed class SceneRenderer : IDisposable
     private BedBoundaryRenderer? _bedBoundary;
     private GizmoRenderer?       _gizmo;
     private BackdropRenderer?    _backdrop;
-    private ToolpathRenderer?    _toolpathRenderer;
+
+    private readonly struct ToolpathEntry
+    {
+        public ToolpathRenderer             Renderer { get; init; }
+        public Toolpath                     Data     { get; init; }
+        public System.Numerics.Vector3      Origin   { get; init; }
+    }
+    private readonly Dictionary<SceneNode, ToolpathEntry> _toolpaths = [];
     private bool _disposed;
     private bool _initialised;
 
@@ -143,6 +151,9 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Currently selected node (direct child of <see cref="SceneRoot"/>), or <c>null</c>.</summary>
     public SceneNode? SelectedNode { get; private set; }
 
+    /// <summary>Returns <c>true</c> if <paramref name="node"/> is a registered toolpath node.</summary>
+    public bool IsToolpathNode(SceneNode node) => _toolpaths.ContainsKey(node);
+
     /// <summary>
     /// The gizmo axis currently being dragged, or <see cref="GizmoAxis.None"/>.
     /// Set by the viewport when a drag begins and cleared when it ends.
@@ -171,13 +182,29 @@ public sealed class SceneRenderer : IDisposable
     public float BackdropBlur { get; set; } = 2.5f;
 
     /// <summary>
-    /// Replaces the current toolpath overlay. Pass <c>null</c> to clear.
+    /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
     /// </summary>
-    public void SetToolpath(MassiveSlicer.Core.Models.Toolpath? toolpath)
+    public void AddToolpath(Toolpath toolpath, SceneNode node)
     {
-        _toolpathRenderer?.Dispose();
-        _toolpathRenderer = toolpath is not null ? new ToolpathRenderer(toolpath) : null;
+        var centroid = ComputeToolpathCentroid(toolpath);
+        var renderer = new ToolpathRenderer(toolpath, centroid);
+        node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
+        _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
+        SceneRoot.AddChild(node);
+    }
+
+    /// <summary>
+    /// Disposes the toolpath renderer for <paramref name="node"/> if one is registered.
+    /// Call before removing the node from the scene. Safe to call on non-toolpath nodes.
+    /// </summary>
+    public void RemoveToolpathIfExists(SceneNode node)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+        {
+            entry.Renderer.Dispose();
+            _toolpaths.Remove(node);
+        }
     }
 
     /// <summary>
@@ -315,8 +342,13 @@ public sealed class SceneRenderer : IDisposable
         }
         GL.Disable(EnableCap.PolygonOffsetFill);
 
-        // Draw toolpath after meshes so lines are never occluded by mesh depth writes.
-        _toolpathRenderer?.Draw(mvp);
+        // Draw toolpaths after meshes so the polygon-offset pass has written depth first.
+        foreach (var (tpNode, entry) in _toolpaths)
+        {
+            if (!tpNode.Visible) continue;
+            var toolpathMvp = tpNode.LocalTransform * mvp;
+            entry.Renderer.Draw(toolpathMvp, selected: tpNode == SelectedNode);
+        }
 
         // ── Selection mask pass ───────────────────────────────────────────────
         // Render the selected object as flat white into the mask FBO. The mask FBO
@@ -451,6 +483,71 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>
+    /// Tests whether screen position (<paramref name="mx"/>, <paramref name="my"/>) is
+    /// within 8 px of any extrude segment in the toolpath. Returns the toolpath node, or
+    /// <c>null</c> if no hit (or toolpath is hidden / absent).
+    /// </summary>
+    public SceneNode? PickToolpath(float mx, float my, float vpW, float vpH)
+    {
+        if (vpW <= 0 || vpH <= 0 || _toolpaths.Count == 0) return null;
+
+        float aspect = vpW / vpH;
+        var   click  = new Vector2(mx, my);
+        var   viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+
+        foreach (var (node, entry) in _toolpaths)
+        {
+            if (!node.Visible) continue;
+            var mvp    = node.LocalTransform * viewProj;
+            var origin = entry.Origin;
+
+            foreach (var layer in entry.Data.Layers)
+                foreach (var move in layer.Moves)
+                {
+                    if (move.Kind != MoveKind.Extrude) continue;
+                    var a = WorldToScreen(new Vector3(move.From.X - origin.X, move.From.Y - origin.Y, move.From.Z - origin.Z), mvp, vpW, vpH);
+                    var b = WorldToScreen(new Vector3(move.To.X   - origin.X, move.To.Y   - origin.Y, move.To.Z   - origin.Z), mvp, vpW, vpH);
+                    if (float.IsNaN(a.X) || float.IsNaN(b.X)) continue;
+                    if (SegmentPointDist2D(click, a, b) < 8f) return node;
+                }
+        }
+        return null;
+    }
+
+    private static Vector2 WorldToScreen(Vector3 world, Matrix4 mvp, float vpW, float vpH)
+    {
+        var clip = new Vector4(world, 1f) * mvp;
+        if (clip.W <= 0f) return new Vector2(float.NaN);
+        float invW = 1f / clip.W;
+        return new Vector2(
+            (clip.X * invW * 0.5f + 0.5f) * vpW,
+            (1f - (clip.Y * invW * 0.5f + 0.5f)) * vpH);
+    }
+
+    private static System.Numerics.Vector3 ComputeToolpathCentroid(Toolpath toolpath)
+    {
+        var sum = System.Numerics.Vector3.Zero;
+        int count = 0;
+        foreach (var layer in toolpath.Layers)
+            foreach (var move in layer.Moves)
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    sum += move.From + move.To;
+                    count += 2;
+                }
+        return count > 0 ? sum / count : System.Numerics.Vector3.Zero;
+    }
+
+    private static float SegmentPointDist2D(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared;
+        if (len2 < 0.01f) return (p - a).Length;
+        float t = MathF.Max(0f, MathF.Min(1f, Vector2.Dot(p - a, ab) / len2));
+        return (p - (a + t * ab)).Length;
+    }
+
+    /// <summary>
     /// Returns which gizmo axis is under the given screen position,
     /// or <see cref="GizmoAxis.None"/> if no axis is hit or nothing is selected.
     /// </summary>
@@ -483,7 +580,8 @@ public sealed class SceneRenderer : IDisposable
         _bedBoundary?.Dispose();
         _gizmo?.Dispose();
         _backdrop?.Dispose();
-        _toolpathRenderer?.Dispose();
+        foreach (var entry in _toolpaths.Values) entry.Renderer.Dispose();
+        _toolpaths.Clear();
         _maskShader?.Dispose();
         _compositeShader?.Dispose();
         DestroyFbos();

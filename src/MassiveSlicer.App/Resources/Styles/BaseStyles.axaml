@@ -128,17 +128,18 @@
     <Style Selector="ComboBox">
         <Setter Property="Background"        Value="{DynamicResource Bg2}"/>
         <Setter Property="Foreground"        Value="{DynamicResource Accent}"/>
-        <Setter Property="BorderBrush"       Value="{DynamicResource Accent}"/>
+        <Setter Property="BorderBrush"       Value="{DynamicResource Border2}"/>
         <Setter Property="BorderThickness"   Value="1"/>
         <Setter Property="Padding"           Value="6,4"/>
         <Setter Property="CornerRadius"      Value="4"/>
         <Setter Property="MaxDropDownHeight" Value="220"/>
         <Setter Property="Cursor"            Value="Hand"/>
     </Style>
-    <Style Selector="ComboBox:pointerover">
-        <Setter Property="BorderBrush" Value="{DynamicResource AccentHover}"/>
+    <!-- Template-targeting beats ControlTheme's ThemeBorderHighBrush override on hover -->
+    <Style Selector="ComboBox:pointerover /template/ Border#border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
     </Style>
-    <Style Selector="ComboBox:focus">
+    <Style Selector="ComboBox:focus /template/ Border#border">
         <Setter Property="BorderBrush" Value="{DynamicResource AccentHover}"/>
     </Style>
 
@@ -149,7 +150,7 @@
         <Setter Property="Cursor"     Value="Hand"/>
     </Style>
     <Style Selector="ComboBoxItem:pointerover">
-        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+        <Setter Property="Background" Value="{DynamicResource Bg4}"/>
     </Style>
     <!-- Override the template-level selection highlight (beats SimpleTheme's HighlightBrush) -->
     <Style Selector="ComboBoxItem:selected /template/ ContentPresenter">
@@ -159,16 +160,19 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
     </Style>
     <Style Selector="ComboBoxItem:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+        <Setter Property="Background" Value="{DynamicResource Bg4}"/>
     </Style>
 
     <!-- ── CheckBox ───────────────────────────────────────────────────────── -->
-    <Style Selector="CheckBox /template/ Border">
-        <Setter Property="CornerRadius" Value="3"/>
-        <Setter Property="Background"   Value="{DynamicResource Bg4}"/>
-        <Setter Property="BorderBrush"  Value="{DynamicResource TextMuted}"/>
+    <!-- Set on CheckBox itself so {TemplateBinding} picks up the values -->
+    <Style Selector="CheckBox">
+        <Setter Property="Background"      Value="{DynamicResource Bg4}"/>
+        <Setter Property="BorderBrush"     Value="{DynamicResource TextMuted}"/>
+        <Setter Property="BorderThickness" Value="1.5"/>
+        <Setter Property="CornerRadius"    Value="4"/>
     </Style>
-    <Style Selector="CheckBox:pointerover /template/ Border">
+    <!-- StyleTrigger priority overrides the ControlTheme's pointerover setter -->
+    <Style Selector="CheckBox:pointerover /template/ Border#border">
         <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
     </Style>
 

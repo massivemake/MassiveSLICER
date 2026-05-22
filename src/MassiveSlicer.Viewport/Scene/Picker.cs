@@ -46,12 +46,13 @@ public static class Picker
         return closest;
     }
 
-    // Returns true when the nearest SceneRoot-child ancestor of node is selectable.
+    // Returns true when the nearest SceneRoot-child ancestor of node is selectable and visible.
     private static bool IsPickable(SceneNode node, SceneNode sceneRoot)
     {
         var current = node;
         while (current is not null)
         {
+            if (!current.Visible) return false;
             if (current.Parent == sceneRoot) return current.Selectable;
             current = current.Parent;
         }

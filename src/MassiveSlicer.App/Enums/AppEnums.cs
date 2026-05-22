@@ -67,7 +67,9 @@ public enum RightPanelTab
     /// <summary>Subtractive (milling) slicing and post-processor settings.</summary>
     Subtractive,
     /// <summary>View, UV, robot, and object settings — opened via the gear icon.</summary>
-    Settings
+    Settings,
+    /// <summary>Toolpath export and visibility options. Shown when a toolpath is selected.</summary>
+    Toolpath
 }
 
 /// <summary>Sub-tab options inside the Settings panel.</summary>

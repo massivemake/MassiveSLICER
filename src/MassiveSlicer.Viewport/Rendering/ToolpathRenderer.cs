@@ -32,20 +32,24 @@ public sealed class ToolpathRenderer : IDisposable
     private static readonly string FragSrc = """
         #version 330 core
         in vec3 vColor;
+        uniform float uSelected;
+        uniform vec3  uSelectColor;
         out vec4 fragColor;
-        void main() { fragColor = vec4(vColor, 1.0); }
+        void main() {
+            fragColor = vec4(uSelected > 0.5 ? uSelectColor : vColor, 1.0);
+        }
         """;
 
     private static readonly Vector3 TravelColor  = new(0.35f, 0.35f, 0.35f);
-    private static readonly Vector3 ExtrudeColor = new(0.2f, 0.9f, 1.0f);
+    private static readonly Vector3 ExtrudeColor = new(0.1f, 0.45f, 0.9f);
 
-    public ToolpathRenderer(Toolpath toolpath)
+    public ToolpathRenderer(Toolpath toolpath, System.Numerics.Vector3 origin = default)
     {
         _shader = new Shader(VertSrc, FragSrc);
-        Upload(toolpath);
+        Upload(toolpath, origin);
     }
 
-    private void Upload(Toolpath toolpath)
+    private void Upload(Toolpath toolpath, System.Numerics.Vector3 origin)
     {
         // Count total vertices (2 per move segment).
         int total = 0;
@@ -56,6 +60,8 @@ public sealed class ToolpathRenderer : IDisposable
         _vertexCount = total;
 
         // Pack interleaved [x,y,z, r,g,b].
+        // Points are stored in local space (world - origin) so the node's LocalTransform
+        // (set to Translation(origin)) correctly positions them back in world space.
         var data = new float[total * 6];
         int di = 0;
 
@@ -64,10 +70,10 @@ public sealed class ToolpathRenderer : IDisposable
             foreach (var move in layer.Moves)
             {
                 var c = move.Kind == MoveKind.Extrude ? ExtrudeColor : TravelColor;
-                data[di++] = move.From.X; data[di++] = move.From.Y; data[di++] = move.From.Z;
-                data[di++] = c.X;         data[di++] = c.Y;         data[di++] = c.Z;
-                data[di++] = move.To.X;   data[di++] = move.To.Y;   data[di++] = move.To.Z;
-                data[di++] = c.X;         data[di++] = c.Y;         data[di++] = c.Z;
+                data[di++] = move.From.X - origin.X; data[di++] = move.From.Y - origin.Y; data[di++] = move.From.Z - origin.Z;
+                data[di++] = c.X;                    data[di++] = c.Y;                    data[di++] = c.Z;
+                data[di++] = move.To.X   - origin.X; data[di++] = move.To.Y   - origin.Y; data[di++] = move.To.Z   - origin.Z;
+                data[di++] = c.X;                    data[di++] = c.Y;                    data[di++] = c.Z;
             }
         }
 
@@ -86,17 +92,19 @@ public sealed class ToolpathRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    public void Draw(Matrix4 mvp)
+    private static readonly Vector3 SelectColor = new(0.2f, 1.0f, 0.1f); // bright green
+
+    public void Draw(Matrix4 mvp, bool selected = false)
     {
         if (_vertexCount == 0 || _disposed) return;
 
-        GL.Disable(EnableCap.DepthTest);
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetFloat("uSelected", selected ? 1f : 0f);
+        _shader.SetVector3("uSelectColor", SelectColor);
         GL.BindVertexArray(_vao);
         GL.DrawArrays(PrimitiveType.Lines, 0, _vertexCount);
         GL.BindVertexArray(0);
-        GL.Enable(EnableCap.DepthTest);
     }
 
     public void Dispose()

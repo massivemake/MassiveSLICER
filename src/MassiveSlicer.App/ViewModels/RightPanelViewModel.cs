@@ -22,22 +22,26 @@ public sealed class RightPanelViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsAdditiveTab));
             OnPropertyChanged(nameof(IsSubtractiveTab));
             OnPropertyChanged(nameof(IsSettingsTab));
+            OnPropertyChanged(nameof(IsToolpathTab));
         }
     }
 
     public bool IsAdditiveTab     => ActiveTab == RightPanelTab.Additive;
     public bool IsSubtractiveTab  => ActiveTab == RightPanelTab.Subtractive;
     public bool IsSettingsTab     => ActiveTab == RightPanelTab.Settings;
+    public bool IsToolpathTab     => ActiveTab == RightPanelTab.Toolpath;
 
     public ICommand ShowAdditiveCommand     { get; }
     public ICommand ShowSubtractiveCommand  { get; }
     public ICommand ShowSettingsCommand     { get; }
+    public ICommand ShowToolpathCommand     { get; }
 
     public RightPanelViewModel()
     {
         ShowAdditiveCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Additive);
         ShowSubtractiveCommand = new RelayCommand(() => ActiveTab = RightPanelTab.Subtractive);
         ShowSettingsCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Settings);
+        ShowToolpathCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Toolpath);
     }
 
     /// <summary>Settings for additive (print) slicing operations.</summary>

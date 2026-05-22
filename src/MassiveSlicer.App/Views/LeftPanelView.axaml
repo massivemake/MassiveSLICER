@@ -89,31 +89,68 @@
 
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Grid Margin="6,0,4,0">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0"
-                                           Text="{Binding Name}"
-                                           VerticalAlignment="Center"
-                                           Padding="0,5"/>
-                                <CheckBox Grid.Column="1"
-                                          IsChecked="{Binding Visible, Mode=TwoWay}"
-                                          VerticalAlignment="Center"
-                                          Margin="2,0,0,0"
-                                          ToolTip.Tip="Toggle visibility"/>
-                                <Button Grid.Column="2"
-                                        Content="×"
-                                        Command="{Binding DeleteCommand}"
-                                        Classes="ToolbarButton"
-                                        Padding="5,2"
-                                        Margin="2,2,0,2"
-                                        FontSize="14"
-                                        Foreground="{DynamicResource TextSecondary}"
-                                        ToolTip.Tip="Remove from scene"/>
-                            </Grid>
+                            <StackPanel>
+                                <!-- Item row -->
+                                <Grid Margin="6,0,4,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Name}"
+                                               VerticalAlignment="Center"
+                                               Padding="0,5"/>
+                                    <CheckBox Grid.Column="1"
+                                              IsChecked="{Binding Visible, Mode=TwoWay}"
+                                              VerticalAlignment="Center"
+                                              Margin="2,0,0,0"
+                                              ToolTip.Tip="Toggle visibility"/>
+                                    <Button Grid.Column="2"
+                                            Content="×"
+                                            Command="{Binding DeleteCommand}"
+                                            Classes="ToolbarButton"
+                                            Padding="5,2"
+                                            Margin="2,2,0,2"
+                                            FontSize="14"
+                                            Foreground="{DynamicResource TextSecondary}"
+                                            ToolTip.Tip="Remove from scene"/>
+                                </Grid>
+                                <!-- Child items (e.g. toolpaths) indented below parent -->
+                                <ItemsControl ItemsSource="{Binding Children}"
+                                              IsVisible="{Binding HasChildren}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="20,0,4,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0"
+                                                           Text="{Binding Name}"
+                                                           VerticalAlignment="Center"
+                                                           Padding="0,4"
+                                                           Foreground="{DynamicResource TextMuted}"/>
+                                                <CheckBox Grid.Column="1"
+                                                          IsChecked="{Binding Visible, Mode=TwoWay}"
+                                                          VerticalAlignment="Center"
+                                                          Margin="2,0,0,0"
+                                                          ToolTip.Tip="Toggle visibility"/>
+                                                <Button Grid.Column="2"
+                                                        Content="×"
+                                                        Command="{Binding DeleteCommand}"
+                                                        Classes="ToolbarButton"
+                                                        Padding="5,2"
+                                                        Margin="2,2,0,2"
+                                                        FontSize="14"
+                                                        Foreground="{DynamicResource TextSecondary}"
+                                                        ToolTip.Tip="Remove toolpath"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>

@@ -149,6 +149,7 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingRemoveNodes.TryDequeue(out var removing))
             {
+                _renderer.RemoveToolpathIfExists(removing);
                 foreach (var n in removing.SelfAndDescendants())
                     n.Mesh?.Dispose();
                 _renderer.SceneRoot.RemoveChild(removing);
@@ -214,11 +215,8 @@ public partial class ViewportView : UserControl
                 RebuildIkSolver(vm);
             }
 
-            while (vm.PendingToolpath.TryDequeue(out var tp))
-                _renderer.SetToolpath(tp);
-
-            while (vm.PendingClearToolpath.TryDequeue(out _))
-                _renderer.SetToolpath(null);
+            while (vm.PendingToolpath.TryDequeue(out var entry))
+                _renderer.AddToolpath(entry.Toolpath, entry.Node);
 
             if (_fkController is not null && vm.Robot is not null)
             {
@@ -652,7 +650,11 @@ public partial class ViewportView : UserControl
                 }
                 else
                 {
-                    _renderer.Select(_renderer.Pick(ray));
+                    float vpW2 = (float)GlCanvas.Bounds.Width;
+                    float vpH2 = (float)GlCanvas.Bounds.Height;
+                    var picked = _renderer.Pick(ray)
+                        ?? _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
+                    _renderer.Select(picked);
                     UpdateFocusOverlay();
                 }
 
@@ -760,6 +762,7 @@ public partial class ViewportView : UserControl
             var sourceItems   = new List<OutlinerItemViewModel>();
             foreach (var item in vm.OutlinerItems)
             {
+                if (!item.Visible) continue; // skip hidden items — they were already sliced
                 bool contributed = false;
                 foreach (var node in item.Node.SelfAndDescendants())
                 {
@@ -807,8 +810,11 @@ public partial class ViewportView : UserControl
                 return PlanarSlicer.Slice(flatMeshes, settings);
             });
 
-            vm.PendingToolpath.Enqueue(toolpath);
-            vm.RegisterToolpathInOutliner();
+            var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
+            var toolpathName = $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm";
+            var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
+            vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
+            vm.PendingToolpath.Enqueue((toolpath, toolpathNode));
 
             // Hide source meshes so the toolpath is unobstructed.
             foreach (var item in sourceItems)
@@ -921,7 +927,11 @@ public partial class ViewportView : UserControl
     private void UpdateFocusOverlay()
     {
         if (DataContext is ViewportViewModel vm)
-            vm.HasSelection = _renderer.SelectedNode is not null;
+        {
+            vm.HasSelection       = _renderer.SelectedNode is not null;
+            vm.IsToolpathSelected = _renderer.SelectedNode is not null
+                                 && _renderer.IsToolpathNode(_renderer.SelectedNode);
+        }
     }
 
     private void FocusSelected()

@@ -22,7 +22,7 @@
     <!-- Accent — lime green -->
     <SolidColorBrush x:Key="Accent"      Color="#76b82a"/>
     <SolidColorBrush x:Key="AccentHover" Color="#90d436"/>
-    <SolidColorBrush x:Key="AccentMuted" Color="#1e3800"/>
+    <SolidColorBrush x:Key="AccentMuted" Color="#2e5c00"/>
 
     <!-- Semantic status colours -->
     <SolidColorBrush x:Key="ColorSuccess" Color="#00e676"/>

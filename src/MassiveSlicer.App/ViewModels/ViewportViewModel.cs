@@ -259,6 +259,15 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _hasSelection, value);
     }
 
+    private bool _isToolpathSelected;
+
+    /// <summary>True when the active toolpath node is the current selection.</summary>
+    public bool IsToolpathSelected
+    {
+        get => _isToolpathSelected;
+        set => SetField(ref _isToolpathSelected, value);
+    }
+
     public RelayCommand FocusCommand { get; }
 
     /// <summary>Callback set by the viewport code-behind to perform focus-on-selection.</summary>
@@ -328,8 +337,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>
     /// Completed toolpaths queued for upload on the GL thread.
     /// Produced by the slice task; consumed by the render loop.
+    /// Each entry is a freshly-created SceneNode — never re-uses an existing node.
     /// </summary>
-    public ConcurrentQueue<Toolpath> PendingToolpath { get; } = new();
+    public ConcurrentQueue<(Toolpath Toolpath, SceneNode Node)> PendingToolpath { get; } = new();
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
@@ -354,11 +364,6 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Nodes queued for GL-thread removal and GPU resource disposal.</summary>
     public ConcurrentQueue<SceneNode> PendingRemoveNodes { get; } = new();
 
-    /// <summary>Signals the GL thread to clear the active toolpath renderer.</summary>
-    public ConcurrentQueue<bool> PendingClearToolpath { get; } = new();
-
-    private OutlinerItemViewModel? _toolpathItem;
-
     /// <summary>
     /// Enqueues <paramref name="node"/> for GPU upload and registers it in the outliner.
     /// Must be called on the UI thread.
@@ -372,22 +377,24 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Adds a "Toolpath" entry to the outliner if one does not already exist.
-    /// Deleting it clears the active toolpath on the GL thread.
+    /// Creates a new toolpath outliner item as a child of <paramref name="parentItem"/>
+    /// (or top-level if <c>null</c>), and enqueues its node for GL upload.
     /// Must be called on the UI thread.
     /// </summary>
-    internal void RegisterToolpathInOutliner()
+    internal void RegisterToolpathInOutliner(SceneNode toolpathNode, OutlinerItemViewModel? parentItem)
     {
-        if (_toolpathItem is not null) return;
-        var sentinel = new SceneNode { Name = "Toolpath", Selectable = false };
-        _toolpathItem = new OutlinerItemViewModel(sentinel, NotifyRenderNeeded, item =>
+        var item = new OutlinerItemViewModel(toolpathNode, NotifyRenderNeeded, child =>
         {
-            OutlinerItems.Remove(item);
-            _toolpathItem = null;
-            PendingClearToolpath.Enqueue(true);
+            parentItem?.RemoveChild(child);
+            if (parentItem is null) OutlinerItems.Remove(child);
+            PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
         });
-        OutlinerItems.Add(_toolpathItem);
+
+        if (parentItem is not null)
+            parentItem.AddChild(item);
+        else
+            OutlinerItems.Add(item);
     }
 
     /// <summary>
@@ -397,15 +404,34 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public void RequestDeleteNode(SceneNode node)
     {
-        var item = OutlinerItems.FirstOrDefault(x =>
-            x.Node == node || x.Node.SelfAndDescendants().Any(n => n == node));
-        if (item is not null) RemoveUserNode(item);
+        foreach (var item in OutlinerItems)
+        {
+            // Check direct match (top-level mesh or its sub-nodes)
+            if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
+            {
+                RemoveUserNode(item);
+                return;
+            }
+            // Check child toolpath nodes
+            var child = item.Children.FirstOrDefault(c => c.Node == node);
+            if (child is not null)
+            {
+                item.RemoveChild(child);
+                PendingRemoveNodes.Enqueue(child.Node);
+                NotifyRenderNeeded();
+                return;
+            }
+        }
     }
 
     private void RemoveUserNode(OutlinerItemViewModel item)
     {
         OutlinerItems.Remove(item);
+        // Queue child toolpath nodes for cleanup before the parent
+        foreach (var child in item.Children)
+            PendingRemoveNodes.Enqueue(child.Node);
         PendingRemoveNodes.Enqueue(item.Node);
         SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
     }
 }

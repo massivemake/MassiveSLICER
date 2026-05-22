@@ -59,7 +59,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             PreferencesLoader.Save(AppPreferences);
         };
 
-        // Persist visibility toggles whenever they change in the left panel.
+        // Persist visibility toggles and handle cross-panel side-effects.
         Viewport.PropertyChanged += (_, e) =>
         {
             bool dirty = false;
@@ -71,6 +71,10 @@ public sealed class MainWindowViewModel : ViewModelBase
                     AppPreferences.ShowAxes = Viewport.ShowAxes; dirty = true; break;
                 case nameof(ViewportViewModel.ShowBedGrid):
                     AppPreferences.ShowBedGrid = Viewport.ShowBedGrid; dirty = true; break;
+                case nameof(ViewportViewModel.IsToolpathSelected):
+                    if (Viewport.IsToolpathSelected)
+                        RightPanel.ActiveTab = RightPanelTab.Toolpath;
+                    break;
             }
             if (dirty) PreferencesLoader.Save(AppPreferences);
         };

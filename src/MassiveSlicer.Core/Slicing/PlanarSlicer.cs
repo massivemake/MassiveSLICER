@@ -95,9 +95,16 @@ public static class PlanarSlicer
                 prev = next;
             }
 
-            // Close the contour.
+            // Close the contour only when the chain is topologically closed.
+            // Open contours (mesh holes, T-junctions) must not be force-closed —
+            // doing so draws a stray extrusion line across the model.
             if (contour.Count > 2)
-                layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude));
+            {
+                float dx = contour[^1].X - contour[0].X;
+                float dy = contour[^1].Y - contour[0].Y;
+                if (dx * dx + dy * dy < SnapGrid * SnapGrid * 4f)
+                    layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude));
+            }
 
             lastPos = contour[^1];
         }
@@ -125,9 +132,10 @@ public static class PlanarSlicer
             float d2 = v2.Z - z;
 
             // Push nearly-on-plane vertices slightly off to avoid degenerate intersections.
-            if (MathF.Abs(d0) < 1e-5f) d0 = 1e-5f;
-            if (MathF.Abs(d1) < 1e-5f) d1 = 1e-5f;
-            if (MathF.Abs(d2) < 1e-5f) d2 = 1e-5f;
+            // Preserve sign so a vertex just below the plane stays below.
+            if (MathF.Abs(d0) < 1e-5f) d0 = d0 >= 0f ? 1e-5f : -1e-5f;
+            if (MathF.Abs(d1) < 1e-5f) d1 = d1 >= 0f ? 1e-5f : -1e-5f;
+            if (MathF.Abs(d2) < 1e-5f) d2 = d2 >= 0f ? 1e-5f : -1e-5f;
 
             // Collect up to 2 edge crossing points.
             int count = 0;

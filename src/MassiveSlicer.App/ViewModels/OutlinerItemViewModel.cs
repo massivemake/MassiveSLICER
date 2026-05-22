@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -23,6 +24,21 @@ public sealed class OutlinerItemViewModel : ViewModelBase
             OnPropertyChanged();
             _notifyRender();
         }
+    }
+
+    public ObservableCollection<OutlinerItemViewModel> Children { get; } = [];
+    public bool HasChildren => Children.Count > 0;
+
+    public void AddChild(OutlinerItemViewModel child)
+    {
+        Children.Add(child);
+        OnPropertyChanged(nameof(HasChildren));
+    }
+
+    public void RemoveChild(OutlinerItemViewModel child)
+    {
+        Children.Remove(child);
+        OnPropertyChanged(nameof(HasChildren));
     }
 
     internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete)

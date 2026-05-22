@@ -21,6 +21,8 @@
                     <Button Content="ADDITIVE"    Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
                     <Button Content="SUBTRACTIVE" Classes="TabButton" Command="{Binding ShowSubtractiveCommand}"/>
                     <Button Content="ROBOT"       Classes="TabButton" Command="{Binding ShowSettingsCommand}"/>
+                    <Button Content="TOOLPATH"    Classes="TabButton" Command="{Binding ShowToolpathCommand}"
+                            IsVisible="{Binding IsToolpathTab}"/>
                 </StackPanel>
             </Border>
 
@@ -350,6 +352,19 @@
                         <TextBlock Grid.Column="1" Text="{Binding Settings.Robot.TcpC, StringFormat={}{0:F1}°}" Classes="LabelMuted"/>
                     </Grid>
 
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- TOOLPATH tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="{DynamicResource Bg2}"
+                          IsVisible="{Binding IsToolpathTab}">
+                <StackPanel Margin="0,8">
+                    <TextBlock Text="TOOLPATH" Classes="SectionHeader"/>
+                    <TextBlock Text="Export and visibility options coming soon."
+                               Classes="LabelMuted" Margin="12,4"/>
                 </StackPanel>
             </ScrollViewer>
 
