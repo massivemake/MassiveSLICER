@@ -1,4 +1,5 @@
 using System.IO;
+#pragma warning disable CA1416  // Windows-only app
 using Avalonia;
 using OpenTK.Mathematics;
 using NVec3 = System.Numerics.Vector3;
@@ -54,6 +55,10 @@ public partial class ViewportView : UserControl
     // Pointer capture
     private IPointer? _capturedPointer;
 
+    // Cached VM reference — set on the UI thread in WireGlCanvas, read from GL thread in OnRender.
+    // Avoids accessing the Avalonia DataContext property (UI-thread-only) from the GL thread.
+    private ViewportViewModel? _vm;
+
     // Robot cell state
     private Vector3 _robrootWorldPos;
     private Vector3 _tcpOffsetLocal;
@@ -93,14 +98,27 @@ public partial class ViewportView : UserControl
     {
         GlCanvas.GlRender += OnRender;
 
-        if (DataContext is ViewportViewModel vm)
+        if (DataContext is not ViewportViewModel vm) return;
+        _vm = vm;
+
         {
             vm.PropertyChanged   += (_, _) => GlCanvas.RequestNextFrameRendering();
-            vm.RenderNeeded      += (_, _) => GlCanvas.RequestNextFrameRendering();
-            vm.OnSliceRequested   = () => RunSliceAsync(vm);
+            vm.PropertyChanged   += (_, pe) =>
+            {
+                if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
+                    Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
+            };
+            vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
+            vm.OnSliceRequested    = () => RunSliceAsync(vm);
+            vm.OnFocusRequested    = FocusSelected;
+
+            // OverlayView is declared in the XAML Grid above GlCanvas. Because
+            // there is no native HWND, normal Avalonia z-order works — no
+            // OverlayLayer needed. Just wire the DataContext.
+            OverlayView.DataContext = vm;
         }
 
-        if (DataContext is ViewportViewModel { Robot: { } robot })
+        if (vm.Robot is { } robot)
         {
             robot.PropertyChanged += (_, _) => GlCanvas.RequestNextFrameRendering();
             robot.OnToolSelected   = OnToolSwapRequested;
@@ -111,11 +129,12 @@ public partial class ViewportView : UserControl
     {
         _renderer.Initialise();
 
-        if (DataContext is ViewportViewModel vm)
+        if (_vm is { } vm)
         {
             _renderer.ShowGrid    = vm.ShowGrid;
             _renderer.ShowAxes    = vm.ShowAxes;
             _renderer.ShowBedGrid = vm.ShowBedGrid;
+            _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode     = vm.ActiveShaderMode;
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
@@ -197,6 +216,9 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolpath.TryDequeue(out var tp))
                 _renderer.SetToolpath(tp);
+
+            while (vm.PendingClearToolpath.TryDequeue(out _))
+                _renderer.SetToolpath(null);
 
             if (_fkController is not null && vm.Robot is not null)
             {
@@ -616,8 +638,24 @@ public partial class ViewportView : UserControl
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay(
                     (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
-                _renderer.Select(_renderer.Pick(ray));
-                UpdateFocusOverlay();
+
+                if (DataContext is ViewportViewModel flatVm && flatVm.IsLayFlatMode)
+                {
+                    var (node, normal) = _renderer.PickFace(ray);
+                    if (node is not null)
+                    {
+                        ApplyLayFlat(node, normal, _renderer.BedZ);
+                        _renderer.Select(node);
+                        UpdateFocusOverlay();
+                    }
+                    flatVm.IsLayFlatMode = false;
+                }
+                else
+                {
+                    _renderer.Select(_renderer.Pick(ray));
+                    UpdateFocusOverlay();
+                }
+
                 GlCanvas.RequestNextFrameRendering();
             }
             _leftDragged = false;
@@ -642,11 +680,6 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    // ── Focus ─────────────────────────────────────────────────────────────────
-
-    private void OnFocusClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => FocusSelected();
-
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         switch (e.Key)
@@ -656,6 +689,13 @@ public partial class ViewportView : UserControl
             case Key.R:      SetGizmoMode(GizmoMode.Rotate);    e.Handled = true; break;
             case Key.S:      SetGizmoMode(GizmoMode.Scale);     e.Handled = true; break;
             case Key.Delete: DeleteSelectedNode();              e.Handled = true; break;
+            case Key.Escape:
+                if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
+                {
+                    escVm.IsLayFlatMode = false;
+                    e.Handled = true;
+                }
+                break;
         }
     }
 
@@ -715,14 +755,19 @@ public partial class ViewportView : UserControl
         try
         {
             // Snapshot mesh data on the UI thread (OutlinerItems is UI-thread-owned).
+            // Track which outliner items contributed so we can hide them after slicing.
             var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
+            var sourceItems   = new List<OutlinerItemViewModel>();
             foreach (var item in vm.OutlinerItems)
             {
+                bool contributed = false;
                 foreach (var node in item.Node.SelfAndDescendants())
                 {
                     if (node.Mesh?.PickingData is not { } md) continue;
                     meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
+                    contributed = true;
                 }
+                if (contributed) sourceItems.Add(item);
             }
 
             var settings = vm.AdditiveSettings is { } s
@@ -763,6 +808,12 @@ public partial class ViewportView : UserControl
             });
 
             vm.PendingToolpath.Enqueue(toolpath);
+            vm.RegisterToolpathInOutliner();
+
+            // Hide source meshes so the toolpath is unobstructed.
+            foreach (var item in sourceItems)
+                item.Visible = false;
+
             GlCanvas.RequestNextFrameRendering();
         }
         finally
@@ -780,35 +831,97 @@ public partial class ViewportView : UserControl
         return new NVec3(x, y, z);
     }
 
-    // ── Gizmo mode switching ──────────────────────────────────────────────────
+    // ── Lay Flat ──────────────────────────────────────────────────────────────
 
-    private void OnModeMove  (object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => SetGizmoMode(GizmoMode.Translate);
-    private void OnModeRotate(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => SetGizmoMode(GizmoMode.Rotate);
-    private void OnModeScale (object? sender, Avalonia.Interactivity.RoutedEventArgs e)
-        => SetGizmoMode(GizmoMode.Scale);
+    private static void ApplyLayFlat(SceneNode node, TkVector3 worldFaceNormal, float bedZ)
+    {
+        if (worldFaceNormal.LengthSquared < 1e-12f) return;
+
+        var from = TkVector3.Normalize(worldFaceNormal);
+        var to   = new TkVector3(0f, 0f, -1f); // face must point into the bed
+
+        TkMatrix4 rot;
+        var   axis     = TkVector3.Cross(from, to);
+        float sinAngle = axis.Length;
+        float cosAngle = TkVector3.Dot(from, to);
+
+        const float Eps = 1e-6f;
+        if (sinAngle < Eps)
+        {
+            if (cosAngle > 0f)
+            {
+                rot = TkMatrix4.Identity; // already pointing down
+            }
+            else
+            {
+                // 180° — flip around any axis perpendicular to the face normal.
+                var perp = MathF.Abs(from.X) < 0.9f ? TkVector3.UnitX : TkVector3.UnitY;
+                perp = TkVector3.Normalize(TkVector3.Cross(from, perp));
+                rot  = TkMatrix4.CreateFromAxisAngle(perp, MathF.PI);
+            }
+        }
+        else
+        {
+            rot = TkMatrix4.CreateFromAxisAngle(axis / sinAngle, MathF.Atan2(sinAngle, cosAngle));
+        }
+
+        // Rotate around the world-space bounding-box centre so the object doesn't drift.
+        var center = LayFlatWorldCenter(node);
+        // Row-vector: p_new = p_old * M  →  W_new = W_old * M
+        var M = TkMatrix4.CreateTranslation(-center) * rot * TkMatrix4.CreateTranslation(center);
+        node.LocalTransform = node.LocalTransform * M;
+
+        // Drop the object so its lowest point sits exactly on the bed surface.
+        float minZ = LayFlatMinZ(node);
+        if (minZ < float.MaxValue)
+            node.LocalTransform = node.LocalTransform * TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ);
+    }
+
+    private static TkVector3 LayFlatWorldCenter(SceneNode node)
+    {
+        var mesh = node.Mesh?.PickingData;
+        if (mesh is null) return node.WorldTransform.Row3.Xyz;
+        var lo = mesh.LocalBounds.Min;
+        var hi = mesh.LocalBounds.Max;
+        var lc = new TkVector3((lo.X + hi.X) * 0.5f, (lo.Y + hi.Y) * 0.5f, (lo.Z + hi.Z) * 0.5f);
+        var m  = node.WorldTransform;
+        return new TkVector3(
+            lc.X * m.M11 + lc.Y * m.M21 + lc.Z * m.M31 + m.M41,
+            lc.X * m.M12 + lc.Y * m.M22 + lc.Z * m.M32 + m.M42,
+            lc.X * m.M13 + lc.Y * m.M23 + lc.Z * m.M33 + m.M43);
+    }
+
+    private static float LayFlatMinZ(SceneNode node)
+    {
+        float minZ = float.MaxValue;
+        foreach (var n in node.SelfAndDescendants())
+        {
+            var mesh = n.Mesh?.PickingData;
+            if (mesh is null) continue;
+            var m = n.WorldTransform;
+            foreach (var p in mesh.Positions)
+            {
+                float z = p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43;
+                if (z < minZ) minZ = z;
+            }
+        }
+        return minZ;
+    }
+
+    // ── Gizmo mode switching ──────────────────────────────────────────────────
 
     private void SetGizmoMode(GizmoMode mode)
     {
         _renderer.GizmoMode = mode;
-
-        // Look up the accent brush from the application resources.
-        object? accentRes = null;
-        Application.Current?.TryGetResource("AccentMuted", null, out accentRes);
-        IBrush accent = accentRes as IBrush ?? Brushes.Transparent;
-        IBrush none   = Brushes.Transparent;
-
-        BtnMove  .Background = mode == GizmoMode.Translate ? accent : none;
-        BtnRotate.Background = mode == GizmoMode.Rotate    ? accent : none;
-        BtnScale .Background = mode == GizmoMode.Scale     ? accent : none;
-
+        if (DataContext is ViewportViewModel vm)
+            vm.ActiveGizmoModeInternal = mode;
         GlCanvas.RequestNextFrameRendering();
     }
 
     private void UpdateFocusOverlay()
     {
-        FocusOverlay.IsVisible = _renderer.SelectedNode is not null;
+        if (DataContext is ViewportViewModel vm)
+            vm.HasSelection = _renderer.SelectedNode is not null;
     }
 
     private void FocusSelected()

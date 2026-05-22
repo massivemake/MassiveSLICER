@@ -42,6 +42,9 @@
     <Style Selector="Button.ToolbarButton:pressed">
         <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
     </Style>
+    <Style Selector="Button.ToolbarButton.active">
+        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+    </Style>
 
     <!-- Tab button -->
     <Style Selector="Button.TabButton">

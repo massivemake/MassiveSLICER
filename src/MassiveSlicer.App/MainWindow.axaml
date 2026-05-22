@@ -4,6 +4,7 @@
         xmlns:views="clr-namespace:MassiveSlicer.App.Views"
         x:Class="MassiveSlicer.App.MainWindow"
         x:DataType="vm:MainWindowViewModel"
+        x:CompileBindings="False"
         Title="MassiveSlicer"
         Height="900" Width="1440"
         MinHeight="600" MinWidth="900"
@@ -47,7 +48,7 @@
             <GridSplitter Grid.Column="1"
                           Background="{DynamicResource Border0}"/>
 
-            <!-- Viewport -->
+            <!-- Viewport — overlays are hosted in ViewportView's VisualLayerManager.OverlayLayer -->
             <views:ViewportView Grid.Column="2"
                                 DataContext="{Binding Viewport}"/>
 

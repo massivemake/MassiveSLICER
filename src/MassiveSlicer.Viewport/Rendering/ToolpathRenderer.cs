@@ -6,9 +6,8 @@ namespace MassiveSlicer.Viewport.Rendering;
 
 /// <summary>
 /// Draws a sliced <see cref="Toolpath"/> as coloured line segments.
-/// Each layer gets a distinct hue (golden-ratio steps). Travel moves are gray;
-/// extrude moves are the layer colour. Depth test disabled so the overlay is
-/// always visible on top of the mesh.
+/// Extrude moves are drawn in a uniform accent colour; travel moves are gray.
+/// Depth test is disabled so lines are never occluded by mesh geometry.
 /// </summary>
 public sealed class ToolpathRenderer : IDisposable
 {
@@ -37,7 +36,8 @@ public sealed class ToolpathRenderer : IDisposable
         void main() { fragColor = vec4(vColor, 1.0); }
         """;
 
-    private static readonly Vector3 TravelColor = new(0.35f, 0.35f, 0.35f);
+    private static readonly Vector3 TravelColor  = new(0.35f, 0.35f, 0.35f);
+    private static readonly Vector3 ExtrudeColor = new(0.2f, 0.9f, 1.0f);
 
     public ToolpathRenderer(Toolpath toolpath)
     {
@@ -61,10 +61,9 @@ public sealed class ToolpathRenderer : IDisposable
 
         foreach (var layer in toolpath.Layers)
         {
-            var col = LayerColor(layer.Index);
             foreach (var move in layer.Moves)
             {
-                var c = move.Kind == MoveKind.Extrude ? col : TravelColor;
+                var c = move.Kind == MoveKind.Extrude ? ExtrudeColor : TravelColor;
                 data[di++] = move.From.X; data[di++] = move.From.Y; data[di++] = move.From.Z;
                 data[di++] = c.X;         data[di++] = c.Y;         data[di++] = c.Z;
                 data[di++] = move.To.X;   data[di++] = move.To.Y;   data[di++] = move.To.Z;
@@ -108,31 +107,4 @@ public sealed class ToolpathRenderer : IDisposable
         _shader.Dispose();
     }
 
-    // Golden-ratio hue stepping so adjacent layers have very different colours.
-    private static readonly float GoldenAngle = (MathF.Sqrt(5f) - 1f) / 2f;
-
-    private static Vector3 LayerColor(int index)
-    {
-        float h = (index * GoldenAngle) % 1f;
-        return HsvToRgb(h, 0.85f, 0.95f);
-    }
-
-    private static Vector3 HsvToRgb(float h, float s, float v)
-    {
-        float c  = v * s;
-        float x  = c * (1f - MathF.Abs((h * 6f) % 2f - 1f));
-        float m  = v - c;
-        float r, g, b;
-        int   sector = (int)(h * 6f);
-        switch (sector % 6)
-        {
-            case 0:  r = c; g = x; b = 0; break;
-            case 1:  r = x; g = c; b = 0; break;
-            case 2:  r = 0; g = c; b = x; break;
-            case 3:  r = 0; g = x; b = c; break;
-            case 4:  r = x; g = 0; b = c; break;
-            default: r = c; g = 0; b = x; break;
-        }
-        return new Vector3(r + m, g + m, b + m);
-    }
 }

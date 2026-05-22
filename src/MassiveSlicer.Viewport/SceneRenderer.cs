@@ -196,8 +196,12 @@ public sealed class SceneRenderer : IDisposable
     /// Configures (or replaces) the print-bed boundary overlay. Safe to call at any time
     /// on the GL thread — disposes the previous renderer if one exists.
     /// </summary>
+    /// <summary>World-space Z coordinate of the build plate surface.</summary>
+    public float BedZ { get; private set; }
+
     public void SetBedBoundary(Vector3 origin, float width, float depth)
     {
+        BedZ         = origin.Z;
         _bedBoundary?.Dispose();
         _bedBoundary = new BedBoundaryRenderer(origin, width, depth);
     }
@@ -252,11 +256,15 @@ public sealed class SceneRenderer : IDisposable
         if (!_initialised || viewportWidth <= 0 || viewportHeight <= 0)
             return;
 
-        // With Win32GlHost the context is dedicated (no Avalonia FBO overhead).
-        // FBO 0 is the window back buffer; save it as the composite target.
-        GL.GetInteger(GetPName.FramebufferBinding, out int outputFbo);
+        // Capture the currently bound FBO before we touch anything.
+        // With OpenGlControlBase this is Avalonia's internal FBO; with Win32GlHost it's 0.
+        GL.GetInteger(GetPName.DrawFramebufferBinding, out int outputFbo);
 
         EnsureFbos(viewportWidth, viewportHeight);
+
+        // Set viewport immediately after any potential FBO resize.
+        // AMD is sensitive to mismatched viewport / FBO dimensions.
+        GL.Viewport(0, 0, viewportWidth, viewportHeight);
 
         float aspect = viewportWidth / (float)viewportHeight;
         var view = Camera.GetViewMatrix();
@@ -294,7 +302,6 @@ public sealed class SceneRenderer : IDisposable
         if (ShowGrid)    _grid?.Draw(mvp);
         if (ShowAxes)    _axes?.Draw(mvp);
         if (ShowBedGrid) _bedBoundary?.Draw(mvp);
-        _toolpathRenderer?.Draw(mvp);
 
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1f, 1f);
@@ -307,6 +314,9 @@ public sealed class SceneRenderer : IDisposable
             if (!child.CullFaces) GL.Enable(EnableCap.CullFace);
         }
         GL.Disable(EnableCap.PolygonOffsetFill);
+
+        // Draw toolpath after meshes so lines are never occluded by mesh depth writes.
+        _toolpathRenderer?.Draw(mvp);
 
         // ── Selection mask pass ───────────────────────────────────────────────
         // Render the selected object as flat white into the mask FBO. The mask FBO
@@ -333,6 +343,7 @@ public sealed class SceneRenderer : IDisposable
         // ── Composite pass ────────────────────────────────────────────────────
         // Blit to the output FBO using a fullscreen quad. Roberts Cross on the mask
         // texture detects the selection silhouette edge and blends lime green there.
+        GL.Viewport(0, 0, viewportWidth, viewportHeight);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, outputFbo);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         GL.Disable(EnableCap.DepthTest);
@@ -360,7 +371,12 @@ public sealed class SceneRenderer : IDisposable
             GL.BindVertexArray(0);
         }
 
+        // Unbind both texture units so Avalonia's subsequent compositor pass
+        // starts with a clean texture state (AMD is sensitive to stale bindings).
+        GL.ActiveTexture(TextureUnit.Texture1);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture0);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.Enable(EnableCap.DepthTest);
         GL.Enable(EnableCap.CullFace);
 
@@ -420,6 +436,18 @@ public sealed class SceneRenderer : IDisposable
     {
         var hit = Picker.Pick(worldRay, SceneRoot, out _);
         return hit is null ? null : Picker.FindSelectableRoot(hit, SceneRoot);
+    }
+
+    /// <summary>
+    /// Picks the closest triangle under <paramref name="worldRay"/> and returns the
+    /// selectable root node plus the face normal in world space (camera-facing).
+    /// Node is <c>null</c> if nothing was hit.
+    /// </summary>
+    public (SceneNode? node, Vector3 faceNormal) PickFace(Ray worldRay)
+    {
+        var hit  = Picker.PickFace(worldRay, SceneRoot, out var normal, out _);
+        var root = hit is null ? null : Picker.FindSelectableRoot(hit, SceneRoot);
+        return (root, root is null ? Vector3.Zero : normal);
     }
 
     /// <summary>
@@ -560,6 +588,7 @@ public sealed class SceneRenderer : IDisposable
             GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
                                        FramebufferAttachment.DepthStencilAttachment,
                                        RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
+            ValidateFbo("sceneFbo(create)");
 
             // Mask FBO: colour texture + shared scene depth.
             // Sharing the depth buffer means the mask pass respects scene occlusion
@@ -587,6 +616,7 @@ public sealed class SceneRenderer : IDisposable
             GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
                                        FramebufferAttachment.DepthStencilAttachment,
                                        RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
+            ValidateFbo("maskFbo(create)");
         }
         else
         {
@@ -662,6 +692,7 @@ public sealed class SceneRenderer : IDisposable
             GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
                                        FramebufferAttachment.DepthStencilAttachment,
                                        RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
+            ValidateFbo("sceneFbo(resize)");
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
             GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
@@ -670,6 +701,7 @@ public sealed class SceneRenderer : IDisposable
             GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
                                        FramebufferAttachment.DepthStencilAttachment,
                                        RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
+            ValidateFbo("maskFbo(resize)");
         }
 
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
@@ -678,6 +710,13 @@ public sealed class SceneRenderer : IDisposable
 
         _fboWidth  = w;
         _fboHeight = h;
+    }
+
+    private static void ValidateFbo(string name)
+    {
+        var status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
+        if (status != FramebufferErrorCode.FramebufferComplete)
+            throw new InvalidOperationException($"FBO '{name}' incomplete: {status}");
     }
 
     private void DestroyFbos()

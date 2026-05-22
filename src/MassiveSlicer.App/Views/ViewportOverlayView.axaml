@@ -1,0 +1,78 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
+             x:CompileBindings="False">
+
+    <Grid>
+
+        <!-- Selection toolbar — bottom-left -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="4">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="V" Classes="ToolbarButton" ToolTip.Tip="Vertex (1)" Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="E" Classes="ToolbarButton" ToolTip.Tip="Edge (2)"   Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="F" Classes="ToolbarButton" ToolTip.Tip="Face (3)"   Padding="6,4" Margin="0,0,2,0"/>
+                <Button Content="O" Classes="ToolbarButton" ToolTip.Tip="Object (4)" Padding="6,4" Margin="0,0,8,0"/>
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="0,4"/>
+                <Button Content="Q" Classes="ToolbarButton" ToolTip.Tip="Select (Q)" Padding="6,4" Margin="4,0,2,0"/>
+                <Button Content="G" Classes="ToolbarButton" ToolTip.Tip="Move (G)"   Padding="6,4" Margin="0,0,2,0"
+                        Classes.active="{Binding IsMoveActive}"
+                        Command="{Binding GizmoMoveCommand}"/>
+                <Button Content="R" Classes="ToolbarButton" ToolTip.Tip="Rotate (R)" Padding="6,4" Margin="0,0,2,0"
+                        Classes.active="{Binding IsRotateActive}"
+                        Command="{Binding GizmoRotateCommand}"/>
+                <Button Content="S" Classes="ToolbarButton" ToolTip.Tip="Scale (S)"  Padding="6,4"
+                        Classes.active="{Binding IsScaleActive}"
+                        Command="{Binding GizmoScaleCommand}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Focus overlay — top-left, visible only when an object is selected -->
+        <Border IsVisible="{Binding HasSelection}"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="4">
+            <StackPanel Orientation="Horizontal">
+                <Button Content="Focus"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Command="{Binding FocusCommand}"
+                        ToolTip.Tip="Focus camera on selected object (F)"/>
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"/>
+                <Button Content="Lay Flat"
+                        Classes="ToolbarButton"
+                        Classes.active="{Binding IsLayFlatMode}"
+                        Padding="10,4"
+                        Command="{Binding LayFlatCommand}"
+                        ToolTip.Tip="Click a face to align it with the build plate (Esc to cancel)"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Coordinate readout — bottom-right -->
+        <Border HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,4">
+            <TextBlock Text="X: 0.0   Y: 0.0   Z: 0.0"
+                       Classes="Readout"
+                       FontSize="11"/>
+        </Border>
+
+    </Grid>
+
+</UserControl>

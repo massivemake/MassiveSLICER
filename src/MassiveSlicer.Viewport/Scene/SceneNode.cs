@@ -35,6 +35,12 @@ public sealed class SceneNode
     /// </summary>
     public bool Overlay { get; set; } = false;
 
+    /// <summary>
+    /// When <c>false</c> this node and its entire subtree are skipped during rendering.
+    /// Toggle to show or hide geometry without removing it from the scene graph.
+    /// </summary>
+    public bool Visible { get; set; } = true;
+
     // ── Hierarchy ─────────────────────────────────────────────────────────────
 
     /// <summary>Parent node, or <c>null</c> for a root node.</summary>
@@ -90,6 +96,7 @@ public sealed class SceneNode
     /// <param name="lightIntensity">Directional light multiplier (1 = default).</param>
     public void Draw(Matrix4 viewProj, Vector3 viewPos, Vector3 lightDir, float lightIntensity)
     {
+        if (!Visible) return;
         var world   = WorldTransform;
         var fullMvp = world * viewProj;
         Mesh?.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);

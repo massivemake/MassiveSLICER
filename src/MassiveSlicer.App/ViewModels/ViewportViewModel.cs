@@ -222,6 +222,48 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Sets <see cref="ActiveShaderMode"/> from a string enum name (e.g. "Clay").</summary>
     public RelayCommand<string> SetShaderModeCommand { get; }
 
+    // ── Gizmo mode (synced to renderer via OnRender) ─────────────────────────
+
+    private GizmoMode _activeGizmoMode;
+
+    internal GizmoMode ActiveGizmoModeInternal
+    {
+        get => _activeGizmoMode;
+        set
+        {
+            if (_activeGizmoMode == value) return;
+            _activeGizmoMode = value;
+            OnPropertyChanged(nameof(IsMoveActive));
+            OnPropertyChanged(nameof(IsRotateActive));
+            OnPropertyChanged(nameof(IsScaleActive));
+            NotifyRenderNeeded();
+        }
+    }
+
+    public bool IsMoveActive   => _activeGizmoMode == GizmoMode.Translate;
+    public bool IsRotateActive => _activeGizmoMode == GizmoMode.Rotate;
+    public bool IsScaleActive  => _activeGizmoMode == GizmoMode.Scale;
+
+    public RelayCommand GizmoMoveCommand   { get; }
+    public RelayCommand GizmoRotateCommand { get; }
+    public RelayCommand GizmoScaleCommand  { get; }
+
+    // ── Selection / focus overlay ─────────────────────────────────────────────
+
+    private bool _hasSelection;
+
+    /// <summary>True when an object is selected in the viewport (shows the focus overlay).</summary>
+    public bool HasSelection
+    {
+        get => _hasSelection;
+        set => SetField(ref _hasSelection, value);
+    }
+
+    public RelayCommand FocusCommand { get; }
+
+    /// <summary>Callback set by the viewport code-behind to perform focus-on-selection.</summary>
+    internal Action? OnFocusRequested { get; set; }
+
     public ViewportViewModel()
     {
         SetShaderModeCommand = new RelayCommand<string>(name =>
@@ -230,6 +272,11 @@ public sealed class ViewportViewModel : ViewModelBase
                 ActiveShaderMode = mode;
         });
         SetDefaultBackdropCommand = new RelayCommand(() => OnSetDefaultBackdrop?.Invoke(ActiveBackdropPath));
+        LayFlatCommand = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
+        FocusCommand   = new RelayCommand(() => OnFocusRequested?.Invoke());
+        GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Translate);
+        GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Rotate);
+        GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Scale);
         SliceCommand = new RelayCommand(
             execute:  () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && OutlinerItems.Count > 0);
@@ -245,6 +292,23 @@ public sealed class ViewportViewModel : ViewModelBase
         AvailableBackdrops = options;
         _activeBackdrop    = options[0];
     }
+
+    // ── Lay Flat ──────────────────────────────────────────────────────────────
+
+    private bool _isLayFlatMode;
+
+    /// <summary>
+    /// When <c>true</c> the viewport is waiting for the user to click a face;
+    /// the clicked face will be aligned to the build plate.
+    /// </summary>
+    public bool IsLayFlatMode
+    {
+        get => _isLayFlatMode;
+        set => SetField(ref _isLayFlatMode, value);
+    }
+
+    /// <summary>Toggles <see cref="IsLayFlatMode"/> to begin or cancel face-pick mode.</summary>
+    public RelayCommand LayFlatCommand { get; }
 
     // ── Slicing ───────────────────────────────────────────────────────────────
 
@@ -290,6 +354,11 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Nodes queued for GL-thread removal and GPU resource disposal.</summary>
     public ConcurrentQueue<SceneNode> PendingRemoveNodes { get; } = new();
 
+    /// <summary>Signals the GL thread to clear the active toolpath renderer.</summary>
+    public ConcurrentQueue<bool> PendingClearToolpath { get; } = new();
+
+    private OutlinerItemViewModel? _toolpathItem;
+
     /// <summary>
     /// Enqueues <paramref name="node"/> for GPU upload and registers it in the outliner.
     /// Must be called on the UI thread.
@@ -297,9 +366,28 @@ public sealed class ViewportViewModel : ViewModelBase
     public void AddUserNode(SceneNode node)
     {
         PendingNodes.Enqueue(node);
-        OutlinerItems.Add(new OutlinerItemViewModel(node, RemoveUserNode));
+        OutlinerItems.Add(new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode));
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Adds a "Toolpath" entry to the outliner if one does not already exist.
+    /// Deleting it clears the active toolpath on the GL thread.
+    /// Must be called on the UI thread.
+    /// </summary>
+    internal void RegisterToolpathInOutliner()
+    {
+        if (_toolpathItem is not null) return;
+        var sentinel = new SceneNode { Name = "Toolpath", Selectable = false };
+        _toolpathItem = new OutlinerItemViewModel(sentinel, NotifyRenderNeeded, item =>
+        {
+            OutlinerItems.Remove(item);
+            _toolpathItem = null;
+            PendingClearToolpath.Enqueue(true);
+            NotifyRenderNeeded();
+        });
+        OutlinerItems.Add(_toolpathItem);
     }
 
     /// <summary>

@@ -73,20 +73,17 @@
                          Padding="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          IsVisible="{Binding IsOutlinerTabActive}">
+                    <ListBox.Resources>
+                        <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#21273a"/>
+                        <SolidColorBrush x:Key="ThemeAccentBrush4"             Color="#1e3800"/>
+                        <SolidColorBrush x:Key="ThemeAccentBrush3"             Color="#253300"/>
+                        <SolidColorBrush x:Key="ThemeAccentBrush2"             Color="#2c3c00"/>
+                    </ListBox.Resources>
                     <ListBox.Styles>
                         <Style Selector="ListBoxItem">
                             <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                             <Setter Property="Padding" Value="0"/>
                             <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:pointerover">
-                            <Setter Property="Background" Value="{DynamicResource Bg4}"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:selected">
-                            <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
-                        </Style>
-                        <Style Selector="ListBoxItem:selected:pointerover">
-                            <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
                         </Style>
                     </ListBox.Styles>
 
@@ -96,12 +93,18 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0"
                                            Text="{Binding Name}"
                                            VerticalAlignment="Center"
                                            Padding="0,5"/>
-                                <Button Grid.Column="1"
+                                <CheckBox Grid.Column="1"
+                                          IsChecked="{Binding Visible, Mode=TwoWay}"
+                                          VerticalAlignment="Center"
+                                          Margin="2,0,0,0"
+                                          ToolTip.Tip="Toggle visibility"/>
+                                <Button Grid.Column="2"
                                         Content="×"
                                         Command="{Binding DeleteCommand}"
                                         Classes="ToolbarButton"
