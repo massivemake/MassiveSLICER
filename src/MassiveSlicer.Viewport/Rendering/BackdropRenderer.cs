@@ -16,6 +16,9 @@ public sealed class BackdropRenderer : IDisposable
     private readonly int    _vao, _vbo, _tex;
     private bool _disposed;
 
+    /// <summary>GL texture handle for the loaded HDR image. Used by mesh shaders for IBL.</summary>
+    public int TextureId => _tex;
+
     private static readonly string VertSrc = """
         #version 330 core
         layout(location = 0) in vec2 aPos;

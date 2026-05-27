@@ -13,6 +13,8 @@ public sealed class ToolpathRenderer : IDisposable
 {
     private int  _vao, _vbo;
     private int  _vertexCount;
+    private int  _ptVao, _ptVbo;
+    private int  _pointCount;
     private bool _disposed;
 
     private readonly Shader _shader;
@@ -40,8 +42,10 @@ public sealed class ToolpathRenderer : IDisposable
         }
         """;
 
-    private static readonly Vector3 TravelColor  = new(0.35f, 0.35f, 0.35f);
+    private static readonly Vector3 TravelColor  = new(0.18f, 0.42f, 0.18f);
     private static readonly Vector3 ExtrudeColor = new(0.1f, 0.45f, 0.9f);
+    private static readonly Vector3 SeamStart    = new(1.0f, 0.9f, 0.0f);  // yellow
+    private static readonly Vector3 SeamEnd      = new(1.0f, 0.2f, 0.1f);  // red
 
     public ToolpathRenderer(Toolpath toolpath, System.Numerics.Vector3 origin = default)
     {
@@ -90,6 +94,72 @@ public sealed class ToolpathRenderer : IDisposable
         GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
 
         GL.BindVertexArray(0);
+
+        // ── Seam points: start (yellow) and end (red) per contour ────────────
+        // Count extrude-runs first so we can allocate exactly.
+        int totalContours = 0;
+        foreach (var layer in toolpath.Layers)
+        {
+            bool inEx = false;
+            foreach (var m in layer.Moves)
+            {
+                if (m.Kind == MoveKind.Extrude && !inEx) { totalContours++; inEx = true; }
+                else if (m.Kind == MoveKind.Travel)       inEx = false;
+            }
+        }
+
+        var ptData = new float[totalContours * 2 * 6];
+        int pi = 0;
+
+        void WritePoint(System.Numerics.Vector3 p, Vector3 col)
+        {
+            ptData[pi++] = p.X - origin.X; ptData[pi++] = p.Y - origin.Y; ptData[pi++] = p.Z - origin.Z;
+            ptData[pi++] = col.X;           ptData[pi++] = col.Y;           ptData[pi++] = col.Z;
+        }
+
+        foreach (var layer in toolpath.Layers)
+        {
+            bool inExtrude = false;
+            System.Numerics.Vector3 extStart = default, extEnd = default;
+
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    if (!inExtrude) { extStart = move.From; inExtrude = true; }
+                    extEnd = move.To;
+                }
+                else
+                {
+                    if (inExtrude)
+                    {
+                        WritePoint(extStart, SeamStart);
+                        WritePoint(extEnd,   SeamEnd);
+                        inExtrude = false;
+                    }
+                }
+            }
+            if (inExtrude)
+            {
+                WritePoint(extStart, SeamStart);
+                WritePoint(extEnd,   SeamEnd);
+            }
+        }
+
+        _pointCount = pi / 6;
+        if (_pointCount > 0)
+        {
+            _ptVao = GL.GenVertexArray();
+            _ptVbo = GL.GenBuffer();
+            GL.BindVertexArray(_ptVao);
+            GL.BindBuffer(BufferTarget.ArrayBuffer, _ptVbo);
+            GL.BufferData(BufferTarget.ArrayBuffer, pi * sizeof(float), ptData, BufferUsageHint.StaticDraw);
+            GL.EnableVertexAttribArray(0);
+            GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 0);
+            GL.EnableVertexAttribArray(1);
+            GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), 3 * sizeof(float));
+            GL.BindVertexArray(0);
+        }
     }
 
     private static readonly Vector3 SelectColor = new(0.2f, 1.0f, 0.1f); // bright green
@@ -104,6 +174,16 @@ public sealed class ToolpathRenderer : IDisposable
         _shader.SetVector3("uSelectColor", SelectColor);
         GL.BindVertexArray(_vao);
         GL.DrawArrays(PrimitiveType.Lines, 0, _vertexCount);
+
+        if (_pointCount > 0)
+        {
+            GL.PointSize(8f);
+            _shader.SetFloat("uSelected", 0f); // always show true colors on seam points
+            GL.BindVertexArray(_ptVao);
+            GL.DrawArrays(PrimitiveType.Points, 0, _pointCount);
+            GL.PointSize(1f);
+        }
+
         GL.BindVertexArray(0);
     }
 
@@ -111,7 +191,8 @@ public sealed class ToolpathRenderer : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        if (_vao != 0) { GL.DeleteVertexArray(_vao); GL.DeleteBuffer(_vbo); }
+        if (_vao   != 0) { GL.DeleteVertexArray(_vao);   GL.DeleteBuffer(_vbo);   }
+        if (_ptVao != 0) { GL.DeleteVertexArray(_ptVao); GL.DeleteBuffer(_ptVbo); }
         _shader.Dispose();
     }
 

@@ -248,6 +248,26 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand GizmoRotateCommand { get; }
     public RelayCommand GizmoScaleCommand  { get; }
 
+    // ── Gizmo visibility toggle ───────────────────────────────────────────────
+
+    private bool _gizmoEnabled = true;
+
+    /// <summary>
+    /// When true the transform gizmo handles are shown and G/R/S switches mode.
+    /// When false the gizmo is hidden and G/R/S starts a keyboard+mouse transform.
+    /// </summary>
+    public bool GizmoEnabled
+    {
+        get => _gizmoEnabled;
+        set
+        {
+            if (SetField(ref _gizmoEnabled, value))
+                NotifyRenderNeeded();
+        }
+    }
+
+    public RelayCommand GizmoToggleCommand { get; }
+
     // ── Selection / focus overlay ─────────────────────────────────────────────
 
     private bool _hasSelection;
@@ -256,7 +276,11 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool HasSelection
     {
         get => _hasSelection;
-        set => SetField(ref _hasSelection, value);
+        set
+        {
+            if (SetField(ref _hasSelection, value))
+                SliceCommand?.RaiseCanExecuteChanged();
+        }
     }
 
     private bool _isToolpathSelected;
@@ -268,10 +292,13 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _isToolpathSelected, value);
     }
 
-    public RelayCommand FocusCommand { get; }
+    public RelayCommand FocusCommand       { get; }
+    public RelayCommand DropToPlateCommand { get; }
 
     /// <summary>Callback set by the viewport code-behind to perform focus-on-selection.</summary>
-    internal Action? OnFocusRequested { get; set; }
+    internal Action? OnFocusRequested      { get; set; }
+    /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
+    internal Action? OnDropToPlateRequested { get; set; }
 
     public ViewportViewModel()
     {
@@ -281,14 +308,16 @@ public sealed class ViewportViewModel : ViewModelBase
                 ActiveShaderMode = mode;
         });
         SetDefaultBackdropCommand = new RelayCommand(() => OnSetDefaultBackdrop?.Invoke(ActiveBackdropPath));
-        LayFlatCommand = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
-        FocusCommand   = new RelayCommand(() => OnFocusRequested?.Invoke());
+        LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
+        FocusCommand       = new RelayCommand(() => OnFocusRequested?.Invoke());
+        DropToPlateCommand = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
         GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Translate);
         GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Rotate);
         GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Scale);
+        GizmoToggleCommand = new RelayCommand(() => GizmoEnabled = !GizmoEnabled);
         SliceCommand = new RelayCommand(
             execute:  () => _ = OnSliceRequested?.Invoke(),
-            canExecute: () => !IsSlicing && OutlinerItems.Count > 0);
+            canExecute: () => !IsSlicing && HasSelection);
 
         var options = new List<BackdropOption> { new("None", null) };
         if (Directory.Exists("assets/Images"))

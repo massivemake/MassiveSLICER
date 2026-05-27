@@ -52,6 +52,13 @@ public partial class ViewportView : UserControl
     private Matrix4  _gizmoDragInitialLocal;
     private float    _gizmoDragStartAngle;
 
+    // Keyboard-initiated transform state (Blender-style G/R/S)
+    private bool      _kbTransformActive;
+    private GizmoMode _kbTransformOp;
+    private GizmoAxis _kbTransformAxis = GizmoAxis.None;
+    private Point     _kbTransformStartPos;
+    private Matrix4   _kbTransformInitialLocal;
+
     // Pointer capture
     private IPointer? _capturedPointer;
 
@@ -110,7 +117,8 @@ public partial class ViewportView : UserControl
             };
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
             vm.OnSliceRequested    = () => RunSliceAsync(vm);
-            vm.OnFocusRequested    = FocusSelected;
+            vm.OnFocusRequested       = FocusSelected;
+            vm.OnDropToPlateRequested = DropToPlate;
 
             // OverlayView is declared in the XAML Grid above GlCanvas. Because
             // there is no native HWND, normal Avalonia z-order works — no
@@ -123,6 +131,17 @@ public partial class ViewportView : UserControl
             robot.PropertyChanged += (_, _) => GlCanvas.RequestNextFrameRendering();
             robot.OnToolSelected   = OnToolSwapRequested;
         }
+
+        if (vm.AdditiveSettings is { } additive)
+        {
+            additive.PropertyChanged += (_, pe) =>
+            {
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.TiltAngle)
+                                    or nameof(AdditiveSettingsViewModel.TiltAngleX)
+                                    or nameof(AdditiveSettingsViewModel.Method))
+                    GlCanvas.RequestNextFrameRendering();
+            };
+        }
     }
 
     private void OnRender(TimeSpan delta, int w, int h)
@@ -134,6 +153,7 @@ public partial class ViewportView : UserControl
             _renderer.ShowGrid    = vm.ShowGrid;
             _renderer.ShowAxes    = vm.ShowAxes;
             _renderer.ShowBedGrid = vm.ShowBedGrid;
+            _renderer.GizmoEnabled   = vm.GizmoEnabled;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode     = vm.ActiveShaderMode;
             _renderer.LightAzimuth   = vm.LightAzimuth;
@@ -216,7 +236,13 @@ public partial class ViewportView : UserControl
             }
 
             while (vm.PendingToolpath.TryDequeue(out var entry))
+            {
                 _renderer.AddToolpath(entry.Toolpath, entry.Node);
+                _renderer.Select(entry.Node);
+                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+            }
+
+            UpdateAnglePlanePreview(vm);
 
             if (_fkController is not null && vm.Robot is not null)
             {
@@ -528,6 +554,18 @@ public partial class ViewportView : UserControl
         var btn  = ToButton(kind);
         _lastMousePos = pos;
 
+        // Keyboard transform is active — right click cancels, everything else is suppressed
+        // (left release will commit via OnPointerReleased)
+        if (_kbTransformActive)
+        {
+            if (kind == PointerUpdateKind.RightButtonPressed)
+            {
+                CancelKbTransform();
+                e.Handled = true;
+            }
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonPressed)
         {
             _leftDownPos = pos;
@@ -538,7 +576,9 @@ public partial class ViewportView : UserControl
             float vpW = (float)GlCanvas.Bounds.Width;
             float vpH = (float)GlCanvas.Bounds.Height;
 
-            var axis = _renderer.HitTestGizmo(mx, my, vpW, vpH);
+            var axis = _renderer.GizmoEnabled
+                ? _renderer.HitTestGizmo(mx, my, vpW, vpH)
+                : GizmoAxis.None;
             if (axis != GizmoAxis.None)
             {
                 StartGizmoDrag(axis, mx, my, vpW, vpH);
@@ -573,6 +613,12 @@ public partial class ViewportView : UserControl
         var pos   = pt.Position;
         var delta = pos - _lastMousePos;
         _lastMousePos = pos;
+
+        if (_kbTransformActive)
+        {
+            ApplyKbTransform(pos);
+            return;
+        }
 
         if (_gizmoDragAxis != GizmoAxis.None)
         {
@@ -618,6 +664,13 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+
+        if (kind == PointerUpdateKind.LeftButtonReleased && _kbTransformActive)
+        {
+            CommitKbTransform();
+            _leftDragged = false;
+            return;
+        }
 
         if (kind == PointerUpdateKind.LeftButtonReleased)
         {
@@ -684,13 +737,34 @@ public partial class ViewportView : UserControl
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        if (_kbTransformActive)
+        {
+            switch (e.Key)
+            {
+                case Key.X:      SetKbTransformAxis(GizmoAxis.X); e.Handled = true; return;
+                case Key.Y:      SetKbTransformAxis(GizmoAxis.Y); e.Handled = true; return;
+                case Key.Z:      SetKbTransformAxis(GizmoAxis.Z); e.Handled = true; return;
+                case Key.Return: CommitKbTransform();              e.Handled = true; return;
+                case Key.Escape: CancelKbTransform();              e.Handled = true; return;
+            }
+        }
+
         switch (e.Key)
         {
-            case Key.F:      FocusSelected();                   e.Handled = true; break;
-            case Key.G:      SetGizmoMode(GizmoMode.Translate); e.Handled = true; break;
-            case Key.R:      SetGizmoMode(GizmoMode.Rotate);    e.Handled = true; break;
-            case Key.S:      SetGizmoMode(GizmoMode.Scale);     e.Handled = true; break;
-            case Key.Delete: DeleteSelectedNode();              e.Handled = true; break;
+            case Key.F:      FocusSelected();                          e.Handled = true; break;
+            case Key.G:
+                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Translate);
+                else StartKbTransform(GizmoMode.Translate);
+                e.Handled = true; break;
+            case Key.R:
+                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Rotate);
+                else StartKbTransform(GizmoMode.Rotate);
+                e.Handled = true; break;
+            case Key.S:
+                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Scale);
+                else StartKbTransform(GizmoMode.Scale);
+                e.Handled = true; break;
+            case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
             case Key.Escape:
                 if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
                 {
@@ -757,12 +831,14 @@ public partial class ViewportView : UserControl
         try
         {
             // Snapshot mesh data on the UI thread (OutlinerItems is UI-thread-owned).
-            // Track which outliner items contributed so we can hide them after slicing.
+            // Only process the outliner item that owns the currently selected node.
+            var selectedNode  = _renderer.SelectedNode;
             var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
             var sourceItems   = new List<OutlinerItemViewModel>();
             foreach (var item in vm.OutlinerItems)
             {
-                if (!item.Visible) continue; // skip hidden items — they were already sliced
+                if (!item.Visible) continue;
+                if (selectedNode is null || !item.Node.SelfAndDescendants().Any(n => n == selectedNode)) continue;
                 bool contributed = false;
                 foreach (var node in item.Node.SelfAndDescendants())
                 {
@@ -773,6 +849,7 @@ public partial class ViewportView : UserControl
                 if (contributed) sourceItems.Add(item);
             }
 
+            var method = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = vm.AdditiveSettings is { } s
                 ? new SliceSettings
                 {
@@ -782,6 +859,8 @@ public partial class ViewportView : UserControl
                     FeedRate         = (float)s.FeedRate,
                     PtpSpeed         = (float)s.PtpSpeed,
                     ApproachZ        = (float)s.ApproachZ,
+                    TiltAngle        = (float)s.TiltAngle,
+                    TiltAngleX       = (float)s.TiltAngleX,
                 }
                 : new SliceSettings();
 
@@ -807,18 +886,25 @@ public partial class ViewportView : UserControl
                     flatMeshes.Add(flat);
                 }
 
-                return PlanarSlicer.Slice(flatMeshes, settings);
+                return method == SliceMethod.Angled
+                    ? AngledPlanarSlicer.Slice(flatMeshes, settings)
+                    : PlanarSlicer.Slice(flatMeshes, settings);
             });
 
             var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
-            var toolpathName = $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm";
+            var toolpathName = method == SliceMethod.Angled
+                ? $"Toolpath {settings.TiltAngle:0.##}° W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm"
+                : $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm";
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
             vm.PendingToolpath.Enqueue((toolpath, toolpathNode));
 
-            // Hide source meshes so the toolpath is unobstructed.
+            // Hide source meshes so the toolpath is unobstructed, then drop selection.
             foreach (var item in sourceItems)
                 item.Visible = false;
+
+            _renderer.Select(null);
+            UpdateFocusOverlay();
 
             GlCanvas.RequestNextFrameRendering();
         }
@@ -837,7 +923,17 @@ public partial class ViewportView : UserControl
         return new NVec3(x, y, z);
     }
 
-    // ── Lay Flat ──────────────────────────────────────────────────────────────
+    // ── Lay Flat / Drop to Plate ──────────────────────────────────────────────
+
+    private void DropToPlate()
+    {
+        if (_renderer.SelectedNode is not { } node) return;
+        float minZ = LayFlatMinZ(node);
+        if (minZ >= float.MaxValue) return;
+        node.LocalTransform = node.LocalTransform
+            * TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
+        GlCanvas.RequestNextFrameRendering();
+    }
 
     private static void ApplyLayFlat(SceneNode node, TkVector3 worldFaceNormal, float bedZ)
     {
@@ -924,6 +1020,201 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    // ── Keyboard-initiated transform (Blender-style G/R/S + X/Y/Z) ───────────
+
+    private void StartKbTransform(GizmoMode op)
+    {
+        SetGizmoMode(op);
+        if (_renderer.SelectedNode is not { } node) return;
+
+        _kbTransformActive       = true;
+        _kbTransformOp           = op;
+        _kbTransformAxis         = GizmoAxis.None;
+        _kbTransformStartPos     = _lastMousePos;
+        _kbTransformInitialLocal = node.LocalTransform;
+
+        _toolIsDragging = (node == _currentToolNode);
+        if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
+        {
+            _ikDragTcpOffset = tcpMat.Row3.Xyz - node.WorldTransform.Row3.Xyz;
+            if (DataContext is ViewportViewModel { Robot: { } robot })
+                _ikDragTargetRot = _ikSolver.TargetRotFromKukaAbc(
+                    (float)robot.TcpA, (float)robot.TcpB, (float)robot.TcpC);
+        }
+
+        // Prime the view-plane state so unconstrained translate tracks exactly from the start.
+        if (op == GizmoMode.Translate)
+            SetupKbViewPlane(node);
+    }
+
+    // Stores the camera view-plane (normal + anchor + start-hit) for unconstrained translate.
+    private void SetupKbViewPlane(SceneNode node)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+
+        _gizmoDragPlaneNormal  = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+        _gizmoDragPlanePoint   = node.WorldTransform.Row3.Xyz;
+        _gizmoDragInitialLocal = node.LocalTransform;
+
+        var startRay = _renderer.Camera.GetPickRay(
+            (float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y, vpW, vpH);
+        float denom = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
+        _gizmoDragStartHit = MathF.Abs(denom) > 1e-5f
+            ? startRay.At(Vector3.Dot(_gizmoDragPlanePoint - startRay.Origin, _gizmoDragPlaneNormal) / denom)
+            : _gizmoDragPlanePoint;
+    }
+
+    private void SetKbTransformAxis(GizmoAxis axis)
+    {
+        if (!_kbTransformActive || _renderer.SelectedNode is not { } node) return;
+
+        // Reset node so WorldTransform reflects the initial position before re-setup.
+        node.LocalTransform      = _kbTransformInitialLocal;
+        _kbTransformAxis         = axis;
+        _renderer.ActiveDragAxis = axis;
+
+        if (axis != GizmoAxis.None && _kbTransformOp == GizmoMode.Translate)
+        {
+            // Re-use the gizmo drag plane-intersection setup anchored at the keyboard start pos.
+            // StartGizmoDrag reads node.LocalTransform (= _kbTransformInitialLocal) for _gizmoDragInitialLocal.
+            float vpW = (float)GlCanvas.Bounds.Width;
+            float vpH = (float)GlCanvas.Bounds.Height;
+            StartGizmoDrag(axis,
+                (float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y,
+                vpW, vpH);
+        }
+
+        ApplyKbTransform(_lastMousePos);
+    }
+
+    private void CommitKbTransform()
+    {
+        _kbTransformActive       = false;
+        _kbTransformAxis         = GizmoAxis.None;
+        _gizmoDragAxis           = GizmoAxis.None;
+        _renderer.ActiveDragAxis = GizmoAxis.None;
+        _toolIsDragging          = false;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void CancelKbTransform()
+    {
+        if (_renderer.SelectedNode is { } node)
+            node.LocalTransform  = _kbTransformInitialLocal;
+        _kbTransformActive       = false;
+        _kbTransformAxis         = GizmoAxis.None;
+        _gizmoDragAxis           = GizmoAxis.None;
+        _renderer.ActiveDragAxis = GizmoAxis.None;
+        _toolIsDragging          = false;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void ApplyKbTransform(Point mousePos)
+    {
+        if (!_kbTransformActive || _renderer.SelectedNode is not { } node) return;
+
+        float mx  = (float)mousePos.X;
+        float my  = (float)mousePos.Y;
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        float dx  = (float)(mousePos.X - _kbTransformStartPos.X);
+
+        switch (_kbTransformOp)
+        {
+            case GizmoMode.Translate:
+                if (_kbTransformAxis != GizmoAxis.None)
+                    // Axis-constrained: plane-intersection via existing gizmo drag logic —
+                    // _gizmoDragInitialLocal was captured by StartGizmoDrag at SetKbTransformAxis time.
+                    ProcessGizmoDrag(mx, my);
+                else
+                    KbTranslateViewPlane(node, mx, my, vpW, vpH);
+                break;
+
+            case GizmoMode.Rotate:
+                // dx-based is stable for all camera angles; no plane-intersection singularity.
+                KbRotate(node, dx);
+                break;
+
+            case GizmoMode.Scale:
+                KbScale(node, dx, vpW);
+                break;
+        }
+
+        if (_toolIsDragging)
+            RunIkForToolDrag();
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    // Unconstrained translate: follows the mouse exactly in the camera view plane.
+    private void KbTranslateViewPlane(SceneNode node, float mx, float my, float vpW, float vpH)
+    {
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        float denom = Vector3.Dot(ray.Direction, _gizmoDragPlaneNormal);
+        if (MathF.Abs(denom) < 1e-5f) return;
+        float t = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
+        var hitWorld = ray.At(t);
+
+        var worldDelta  = hitWorld - _gizmoDragStartHit;
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        var localDelta = TransformDir(worldDelta, invParent);
+
+        var lt = _kbTransformInitialLocal;
+        lt.M41 += localDelta.X;
+        lt.M42 += localDelta.Y;
+        lt.M43 += localDelta.Z;
+        node.LocalTransform = lt;
+    }
+
+    private void KbRotate(SceneNode node, float dx)
+    {
+        var axisDir = _kbTransformAxis switch
+        {
+            GizmoAxis.X => Vector3.UnitX,
+            GizmoAxis.Y => Vector3.UnitY,
+            GizmoAxis.Z => Vector3.UnitZ,
+            _           => Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye),
+        };
+
+        float angle = dx * 0.01f;
+        var   rot   = Matrix4.CreateFromAxisAngle(axisDir, angle);
+
+        var lt = _kbTransformInitialLocal;
+        var p  = new Vector3(lt.M41, lt.M42, lt.M43);
+        lt     = lt * rot;
+        lt.M41 = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
+        node.LocalTransform = lt;
+    }
+
+    private void KbScale(SceneNode node, float dx, float vpW)
+    {
+        float t     = dx / (vpW * 0.5f);
+        float ratio = MathF.Exp(t * MathF.Log(3f));
+        if (ratio <= 0f) return;
+
+        var lt = _kbTransformInitialLocal;
+        switch (_kbTransformAxis)
+        {
+            case GizmoAxis.X:
+                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
+                break;
+            case GizmoAxis.Y:
+                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
+                break;
+            case GizmoAxis.Z:
+                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
+                break;
+            default:
+                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
+                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
+                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
+                break;
+        }
+        node.LocalTransform = lt;
+    }
+
     private void UpdateFocusOverlay()
     {
         if (DataContext is ViewportViewModel vm)
@@ -932,6 +1223,58 @@ public partial class ViewportView : UserControl
             vm.IsToolpathSelected = _renderer.SelectedNode is not null
                                  && _renderer.IsToolpathNode(_renderer.SelectedNode);
         }
+    }
+
+    private void UpdateAnglePlanePreview(ViewportViewModel vm)
+    {
+        var node = _renderer.SelectedNode;
+        if (node is null
+            || vm.AdditiveSettings?.Method != SliceMethod.Angled
+            || _renderer.IsToolpathNode(node))
+        {
+            _renderer.SetPlanePreview(null, null);
+            return;
+        }
+
+        // World-space AABB of the selected node.
+        var min = new TkVector3(float.MaxValue);
+        var max = new TkVector3(float.MinValue);
+        Span<TkVector3> corners = stackalloc TkVector3[8];
+        bool hasGeometry = false;
+        foreach (var n in node.SelfAndDescendants())
+        {
+            if (n.Mesh?.PickingData is not { } mesh) continue;
+            var world = n.WorldTransform;
+            var (bMin, bMax) = mesh.LocalBounds;
+            corners[0] = new(bMin.X, bMin.Y, bMin.Z); corners[1] = new(bMax.X, bMin.Y, bMin.Z);
+            corners[2] = new(bMin.X, bMax.Y, bMin.Z); corners[3] = new(bMax.X, bMax.Y, bMin.Z);
+            corners[4] = new(bMin.X, bMin.Y, bMax.Z); corners[5] = new(bMax.X, bMin.Y, bMax.Z);
+            corners[6] = new(bMin.X, bMax.Y, bMax.Z); corners[7] = new(bMax.X, bMax.Y, bMax.Z);
+            foreach (var p in corners)
+            {
+                var w = new TkVector3(
+                    p.X * world.M11 + p.Y * world.M21 + p.Z * world.M31 + world.M41,
+                    p.X * world.M12 + p.Y * world.M22 + p.Z * world.M32 + world.M42,
+                    p.X * world.M13 + p.Y * world.M23 + p.Z * world.M33 + world.M43);
+                min = TkVector3.ComponentMin(min, w);
+                max = TkVector3.ComponentMax(max, w);
+            }
+            hasGeometry = true;
+        }
+
+        if (!hasGeometry) { _renderer.SetPlanePreview(null, null); return; }
+
+        var center = (min + max) * 0.5f;
+        float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.3f;
+
+        float ty = (float)(vm.AdditiveSettings.TiltAngle  * Math.PI / 180.0);
+        float tx = (float)(vm.AdditiveSettings.TiltAngleX * Math.PI / 180.0);
+        var normal = new TkVector3(
+            MathF.Sin(ty),
+            -MathF.Sin(tx) * MathF.Cos(ty),
+             MathF.Cos(tx) * MathF.Cos(ty));
+
+        _renderer.SetPlanePreview(center, normal, size);
     }
 
     private void FocusSelected()

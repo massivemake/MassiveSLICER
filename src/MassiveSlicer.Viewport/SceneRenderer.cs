@@ -21,6 +21,7 @@ public sealed class SceneRenderer : IDisposable
     private BedBoundaryRenderer? _bedBoundary;
     private GizmoRenderer?       _gizmo;
     private BackdropRenderer?    _backdrop;
+    private PlanePreviewRenderer? _planePreview;
 
     private readonly struct ToolpathEntry
     {
@@ -163,6 +164,9 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Active gizmo mode: translate, scale, or rotate.</summary>
     public GizmoMode GizmoMode { get; set; } = GizmoMode.Translate;
 
+    /// <summary>When false the gizmo is not rendered and handle hit-testing is skipped.</summary>
+    public bool GizmoEnabled { get; set; } = true;
+
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
 
@@ -231,6 +235,22 @@ public sealed class SceneRenderer : IDisposable
         BedZ         = origin.Z;
         _bedBoundary?.Dispose();
         _bedBoundary = new BedBoundaryRenderer(origin, width, depth);
+    }
+
+    /// <summary>
+    /// Updates (or clears) the angled-slice plane preview quad.
+    /// Pass <c>null</c> center to hide it. Must be called on the GL thread.
+    /// </summary>
+    public void SetPlanePreview(Vector3? center, Vector3? normal, float size = 100f)
+    {
+        if (center is null || normal is null)
+        {
+            _planePreview?.Dispose();
+            _planePreview = null;
+            return;
+        }
+        _planePreview ??= new PlanePreviewRenderer();
+        _planePreview.Update(center.Value, normal.Value, size);
     }
 
     /// <summary>
@@ -330,6 +350,15 @@ public sealed class SceneRenderer : IDisposable
         if (ShowAxes)    _axes?.Draw(mvp);
         if (ShowBedGrid) _bedBoundary?.Draw(mvp);
 
+        // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
+        // Unit 0 is left for other samplers; unit 1 stays bound for all mesh draws.
+        if (_backdrop is not null)
+        {
+            GL.ActiveTexture(TextureUnit.Texture1);
+            GL.BindTexture(TextureTarget.Texture2D, _backdrop.TextureId);
+            GL.ActiveTexture(TextureUnit.Texture0);
+        }
+
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1f, 1f);
         foreach (var child in SceneRoot.Children)
@@ -349,6 +378,9 @@ public sealed class SceneRenderer : IDisposable
             var toolpathMvp = tpNode.LocalTransform * mvp;
             entry.Renderer.Draw(toolpathMvp, selected: tpNode == SelectedNode);
         }
+
+        // Draw the angled-slice plane preview (only present when Angled method is active).
+        _planePreview?.Draw(mvp);
 
         // ── Selection mask pass ───────────────────────────────────────────────
         // Render the selected object as flat white into the mask FBO. The mask FBO
@@ -438,6 +470,8 @@ public sealed class SceneRenderer : IDisposable
         // ── Gizmo pass ────────────────────────────────────────────────────────
         // Drawn directly into the output FBO after the composite so it always
         // appears on top of the selection outline.
+        // Axis highlight renders whenever a drag/keyboard transform has an active axis
+        // (even when gizmo handles are hidden). Handles only render when GizmoEnabled.
         if (SelectedNode is { } sel && _gizmo is not null)
         {
             var nodePos = sel.WorldTransform.Row3.Xyz;
@@ -446,11 +480,17 @@ public sealed class SceneRenderer : IDisposable
 
             GL.Clear(ClearBufferMask.DepthBufferBit);
             GL.Disable(EnableCap.CullFace);
+
             if (ActiveDragAxis != GizmoAxis.None)
                 _gizmo.DrawAxisHighlight(nodePos, ActiveDragAxis, Camera.FarClip * 0.9f, mvp);
-            _gizmo.Draw(nodePos, scale, mvp, GizmoMode);
-            if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
-                _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp);
+
+            if (GizmoEnabled)
+            {
+                _gizmo.Draw(nodePos, scale, mvp, GizmoMode);
+                if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
+                    _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp);
+            }
+
             GL.Enable(EnableCap.CullFace);
         }
     }
@@ -580,6 +620,7 @@ public sealed class SceneRenderer : IDisposable
         _bedBoundary?.Dispose();
         _gizmo?.Dispose();
         _backdrop?.Dispose();
+        _planePreview?.Dispose();
         foreach (var entry in _toolpaths.Values) entry.Renderer.Dispose();
         _toolpaths.Clear();
         _maskShader?.Dispose();
@@ -598,31 +639,38 @@ public sealed class SceneRenderer : IDisposable
 
     private void ApplyShaderModeToSubtree(SceneNode root)
     {
+        bool hasEnv = _backdrop is not null;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
+            mesh.HasEnvMap = hasEnv;
             switch (ShaderMode)
             {
                 case ShaderMode.Standard:
+                {
+                    // Use PBR values baked in from the source file.
+                    var pd = mesh.PickingData;
+                    float smoothness = 1f - pd.Roughness;
                     mesh.NormalsMode      = false;
-                    mesh.Metallic         = 0f;
-                    mesh.Color            = mesh.PickingData.BaseColor;
-                    mesh.SpecularStrength = 0.25f;
-                    mesh.Shininess        = 32f;
+                    mesh.Color            = pd.BaseColor;
+                    mesh.Metallic         = pd.Metallic;
+                    mesh.Shininess        = MathF.Pow(2f, smoothness * 5f);
+                    mesh.SpecularStrength = smoothness * (0.25f + pd.Metallic * 0.5f);
                     break;
+                }
                 case ShaderMode.Clay:
                     mesh.NormalsMode      = false;
                     mesh.Metallic         = 0f;
                     mesh.Color            = ClayColor;
-                    mesh.SpecularStrength = 0.05f;
-                    mesh.Shininess        = 8f;
+                    mesh.SpecularStrength = 0f;
+                    mesh.Shininess        = 1f;
                     break;
                 case ShaderMode.Metal:
                     mesh.NormalsMode      = false;
-                    mesh.Metallic         = 1f;
+                    mesh.Metallic         = 0.85f;
                     mesh.Color            = MetalColor;
-                    mesh.SpecularStrength = 0.80f;
-                    mesh.Shininess        = 120f;
+                    mesh.SpecularStrength = 0.35f;
+                    mesh.Shininess        = 18f;
                     break;
                 case ShaderMode.Chrome:
                     mesh.NormalsMode      = false;
@@ -640,10 +688,10 @@ public sealed class SceneRenderer : IDisposable
                     break;
                 case ShaderMode.Purple:
                     mesh.NormalsMode      = false;
-                    mesh.Metallic         = 0.3f;
+                    mesh.Metallic         = 0.1f;
                     mesh.Color            = PurpleColor;
-                    mesh.SpecularStrength = 0.35f;
-                    mesh.Shininess        = 48f;
+                    mesh.SpecularStrength = 0.15f;
+                    mesh.Shininess        = 16f;
                     break;
                 case ShaderMode.Normals:
                     mesh.NormalsMode      = true;

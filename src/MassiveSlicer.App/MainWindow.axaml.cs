@@ -126,7 +126,10 @@ public partial class MainWindow : Window
         {
             try
             {
-                var node = StlLoader.Load(frame.ModelPath, $"{cell.Name}_BoosterFrame");
+                var ext  = Path.GetExtension(frame.ModelPath).ToLowerInvariant();
+                var node = (ext is ".glb" or ".gltf")
+                    ? GltfLoader.Load(frame.ModelPath)
+                    : StlLoader.Load(frame.ModelPath, $"{cell.Name}_BoosterFrame");
                 var p    = frame.WorldPosition;
                 if (p.X != 0f || p.Y != 0f || p.Z != 0f)
                 {
@@ -152,7 +155,10 @@ public partial class MainWindow : Window
         {
             try
             {
-                var bed     = StlLoader.Load(bedPath, $"{cell.Name}_Bed");
+                var bedExt  = Path.GetExtension(bedPath).ToLowerInvariant();
+                var bed     = (bedExt is ".glb" or ".gltf")
+                    ? GltfLoader.Load(bedPath)
+                    : StlLoader.Load(bedPath, $"{cell.Name}_Bed");
                 var o       = cell.Bed.Origin;
                 var wrapper = new SceneNode
                 {

@@ -35,6 +35,12 @@ public sealed class MeshRenderer : IDisposable
     /// </summary>
     public float Metallic { get; set; }
 
+    /// <summary>
+    /// When true the fragment shader samples the backdrop equirectangular texture (bound to
+    /// unit 1 by SceneRenderer) for environment reflections and diffuse IBL.
+    /// </summary>
+    public bool HasEnvMap { get; set; }
+
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
@@ -65,16 +71,44 @@ public sealed class MeshRenderer : IDisposable
         in vec3 vWorldPos;
         in vec3 vNormal;
 
-        uniform vec3  uLightDir;       // direction TO the light, world space
-        uniform vec3  uViewPos;        // camera position, world space
-        uniform vec4  uBaseColor;
-        uniform float uSpecular;
-        uniform float uShininess;
-        uniform float uMetallic;       // 0=dielectric, 1=metallic
-        uniform float uLightIntensity; // scales directional light (diffuse + specular)
-        uniform int   uShadingMode;    // 0=shaded, 1=normals
+        uniform vec3      uLightDir;       // direction TO the light, world space
+        uniform vec3      uViewPos;        // camera position, world space
+        uniform vec4      uBaseColor;
+        uniform float     uSpecular;
+        uniform float     uShininess;
+        uniform float     uMetallic;       // 0=dielectric, 1=metallic
+        uniform float     uLightIntensity; // scales directional light (diffuse + specular)
+        uniform int       uShadingMode;    // 0=shaded, 1=normals
+        uniform sampler2D uEnvTex;         // equirectangular HDR backdrop (unit 1)
+        uniform int       uHasEnv;         // 1 when uEnvTex is valid
 
         out vec4 fragColor;
+
+        const float PI = 3.14159265;
+
+        vec3 sampleEnv(vec3 dir, float lod) {
+            float u = atan(dir.y, dir.x) / (2.0 * PI) + 0.5;
+            float v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
+            vec3 raw = textureLod(uEnvTex, vec2(u, v), lod).rgb;
+            return pow(max(raw, vec3(0.0)), vec3(1.0 / 2.2));
+        }
+
+        // 5-tap cross sample to smooth blocky mip boundaries at high LOD values.
+        // At LOD 5+ the texture is only 32-64px wide, so a single tap shows visible
+        // pixel blocks. The 4 offset taps straddle adjacent texels; spread grows with
+        // LOD so sharp reflections (LOD 0-1) are unaffected.
+        vec3 sampleEnvSmooth(vec3 dir, float lod) {
+            vec3 t = abs(dir.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+            vec3 r = normalize(cross(t, dir));
+            vec3 u = cross(dir, r);
+            float s = max(lod - 1.0, 0.0) * 0.07;
+            vec3 c = sampleEnv(dir, lod);
+            c += sampleEnv(normalize(dir + r * s), lod);
+            c += sampleEnv(normalize(dir - r * s), lod);
+            c += sampleEnv(normalize(dir + u * s), lod);
+            c += sampleEnv(normalize(dir - u * s), lod);
+            return c * 0.2;
+        }
 
         void main() {
             vec3 N = normalize(vNormal);
@@ -84,21 +118,47 @@ public sealed class MeshRenderer : IDisposable
                 return;
             }
 
-            vec3 L = normalize(uLightDir);
-            vec3 V = normalize(uViewPos - vWorldPos);
-            vec3 R = reflect(-L, N);
+            vec3 L    = normalize(uLightDir);
+            vec3 V    = normalize(uViewPos - vWorldPos);
+            vec3 Rdir = reflect(-L, N);
+            vec3 Renv = reflect(-V, N);
             float NdotL = max(dot(N, L), 0.0);
             float NdotV = max(dot(N, V), 0.0);
 
-            float ambient = 0.15;
+            float specWeight = mix(uSpecular, 1.0, uMetallic);
+
+            // Keep flat ambient at 0.15 for fully matte materials even when an env map is
+            // loaded -- env IBL is skipped for them, so they would otherwise go dark.
+            // Shiny/metallic materials use 0.04 since env IBL supplements the ambient.
+            float ambient = (uHasEnv == 1 && specWeight > 0.01) ? 0.04 : 0.15;
             float diffuse = NdotL * mix(0.75, 0.08, uMetallic) * uLightIntensity;
 
-            float specRaw  = pow(max(dot(R, V), 0.0), uShininess) * uSpecular * uLightIntensity;
+            float specRaw  = pow(max(dot(Rdir, V), 0.0), uShininess) * uSpecular * uLightIntensity;
             vec3 specColor = mix(vec3(1.0), uBaseColor.rgb, uMetallic) * specRaw;
 
             float fresnel = pow(1.0 - NdotV, 4.0) * uMetallic * 0.75 * uLightIntensity;
 
             vec3 color = uBaseColor.rgb * (ambient + diffuse) + specColor + fresnel;
+
+            // Environment IBL -- only for shiny/metallic materials.
+            // Matte objects (specWeight <= 0.01) use flat ambient only; the directional
+            // variation from envDiff sampling reads as sheen on otherwise flat surfaces.
+            if (uHasEnv == 1 && specWeight > 0.01) {
+                float roughness = 1.0 - clamp(log2(max(uShininess, 1.0)) / 5.0, 0.0, 1.0);
+                vec3 F0 = mix(vec3(0.04), uBaseColor.rgb, uMetallic);
+
+                // Dielectrics (metallic=0) always start at LOD 5 so they never show
+                // a sharp reflection. Pure metals (metallic=1) start at LOD 0 and can
+                // be mirror-like. Roughness adds further blur on top of that baseline.
+                float minLod  = mix(5.0, 0.0, uMetallic);
+                float specLod = minLod + roughness * (6.0 - minLod);
+                vec3 envSpec  = sampleEnvSmooth(Renv, specLod);
+                color += envSpec * F0 * specWeight;
+
+                vec3 envDiff = sampleEnv(N, 7.0);
+                color += envDiff * uBaseColor.rgb * (1.0 - uMetallic) * 0.15;
+            }
+
             fragColor = vec4(color, uBaseColor.a);
         }
         """;
@@ -113,7 +173,13 @@ public sealed class MeshRenderer : IDisposable
     {
         PickingData = data;
         Color       = data.BaseColor;
-        _shader     = new Shader(VertSrc, FragSrc);
+        Metallic    = data.Metallic;
+
+        float smoothness = 1f - data.Roughness;
+        Shininess        = MathF.Pow(2f, smoothness * 5f);
+        SpecularStrength = smoothness * (0.25f + data.Metallic * 0.5f);
+
+        _shader = new Shader(VertSrc, FragSrc);
         Upload(data);
     }
 
@@ -145,6 +211,8 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uMetallic",         Metallic);
         _shader.SetFloat("uLightIntensity",   lightIntensity);
         _shader.SetInt("uShadingMode",        NormalsMode ? 1 : 0);
+        _shader.SetInt("uEnvTex",             1);
+        _shader.SetInt("uHasEnv",             HasEnvMap ? 1 : 0);
 
         GL.BindVertexArray(_vao);
         if (_indexed)

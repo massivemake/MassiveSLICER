@@ -1,3 +1,5 @@
+using System.Windows.Input;
+using MassiveSlicer.Commands;
 using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
@@ -9,6 +11,12 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class AdditiveSettingsViewModel : ViewModelBase
 {
+    public AdditiveSettingsViewModel()
+    {
+        SetMethodPlanarCommand = new RelayCommand(() => Method = SliceMethod.Planar);
+        SetMethodAngledCommand = new RelayCommand(() => Method = SliceMethod.Angled);
+    }
+
     // ── Geometry ─────────────────────────────────────────────────────────────
 
     private double _layerHeight = 3.0;
@@ -46,8 +54,23 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public SliceMethod Method
     {
         get => _method;
-        set => SetField(ref _method, value);
+        set
+        {
+            if (SetField(ref _method, value))
+            {
+                OnPropertyChanged(nameof(IsMethodPlanar));
+                OnPropertyChanged(nameof(IsMethodAngled));
+                OnPropertyChanged(nameof(ShowTiltAngle));
+            }
+        }
     }
+
+    public bool IsMethodPlanar => Method == SliceMethod.Planar;
+    public bool IsMethodAngled => Method == SliceMethod.Angled;
+    public bool ShowTiltAngle  => Method == SliceMethod.Angled;
+
+    public ICommand SetMethodPlanarCommand { get; }
+    public ICommand SetMethodAngledCommand { get; }
 
     private double _passAngle;
 
@@ -60,11 +83,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private double _tiltAngle;
 
-    /// <summary>Tilt angle in degrees when using the Angled method.</summary>
+    /// <summary>Tilt around Y-axis in degrees (leans the cutting plane toward ±X).</summary>
     public double TiltAngle
     {
         get => _tiltAngle;
-        set => SetField(ref _tiltAngle, value);
+        set => SetField(ref _tiltAngle, Math.Clamp(value, -89.0, 89.0));
+    }
+
+    private double _tiltAngleX;
+
+    /// <summary>Tilt around X-axis in degrees (leans the cutting plane toward ±Y).</summary>
+    public double TiltAngleX
+    {
+        get => _tiltAngleX;
+        set => SetField(ref _tiltAngleX, Math.Clamp(value, -89.0, 89.0));
     }
 
     // ── Motion ───────────────────────────────────────────────────────────────

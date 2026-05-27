@@ -27,9 +27,13 @@
                 <Button Content="R" Classes="ToolbarButton" ToolTip.Tip="Rotate (R)" Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsRotateActive}"
                         Command="{Binding GizmoRotateCommand}"/>
-                <Button Content="S" Classes="ToolbarButton" ToolTip.Tip="Scale (S)"  Padding="6,4"
+                <Button Content="S" Classes="ToolbarButton" ToolTip.Tip="Scale (S)"  Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsScaleActive}"
                         Command="{Binding GizmoScaleCommand}"/>
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,4,0,4"/>
+                <Button Content="⊕" Classes="ToolbarButton" ToolTip.Tip="Toggle gizmo handles (active = gizmo; inactive = G/R/S mouse transform)" Padding="6,4" Margin="2,0,0,0"
+                        Classes.active="{Binding GizmoEnabled}"
+                        Command="{Binding GizmoToggleCommand}"/>
             </StackPanel>
         </Border>
 
@@ -50,12 +54,18 @@
                         Command="{Binding FocusCommand}"
                         ToolTip.Tip="Focus camera on selected object (F)"/>
                 <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"/>
-                <Button Content="Lay Flat"
+                <Button Content="Lay on Face"
                         Classes="ToolbarButton"
                         Classes.active="{Binding IsLayFlatMode}"
                         Padding="10,4"
                         Command="{Binding LayFlatCommand}"
-                        ToolTip.Tip="Click a face to align it with the build plate (Esc to cancel)"/>
+                        ToolTip.Tip="Click a face to align it flat on the build plate (Esc to cancel)"/>
+                <Button Content="Drop to Plate"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding DropToPlateCommand}"
+                        ToolTip.Tip="Translate the object down so its lowest point sits on the build plate"/>
             </StackPanel>
         </Border>
 

@@ -23,7 +23,7 @@
     "baseData": { "x": 2133.45, "y": -55.28, "z": -89.30 }
   },
   "boosterFrame": {
-    "modelPath": "assets/cells/LFAM3/booster_frame.stl",
+    "modelPath": "assets/cells/LFAM3/booster_frame.glb",
     "worldPosition": { "x": 0, "y": 0, "z": 0 }
   },
   "tools": [

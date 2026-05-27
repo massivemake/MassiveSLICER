@@ -136,18 +136,33 @@ public static class GltfLoader
         if (normAccessor is null && indices is not null)
             normals = ComputeFlatNormals(positions, indices);
 
-        // Extract PBR base colour from the primitive's material, if present.
+        // Extract PBR material properties.
         Vector4? baseColor = null;
-        var colorChannel = prim.Material?.FindChannel("BaseColor");
-        if (colorChannel.HasValue)
+        float metallic  = 0f;
+        float roughness = 0.5f;
+
+        var mat = prim.Material;
+        if (mat is not null)
         {
+            var bcCh = mat.FindChannel("BaseColor");
+            if (bcCh.HasValue)
+            {
 #pragma warning disable CS0618
-            var p = colorChannel.Value.Parameter;
+                var p = bcCh.Value.Parameter;
 #pragma warning restore CS0618
-            baseColor = new Vector4(p.X, p.Y, p.Z, p.W);
+                baseColor = new Vector4(p.X, p.Y, p.Z, p.W);
+            }
+
+            var mrCh = mat.FindChannel("MetallicRoughness");
+            if (mrCh.HasValue)
+            {
+                var parms = mrCh.Value.Parameters;
+                if (parms.Count >= 1 && parms[0].Value is float mf) metallic  = mf;
+                if (parms.Count >= 2 && parms[1].Value is float rf) roughness = rf;
+            }
         }
 
-        return new MeshData(positions, normals, indices, name, baseColor);
+        return new MeshData(positions, normals, indices, name, baseColor, metallic, roughness);
     }
 
     private static Matrix4 ToMatrix4(SysNum.Matrix4x4 m) => new(

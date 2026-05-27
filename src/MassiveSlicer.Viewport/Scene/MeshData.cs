@@ -25,19 +25,28 @@ public sealed class MeshData
     public (Vector3 Min, Vector3 Max) LocalBounds { get; }
 
     /// <summary>
-    /// PBR base colour extracted from the source file's material (RGBA, 0–1).
+    /// PBR base colour extracted from the source file's material (RGBA, 0-1).
     /// Defaults to opaque white when no material data is present.
     /// </summary>
     public Vector4 BaseColor { get; }
 
+    /// <summary>PBR metallic factor (0 = dielectric, 1 = metal). Default 0.</summary>
+    public float Metallic { get; }
+
+    /// <summary>PBR roughness factor (0 = mirror, 1 = fully diffuse). Default 0.5.</summary>
+    public float Roughness { get; }
+
     public MeshData(Vector3[] positions, Vector3[] normals, uint[]? indices,
-                    string name = "Mesh", Vector4? baseColor = null)
+                    string name = "Mesh", Vector4? baseColor = null,
+                    float metallic = 0f, float roughness = 1f)
     {
         Positions   = positions;
         Normals     = normals;
         Indices     = indices;
         Name        = name;
         BaseColor   = baseColor ?? Vector4.One;
+        Metallic    = metallic;
+        Roughness   = roughness;
         LocalBounds = ComputeBounds(positions);
     }
 
