@@ -5,9 +5,28 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <!-- COM interop is required for the Windows WGL P/Invoke GL host. Not needed on
+         macOS/Linux, but harmless to leave unconditional for a Windows-only project. -->
+    <BuiltInComInteropSupport Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BuiltInComInteropSupport>
     <RootNamespace>MassiveSlicer.App</RootNamespace>
   </PropertyGroup>
+
+  <!-- Platform-specific GL host: Windows uses the WGL P/Invoke implementation
+       (GlHostControl.Windows.cs) to work around an AMD atio6axx driver crash in
+       Avalonia's FBO teardown. macOS / Linux use the cross-platform OpenGlControlBase
+       approach (GlHostControl.NonWindows.cs) which is safe on those platforms.
+       Both files define the same class GlHostControl in the same namespace; only one
+       is compiled per target platform. -->
+  <ItemGroup>
+    <Compile Remove="Views\GlHostControl.Windows.cs" />
+    <Compile Remove="Views\GlHostControl.NonWindows.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Views\GlHostControl.Windows.cs"
+             Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Compile Include="Views\GlHostControl.NonWindows.cs"
+             Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\MassiveSlicer.Core\MassiveSlicer.Core.csproj" />
