@@ -14,15 +14,45 @@ using GlPixelFormat = OpenTK.Graphics.OpenGL4.PixelFormat;
 
 namespace MassiveSlicer.App.Views;
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// WHY THIS IS WINDOWS-ONLY (WGL P/INVOKE INSTEAD OF OpenGlControlBase)
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// The natural cross-platform approach for embedding OpenGL in Avalonia is to
+// inherit from Avalonia.OpenGL.Controls.OpenGlControlBase. That worked on macOS
+// and Linux but CRASHED on Windows — specifically on AMD GPUs (driver atio6axx)
+// — because Avalonia's OpenGlControlBase allocates and disposes its own FBO on
+// every resize, and AMD's Windows driver enforces a strict rule: you MUST detach
+// all texture/renderbuffer attachments from an FBO before calling glDeleteFramebuffer.
+// Avalonia's internal FBO teardown does not do this, causing an access violation
+// inside atio6axx.dll on the first window resize.
+//
+// The fix is to NEVER let Avalonia manage a GL framebuffer on Windows. Instead:
+//   1. Create our own WGL context on a hidden off-screen 1x1 HWND (no Avalonia
+//      framebuffer is ever allocated or touched by the driver during resize).
+//   2. Render into our own FBO whose teardown code manually detaches all
+//      attachments and calls GL.Finish() both before and after (see DestroyResources).
+//   3. Read the finished pixels back to CPU with glReadPixels and blit them into
+//      an Avalonia WriteableBitmap displayed by a normal Image control.
+//
+// This avoids the AMD resize crash entirely and also sidesteps the Win32 airspace
+// problem (no native child HWND is visible on screen, so Avalonia overlay controls
+// placed above this in the Grid z-order just work).
+//
+// If OpenGlControlBase is ever fixed upstream to safely handle FBO teardown on AMD,
+// or if a GL extension path is found that avoids the crash, this file can be replaced
+// with a much simpler OpenGlControlBase subclass. Until then, DO NOT replace this
+// implementation on Windows — the crash is real and reproducible.
+//
+// See also: DestroyResources() below for the AMD-safe detach-before-delete sequence.
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /// <summary>
-/// Renders an OpenGL scene completely off-screen (hidden 1×1 WGL context + own output
-/// FBO) and presents each frame into an Avalonia <see cref="WriteableBitmap"/> via
-/// double-buffered PBO async pixel readback.
-///
-/// Benefits over both previous approaches:
-/// • No Avalonia-managed FBO → AMD atio6axx resize crash is gone.
-/// • No native child HWND visible on screen → no Win32 airspace problem; overlay
-///   controls placed on top in the XAML Grid just work.
+/// Windows-only OpenGL host. Renders into a private WGL off-screen context and
+/// FBO, then presents each frame by copying pixels into an Avalonia
+/// <see cref="WriteableBitmap"/>. See the block comment above the class for the
+/// full explanation of why the cross-platform <c>OpenGlControlBase</c> cannot be
+/// used on Windows.
 /// </summary>
 [SupportedOSPlatform("windows")]
 internal sealed class GlHostControl : UserControl, IDisposable
@@ -247,9 +277,14 @@ internal sealed class GlHostControl : UserControl, IDisposable
     {
         if (_outputFbo == 0) return;
 
+        // AMD Windows driver (atio6axx) requirement: MUST explicitly detach every
+        // texture and renderbuffer from the FBO before calling glDeleteFramebuffer,
+        // and MUST call GL.Finish() to drain the GPU pipeline both before and after
+        // detaching. Skipping either step causes an access violation in atio6axx.dll.
+        // This exact sequence is what makes the WGL approach mandatory on Windows --
+        // Avalonia's OpenGlControlBase does not perform this teardown and crashes.
         GL.Finish();
 
-        // Detach before deletion (AMD-safe).
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _outputFbo);
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
                                 FramebufferAttachment.ColorAttachment0,
