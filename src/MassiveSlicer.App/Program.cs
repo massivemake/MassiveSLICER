@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Avalonia;
+using Avalonia.Native;
 
 namespace MassiveSlicer.App;
 
@@ -21,6 +22,13 @@ class Program
             builder = builder.With(new Win32PlatformOptions
             {
                 RenderingMode = [Win32RenderingMode.Wgl]
+            });
+
+        // Enable OpenGL on macOS so OpenGlControlBase can create a CGL context.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            builder = builder.With(new AvaloniaNativePlatformOptions
+            {
+                RenderingMode = [AvaloniaNativeRenderingMode.OpenGl, AvaloniaNativeRenderingMode.Software]
             });
 
         return builder;
