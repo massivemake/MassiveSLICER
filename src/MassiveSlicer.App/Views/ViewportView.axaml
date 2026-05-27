@@ -4,9 +4,12 @@
              x:Class="MassiveSlicer.App.Views.ViewportView"
              Background="#07090f">
 
-    <!-- GlHostControl renders off-screen via PBO and presents into a WriteableBitmap.
-         No native HWND is visible, so ViewportOverlayView stacks on top with no
-         Win32 airspace problem — it is just a regular Avalonia grid child. -->
+    <!-- GlHostControl is a platform-specific GL host:
+           Windows  — WGL P/Invoke, renders off-screen via PBO into a WriteableBitmap.
+                       No native HWND visible, so overlay stacks normally (no airspace issue).
+           macOS/Linux — extends OpenGlControlBase, renders into own FBO and blits to Avalonia's FB.
+         In both cases the public API (GlInitialized / GlRender / GlDeinitialized events +
+         RequestNextFrameRendering) is identical, so this XAML reference never changes. -->
     <Grid>
         <local:GlHostControl x:Name="GlCanvas"/>
         <local:ViewportOverlayView x:Name="OverlayView"/>
