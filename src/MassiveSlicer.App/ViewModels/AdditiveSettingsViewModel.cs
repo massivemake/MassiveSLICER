@@ -156,4 +156,45 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _baseDataIndex;
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
+
+    // ── Toolhead approach orientation ─────────────────────────────────────────
+    // These ABC angles (KUKA ZYX Euler, degrees) define the target tool orientation
+    // used by the IK solver when scrubbing through a toolpath.  They are analogous
+    // to the "toolhead ABC" setting in Eidos CAM: a fixed approach orientation applied
+    // uniformly to every toolpath point.
+    //
+    // Defaults: A=0, B=0, C=0 — identity (no additional rotation).
+    // With these defaults the IK behaviour is identical to before this setting was added.
+    // Increasing A rotates the tool around its own approach axis (e.g. spin the nozzle);
+    // B/C tilt the tool relative to the plane-normal-derived approach direction.
+
+    private double _toolheadA = 0.0;
+
+    /// <summary>KUKA A angle (deg, rotation about Z) applied locally after the
+    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    public double ToolheadA
+    {
+        get => _toolheadA;
+        set => SetField(ref _toolheadA, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    private double _toolheadB = 0.0;
+
+    /// <summary>KUKA B angle (deg, rotation about Y') applied locally after the
+    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    public double ToolheadB
+    {
+        get => _toolheadB;
+        set => SetField(ref _toolheadB, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    private double _toolheadC = 0.0;
+
+    /// <summary>KUKA C angle (deg, rotation about X'') applied locally after the
+    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    public double ToolheadC
+    {
+        get => _toolheadC;
+        set => SetField(ref _toolheadC, Math.Clamp(value, -180.0, 180.0));
+    }
 }

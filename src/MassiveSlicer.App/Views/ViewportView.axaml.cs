@@ -68,7 +68,14 @@ public partial class ViewportView : UserControl
     private ViewportViewModel? _vm;
 
     // Toolpath-to-node map — populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
-    private readonly ConcurrentDictionary<SceneNode, Toolpath> _toolpathByNode = new();
+    private readonly ConcurrentDictionary<SceneNode, Toolpath>   _toolpathByNode       = new();
+    // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
+    // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
+    private readonly ConcurrentDictionary<SceneNode, NVec3>       _toolpathOriginByNode = new();
+
+    // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
+    // UpdateFocusOverlay; read on the UI thread in ScrubIk — no cross-thread access.
+    private SceneNode? _activeScrubNode;
 
     // Cancellation for in-flight scrub-IK tasks — replaced on each scrub step so only
     // the most recent index drives the robot.
@@ -149,6 +156,16 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.TiltAngleX)
                                     or nameof(AdditiveSettingsViewModel.Method))
                     GlCanvas.RequestNextFrameRendering();
+
+                // Re-solve IK live when the toolhead orientation offset changes so the
+                // user can see the effect in the viewport without moving the scrubber.
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ToolheadA)
+                                    or nameof(AdditiveSettingsViewModel.ToolheadB)
+                                    or nameof(AdditiveSettingsViewModel.ToolheadC))
+                {
+                    if (vm.IsToolpathSelected)
+                        ScrubIk(vm.ToolpathScrubIndex);
+                }
             };
         }
     }
@@ -179,6 +196,7 @@ public partial class ViewportView : UserControl
             while (vm.PendingRemoveNodes.TryDequeue(out var removing))
             {
                 _toolpathByNode.TryRemove(removing, out _);
+                _toolpathOriginByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 foreach (var n in removing.SelfAndDescendants())
                     n.Mesh?.Dispose();
@@ -249,6 +267,11 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode[entry.Node] = entry.Toolpath;
                 _renderer.AddToolpath(entry.Toolpath, entry.Node);
+                // Capture the centroid that AddToolpath stamped onto the node's LocalTransform.
+                // ScrubIk uses this to convert stored Toolpath positions (original world space)
+                // back to local space before applying the node's current WorldTransform.
+                var row3 = entry.Node.LocalTransform.Row3;
+                _toolpathOriginByNode[entry.Node] = new NVec3(row3.X, row3.Y, row3.Z);
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
@@ -1239,9 +1262,15 @@ public partial class ViewportView : UserControl
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset — the robot only follows scrubbing the user initiates.
         if (isToolpath && selected is not null && _toolpathByNode.TryGetValue(selected, out var tp))
+        {
+            _activeScrubNode = selected;
             vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+        }
         else
+        {
+            _activeScrubNode = null;
             vm.ResetScrubIndex(0, null);
+        }
     }
 
     // ── Scrub IK ──────────────────────────────────────────────────────────────
@@ -1269,16 +1298,50 @@ public partial class ViewportView : UserControl
         if (info is null) return;
         var (pos, planeNormal) = info.Value;
 
-        // Toolpath positions are in scene/world space; IK expects ROBROOT frame.
-        var robrootPos    = _robrootWorldPos;
-        var targetRobroot = new TkVector3(pos.X - robrootPos.X,
-                                          pos.Y - robrootPos.Y,
-                                          pos.Z - robrootPos.Z);
+        // Apply the node's current world transform so scrubbing follows a moved toolpath.
+        // Stored Toolpath positions are in the original sliced world space; the renderer
+        // stores them as (pos − origin) and uses LocalTransform to put them back in world
+        // space.  If the user has moved the node we need to apply that same transform here.
+        var node = _activeScrubNode;
+        TkVector3 worldPos;
+        TkVector3 worldNormal;
+        if (node is not null && _toolpathOriginByNode.TryGetValue(node, out var origin))
+        {
+            var wt = node.WorldTransform;                   // UI-thread — safe to read here
+            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+            worldPos = new TkVector3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+            // Normals transform by the rotation part only (no translation).
+            float nx = planeNormal.X, ny = planeNormal.Y, nz = planeNormal.Z;
+            worldNormal = TkVector3.Normalize(new TkVector3(
+                nx * wt.M11 + ny * wt.M21 + nz * wt.M31,
+                nx * wt.M12 + ny * wt.M22 + nz * wt.M32,
+                nx * wt.M13 + ny * wt.M23 + nz * wt.M33));
+        }
+        else
+        {
+            // Fallback: no node transform — use stored directions as-is.
+            worldPos    = new TkVector3(pos.X,         pos.Y,         pos.Z);
+            worldNormal = new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z);
+        }
 
-        // Derive orientation target from the layer's slicing-plane normal.
-        // The tool approaches along -planeNormal (e.g. straight down for horizontal layers).
-        var targetRot = solver.TargetRotFromPlaneNormal(
-            new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z));
+        // IK expects the target in ROBROOT frame (world − ROBROOT origin).
+        var robrootPos    = _robrootWorldPos;
+        var targetRobroot = worldPos - robrootPos;
+
+        // Nozzle perpendicular to the slicing plane, with optional ABC offset on top.
+        // The offset is added directly to the Euler angles derived from the plane normal,
+        // so (0, 0, 0) is a true zero-offset — the tool sits exactly where the plane normal
+        // puts it.  Adjusting A/B/C shifts the final KUKA ABC by that delta, letting the
+        // operator nudge the wrist out of singularities without changing the approach direction.
+        var targetRot = vm.AdditiveSettings is { } addSettings
+            ? solver.TargetRotFromPlaneNormalWithOffset(worldNormal,
+                (float)addSettings.ToolheadA,
+                (float)addSettings.ToolheadB,
+                (float)addSettings.ToolheadC)
+            : solver.TargetRotFromPlaneNormal(worldNormal);
 
         // Seed from current joint angles (snapshot on UI thread, safe to read).
         var seed = new float[]
@@ -1329,7 +1392,7 @@ public partial class ViewportView : UserControl
 
         foreach (var layer in tp.Layers)
         {
-            var n = layer.PlaneNormal;  // System.Numerics.Vector3 — no conversion needed
+            var n = layer.PlaneNormal;
             foreach (var move in layer.Moves)
             {
                 if (index == 0) return (move.From, n);

@@ -399,6 +399,59 @@
 
                     <!-- Options — shown only when a toolpath is selected -->
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
+
+                        <TextBlock Text="TOOLHEAD ORIENTATION" Classes="SectionHeader"
+                                   ToolTip.Tip="Local ABC rotation applied on top of the plane-normal-derived approach direction. A=B=C=0 → no change from automatic orientation."/>
+
+                        <!-- A -->
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
+                                       Value="{Binding Additive.ToolheadA, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.ToolheadA, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <!-- B -->
+                        <Grid Margin="8,4,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="B (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
+                                       Value="{Binding Additive.ToolheadB, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.ToolheadB, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <!-- C -->
+                        <Grid Margin="8,4,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="C (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
+                                       Value="{Binding Additive.ToolheadC, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.ToolheadC, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="Export and visibility options coming soon."
                                    Classes="LabelMuted" Margin="12,4"/>
                     </StackPanel>

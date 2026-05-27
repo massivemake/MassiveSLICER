@@ -89,8 +89,7 @@ public sealed class MeshRenderer : IDisposable
         vec3 sampleEnv(vec3 dir, float lod) {
             float u = atan(dir.y, dir.x) / (2.0 * PI) + 0.5;
             float v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
-            vec3 raw = textureLod(uEnvTex, vec2(u, v), lod).rgb;
-            return pow(max(raw, vec3(0.0)), vec3(1.0 / 2.2));
+            return max(textureLod(uEnvTex, vec2(u, v), lod).rgb, vec3(0.0));
         }
 
         // 5-tap cross sample to smooth blocky mip boundaries at high LOD values.
@@ -118,6 +117,10 @@ public sealed class MeshRenderer : IDisposable
                 return;
             }
 
+            // sRGB to linear: glTF baseColorFactor is stored in sRGB. Decode it so all
+            // lighting is done in linear space and the result is gamma-encoded at output.
+            vec3 baseLinear = pow(max(uBaseColor.rgb, vec3(0.0)), vec3(2.2));
+
             vec3 L    = normalize(uLightDir);
             vec3 V    = normalize(uViewPos - vWorldPos);
             vec3 Rdir = reflect(-L, N);
@@ -134,18 +137,18 @@ public sealed class MeshRenderer : IDisposable
             float diffuse = NdotL * mix(0.75, 0.08, uMetallic) * uLightIntensity;
 
             float specRaw  = pow(max(dot(Rdir, V), 0.0), uShininess) * uSpecular * uLightIntensity;
-            vec3 specColor = mix(vec3(1.0), uBaseColor.rgb, uMetallic) * specRaw;
+            vec3 specColor = mix(vec3(1.0), baseLinear, uMetallic) * specRaw;
 
             float fresnel = pow(1.0 - NdotV, 4.0) * uMetallic * 0.75 * uLightIntensity;
 
-            vec3 color = uBaseColor.rgb * (ambient + diffuse) + specColor + fresnel;
+            vec3 color = baseLinear * (ambient + diffuse) + specColor + fresnel;
 
             // Environment IBL -- only for shiny/metallic materials.
             // Matte objects (specWeight <= 0.01) use flat ambient only; the directional
             // variation from envDiff sampling reads as sheen on otherwise flat surfaces.
             if (uHasEnv == 1 && specWeight > 0.01) {
                 float roughness = 1.0 - clamp(log2(max(uShininess, 1.0)) / 5.0, 0.0, 1.0);
-                vec3 F0 = mix(vec3(0.04), uBaseColor.rgb, uMetallic);
+                vec3 F0 = mix(vec3(0.04), baseLinear, uMetallic);
 
                 // Dielectrics (metallic=0) always start at LOD 5 so they never show
                 // a sharp reflection. Pure metals (metallic=1) start at LOD 0 and can
@@ -156,10 +159,11 @@ public sealed class MeshRenderer : IDisposable
                 color += envSpec * F0 * specWeight;
 
                 vec3 envDiff = sampleEnv(N, 7.0);
-                color += envDiff * uBaseColor.rgb * (1.0 - uMetallic) * 0.15;
+                color += envDiff * baseLinear * (1.0 - uMetallic) * 0.15;
             }
 
-            fragColor = vec4(color, uBaseColor.a);
+            // Linear to sRGB: gamma-encode for display.
+            fragColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2)), uBaseColor.a);
         }
         """;
 

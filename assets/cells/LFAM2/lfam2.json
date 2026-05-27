@@ -27,7 +27,7 @@
   "tools": [
     {
       "name": "HV Extruder",
-      "modelPath": "assets/cells/LFAM2/ToolHeads/hv_extruder.stl",
+      "modelPath": "assets/cells/LFAM2/ToolHeads/hv_extruder.glb",
       "tcpX":  677.94,
       "tcpY": -163.20,
       "tcpZ":  314.32,
