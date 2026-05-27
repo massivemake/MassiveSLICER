@@ -79,6 +79,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (dirty) PreferencesLoader.Save(AppPreferences);
         };
 
+        // Wire the robot connect button to the robot panel and mirror status to toolbar.
+        var robot = RightPanel.Settings.Robot;
+        Toolbar.SyncRobotRequested += (_, _) => robot.ConnectCommand.Execute(null);
+        robot.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RobotPanelViewModel.ConnectionStatus))
+                Toolbar.RobotStatus = robot.ConnectionStatus;
+        };
+
         // Restore default backdrop and blur from prefs.
         if (AppPreferences.DefaultBackdropPath is { } saved)
         {

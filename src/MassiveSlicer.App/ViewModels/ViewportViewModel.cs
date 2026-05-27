@@ -292,6 +292,153 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _isToolpathSelected, value);
     }
 
+    /// <summary>
+    /// The <see cref="Toolpath"/> whose scrubber is currently active.
+    /// Set by the viewport code-behind in <c>UpdateFocusOverlay</c>; cleared when
+    /// the selection changes away from a toolpath node.
+    /// </summary>
+    internal Toolpath? ActiveScrubToolpath { get; set; }
+
+    /// <summary>
+    /// Invoked when the scrubber index changes while a toolpath is selected.
+    /// The viewport code-behind subscribes to run IK for the scrubbed position.
+    /// Argument is the new move index.
+    /// </summary>
+    internal Action<int>? OnScrubIkRequested { get; set; }
+
+    private int    _toolpathScrubIndex;
+    private int    _toolpathScrubMax;
+    private string _toolpathScrubText = "0";
+    /// <summary>Guards against the index↔text two-way binding feedback loop.</summary>
+    private bool   _scrubSyncing;
+
+    /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
+    public int ToolpathScrubIndex
+    {
+        get => _toolpathScrubIndex;
+        set
+        {
+            if (SetField(ref _toolpathScrubIndex, value))
+            {
+                OnPropertyChanged(nameof(ToolpathScrubLabel));
+                OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
+                OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+                // Keep the editable text box in sync unless we're already being
+                // called from ToolpathScrubText's setter (avoids a re-entry loop).
+                if (!_scrubSyncing && _toolpathScrubText != value.ToString())
+                {
+                    _scrubSyncing = true;
+                    ToolpathScrubText = value.ToString();
+                    _scrubSyncing = false;
+                }
+                // Drive IK when the user is actively scrubbing a toolpath.
+                if (_isToolpathSelected)
+                    OnScrubIkRequested?.Invoke(value);
+            }
+        }
+    }
+
+    /// <summary>Total number of moves in the selected toolpath. Sets the slider maximum.</summary>
+    public int ToolpathScrubMax
+    {
+        get => _toolpathScrubMax;
+        set
+        {
+            if (SetField(ref _toolpathScrubMax, value))
+            {
+                OnPropertyChanged(nameof(ToolpathScrubLabel));
+                OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
+                OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
+                OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+            }
+        }
+    }
+
+    /// <summary>
+    /// The editable move index. Typing a number and committing (Enter / focus loss)
+    /// jumps the slider to that position. Updated automatically when the slider moves.
+    /// </summary>
+    public string ToolpathScrubText
+    {
+        get => _toolpathScrubText;
+        set
+        {
+            if (!SetField(ref _toolpathScrubText, value)) return;
+            // When this setter fires from the TextBox (not from the slider sync above),
+            // parse and clamp the value to drive the slider.
+            if (!_scrubSyncing && int.TryParse(value, out var n))
+            {
+                _scrubSyncing = true;
+                ToolpathScrubIndex = Math.Clamp(n, 0, _toolpathScrubMax);
+                _scrubSyncing = false;
+            }
+        }
+    }
+
+    /// <summary>Human-readable position label shown beside the scrubber slider.</summary>
+    public string ToolpathScrubLabel
+        => _toolpathScrubMax > 0 ? $"Move {_toolpathScrubIndex} / {_toolpathScrubMax}" : string.Empty;
+
+    /// <summary>The static " / N" suffix shown to the right of the editable index box.</summary>
+    public string ToolpathScrubMaxLabel
+        => _toolpathScrubMax > 0 ? $" / {_toolpathScrubMax}" : string.Empty;
+
+    /// <summary>
+    /// Resets the scrubber to position 0 and records the active toolpath without
+    /// firing <see cref="OnScrubIkRequested"/>. Use this for programmatic selection
+    /// changes so the robot is not driven automatically when a new toolpath is picked.
+    /// </summary>
+    internal void ResetScrubIndex(int max, Toolpath? toolpath)
+    {
+        ActiveScrubToolpath = toolpath;
+
+        _toolpathScrubMax   = max;
+        OnPropertyChanged(nameof(ToolpathScrubMax));
+        OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
+
+        _toolpathScrubIndex = 0;
+        _toolpathScrubText  = "0";
+        OnPropertyChanged(nameof(ToolpathScrubIndex));
+        OnPropertyChanged(nameof(ToolpathScrubText));
+        OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
+        OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+    }
+
+    // Slider geometry constants (must match the Slider Height / thumb size in the AXAML).
+    private const double ScrubSliderHeight     = 480.0; // Slider control Height
+    private const double ScrubThumbSize        = 20.0;  // Avalonia 12 SimpleTheme thumb MinHeight
+    private const double ScrubBorderPadding    = 4.0;   // Border Padding top/bottom
+    private const double ScrubLabelHalfHeight  = 7.0;   // ~half of a 14px label row
+
+    /// <summary>
+    /// Height in pixels of the accent-coloured fill rectangle that grows from the
+    /// bottom of the slider as the index increases.
+    /// </summary>
+    public double ToolpathScrubFillHeight =>
+        _toolpathScrubMax > 0
+            ? (double)_toolpathScrubIndex / _toolpathScrubMax * (ScrubSliderHeight - ScrubThumbSize)
+            : 0.0;
+
+    /// <summary>
+    /// Pixel offset from the top of the slider Border to the top of the floating label,
+    /// computed so the label centre tracks the slider thumb centre.
+    /// </summary>
+    public double ToolpathScrubThumbOffsetY
+    {
+        get
+        {
+            // Thumb centre measured from the top of the Canvas (= top of the slider Border).
+            double trackLength  = ScrubSliderHeight - ScrubThumbSize;
+            double normalised   = _toolpathScrubMax > 0
+                ? (double)_toolpathScrubIndex / _toolpathScrubMax
+                : 0.0;
+            double thumbCentre  = ScrubBorderPadding + ScrubThumbSize / 2.0
+                                + (1.0 - normalised) * trackLength;
+            return thumbCentre - ScrubLabelHalfHeight;
+        }
+    }
+
     public RelayCommand FocusCommand       { get; }
     public RelayCommand DropToPlateCommand { get; }
 

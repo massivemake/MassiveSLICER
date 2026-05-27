@@ -41,7 +41,16 @@
                     <TextBlock Text="ROBOT CELL" Classes="LabelMuted" Margin="0,0,0,4"/>
                     <ComboBox ItemsSource="{Binding CellNames}"
                               SelectedIndex="{Binding SelectedCellIndex, Mode=TwoWay}"
-                              HorizontalAlignment="Stretch"/>
+                              HorizontalAlignment="Stretch"
+                              Margin="0,0,0,6"/>
+                    <Button Content="Sync Robot"
+                            Classes="ToolbarButton"
+                            HorizontalAlignment="Stretch"
+                            BorderBrush="{DynamicResource Border2}"
+                            BorderThickness="1"
+                            Command="{Binding DataContext.Toolbar.SyncRobotCommand,
+                                      RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                            ToolTip.Tip="Pull live joint positions from the KRC4 controller"/>
                 </StackPanel>
             </Border>
 

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO;
 #pragma warning disable CA1416  // Windows-only app
 using Avalonia;
@@ -66,6 +67,13 @@ public partial class ViewportView : UserControl
     // Avoids accessing the Avalonia DataContext property (UI-thread-only) from the GL thread.
     private ViewportViewModel? _vm;
 
+    // Toolpath-to-node map — populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
+    private readonly ConcurrentDictionary<SceneNode, Toolpath> _toolpathByNode = new();
+
+    // Cancellation for in-flight scrub-IK tasks — replaced on each scrub step so only
+    // the most recent index drives the robot.
+    private CancellationTokenSource? _scrubIkCts;
+
     // Robot cell state
     private Vector3 _robrootWorldPos;
     private Vector3 _tcpOffsetLocal;
@@ -116,9 +124,10 @@ public partial class ViewportView : UserControl
                     Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
             };
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
-            vm.OnSliceRequested    = () => RunSliceAsync(vm);
+            vm.OnSliceRequested       = () => RunSliceAsync(vm);
             vm.OnFocusRequested       = FocusSelected;
             vm.OnDropToPlateRequested = DropToPlate;
+            vm.OnScrubIkRequested     = ScrubIk;
 
             // OverlayView is declared in the XAML Grid above GlCanvas. Because
             // there is no native HWND, normal Avalonia z-order works — no
@@ -169,6 +178,7 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingRemoveNodes.TryDequeue(out var removing))
             {
+                _toolpathByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 foreach (var n in removing.SelfAndDescendants())
                     n.Mesh?.Dispose();
@@ -237,6 +247,7 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
+                _toolpathByNode[entry.Node] = entry.Toolpath;
                 _renderer.AddToolpath(entry.Toolpath, entry.Node);
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
@@ -427,6 +438,7 @@ public partial class ViewportView : UserControl
         {
             if (vm.Robot is null) return;
             vm.Robot.Configure(swap.Config.Robot.Joints, swap.Config.Robot.HomePosition);
+            vm.Robot.SetBridgeConfig(swap.Config.BridgeIp, swap.Config.BridgePort);
             vm.Robot.SetToolLibrary(swap.Config.EffectiveTools);
 
             if (swap.FirstTool is { } tool)
@@ -1217,12 +1229,118 @@ public partial class ViewportView : UserControl
 
     private void UpdateFocusOverlay()
     {
-        if (DataContext is ViewportViewModel vm)
+        if (DataContext is not ViewportViewModel vm) return;
+
+        var selected = _renderer.SelectedNode;
+        vm.HasSelection       = selected is not null;
+        bool isToolpath       = selected is not null && _renderer.IsToolpathNode(selected);
+        vm.IsToolpathSelected = isToolpath;
+
+        // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
+        // by the programmatic reset — the robot only follows scrubbing the user initiates.
+        if (isToolpath && selected is not null && _toolpathByNode.TryGetValue(selected, out var tp))
+            vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+        else
+            vm.ResetScrubIndex(0, null);
+    }
+
+    // ── Scrub IK ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Runs orientation-constrained IK for the toolpath move at <paramref name="index"/>
+    /// and drives the robot joints to the result. The tool orientation is derived from
+    /// the slicing-plane normal stored on the layer, so angled paths hold the correct tilt.
+    /// Any in-flight solve for a stale index is cancelled before the new one starts,
+    /// so only the last-requested position ever drives the robot.
+    /// </summary>
+    private void ScrubIk(int index)
+    {
+        var vm       = _vm;
+        var toolpath = vm?.ActiveScrubToolpath;
+        var solver   = _ikSolver;
+        var robot    = vm?.Robot;
+
+        if (vm is null || toolpath is null || solver is null || robot is null) return;
+
+        // Desync live feed so IK drives the robot instead of the C3Bridge stream.
+        robot.Desync();
+
+        var info = GetScrubInfo(toolpath, index);
+        if (info is null) return;
+        var (pos, planeNormal) = info.Value;
+
+        // Toolpath positions are in scene/world space; IK expects ROBROOT frame.
+        var robrootPos    = _robrootWorldPos;
+        var targetRobroot = new TkVector3(pos.X - robrootPos.X,
+                                          pos.Y - robrootPos.Y,
+                                          pos.Z - robrootPos.Z);
+
+        // Derive orientation target from the layer's slicing-plane normal.
+        // The tool approaches along -planeNormal (e.g. straight down for horizontal layers).
+        var targetRot = solver.TargetRotFromPlaneNormal(
+            new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z));
+
+        // Seed from current joint angles (snapshot on UI thread, safe to read).
+        var seed = new float[]
         {
-            vm.HasSelection       = _renderer.SelectedNode is not null;
-            vm.IsToolpathSelected = _renderer.SelectedNode is not null
-                                 && _renderer.IsToolpathNode(_renderer.SelectedNode);
+            (float)robot.A1, (float)robot.A2, (float)robot.A3,
+            (float)robot.A4, (float)robot.A5, (float)robot.A6,
+        };
+
+        // Cancel any still-running solve for a previous index.
+        _scrubIkCts?.Cancel();
+        _scrubIkCts = new CancellationTokenSource();
+        var cts = _scrubIkCts;
+
+        Task.Run(() =>
+        {
+            if (cts.IsCancellationRequested) return;
+            var result = solver.Solve(targetRobroot, seed, targetRot);
+            if (result is null || cts.IsCancellationRequested) return;
+
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (cts.IsCancellationRequested) return;
+                robot.A1 = Math.Round(result[0], 2);
+                robot.A2 = Math.Round(result[1], 2);
+                robot.A3 = Math.Round(result[2], 2);
+                robot.A4 = Math.Round(result[3], 2);
+                robot.A5 = Math.Round(result[4], 2);
+                robot.A6 = Math.Round(result[5], 2);
+                GlCanvas.RequestNextFrameRendering();
+            });
+        }, cts.Token);
+    }
+
+    /// <summary>
+    /// Maps a flat scrub <paramref name="index"/> to the TCP position and slicing-plane
+    /// normal for that move in the toolpath.
+    /// <list type="bullet">
+    ///   <item>Index 0  → first move's <c>From</c> and its layer's <c>PlaneNormal</c>.</item>
+    ///   <item>Index N  → N-th move's <c>To</c> and its layer's <c>PlaneNormal</c>.</item>
+    ///   <item>Index &gt; total → last move's <c>To</c> / normal (slider at maximum).</item>
+    /// </list>
+    /// </summary>
+    private static (NVec3 pos, NVec3 normal)? GetScrubInfo(Toolpath tp, int index)
+    {
+        NVec3 lastPos    = default;
+        NVec3 lastNormal = NVec3.UnitZ;
+        bool  hasAny     = false;
+
+        foreach (var layer in tp.Layers)
+        {
+            var n = layer.PlaneNormal;  // System.Numerics.Vector3 — no conversion needed
+            foreach (var move in layer.Moves)
+            {
+                if (index == 0) return (move.From, n);
+                lastPos    = move.To;
+                lastNormal = n;
+                hasAny     = true;
+                if (--index == 0) return (move.To, n);
+            }
         }
+
+        return hasAny ? (lastPos, lastNormal) : null;
     }
 
     private void UpdateAnglePlanePreview(ViewportViewModel vm)

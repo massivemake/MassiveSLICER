@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Numerics;
 using System.Windows.Input;
+using Avalonia.Threading;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.FK;
@@ -53,6 +55,61 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double A4 { get => _a4; set => SetField(ref _a4, Math.Clamp(value, _minA4, _maxA4)); }
     public double A5 { get => _a5; set => SetField(ref _a5, Math.Clamp(value, _minA5, _maxA5)); }
     public double A6 { get => _a6; set => SetField(ref _a6, Math.Clamp(value, _minA6, _maxA6)); }
+
+    // ── C3Bridge connection ───────────────────────────────────────────────────
+
+    private readonly RobotSyncService _sync = new();
+    private string _bridgeIp   = "192.168.0.1";
+    private int    _bridgePort = 7000;
+
+    private ConnectionStatus _connectionStatus = ConnectionStatus.Disconnected;
+    public ConnectionStatus ConnectionStatus
+    {
+        get => _connectionStatus;
+        private set => SetField(ref _connectionStatus, value);
+    }
+
+    public ICommand ConnectCommand { get; }
+
+    /// <summary>Updates the target IP/port from the loaded cell config.</summary>
+    public void SetBridgeConfig(string ip, int port)
+    {
+        _bridgeIp   = ip;
+        _bridgePort = port;
+    }
+
+    /// <summary>
+    /// Disconnects the C3Bridge live feed if currently connected.
+    /// Call before driving joints via IK (e.g. toolpath scrubbing) so the live
+    /// position stream does not overwrite the IK result.
+    /// </summary>
+    public void Desync()
+    {
+        if (_sync.IsConnected)
+            _sync.Disconnect();
+    }
+
+    private async void ToggleConnect()
+    {
+        if (_sync.IsConnected)
+        {
+            _sync.Disconnect();
+            return;
+        }
+
+        ConnectionStatus = ConnectionStatus.Syncing;
+        try
+        {
+            await _sync.ConnectAsync(_bridgeIp, _bridgePort);
+            _sync.StartStreaming(100);
+        }
+        catch
+        {
+            ConnectionStatus = ConnectionStatus.Error;
+        }
+    }
+
+    // ── Joint limits (driven by cell config) ────────────────────────────────
 
     /// <summary>Applies joint limits and home position from the loaded cell config.</summary>
     public void Configure(IReadOnlyList<JointConfig> joints, float[] home)
@@ -190,11 +247,35 @@ public sealed class RobotPanelViewModel : ViewModelBase
         _robotWorldPos  = robotWorldPos;
     }
 
-    public ICommand GoToBedCenterCommand { get; } = new RelayCommand(() => { });
+    public ICommand GoToBedCenterCommand { get; }
 
     public RobotPanelViewModel()
     {
         GoToBedCenterCommand = new RelayCommand(GoToBedCenter);
+        ConnectCommand       = new RelayCommand(ToggleConnect);
+
+        _sync.Connected     += (_, _)  => Dispatcher.UIThread.Post(() => ConnectionStatus = ConnectionStatus.Ready);
+        _sync.Disconnected  += (_, _)  => Dispatcher.UIThread.Post(() => ConnectionStatus = ConnectionStatus.Disconnected);
+
+        _sync.AxesUpdated   += (_, axes) => Dispatcher.UIThread.Post(() =>
+        {
+            A1 = Math.Round(axes[0], 2);
+            A2 = Math.Round(axes[1], 2);
+            A3 = Math.Round(axes[2], 2);
+            A4 = Math.Round(axes[3], 2);
+            A5 = Math.Round(axes[4], 2);
+            A6 = Math.Round(axes[5], 2);
+        });
+
+        _sync.TcpUpdated += (_, pos) => Dispatcher.UIThread.Post(() =>
+        {
+            TcpX = Math.Round(pos.X, 1);
+            TcpY = Math.Round(pos.Y, 1);
+            TcpZ = Math.Round(pos.Z, 1);
+            TcpA = Math.Round(pos.A, 3);
+            TcpB = Math.Round(pos.B, 3);
+            TcpC = Math.Round(pos.C, 3);
+        });
     }
 
     private void GoToBedCenter()

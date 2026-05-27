@@ -69,6 +69,78 @@
             </StackPanel>
         </Border>
 
+        <!-- Toolpath scrubber — right-center.
+             Label lays out at the top of its column and tracks the thumb via RenderTransform,
+             so no fixed pixel widths are needed and the slider auto-sizes naturally. -->
+        <Grid IsVisible="{Binding IsToolpathSelected}"
+              HorizontalAlignment="Right"
+              VerticalAlignment="Center"
+              Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- Floating label — tracks thumb via RenderTransform.Y.
+                 The move number is an editable TextBox; typing a new value and
+                 pressing Enter or clicking away jumps the slider to that position. -->
+            <Border Grid.Column="0"
+                    VerticalAlignment="Top"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="6,3">
+                <Border.RenderTransform>
+                    <TranslateTransform Y="{Binding ToolpathScrubThumbOffsetY}"/>
+                </Border.RenderTransform>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBox Text="{Binding ToolpathScrubText}"
+                             Classes="ScrubInput"
+                             ToolTip.Tip="Type a move number and press Enter"/>
+                    <TextBlock Text="{Binding ToolpathScrubMaxLabel}"
+                               Classes="Readout"
+                               FontSize="10"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Vertical slider box — auto-sized so Avalonia centres the track naturally -->
+            <Border Grid.Column="2"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="4">
+                <Grid>
+                    <!-- Unfilled rail -->
+                    <Rectangle Width="4"
+                               Fill="{DynamicResource Border2}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Stretch"
+                               Margin="4"/>
+                    <!-- Accent fill — grows from the bottom as value increases -->
+                    <Rectangle Width="4"
+                               Fill="{DynamicResource Accent}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Bottom"
+                               Height="{Binding ToolpathScrubFillHeight}"
+                               Margin="4"/>
+                    <!-- Slider on top — RepeatButtons transparent, thumb remains visible -->
+                    <Slider Classes="ScrubSlider"
+                            Orientation="Vertical"
+                            Height="480"
+                            Minimum="0"
+                            Maximum="{Binding ToolpathScrubMax}"
+                            Value="{Binding ToolpathScrubIndex}"
+                            IsSnapToTickEnabled="True"
+                            TickFrequency="1"/>
+                </Grid>
+            </Border>
+
+        </Grid>
+
         <!-- Coordinate readout — bottom-right -->
         <Border HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"

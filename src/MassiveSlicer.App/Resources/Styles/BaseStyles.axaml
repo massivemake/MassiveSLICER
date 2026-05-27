@@ -196,4 +196,58 @@
         <Setter Property="FontSize"        Value="11"/>
     </Style>
 
+    <!-- ── Scrubber label input ─────────────────────────────────────────────── -->
+    <!-- Inline move-number input in the floating scrubber label.
+         Invisible until hovered/focused so it reads as a normal label at a glance. -->
+    <Style Selector="TextBox.ScrubInput">
+        <Setter Property="Background"                 Value="Transparent"/>
+        <Setter Property="BorderBrush"                Value="Transparent"/>
+        <Setter Property="BorderThickness"            Value="0,0,0,1"/>
+        <Setter Property="Padding"                    Value="2,0"/>
+        <Setter Property="FontSize"                   Value="10"/>
+        <Setter Property="FontFamily"                 Value="Consolas, Courier New, monospace"/>
+        <Setter Property="Foreground"                 Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="CaretBrush"                 Value="{DynamicResource Accent}"/>
+        <Setter Property="SelectionBrush"             Value="{DynamicResource AccentMuted}"/>
+        <Setter Property="Width"                      Value="36"/>
+        <Setter Property="MinWidth"                   Value="0"/>
+        <Setter Property="MinHeight"                  Value="0"/>
+        <Setter Property="HorizontalContentAlignment" Value="Right"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+    </Style>
+    <!-- Template-level override: keep the inner border transparent by default -->
+    <Style Selector="TextBox.ScrubInput /template/ Border">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderBrush"     Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+    </Style>
+    <Style Selector="TextBox.ScrubInput:pointerover /template/ Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+    </Style>
+    <Style Selector="TextBox.ScrubInput:focus-within /template/ Border">
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+    </Style>
+
+    <!-- ── Scrubber slider ───────────────────────────────────────────────────── -->
+    <!-- Strip the Slider's own background/border so the custom fill Rectangle
+         beneath it is not covered by the theme's opaque track surface. -->
+    <Style Selector="Slider.ScrubSlider">
+        <Setter Property="Background"       Value="Transparent"/>
+        <Setter Property="BorderThickness"  Value="0"/>
+    </Style>
+    <!-- Make the template root border transparent too (picks up TemplateBinding Background). -->
+    <Style Selector="Slider.ScrubSlider /template/ Border">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+    </Style>
+    <!-- Keep repeat-buttons invisible so clicks register but fill shows through. -->
+    <Style Selector="Slider.ScrubSlider /template/ RepeatButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="Transparent"/>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+
 </Styles>

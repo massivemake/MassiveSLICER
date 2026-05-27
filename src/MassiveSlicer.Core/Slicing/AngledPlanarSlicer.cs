@@ -63,7 +63,7 @@ public static class AngledPlanarSlicer
         while (step < tMax - 1e-4f)
         {
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
-            var   layer = new ToolpathLayer(idx++, repZ);
+            var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
             prevTracks = BuildLayer(meshes, normal, step, seamOrigin, sd, prevTracks, layer);
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);

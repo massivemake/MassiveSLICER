@@ -112,6 +112,32 @@ public sealed class GltfNumericalIkSolver
         return (cr * kukaX + sr * kukaY, kukaZ, sr * kukaX - cr * kukaY);
     }
 
+    /// <summary>
+    /// Computes the orientation target for a tool that approaches along the slicing-plane
+    /// normal, i.e. with the tool coming in from above along <c>-normal</c>.
+    ///
+    /// Derivation: the solver's <c>kukaX</c> direction is the tool approach vector.
+    /// Setting <c>kukaX = -normal</c> and solving KUKA ZYX Euler gives:
+    /// <code>
+    ///   B = asin(normal.Z)
+    ///   A = atan2(-normal.Y, -normal.X)   (0 when cos(B) ≈ 0 — gimbal lock)
+    ///   C = 0                              (no tool spin)
+    /// </code>
+    /// Then delegates to <see cref="TargetRotFromKukaAbc"/> so the result is
+    /// consistent with the tool-drag solver.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromPlaneNormal(Vector3 normal)
+    {
+        float b    = MathF.Asin(Math.Clamp(normal.Z, -1f, 1f));
+        float cosB = MathF.Cos(b);
+        float a    = MathF.Abs(cosB) > 1e-6f ? MathF.Atan2(-normal.Y, -normal.X) : 0f;
+
+        return TargetRotFromKukaAbc(
+            a * (180f / MathF.PI),
+            b * (180f / MathF.PI),
+            0f);
+    }
+
     // ── IK ────────────────────────────────────────────────────────────────────
 
     /// <summary>
