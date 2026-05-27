@@ -66,8 +66,19 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public ConnectionStatus ConnectionStatus
     {
         get => _connectionStatus;
-        private set => SetField(ref _connectionStatus, value);
+        private set
+        {
+            if (!SetField(ref _connectionStatus, value)) return;
+            OnPropertyChanged(nameof(IsConnected));
+            OnPropertyChanged(nameof(SyncButtonLabel));
+        }
     }
+
+    /// <summary>True while a live C3Bridge session is active.</summary>
+    public bool IsConnected => _connectionStatus == ConnectionStatus.Ready;
+
+    /// <summary>Button label — "Sync Robot" when disconnected, "Desync Robot" when live.</summary>
+    public string SyncButtonLabel => IsConnected ? "Desync Robot" : "Sync Robot";
 
     public ICommand ConnectCommand { get; }
 

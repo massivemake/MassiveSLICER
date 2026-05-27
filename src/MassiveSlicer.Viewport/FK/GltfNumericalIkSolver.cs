@@ -125,6 +125,10 @@ public sealed class GltfNumericalIkSolver
     /// </code>
     /// Then delegates to <see cref="TargetRotFromKukaAbc"/> so the result is
     /// consistent with the tool-drag solver.
+    ///
+    /// <b>Note:</b> this leaves the tool spin around the approach axis undefined (C=0).
+    /// Prefer <see cref="TargetRotFromPathFrame"/> when the toolpath tangent is available,
+    /// as it fully determines the tool frame.
     /// </summary>
     public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromPlaneNormal(Vector3 normal)
     {
@@ -136,6 +140,85 @@ public sealed class GltfNumericalIkSolver
             a * (180f / MathF.PI),
             b * (180f / MathF.PI),
             0f);
+    }
+
+    /// <summary>
+    /// Same as <see cref="TargetRotFromPlaneNormal"/> but adds the given KUKA Euler
+    /// angle offsets (degrees) on top of the plane-normal-derived A, B and zero C.
+    ///
+    /// Because the offset is added directly to the Euler angles before the GLTF/toolFrameRoll
+    /// mapping, <c>(0, 0, 0)</c> is a true identity offset — identical to calling
+    /// <see cref="TargetRotFromPlaneNormal"/> with no offset.  This avoids the world-axis
+    /// snap that occurs when composing a separate rotation matrix whose "identity" does
+    /// not coincide with the plane-normal orientation.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromPlaneNormalWithOffset(
+        Vector3 normal, float offsetADeg, float offsetBDeg, float offsetCDeg)
+    {
+        float b    = MathF.Asin(Math.Clamp(normal.Z, -1f, 1f));
+        float cosB = MathF.Cos(b);
+        float a    = MathF.Abs(cosB) > 1e-6f ? MathF.Atan2(-normal.Y, -normal.X) : 0f;
+
+        return TargetRotFromKukaAbc(
+            a * (180f / MathF.PI) + offsetADeg,
+            b * (180f / MathF.PI) + offsetBDeg,
+            offsetCDeg);
+    }
+
+    /// <summary>
+    /// Builds a fully-determined tool orientation from the toolpath geometry:
+    /// <code>
+    ///   kukaX = -normalize(normal)       — approach direction (tool → workpiece)
+    ///   kukaZ = normalize(tangent ⊥ X)  — travel direction (re-orthogonalised)
+    ///   kukaY = kukaZ × kukaX           — side vector (right-hand frame)
+    /// </code>
+    /// This eliminates the undefined spin-around-approach-axis present in
+    /// <see cref="TargetRotFromPlaneNormal"/>.
+    ///
+    /// When <paramref name="offset"/> is provided it is applied as a post-multiply
+    /// in the tool's own frame: <c>R_final = R_path × R_offset</c>.  With all-zero
+    /// offset the behaviour is a pure path-frame solve.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromPathFrame(
+        Vector3 normal, Vector3 tangent,
+        (Vector3 r0, Vector3 r1, Vector3 r2)? offset = null)
+    {
+        // ── Step 1: build the path-derived KUKA tool frame ───────────────────
+        var kukaX = -Vector3.Normalize(normal);       // approach = -planeNormal
+
+        // Re-orthogonalise tangent against kukaX so kukaZ ⊥ kukaX.
+        var t = tangent - Vector3.Dot(tangent, kukaX) * kukaX;
+        Vector3 kukaY, kukaZ;
+        if (t.LengthSquared > 1e-6f)
+        {
+            kukaZ = Vector3.Normalize(t);
+            kukaY = Vector3.Cross(kukaZ, kukaX);      // already unit, perpendicular pair
+        }
+        else
+        {
+            // Tangent degenerate (parallel to normal) — fall back to an arbitrary spin.
+            var arb = MathF.Abs(kukaX.X) < 0.9f ? Vector3.UnitX : Vector3.UnitY;
+            kukaY = Vector3.Normalize(Vector3.Cross(arb, kukaX));
+            kukaZ = Vector3.Cross(kukaX, kukaY);
+        }
+
+        // ── Step 2: map to scene-space rows via toolFrameRoll ────────────────
+        float cr = MathF.Cos(_toolFrameRoll);
+        float sr = MathF.Sin(_toolFrameRoll);
+        var r0 = cr * kukaX + sr * kukaY;
+        var r1 = kukaZ;
+        var r2 = sr * kukaX - cr * kukaY;
+
+        if (offset is null) return (r0, r1, r2);
+
+        // ── Step 3: apply local post-rotation R_final = R_path * R_offset ────
+        // Column-vector: R_final = R_path * R_offset
+        // Row-vector equivalent: M_final = M_offset * M_path
+        var (or0, or1, or2) = offset.Value;
+        var Mp = new Matrix3(r0,  r1,  r2);
+        var Mo = new Matrix3(or0, or1, or2);
+        var Mf = Mo * Mp;
+        return (Mf.Row0, Mf.Row1, Mf.Row2);
     }
 
     // ── IK ────────────────────────────────────────────────────────────────────

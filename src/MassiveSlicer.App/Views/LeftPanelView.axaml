@@ -43,14 +43,17 @@
                               SelectedIndex="{Binding SelectedCellIndex, Mode=TwoWay}"
                               HorizontalAlignment="Stretch"
                               Margin="0,0,0,6"/>
-                    <Button Content="Sync Robot"
+                    <Button Content="{Binding DataContext.RightPanel.Settings.Robot.SyncButtonLabel,
+                                             RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                             Classes="ToolbarButton"
+                            Classes.active="{Binding DataContext.RightPanel.Settings.Robot.IsConnected,
+                                             RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                             HorizontalAlignment="Stretch"
                             BorderBrush="{DynamicResource Border2}"
                             BorderThickness="1"
                             Command="{Binding DataContext.Toolbar.SyncRobotCommand,
                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                            ToolTip.Tip="Pull live joint positions from the KRC4 controller"/>
+                            ToolTip.Tip="Connect to the KRC4 controller (live joint streaming). Click again to desync."/>
                 </StackPanel>
             </Border>
 
