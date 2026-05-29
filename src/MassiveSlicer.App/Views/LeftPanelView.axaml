@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:converters="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.LeftPanelView"
              x:CompileBindings="False">
 
@@ -68,8 +69,8 @@
                 <StackPanel Orientation="Horizontal">
                     <Button Content="OUTLINER" Classes="TabButton"
                             Command="{Binding SetTabCommand}" CommandParameter="Outliner"/>
-                    <Button Content="ASSETS"   Classes="TabButton"
-                            Command="{Binding SetTabCommand}" CommandParameter="Assets"/>
+                    <Button Content="ROBOT"    Classes="TabButton"
+                            Command="{Binding SetTabCommand}" CommandParameter="Robot"/>
                     <Button Content="VIEWPORT" Classes="TabButton"
                             Command="{Binding SetTabCommand}" CommandParameter="Viewport"/>
                 </StackPanel>
@@ -119,14 +120,14 @@
                                               Margin="2,0,0,0"
                                               ToolTip.Tip="Toggle visibility"/>
                                     <Button Grid.Column="2"
-                                            Content="×"
                                             Command="{Binding DeleteCommand}"
                                             Classes="ToolbarButton"
                                             Padding="5,2"
                                             Margin="2,2,0,2"
-                                            FontSize="14"
                                             Foreground="{DynamicResource TextSecondary}"
-                                            ToolTip.Tip="Remove from scene"/>
+                                            ToolTip.Tip="Remove from scene">
+                                        <ia:Icon Value="mdi-close" FontSize="14"/>
+                                    </Button>
                                 </Grid>
                                 <!-- Child items (e.g. toolpaths) indented below parent -->
                                 <ItemsControl ItemsSource="{Binding Children}"
@@ -150,14 +151,14 @@
                                                           Margin="2,0,0,0"
                                                           ToolTip.Tip="Toggle visibility"/>
                                                 <Button Grid.Column="2"
-                                                        Content="×"
                                                         Command="{Binding DeleteCommand}"
                                                         Classes="ToolbarButton"
                                                         Padding="5,2"
                                                         Margin="2,2,0,2"
-                                                        FontSize="14"
                                                         Foreground="{DynamicResource TextSecondary}"
-                                                        ToolTip.Tip="Remove toolpath"/>
+                                                        ToolTip.Tip="Remove toolpath">
+                                                    <ia:Icon Value="mdi-close" FontSize="14"/>
+                                                </Button>
                                             </Grid>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -166,17 +167,6 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-
-                <!-- Assets tab placeholder -->
-                <Border Background="{DynamicResource Bg2}"
-                        IsVisible="{Binding IsAssetsTabActive}">
-                    <TextBlock Text="Asset browser not yet implemented."
-                               Classes="LabelMuted"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Center"
-                               TextWrapping="Wrap"
-                               Margin="16"/>
-                </Border>
 
                 <!-- Viewport tab -->
                 <ScrollViewer IsVisible="{Binding IsViewportTabActive}"
@@ -407,6 +397,212 @@
                             <CheckBox  Grid.Column="1" VerticalAlignment="Center"
                                        IsChecked="{Binding DataContext.Viewport.ShowBedGrid,
                                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Robot tab -->
+                <ScrollViewer IsVisible="{Binding IsRobotTabActive}"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel Margin="0,8">
+
+                        <TextBlock Text="TOOL" Classes="SectionHeader"/>
+                        <ComboBox Margin="8,0,8,8"
+                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.ToolNames,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.SelectedToolIndex,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                  Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch"/>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="JOINT ANGLES" Classes="SectionHeader"/>
+
+                        <!-- A1 -->
+                        <Grid Margin="8,4,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A1" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <!-- A2 -->
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A2" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A2, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A2, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <!-- A3 -->
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A3" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A3, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A3, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <!-- A4 -->
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A4" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A4, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A4, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <!-- A5 -->
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A5" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A5, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A5, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <!-- A6 -->
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A6" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.A6, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.A6, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
+                        <Button Content="GO TO BED CENTER"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.GoToBedCenterCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                Classes="PrimaryButton"
+                                HorizontalAlignment="Stretch"
+                                Margin="8,4,8,8"/>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <!-- Flange position readout -->
+                        <TextBlock Text="FLANGE POSITION (ROBROOT)" Classes="SectionHeader"/>
+                        <Grid Margin="8,4,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeX, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeY, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.FlangeZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <!-- TCP world position readout -->
+                        <TextBlock Text="TCP WORLD POSITION" Classes="SectionHeader"/>
+                        <Grid Margin="8,4,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpX, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpY, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpA, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1}°}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="B" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpB, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1}°}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="C" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.TcpC, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1}°}"/>
                         </Grid>
 
                     </StackPanel>

@@ -1,4 +1,4 @@
-namespace MassiveSlicer;
+﻿namespace MassiveSlicer;
 
 /// <summary>Top-level application mode toggled by the Prepare / Preview buttons.</summary>
 public enum AppMode
@@ -53,10 +53,10 @@ public enum LeftPanelTab
 {
     /// <summary>Scene tree showing all loaded objects.</summary>
     Outliner,
-    /// <summary>Asset browser (robot cells, tool library).</summary>
-    Assets,
     /// <summary>Viewport appearance: backdrop, blur, shader mode.</summary>
-    Viewport
+    Viewport,
+    /// <summary>Robot joint control, TCP readout, and tool library.</summary>
+    Robot
 }
 
 /// <summary>Primary tab options for the right settings panel.</summary>
@@ -66,7 +66,7 @@ public enum RightPanelTab
     Additive,
     /// <summary>Subtractive (milling) slicing and post-processor settings.</summary>
     Subtractive,
-    /// <summary>View, UV, robot, and object settings — opened via the gear icon.</summary>
+    /// <summary>View, UV, robot, and object settings -- opened via the gear icon.</summary>
     Settings,
     /// <summary>Toolpath export and visibility options. Shown when a toolpath is selected.</summary>
     Toolpath

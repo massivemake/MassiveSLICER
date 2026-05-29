@@ -1,4 +1,4 @@
-using OpenTK.Graphics.OpenGL4;
+﻿using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Rendering;
@@ -70,7 +70,7 @@ public sealed class PlanePreviewRenderer : IDisposable
         var c2  = center + h * u + h * v;
         var c3  = center - h * u + h * v;
 
-        // ── Face: two triangles ───────────────────────────────────────────────
+        // -- Face: two triangles -----------------------------------------------
         float[] faceVerts =
         [
             c0.X, c0.Y, c0.Z,
@@ -89,7 +89,7 @@ public sealed class PlanePreviewRenderer : IDisposable
         GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), 0);
         GL.BindVertexArray(0);
 
-        // ── Edge: 4 line segments ─────────────────────────────────────────────
+        // -- Edge: 4 line segments ---------------------------------------------
         float[] edgeVerts =
         [
             c0.X, c0.Y, c0.Z,  c1.X, c1.Y, c1.Z,

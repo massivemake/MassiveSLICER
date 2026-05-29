@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.IO;
+﻿using MassiveSlicer.Core.IO;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -59,7 +59,7 @@ public class RccExtractTest(ITestOutputHelper output)
             if (!vpath.StartsWith(matchPrefix, StringComparison.Ordinal)) continue;
 
             // vpath e.g. "external/library/KUKA/KR120_R2500_pro/AXIS_1.stl"
-            // → outputDir: assets/rcc_models/KR120_R2500_pro/AXIS_1.stl
+            // -> outputDir: assets/rcc_models/KR120_R2500_pro/AXIS_1.stl
             string afterPrefix = vpath["external/library/KUKA/".Length..]; // "KR120_R2500_pro/AXIS_1.stl"
             string dest = Path.Combine(
                 AppContext.BaseDirectory, "../../../../..", "assets", "rcc_models", afterPrefix);
@@ -70,7 +70,7 @@ public class RccExtractTest(ITestOutputHelper output)
         }
 
         output.WriteLine($"\n{fileName}: extracted {written} KR120 files");
-        // Not asserting > 0 — some RCC files may not contain KR120 entries.
+        // Not asserting > 0 -- some RCC files may not contain KR120 entries.
     }
 
     private static string? FindAsset(string fileName) =>

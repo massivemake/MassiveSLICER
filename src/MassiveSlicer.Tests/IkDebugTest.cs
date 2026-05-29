@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.Kinematics;
 using Xunit.Abstractions;
 
@@ -11,7 +11,7 @@ public class IkDebugTest(ITestOutputHelper output)
     private static readonly Vector3 TcpOffset      = new(677.94f, -163.20f, 314.32f);
     private static readonly float[] HomeSeed       = [0f, -90f, 90f, 0f, 15f, 0f];
 
-    // ── Test 1: FK/IK round-trip at home ────────────────────────────────────────
+    // -- Test 1: FK/IK round-trip at home ----------------------------------------
     // NOTE: The DH ForwardKinematics is inconsistent with SolveAll's analytic OPW geometry.
     // The round-trip fails. This test documents the failure; it does NOT block the IK path
     // because the viewport uses GLTF FK, not ForwardKinematics.
@@ -25,7 +25,7 @@ public class IkDebugTest(ITestOutputHelper output)
         var (aH, bH, cH) = KukaIkSolver.MatrixToAbc(fkHome);
 
         output.WriteLine($"Flange pos (ROBROOT): {Fmt(flangeH)}");
-        output.WriteLine($"Flange ABC: A={aH:F2}° B={bH:F2}° C={cH:F2}°");
+        output.WriteLine($"Flange ABC: A={aH:F2}deg B={bH:F2}deg C={cH:F2}deg");
         output.WriteLine($"FK rotation rows:");
         output.WriteLine($"  X-row: ({fkHome.M11:F3}, {fkHome.M12:F3}, {fkHome.M13:F3})");
         output.WriteLine($"  Y-row: ({fkHome.M21:F3}, {fkHome.M22:F3}, {fkHome.M23:F3})");
@@ -68,10 +68,10 @@ public class IkDebugTest(ITestOutputHelper output)
 
         float diff = 0f;
         for (int i = 0; i < 6; i++) diff = Math.Max(diff, Math.Abs(best[i] - HomeSeed[i]));
-        output.WriteLine($"Max joint diff from home: {diff:F2}°");
+        output.WriteLine($"Max joint diff from home: {diff:F2}deg");
     }
 
-    // ── Test 2: What ABC does the bed center target require? ────────────────────
+    // -- Test 2: What ABC does the bed center target require? --------------------
 
     [Fact]
     public void BedCenter_WhatAbcWorksWithinLimits()
@@ -112,7 +112,7 @@ public class IkDebugTest(ITestOutputHelper output)
         }
     }
 
-    // ── Test 3: What is the FK-derived ABC at the nozzle target? ────────────────
+    // -- Test 3: What is the FK-derived ABC at the nozzle target? ----------------
 
     [Fact]
     public void Home_FK_TcpCheck()
@@ -124,10 +124,10 @@ public class IkDebugTest(ITestOutputHelper output)
         output.WriteLine("");
 
         var fk = KukaIkSolver.ForwardKinematics(HomeSeed);
-        output.WriteLine("FK tool-frame axes at home (row = flange-local axis → ROBROOT direction):");
-        output.WriteLine($"  Flange X → ROBROOT: ({fk.M11:F3}, {fk.M12:F3}, {fk.M13:F3})");
-        output.WriteLine($"  Flange Y → ROBROOT: ({fk.M21:F3}, {fk.M22:F3}, {fk.M23:F3})");
-        output.WriteLine($"  Flange Z → ROBROOT: ({fk.M31:F3}, {fk.M32:F3}, {fk.M33:F3})");
+        output.WriteLine("FK tool-frame axes at home (row = flange-local axis -> ROBROOT direction):");
+        output.WriteLine($"  Flange X -> ROBROOT: ({fk.M11:F3}, {fk.M12:F3}, {fk.M13:F3})");
+        output.WriteLine($"  Flange Y -> ROBROOT: ({fk.M21:F3}, {fk.M22:F3}, {fk.M23:F3})");
+        output.WriteLine($"  Flange Z -> ROBROOT: ({fk.M31:F3}, {fk.M32:F3}, {fk.M33:F3})");
     }
 
     private static string Fmt(Vector3 v) => $"({v.X:F2}, {v.Y:F2}, {v.Z:F2})";

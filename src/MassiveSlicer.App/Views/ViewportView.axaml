@@ -2,7 +2,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:MassiveSlicer.App.Views"
              x:Class="MassiveSlicer.App.Views.ViewportView"
-             Background="#07090f">
+             Background="#07090f"
+             DragDrop.AllowDrop="True">
 
     <!-- GlHostControl is a platform-specific GL host:
            Windows  — WGL P/Invoke, renders off-screen via PBO into a WriteableBitmap.

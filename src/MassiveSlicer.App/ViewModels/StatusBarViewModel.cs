@@ -1,4 +1,4 @@
-using MassiveSlicer.ViewModels.Base;
+﻿using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
 
@@ -20,7 +20,7 @@ public sealed class StatusBarViewModel : ViewModelBase
 
     private string _operationFeedback = string.Empty;
 
-    /// <summary>Transient message shown on the right (e.g., "Slice complete — 42 passes").</summary>
+    /// <summary>Transient message shown on the right (e.g., "Slice complete -- 42 passes").</summary>
     public string OperationFeedback
     {
         get => _operationFeedback;

@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.IO;
+﻿using MassiveSlicer.Core.IO;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -47,7 +47,7 @@ public class RccDebugTest(ITestOutputHelper output)
         if (path is null) { output.WriteLine($"SKIP: {fileName}"); return; }
 
         var files = RccExtractor.Extract(File.ReadAllBytes(path));
-        output.WriteLine($"\n{fileName} — {files.Count} entries:");
+        output.WriteLine($"\n{fileName} -- {files.Count} entries:");
         foreach (var (vpath, data) in files.OrderBy(kv => kv.Key))
         {
             string sig   = BitConverter.ToString(data, 0, Math.Min(16, data.Length));

@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 
 namespace MassiveSlicer.Core.Kinematics;
 
@@ -41,11 +41,11 @@ public static class KukaIkSolver
     // so a positive C3 would translate the wrist downward. Negating corrects this.
     private static readonly float[] DhD     = [_C1, 0f, 0f, -_C3, 0f, _C4];
 
-    // ── IK solution record ────────────────────────────────────────────────────
+    // -- IK solution record ----------------------------------------------------
 
     public sealed record IkSolution(float[] Krl, bool InLimits, bool Unreachable, bool Singular);
 
-    // ── ABC <-> Matrix conversion ─────────────────────────────────────────────
+    // -- ABC <-> Matrix conversion ---------------------------------------------
 
     /// <summary>
     /// Converts KUKA ABC orientation (degrees, ZYX Euler) to a row-major rotation matrix.
@@ -86,7 +86,7 @@ public static class KukaIkSolver
         return (aRad * 180f / MathF.PI, bRad * 180f / MathF.PI, cRad * 180f / MathF.PI);
     }
 
-    // ── Forward kinematics ────────────────────────────────────────────────────
+    // -- Forward kinematics ----------------------------------------------------
 
     /// <summary>
     /// OPW DH forward kinematics. Returns the row-major transform from flange frame
@@ -116,7 +116,7 @@ public static class KukaIkSolver
         return robrootWorld + flangeP + offWorld;
     }
 
-    // ── Inverse kinematics ────────────────────────────────────────────────────
+    // -- Inverse kinematics ----------------------------------------------------
 
     /// <summary>
     /// Returns all 8 OPW IK solutions for a given flange target.
@@ -286,7 +286,7 @@ public static class KukaIkSolver
         return angles;
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // -- Internal helpers ------------------------------------------------------
 
     private static IkSolution[] Filter(IkSolution[] all, Func<IkSolution, bool> pred)
     {

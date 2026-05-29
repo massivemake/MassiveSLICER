@@ -1,4 +1,4 @@
-using OpenTK.Graphics.OpenGL4;
+﻿using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Rendering;
@@ -58,7 +58,7 @@ public sealed class GridRenderer : IDisposable
 
     /// <summary>
     /// Draws the grid using the supplied combined MVP matrix.
-    /// The model matrix is identity — the grid lives at world origin.
+    /// The model matrix is identity -- the grid lives at world origin.
     /// </summary>
     /// <param name="mvp">Combined model-view-projection matrix.</param>
     public void Draw(Matrix4 mvp)
@@ -92,7 +92,7 @@ public sealed class GridRenderer : IDisposable
         GL.DeleteBuffer(_majorVbo);
     }
 
-    // ── Private builders ────────────────────────────────────────────────────
+    // -- Private builders ----------------------------------------------------
 
     private void BuildMinorGrid()
     {

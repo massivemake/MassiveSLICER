@@ -1,4 +1,4 @@
-using MassiveSlicer.Viewport.Scene;
+﻿using MassiveSlicer.Viewport.Scene;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -44,7 +44,7 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
-    // ── GLSL source ──────────────────────────────────────────────────────────
+    // -- GLSL source ----------------------------------------------------------
 
     private static readonly string VertSrc = """
         #version 330 core
@@ -167,7 +167,7 @@ public sealed class MeshRenderer : IDisposable
         }
         """;
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    // -- Lifecycle -------------------------------------------------------------
 
     /// <summary>
     /// Uploads <paramref name="data"/> to the GPU.
@@ -187,7 +187,7 @@ public sealed class MeshRenderer : IDisposable
         Upload(data);
     }
 
-    // ── Draw ──────────────────────────────────────────────────────────────────
+    // -- Draw ------------------------------------------------------------------
 
     /// <summary>Renders the mesh using the supplied matrices and scene lighting.</summary>
     /// <param name="model">Model-to-world transform.</param>
@@ -227,7 +227,7 @@ public sealed class MeshRenderer : IDisposable
     }
 
     /// <summary>
-    /// Issues the draw call using the currently bound shader — no uniform setup.
+    /// Issues the draw call using the currently bound shader -- no uniform setup.
     /// Used by the selection outline pass in <see cref="SceneRenderer"/>.
     /// </summary>
     internal void DrawRaw()
@@ -252,7 +252,7 @@ public sealed class MeshRenderer : IDisposable
         if (_indexed) GL.DeleteBuffer(_ebo);
     }
 
-    // ── Upload ────────────────────────────────────────────────────────────────
+    // -- Upload ----------------------------------------------------------------
 
     private void Upload(MeshData data)
     {

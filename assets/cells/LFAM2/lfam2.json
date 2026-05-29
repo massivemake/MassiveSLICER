@@ -4,6 +4,10 @@
     "modelPath": "assets/cells/LFAM2/LFAM2Robot.glb",
     "worldPosition": { "x": 0, "y": 0, "z": 1000 },
     "homePosition": [ 0, -90, 90, 0, 15, 0 ],
+    "homePositions": [
+      { "name": "Home",    "angles": [ 0, -90,  90, 0, 15, 0 ] },
+      { "name": "Service", "angles": [ 0, -90, 110, 0, 35, 0 ] }
+    ],
     "joints": [
       { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg":  -60, "maxDeg":   60 },
       { "axis": "X", "krlSign": -1, "krlOffset":  90, "minDeg": -120, "maxDeg":   70 },

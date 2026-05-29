@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.Models;
+﻿using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.Rendering;
 using MassiveSlicer.Viewport.Scene;
@@ -33,7 +33,7 @@ public sealed class SceneRenderer : IDisposable
     private bool _disposed;
     private bool _initialised;
 
-    // ── Off-screen FBOs ───────────────────────────────────────────────────────
+    // -- Off-screen FBOs -------------------------------------------------------
     // Scene is rendered into _sceneFbo so it can be read back as a texture.
     // The selected object is rendered into _maskFbo (white-on-black) sharing the
     // same depth buffer, then Roberts Cross edge detection composites the two
@@ -46,7 +46,7 @@ public sealed class SceneRenderer : IDisposable
     private Shader? _compositeShader;           // Roberts Cross + scene blend
     private int _fboWidth, _fboHeight;
 
-    // ── Shader sources ────────────────────────────────────────────────────────
+    // -- Shader sources --------------------------------------------------------
 
     // Renders the selected mesh as flat white into the mask FBO.
     private static readonly string MaskVertSrc = """
@@ -119,12 +119,12 @@ public sealed class SceneRenderer : IDisposable
         }
         """;
 
-    // ── World light ───────────────────────────────────────────────────────────
+    // -- World light -----------------------------------------------------------
 
     /// <summary>Horizontal rotation of the key light around the Z axis, in degrees.</summary>
     public float LightAzimuth   { get; set; } = 45f;
 
-    /// <summary>Vertical angle of the key light above the XY plane, in degrees (0–90).</summary>
+    /// <summary>Vertical angle of the key light above the XY plane, in degrees (0-90).</summary>
     public float LightElevation { get; set; } = 45f;
 
     /// <summary>Directional light multiplier applied to diffuse and specular (1 = default).</summary>
@@ -141,7 +141,7 @@ public sealed class SceneRenderer : IDisposable
             MathF.Sin(el)));
     }
 
-    // ── Public state ──────────────────────────────────────────────────────────
+    // -- Public state ----------------------------------------------------------
 
     /// <summary>The orbit camera that all renderers share.</summary>
     public OrbitCamera Camera { get; } = new();
@@ -162,7 +162,7 @@ public sealed class SceneRenderer : IDisposable
     public GizmoAxis ActiveDragAxis { get; set; } = GizmoAxis.None;
 
     /// <summary>Active gizmo mode: translate, scale, or rotate.</summary>
-    public GizmoMode GizmoMode { get; set; } = GizmoMode.Translate;
+    public GizmoMode GizmoMode { get; set; } = GizmoMode.None;
 
     /// <summary>When false the gizmo is not rendered and handle hit-testing is skipped.</summary>
     public bool GizmoEnabled { get; set; } = true;
@@ -175,6 +175,11 @@ public sealed class SceneRenderer : IDisposable
 
     /// <summary>When false the print-bed boundary grid overlay is not rendered.</summary>
     public bool ShowBedGrid { get; set; } = true;
+
+    public bool ShowExtrusionMoves { get; set; } = true;
+    public bool ShowTravelMoves    { get; set; } = true;
+    public bool ShowSeam           { get; set; } = true;
+    public bool ShowBead           { get; set; } = false;
 
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode { get; set; } = ShaderMode.Standard;
@@ -189,10 +194,12 @@ public sealed class SceneRenderer : IDisposable
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
     /// </summary>
-    public void AddToolpath(Toolpath toolpath, SceneNode node)
+    public void AddToolpath(Toolpath toolpath, SceneNode node,
+        float beadWidth = 6f, float layerHeight = 3f,
+        System.Numerics.Vector3 materialColor = default)
     {
         var centroid = ComputeToolpathCentroid(toolpath);
-        var renderer = new ToolpathRenderer(toolpath, centroid);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
         _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
         SceneRoot.AddChild(node);
@@ -221,11 +228,11 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public Matrix4? FlangeFrameMatrix { get; set; }
 
-    // ── Public methods ────────────────────────────────────────────────────────
+    // -- Public methods --------------------------------------------------------
 
     /// <summary>
     /// Configures (or replaces) the print-bed boundary overlay. Safe to call at any time
-    /// on the GL thread — disposes the previous renderer if one exists.
+    /// on the GL thread -- disposes the previous renderer if one exists.
     /// </summary>
     /// <summary>World-space Z coordinate of the build plate surface.</summary>
     public float BedZ { get; private set; }
@@ -265,7 +272,7 @@ public sealed class SceneRenderer : IDisposable
         if (path is null) return;
 
         try   { _backdrop = new BackdropRenderer(path); }
-        catch { BackdropPath = null; }   // unsupported or corrupt image — silently clear
+        catch { BackdropPath = null; }   // unsupported or corrupt image -- silently clear
     }
 
     /// <summary>
@@ -319,7 +326,7 @@ public sealed class SceneRenderer : IDisposable
         var mvp  = view * proj;
         Matrix4.Invert(mvp, out var invVP);
 
-        // ── Scene pass ────────────────────────────────────────────────────────
+        // -- Scene pass --------------------------------------------------------
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
         GL.ClearColor(0.027f, 0.035f, 0.059f, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -330,7 +337,7 @@ public sealed class SceneRenderer : IDisposable
         if (_backdrop is not null)
         {
             // Strip camera translation from the view matrix before inverting.
-            // The backdrop is at infinity — only rotation and FOV matter.
+            // The backdrop is at infinity -- only rotation and FOV matter.
             // Using the full translation causes float precision loss when the
             // camera target is far from the world origin, producing jitter.
             var viewRot = view;
@@ -376,19 +383,21 @@ public sealed class SceneRenderer : IDisposable
         {
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
-            entry.Renderer.Draw(toolpathMvp, selected: tpNode == SelectedNode);
+            entry.Renderer.Draw(toolpathMvp, selected: tpNode == SelectedNode,
+                showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
+                showSeam: ShowSeam, showBead: ShowBead);
         }
 
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
 
-        // ── Selection mask pass ───────────────────────────────────────────────
+        // -- Selection mask pass -----------------------------------------------
         // Render the selected object as flat white into the mask FBO. The mask FBO
         // shares the scene depth buffer so hidden surfaces are correctly excluded.
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
         GL.ClearColor(0f, 0f, 0f, 0f);
         GL.Clear(ClearBufferMask.ColorBufferBit);
-        // Do NOT clear depth — it holds the scene values and gives us occlusion for free.
+        // Do NOT clear depth -- it holds the scene values and gives us occlusion for free.
 
         if (SelectedNode is not null && _maskShader is not null)
         {
@@ -404,7 +413,7 @@ public sealed class SceneRenderer : IDisposable
             GL.DepthMask(true);
         }
 
-        // ── Composite pass ────────────────────────────────────────────────────
+        // -- Composite pass ----------------------------------------------------
         // Blit to the output FBO using a fullscreen quad. Roberts Cross on the mask
         // texture detects the selection silhouette edge and blends lime green there.
         GL.Viewport(0, 0, viewportWidth, viewportHeight);
@@ -444,7 +453,7 @@ public sealed class SceneRenderer : IDisposable
         GL.Enable(EnableCap.DepthTest);
         GL.Enable(EnableCap.CullFace);
 
-        // ── Overlay pass ──────────────────────────────────────────────────────
+        // -- Overlay pass ------------------------------------------------------
         // Nodes flagged Overlay=true and the TCP frame axes are drawn after the
         // composite with depth cleared so they always appear on top.
         bool hasOverlay = TcpFrameMatrix is not null || FlangeFrameMatrix is not null;
@@ -467,7 +476,7 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.CullFace);
         }
 
-        // ── Gizmo pass ────────────────────────────────────────────────────────
+        // -- Gizmo pass --------------------------------------------------------
         // Drawn directly into the output FBO after the composite so it always
         // appears on top of the selection outline.
         // Axis highlight renders whenever a drag/keyboard transform has an active axis
@@ -484,7 +493,7 @@ public sealed class SceneRenderer : IDisposable
             if (ActiveDragAxis != GizmoAxis.None)
                 _gizmo.DrawAxisHighlight(nodePos, ActiveDragAxis, Camera.FarClip * 0.9f, mvp);
 
-            if (GizmoEnabled)
+            if (GizmoEnabled && GizmoMode != GizmoMode.None)
             {
                 _gizmo.Draw(nodePos, scale, mvp, GizmoMode);
                 if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
@@ -495,7 +504,7 @@ public sealed class SceneRenderer : IDisposable
         }
     }
 
-    // ── Selection ─────────────────────────────────────────────────────────────
+    // -- Selection -------------------------------------------------------------
 
     /// <summary>Selects <paramref name="node"/>, or clears selection if <c>null</c>.</summary>
     public void Select(SceneNode? node) => SelectedNode = node;
@@ -593,7 +602,7 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public GizmoAxis HitTestGizmo(float mx, float my, float vpW, float vpH)
     {
-        if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0)
+        if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
             return GizmoAxis.None;
 
         var nodePos = SelectedNode.WorldTransform.Row3.Xyz;
@@ -605,7 +614,7 @@ public sealed class SceneRenderer : IDisposable
 
         return GizmoMode == GizmoMode.Rotate
             ? GizmoRenderer.HitTestRings(nodePos, scale, mx, my, vpW, vpH, viewProj)
-            : GizmoRenderer.HitTestAxes (nodePos, scale, mx, my, vpW, vpH, viewProj);
+            : GizmoRenderer.HitTestAxes (nodePos, scale, mx, my, vpW, vpH, viewProj, GizmoMode);
     }
 
     /// <inheritdoc/>
@@ -629,7 +638,7 @@ public sealed class SceneRenderer : IDisposable
         if (_fsqVao != 0) { GL.DeleteVertexArray(_fsqVao); GL.DeleteBuffer(_fsqVbo); }
     }
 
-    // ── Shader mode ───────────────────────────────────────────────────────────
+    // -- Shader mode -----------------------------------------------------------
 
     private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(1.00f, 0.55f, 0.30f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MetalColor     = new(0.60f, 0.60f, 0.65f, 1f);
@@ -701,7 +710,7 @@ public sealed class SceneRenderer : IDisposable
         }
     }
 
-    // ── FBO management ────────────────────────────────────────────────────────
+    // -- FBO management --------------------------------------------------------
 
     private void EnsureFbos(int w, int h)
     {
@@ -709,7 +718,7 @@ public sealed class SceneRenderer : IDisposable
 
         if (_fboWidth == 0)
         {
-            // ── First-time creation ────────────────────────────────────────────
+            // -- First-time creation --------------------------------------------
 
             // Scene FBO: colour texture + depth renderbuffer
             _sceneFbo = GL.GenFramebuffer();
@@ -738,7 +747,7 @@ public sealed class SceneRenderer : IDisposable
 
             // Mask FBO: colour texture + shared scene depth.
             // Sharing the depth buffer means the mask pass respects scene occlusion
-            // without a blit — selected surfaces behind other objects stay masked out.
+            // without a blit -- selected surfaces behind other objects stay masked out.
             _maskFbo = GL.GenFramebuffer();
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
 
@@ -766,7 +775,7 @@ public sealed class SceneRenderer : IDisposable
         }
         else
         {
-            // ── Resize: detach → delete → create new → re-attach ─────────────
+            // -- Resize: detach -> delete -> create new -> re-attach -------------
             // AMD's driver (atio6axx.dll) faults when TexImage2D or
             // RenderbufferStorage is called on an existing object to make it
             // LARGER, regardless of whether the object is currently attached to
@@ -877,7 +886,7 @@ public sealed class SceneRenderer : IDisposable
         _fboWidth = _fboHeight = 0;
     }
 
-    // ── Fullscreen quad ───────────────────────────────────────────────────────
+    // -- Fullscreen quad -------------------------------------------------------
 
     private void BuildFsq()
     {

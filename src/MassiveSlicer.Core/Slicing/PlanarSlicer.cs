@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Runtime.CompilerServices;
 using MassiveSlicer.Core.Models;
 
@@ -10,7 +10,7 @@ namespace MassiveSlicer.Core.Slicing;
 /// </summary>
 public static class PlanarSlicer
 {
-    // ── Public entry point ────────────────────────────────────────────────────
+    // -- Public entry point ----------------------------------------------------
 
     /// <summary>
     /// Slices all provided meshes and returns a <see cref="Toolpath"/>.
@@ -24,7 +24,7 @@ public static class PlanarSlicer
         IReadOnlyList<Vector3[]> meshes,
         SliceSettings settings)
     {
-        // ── Compute Z + XY extents across all meshes ─────────────────────────
+        // -- Compute Z + XY extents across all meshes -------------------------
         float zMin = float.MaxValue, zMax = float.MinValue;
         float xMin = float.MaxValue, xMax = float.MinValue;
         float yMin = float.MaxValue, yMax = float.MinValue;
@@ -64,7 +64,7 @@ public static class PlanarSlicer
         return toolpath;
     }
 
-    // ── Layer construction ────────────────────────────────────────────────────
+    // -- Layer construction ----------------------------------------------------
 
     private static List<ContourTrack> BuildLayer(
         IReadOnlyList<Vector3[]> meshes,
@@ -118,7 +118,7 @@ public static class PlanarSlicer
         return tracks;
     }
 
-    // ── Intersection / segment collection ─────────────────────────────────────
+    // -- Intersection / segment collection -------------------------------------
 
     private static void CollectSegments(
         Vector3[] verts,
@@ -127,7 +127,7 @@ public static class PlanarSlicer
     {
         Span<Vector2> pts = stackalloc Vector2[2];
 
-        // verts is a flat triangle soup — every 3 entries = one triangle.
+        // verts is a flat triangle soup -- every 3 entries = one triangle.
         for (int i = 0; i + 2 < verts.Length; i += 3)
         {
             var v0 = verts[i];
@@ -163,7 +163,7 @@ public static class PlanarSlicer
         Span<Vector2> pts, ref int count)
     {
         if (count >= 2) return;
-        if (da * db >= 0f) return; // same side — no crossing
+        if (da * db >= 0f) return; // same side -- no crossing
 
         float t = da / (da - db);
         pts[count++] = new Vector2(
@@ -171,7 +171,7 @@ public static class PlanarSlicer
             a.Y + t * (b.Y - a.Y));
     }
 
-    // ── Topological contour extraction ───────────────────────────────────────
+    // -- Topological contour extraction ---------------------------------------
 
     // Welding tolerance: two endpoints within this distance share the same topological vertex.
     private const float SnapGrid = 0.01f;
@@ -186,7 +186,7 @@ public static class PlanarSlicer
     ///
     /// Pipeline (per the reference document):
     ///   1. Weld nearby endpoints into unique vertex IDs (quantised grid hash).
-    ///   2. Build an adjacency graph: vertex → [neighbour, ...].
+    ///   2. Build an adjacency graph: vertex -> [neighbour, ...].
     ///      For a manifold mesh every vertex has degree 2, making cycles unambiguous.
     ///   3. Traverse each connected component as a cycle (walk to unvisited neighbour
     ///      that isn't the vertex we came from; stop when we return to start).
@@ -195,7 +195,7 @@ public static class PlanarSlicer
     /// Limitations:
     ///   Degree-1 vertices (open mesh boundary) produce open chains handled by StitchChains.
     ///   Degree-3+ vertices (non-manifold) are resolved greedily (first available neighbour),
-    ///   which may split one logical contour into two — StitchChains merges them afterward.
+    ///   which may split one logical contour into two -- StitchChains merges them afterward.
     /// </summary>
     // Returns (closed cycles, open chains). Only open chains need stitching.
     // Keeping them separate prevents StitchChains from merging distinct closed contours
@@ -352,7 +352,7 @@ public static class PlanarSlicer
 
     // Repeatedly find the closest pair of open chain endpoints (globally) and merge them
     // until no open chains remain. "Open" = gap between first and last vertex > 1 mm.
-    // No fixed distance limit — for a single-shell object all open ends are artifacts.
+    // No fixed distance limit -- for a single-shell object all open ends are artifacts.
     private static void StitchChains(List<List<Vector2>> chains)
     {
         const float ClosedSq = 1.0f; // < 1 mm gap = already closed
@@ -424,7 +424,7 @@ public static class PlanarSlicer
         return area * 0.5f;
     }
 
-    // ── Topology-aware seam assignment ────────────────────────────────────────
+    // -- Topology-aware seam assignment ----------------------------------------
 
     // Minimum overlap fraction (of the smaller contour's vertices) to consider
     // two contours on adjacent layers to be the "same" feature.
@@ -449,8 +449,8 @@ public static class PlanarSlicer
                 if (score > bestScore) { bestScore = score; bestParent = prev; }
             }
 
-            // Birth (no parent) → initialize seam from ray.
-            // Continuous / split / merge → project from parent seam.
+            // Birth (no parent) -> initialize seam from ray.
+            // Continuous / split / merge -> project from parent seam.
             Vector2 seamRef = (bestParent != null && bestScore >= OverlapThreshold)
                 ? bestParent.SeamXY
                 : new Vector2(float.NaN, float.NaN);
@@ -487,7 +487,7 @@ public static class PlanarSlicer
         return inside;
     }
 
-    // ── Per-contour seam tracking ─────────────────────────────────────────────
+    // -- Per-contour seam tracking ---------------------------------------------
 
     private sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY)
     {

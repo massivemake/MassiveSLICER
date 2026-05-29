@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.Kinematics;
+﻿using MassiveSlicer.Core.Kinematics;
 
 namespace MassiveSlicer.Core.Models;
 
@@ -38,6 +38,16 @@ public sealed record CellConfig
     public int BridgePort { get; init; } = 7000;
 }
 
+/// <summary>A named robot home/start position (A1-A6 joint angles in KRL degrees).</summary>
+public sealed record HomePositionConfig
+{
+    /// <summary>Display name shown in the home position selector.</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Joint angles A1-A6 in KRL degrees.</summary>
+    public float[] Angles { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
+}
+
 public sealed record RobotCellConfig
 {
     /// <summary>Path to the robot GLB asset, relative to the working directory.</summary>
@@ -46,17 +56,20 @@ public sealed record RobotCellConfig
     /// <summary>World position of ROBROOT (A1 axis mounting surface) in mm, Z-up.</summary>
     public Float3 WorldPosition { get; init; } = Float3.Zero;
 
-    /// <summary>Per-joint axis, sign, KRL offset, and soft limits for A1–A6.</summary>
+    /// <summary>Per-joint axis, sign, KRL offset, and soft limits for A1-A6.</summary>
     public IReadOnlyList<JointConfig> Joints { get; init; } = [];
 
-    /// <summary>Home position in KRL degrees for A1–A6.</summary>
+    /// <summary>Fallback home position in KRL degrees for A1-A6. Used when <see cref="HomePositions"/> is empty.</summary>
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
+
+    /// <summary>Named home/start positions available for this cell. Shown in the TOOLPATH panel dropdown.</summary>
+    public IReadOnlyList<HomePositionConfig> HomePositions { get; init; } = [];
 
     /// <summary>
     /// Extra rotation (degrees, CCW positive) applied around the flange outward axis
     /// for the visual flange-frame indicator only. Does not affect TCP position or
     /// IK solving. Use when the physical flange reference mark is rotated relative
-    /// to the GLTF joint_6 frame (e.g. LFAM 3 = 15°).
+    /// to the GLTF joint_6 frame (e.g. LFAM 3 = 15deg).
     /// </summary>
     public float FlangeDisplayRoll { get; init; } = 0f;
 }
@@ -90,7 +103,7 @@ public sealed record BedCellConfig
 
     /// <summary>
     /// BASE_DATA position relative to ROBROOT in mm. Used for IK solving and KRL export.
-    /// NOT a world position — add ROBROOT world position to get world coords.
+    /// NOT a world position -- add ROBROOT world position to get world coords.
     /// </summary>
     public required Float3 BaseData { get; init; }
 }
@@ -117,15 +130,15 @@ public sealed record ToolCellConfig
     /// <summary>Path to the tool GLB asset, relative to the working directory.</summary>
     public required string ModelPath { get; init; }
 
-    // ── KUKA TOOL_DATA ────────────────────────────────────────────────────────
+    // -- KUKA TOOL_DATA --------------------------------------------------------
     public float TcpX { get; init; } = 0f;
     public float TcpY { get; init; } = 0f;
     public float TcpZ { get; init; } = 0f;
-    /// <summary>Euler ZYX A — rotation around Z (degrees).</summary>
+    /// <summary>Euler ZYX A -- rotation around Z (degrees).</summary>
     public float TcpA { get; init; } = 0f;
-    /// <summary>Euler ZYX B — rotation around Y (degrees).</summary>
+    /// <summary>Euler ZYX B -- rotation around Y (degrees).</summary>
     public float TcpB { get; init; } = 0f;
-    /// <summary>Euler ZYX C — rotation around X (degrees).</summary>
+    /// <summary>Euler ZYX C -- rotation around X (degrees).</summary>
     public float TcpC { get; init; } = 0f;
 
     /// <summary>
@@ -134,4 +147,5 @@ public sealed record ToolCellConfig
     /// 0 = KUKA-X aligns with GLTF flange X; adjust per printer.
     /// </summary>
     public float ToolFrameRoll { get; init; } = 0f;
+
 }

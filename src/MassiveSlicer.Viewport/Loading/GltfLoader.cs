@@ -1,4 +1,4 @@
-using MassiveSlicer.Viewport.Scene;
+﻿using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 using SharpGLTF.Schema2;
 using SysNum = System.Numerics;
@@ -10,18 +10,18 @@ namespace MassiveSlicer.Viewport.Loading;
 /// queued for GPU upload on the render thread.
 /// <para>
 /// Coordinate conversion: GLTF is Y-up right-hand; the returned root node's
-/// <see cref="SceneNode.LocalTransform"/> includes a +90° X rotation and ×1000 scale
+/// <see cref="SceneNode.LocalTransform"/> includes a +90deg X rotation and ×1000 scale
 /// so the output is Z-up right-hand in millimetres (our scene convention).
 /// Node-local transforms are preserved in the hierarchy for future FK use.
 /// </para>
 /// </summary>
 public static class GltfLoader
 {
-    // Converts GLTF Y-up metres → scene Z-up millimetres.
+    // Converts GLTF Y-up metres -> scene Z-up millimetres.
     // Row-vector: v' = v * GltfToScene
     //   new.x =  1000 * old.x
-    //   new.y = -1000 * old.z   (GLTF Z → -Y in Z-up)
-    //   new.z =  1000 * old.y   (GLTF Y → Z in Z-up)
+    //   new.y = -1000 * old.z   (GLTF Z -> -Y in Z-up)
+    //   new.z =  1000 * old.y   (GLTF Y -> Z in Z-up)
     private static readonly SysNum.Matrix4x4 YupToZupSys =
         SysNum.Matrix4x4.CreateRotationX(MathF.PI / 2f) *
         SysNum.Matrix4x4.CreateScale(1000f);
@@ -31,8 +31,8 @@ public static class GltfLoader
     /// <summary>
     /// Loads all nodes from a GLB/GLTF file and returns a root <see cref="SceneNode"/>
     /// whose hierarchy mirrors the GLTF scene graph.  The root's
-    /// <see cref="SceneNode.LocalTransform"/> applies the Y-up→Z-up conversion and
-    /// metre→millimetre scale; all child local transforms are the raw GLTF node matrices.
+    /// <see cref="SceneNode.LocalTransform"/> applies the Y-up->Z-up conversion and
+    /// metre->millimetre scale; all child local transforms are the raw GLTF node matrices.
     /// </summary>
     /// <param name="path">Absolute or working-directory-relative path to the file.</param>
     /// <returns>Root scene node; add it (or a positioned wrapper) to the scene graph.</returns>
@@ -71,7 +71,7 @@ public static class GltfLoader
         return root;
     }
 
-    // ── Private helpers ──────────────────────────────────────────────────────
+    // -- Private helpers ------------------------------------------------------
 
     private static SceneNode BuildNode(Node gltfNode)
     {
@@ -102,7 +102,7 @@ public static class GltfLoader
         var posAccessor = prim.GetVertexAccessor("POSITION");
         if (posAccessor is null) return null;
 
-        // Vertex positions are in the node's local space — transforms are handled
+        // Vertex positions are in the node's local space -- transforms are handled
         // by the SceneNode hierarchy, not baked here.
         var rawPositions = posAccessor.AsVector3Array();
         var positions    = new Vector3[rawPositions.Count];

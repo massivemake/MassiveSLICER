@@ -1,4 +1,4 @@
-using MassiveSlicer.Viewport.Scene;
+﻿using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Camera;
@@ -7,18 +7,18 @@ namespace MassiveSlicer.Viewport.Camera;
 /// Spherical orbit camera with a Z-up right-hand coordinate system.
 /// Position is expressed in spherical coordinates (azimuth, elevation, radius)
 /// relative to a world-space <see cref="Target"/> point.
-/// All input handlers apply changes immediately — there is no smoothing or inertia.
+/// All input handlers apply changes immediately -- there is no smoothing or inertia.
 /// </summary>
 public sealed class OrbitCamera
 {
-    // ── Spherical coordinates ─────────────────────────────────────────────
+    // -- Spherical coordinates ---------------------------------------------
 
     /// <summary>Horizontal rotation around the Z axis, in degrees.</summary>
     public float Azimuth { get; set; } = 45f;
 
     /// <summary>
     /// Vertical angle above the XY plane, in degrees.
-    /// Wraps within ±180° — the camera can orbit continuously over and under the target.
+    /// Wraps within ±180deg -- the camera can orbit continuously over and under the target.
     /// </summary>
     public float Elevation { get; set; } = 30f;
 
@@ -28,7 +28,7 @@ public sealed class OrbitCamera
     /// <summary>World-space point the camera orbits around and looks at.</summary>
     public Vector3 Target { get; set; } = Vector3.Zero;
 
-    // ── Projection ────────────────────────────────────────────────────────
+    // -- Projection --------------------------------------------------------
 
     /// <summary>Vertical field of view in degrees.</summary>
     public float FovDegrees { get; set; } = 45f;
@@ -39,7 +39,7 @@ public sealed class OrbitCamera
     /// <summary>Far clip plane distance in mm.</summary>
     public float FarClip { get; set; } = 100_000f;
 
-    // ── Derived state ─────────────────────────────────────────────────────
+    // -- Derived state -----------------------------------------------------
 
     /// <summary>World-space position of the camera eye, computed from spherical coordinates.</summary>
     public Vector3 Eye
@@ -56,14 +56,14 @@ public sealed class OrbitCamera
         }
     }
 
-    // ── Matrix accessors ──────────────────────────────────────────────────
+    // -- Matrix accessors --------------------------------------------------
 
     /// <summary>
-    /// Returns the view matrix (world → camera space).
+    /// Returns the view matrix (world -> camera space).
     /// Uses Gram-Schmidt to derive the up vector: project world-Z onto the plane
     /// perpendicular to the look direction. This is smooth at all elevations and
     /// correctly flips when the camera orbits past a pole, without the hard
-    /// threshold jump that causes a visible flicker near ±90°.
+    /// threshold jump that causes a visible flicker near ±90deg.
     /// </summary>
     public Matrix4 GetViewMatrix()
     {
@@ -94,7 +94,7 @@ public sealed class OrbitCamera
                NearClip,
                FarClip);
 
-    // ── Picking ───────────────────────────────────────────────────────────
+    // -- Picking -----------------------------------------------------------
 
     /// <summary>
     /// Constructs a world-space ray from a screen-space mouse position.
@@ -107,7 +107,7 @@ public sealed class OrbitCamera
     public Ray GetPickRay(float screenX, float screenY, float viewportWidth, float viewportHeight)
     {
         float ndcX =  screenX / viewportWidth  * 2f - 1f;
-        float ndcY = -(screenY / viewportHeight * 2f - 1f); // flip: screen Y-down → NDC Y-up
+        float ndcY = -(screenY / viewportHeight * 2f - 1f); // flip: screen Y-down -> NDC Y-up
 
         float aspect = viewportWidth / viewportHeight;
         var view = GetViewMatrix();
@@ -134,7 +134,7 @@ public sealed class OrbitCamera
             v.X * m.M13 + v.Y * m.M23 + v.Z * m.M33 + v.W * m.M43,
             v.X * m.M14 + v.Y * m.M24 + v.Z * m.M34 + v.W * m.M44);
 
-    // ── Input handlers ────────────────────────────────────────────────────
+    // -- Input handlers ----------------------------------------------------
 
     /// <summary>
     /// Orbits the camera by rotating azimuth and elevation.
@@ -164,7 +164,7 @@ public sealed class OrbitCamera
         float elRad = MathHelper.DegreesToRadians(Elevation);
 
         // Camera right: always horizontal (Z = 0) for a Z-up orbit camera,
-        // rotated by azimuth only. Derived analytically — no matrix extraction needed.
+        // rotated by azimuth only. Derived analytically -- no matrix extraction needed.
         var right = new Vector3(-MathF.Sin(azRad), MathF.Cos(azRad), 0f);
 
         // Camera up: perpendicular to right and the view direction.

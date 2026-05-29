@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
@@ -7,7 +7,7 @@ namespace MassiveSlicer.Viewport.Loading;
 /// <summary>
 /// Loads binary and ASCII STL files into a <see cref="SceneNode"/> with a flat,
 /// non-indexed triangle mesh. Assumes the STL is already in Z-up millimetres
-/// (Rhino / CAD convention) — no coordinate conversion is applied.
+/// (Rhino / CAD convention) -- no coordinate conversion is applied.
 /// </summary>
 public static class StlLoader
 {
@@ -21,7 +21,7 @@ public static class StlLoader
         return new SceneNode { Name = nodeName, PendingMesh = mesh };
     }
 
-    // ── Format detection ─────────────────────────────────────────────────────
+    // -- Format detection -----------------------------------------------------
 
     private static bool IsBinaryStl(string path)
     {
@@ -35,7 +35,7 @@ public static class StlLoader
         return info.Length == 80 + 4 + (long)count * 50;
     }
 
-    // ── Binary STL ───────────────────────────────────────────────────────────
+    // -- Binary STL -----------------------------------------------------------
 
     private static MeshData ReadBinary(string path, string name)
     {
@@ -66,7 +66,7 @@ public static class StlLoader
     private static Vector3 ReadVec3(BinaryReader r) =>
         new(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
 
-    // ── ASCII STL ────────────────────────────────────────────────────────────
+    // -- ASCII STL ------------------------------------------------------------
 
     private static MeshData ReadAscii(string path, string name)
     {

@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.Kinematics;
+﻿using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
@@ -6,7 +6,7 @@ namespace MassiveSlicer.Viewport.FK;
 
 /// <summary>
 /// Applies forward kinematics to a loaded robot scene graph by rotating
-/// the six joint nodes (named <c>joint_a1</c>…<c>joint_a6</c>) around their
+/// the six joint nodes (named <c>joint_a1</c>...<c>joint_a6</c>) around their
 /// bone-local Y-axis according to KRL joint angles.
 /// <para>
 /// Bone angle formula: <c>bone_rad = KrlSign × krl_deg × π/180</c>
@@ -29,7 +29,7 @@ public sealed class RobotFkController
     public SceneNode? FlangeNode => _joints[5];
 
     /// <summary>
-    /// Rest-pose local transforms for each joint (joint_1 … joint_6), in GLTF Y-up space.
+    /// Rest-pose local transforms for each joint (joint_1 ... joint_6), in GLTF Y-up space.
     /// Used by <see cref="GltfNumericalIkSolver"/> to replicate the FK without touching the scene graph.
     /// </summary>
     public IReadOnlyList<Matrix4> RestPoses => _restPose;

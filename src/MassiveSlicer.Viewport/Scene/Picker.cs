@@ -1,11 +1,11 @@
-using OpenTK.Mathematics;
+﻿using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Scene;
 
 /// <summary>
 /// CPU-side ray-mesh intersection for scene picking.
 /// Tests a world-space ray against all mesh nodes in the scene graph using
-/// Möller-Trumbore in each node's local space.
+/// Moller-Trumbore in each node's local space.
 /// </summary>
 public static class Picker
 {
@@ -31,7 +31,7 @@ public static class Picker
             var lo = TransformPoint(worldRay.Origin,    invWorld);
             var ld = TransformDir  (worldRay.Direction, invWorld);
 
-            // Cheap AABB pre-reject before per-triangle Möller-Trumbore.
+            // Cheap AABB pre-reject before per-triangle Moller-Trumbore.
             var (bMin, bMax) = mesh.LocalBounds;
             if (!RayHitsAabb(lo, ld, bMin, bMax)) continue;
 
@@ -61,7 +61,7 @@ public static class Picker
 
     /// <summary>
     /// Walks the parent chain of <paramref name="node"/> to find the direct child of
-    /// <paramref name="sceneRoot"/> — the logical selectable object in the outliner.
+    /// <paramref name="sceneRoot"/> -- the logical selectable object in the outliner.
     /// </summary>
     public static SceneNode? FindSelectableRoot(SceneNode node, SceneNode sceneRoot)
     {
@@ -75,7 +75,7 @@ public static class Picker
         return null;
     }
 
-    // ── Ray-AABB slab test ────────────────────────────────────────────────────
+    // -- Ray-AABB slab test ----------------------------------------------------
 
     private static bool RayHitsAabb(Vector3 ro, Vector3 rd, Vector3 min, Vector3 max)
     {
@@ -106,7 +106,7 @@ public static class Picker
         return tMax > 0f;
     }
 
-    // ── Möller-Trumbore ───────────────────────────────────────────────────────
+    // -- Moller-Trumbore -------------------------------------------------------
 
     private static bool Intersect(MeshData mesh, Vector3 ro, Vector3 rd, out float tMin)
     {
@@ -157,7 +157,7 @@ public static class Picker
         }
     }
 
-    // ── Face picking ──────────────────────────────────────────────────────────
+    // -- Face picking ----------------------------------------------------------
 
     /// <summary>
     /// Like <see cref="Pick"/> but also returns the world-space face normal of the
@@ -262,7 +262,7 @@ public static class Picker
         }
     }
 
-    // ── Row-vector transform helpers ──────────────────────────────────────────
+    // -- Row-vector transform helpers ------------------------------------------
 
     private static Vector3 TransformPoint(Vector3 p, Matrix4 m)
         => new(

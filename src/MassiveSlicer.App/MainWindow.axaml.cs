@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
 using MassiveSlicer.Core.IO;
@@ -22,7 +22,7 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm) return;
 
-        // ── Right panel column toggle ─────────────────────────────────────────
+        // -- Right panel column toggle -----------------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName != nameof(ToolbarViewModel.IsRightPanelVisible)) return;
@@ -31,7 +31,7 @@ public partial class MainWindow : Window
             WorkAreaGrid.ColumnDefinitions[4].Width = visible ? new GridLength(300)  : new GridLength(0);
         };
 
-        // ── Console overlay toggle ────────────────────────────────────────────
+        // -- Console overlay toggle --------------------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName != nameof(ToolbarViewModel.IsConsoleVisible)) return;
@@ -39,7 +39,7 @@ public partial class MainWindow : Window
         };
         ConsoleOverlay.IsVisible = vm.Toolbar.IsConsoleVisible;
 
-        // ── Cell selector ─────────────────────────────────────────────────────
+        // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
 
         var cells = CellLoader.FindAll()
@@ -52,16 +52,14 @@ public partial class MainWindow : Window
             })
             .ToList();
 
-        // TODO Phase 3: replace MessageBox with Avalonia dialog
         if (cells.Count == 0)
             System.Console.Error.WriteLine("No cell files found in assets/cells/.");
 
         vm.LeftPanel.SetCells(cells);
 
-        // ── Model loading ─────────────────────────────────────────────────────
+        // -- Model loading -----------------------------------------------------
         vm.Toolbar.ModelLoadRequested += async (_, _) =>
         {
-            // TODO Phase 3: replace with StorageProvider file picker
             var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
             {
                 Title          = "Open 3D Model",
@@ -81,7 +79,7 @@ public partial class MainWindow : Window
             await LoadAndAddNodeAsync(path, vm);
         };
 
-        // ── Preferences ───────────────────────────────────────────────────────
+        // -- Preferences -------------------------------------------------------
         vm.Toolbar.PreferencesRequested += async (_, _) =>
         {
             var win = new Views.PreferencesWindow { DataContext = vm.Preferences };
@@ -89,7 +87,7 @@ public partial class MainWindow : Window
         };
     }
 
-    // ── Cell switching ────────────────────────────────────────────────────────
+    // -- Cell switching --------------------------------------------------------
 
     private void SwitchCell(string path)
     {
@@ -187,7 +185,6 @@ public partial class MainWindow : Window
 
     private async Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
     {
-        // TODO Phase 3: replace with proper Avalonia dialog
         bool place = true;
 
         SceneNode? node = ImportHelper.LoadAndPlace(filePath, place ? vm.Viewport.ActiveCell : null);

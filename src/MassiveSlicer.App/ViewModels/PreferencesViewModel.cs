@@ -1,4 +1,4 @@
-using System.Windows.Input;
+﻿using System.Windows.Input;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
@@ -18,7 +18,7 @@ public sealed class PreferencesViewModel : ViewModelBase
     private readonly Action         _onChanged;
     private bool                    _loading;
 
-    // ── Navigation ────────────────────────────────────────────────────────
+    // -- Navigation --------------------------------------------------------
 
     private bool _autoDepth;
     public bool AutoDepth
@@ -44,7 +44,7 @@ public sealed class PreferencesViewModel : ViewModelBase
     /// <summary>All available navigation presets for display in the list.</summary>
     public IReadOnlyList<NavigationPreset> NavigationPresets { get; } = NavigationPreset.All;
 
-    // ── Performance ───────────────────────────────────────────────────────
+    // -- Performance -------------------------------------------------------
 
     private bool _antiAliasing;
     public bool AntiAliasing
@@ -53,12 +53,12 @@ public sealed class PreferencesViewModel : ViewModelBase
         set { if (SetField(ref _antiAliasing, value)) Commit(() => _prefs.AntiAliasing = value); }
     }
 
-    // ── Commands ──────────────────────────────────────────────────────────
+    // -- Commands ----------------------------------------------------------
 
     /// <summary>Selects a navigation preset by its ID.</summary>
     public ICommand SelectPresetCommand { get; }
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────
+    // -- Lifecycle ---------------------------------------------------------
 
     /// <summary>
     /// Initialises the ViewModel.
@@ -87,7 +87,7 @@ public sealed class PreferencesViewModel : ViewModelBase
         _loading             = false;
     }
 
-    // ── Private ───────────────────────────────────────────────────────────
+    // -- Private -----------------------------------------------------------
 
     private void Commit(Action writeToPrefs)
     {

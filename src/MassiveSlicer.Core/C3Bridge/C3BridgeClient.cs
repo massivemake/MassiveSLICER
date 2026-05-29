@@ -1,4 +1,4 @@
-using System.Net.Sockets;
+﻿using System.Net.Sockets;
 using System.Text;
 
 namespace MassiveSlicer.Core.C3Bridge;
@@ -27,7 +27,7 @@ public sealed class C3BridgeClient : IDisposable
     /// <summary>Fired on the thread-pool when the socket closes or errors.</summary>
     public event EventHandler<Exception?>? Disconnected;
 
-    // ── Connection ────────────────────────────────────────────────────────────
+    // -- Connection ------------------------------------------------------------
 
     public async Task ConnectAsync(
         string host, int port = 7000,
@@ -80,7 +80,7 @@ public sealed class C3BridgeClient : IDisposable
         Disconnected?.Invoke(this, reason);
     }
 
-    // ── Read ──────────────────────────────────────────────────────────────────
+    // -- Read ------------------------------------------------------------------
 
     /// <summary>
     /// Reads a KRL variable, e.g. <c>$AXIS_ACT</c> or <c>$POS_ACT</c>.
@@ -131,7 +131,7 @@ public sealed class C3BridgeClient : IDisposable
         return await tcs.Task;
     }
 
-    // ── Read loop ─────────────────────────────────────────────────────────────
+    // -- Read loop -------------------------------------------------------------
 
     private async Task ReadLoopAsync(CancellationToken ct)
     {
@@ -165,7 +165,7 @@ public sealed class C3BridgeClient : IDisposable
                             body    = new byte[valLen];
                             bodyPos = 0;
 
-                            // valLen == 0 means empty value — resolve immediately.
+                            // valLen == 0 means empty value -- resolve immediately.
                             if (valLen == 0) goto resolve;
                         }
                     }
@@ -192,13 +192,13 @@ public sealed class C3BridgeClient : IDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
+        catch (OperationCanceledException) { } // normal on Disconnect/Dispose
         catch (Exception ex) { Cleanup(ex); return; }
 
         Cleanup(null);
     }
 
-    // ── Dispose ───────────────────────────────────────────────────────────────
+    // -- Dispose ---------------------------------------------------------------
 
     public void Dispose()
     {

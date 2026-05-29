@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.Kinematics;
 using SharpGLTF.Schema2;
 using Xunit.Abstractions;
@@ -12,7 +12,7 @@ namespace MassiveSlicer.Tests;
 /// </summary>
 public class GltfFkTest(ITestOutputHelper output)
 {
-    // Matches Lfam2Joints.All — (offset_deg, sign, axis)
+    // Matches Lfam2Joints.All -- (offset_deg, sign, axis)
     private static readonly (float OffsetDeg, float Sign, int Axis)[] JointCfg =
     [
         (  0f, -1f, 1),  // A1 Y
@@ -23,7 +23,7 @@ public class GltfFkTest(ITestOutputHelper output)
         (  0f, -1f, 1),  // A6 Y
     ];
 
-    // GltfToScene = Rx(+90°) * Scale(1000) — same as GltfLoader.GltfToScene
+    // GltfToScene = Rx(+90deg) * Scale(1000) -- same as GltfLoader.GltfToScene
     // Applied at the GLTF root before joint chain.
     // In row-vector convention: new.x = 1000*old.x, new.y = -1000*old.z, new.z = 1000*old.y
     private static Matrix4x4 GltfToScene()
@@ -36,7 +36,7 @@ public class GltfFkTest(ITestOutputHelper output)
     [Fact]
     public void GltfFK_vs_OpwFK_AtHome()
     {
-        // ── Locate the GLB file ──────────────────────────────────────────────────
+        // -- Locate the GLB file --------------------------------------------------
         string[] candidates =
         [
             Path.Combine(AppContext.BaseDirectory, "../../../../..", "assets", "LFAM2Robot.glb"),
@@ -53,14 +53,14 @@ public class GltfFkTest(ITestOutputHelper output)
 
         output.WriteLine($"Loaded: {glbPath}");
 
-        // ── Load GLTF and extract joint rest poses ───────────────────────────────
+        // -- Load GLTF and extract joint rest poses -------------------------------
         var model  = ModelRoot.Load(glbPath);
         var scene  = model.DefaultScene;
 
         var joints     = new Node?[6];
         var restPoses  = new Matrix4x4[6];
 
-        // Walk the scene tree to find joint_1 … joint_6
+        // Walk the scene tree to find joint_1 ... joint_6
         void Walk(Node n)
         {
             var name = n.Name ?? "";
@@ -76,7 +76,7 @@ public class GltfFkTest(ITestOutputHelper output)
 
         output.WriteLine("");
 
-        // ── Compute GLTF FK at home angles [0, -90, 90, 0, 15, 0] ───────────────
+        // -- Compute GLTF FK at home angles [0, -90, 90, 0, 15, 0] ---------------
         float[] homeKrl = [0f, -90f, 90f, 0f, 15f, 0f];
         var flange6Home = ComputeGltfFlange(restPoses, homeKrl);
         output.WriteLine($"GLTF FK flange (scene) at home: {Fmt(flange6Home)}");
@@ -89,7 +89,7 @@ public class GltfFkTest(ITestOutputHelper output)
         output.WriteLine($"OPW DH FK flange (ROBROOT) at home: {Fmt(opwFlangeHome)}");
         output.WriteLine("");
 
-        // ── Compute GLTF FK at solved bed-center angles ──────────────────────────
+        // -- Compute GLTF FK at solved bed-center angles --------------------------
         float[] bedAngles = [4.53f, -3.30f, 128.99f, 0f, 54.31f, -175.47f];
         var flange6Bed = ComputeGltfFlange(restPoses, bedAngles);
         output.WriteLine($"GLTF FK flange (scene) at bed-center angles: {Fmt(flange6Bed)}");
@@ -231,7 +231,7 @@ public class GltfFkTest(ITestOutputHelper output)
         output.WriteLine($"  Row0: ({rotMat.M11:F4}, {rotMat.M12:F4}, {rotMat.M13:F4})");
         output.WriteLine($"  Row1: ({rotMat.M21:F4}, {rotMat.M22:F4}, {rotMat.M23:F4})");
         output.WriteLine($"  Row2: ({rotMat.M31:F4}, {rotMat.M32:F4}, {rotMat.M33:F4})");
-        output.WriteLine($"  ABC = A={a:F2}° B={b:F2}° C={c:F2}°");
+        output.WriteLine($"  ABC = A={a:F2}deg B={b:F2}deg C={c:F2}deg");
         output.WriteLine($"  Tool Z (row2) in scene = ({rotMat.M31:F4}, {rotMat.M32:F4}, {rotMat.M33:F4})");
         output.WriteLine("");
 
@@ -244,7 +244,7 @@ public class GltfFkTest(ITestOutputHelper output)
             output.WriteLine($"  [{i}] {tag}: [{string.Join(", ", s.Krl.Select(v => $"{v:F2}"))}]");
         }
 
-        // Check if any solution matches home angles within 1°
+        // Check if any solution matches home angles within 1deg
         bool found = solutions.Any(s =>
         {
             if (s.Unreachable) return false;
@@ -257,7 +257,7 @@ public class GltfFkTest(ITestOutputHelper output)
         output.WriteLine("If 'found=False', OPW IK and GLTF FK use different frames.");
     }
 
-    // ── GLTF FK implementation ────────────────────────────────────────────────
+    // -- GLTF FK implementation ------------------------------------------------
 
     /// <summary>
     /// Computes joint_6 world transform in scene mm (robot base at world 0,0,1000).

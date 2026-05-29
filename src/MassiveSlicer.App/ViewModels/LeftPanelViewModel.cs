@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Windows.Input;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Viewport.Scene;
@@ -12,7 +12,7 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class LeftPanelViewModel : ViewModelBase
 {
-    // ── Cell selector ─────────────────────────────────────────────────────────
+    // -- Cell selector ---------------------------------------------------------
 
     private readonly List<string> _cellPaths = [];
 
@@ -58,7 +58,7 @@ public sealed class LeftPanelViewModel : ViewModelBase
     }
 
 
-    // ── Outliner items ────────────────────────────────────────────────────────
+    // -- Outliner items --------------------------------------------------------
 
     private ObservableCollection<OutlinerItemViewModel>? _outlinerItems;
 
@@ -69,7 +69,7 @@ public sealed class LeftPanelViewModel : ViewModelBase
         internal set => SetField(ref _outlinerItems, value);
     }
 
-    // ── Tab management ────────────────────────────────────────────────────────
+    // -- Tab management --------------------------------------------------------
 
     private LeftPanelTab _activeTab = LeftPanelTab.Outliner;
 
@@ -81,14 +81,14 @@ public sealed class LeftPanelViewModel : ViewModelBase
         {
             if (!SetField(ref _activeTab, value)) return;
             OnPropertyChanged(nameof(IsOutlinerTabActive));
-            OnPropertyChanged(nameof(IsAssetsTabActive));
             OnPropertyChanged(nameof(IsViewportTabActive));
+            OnPropertyChanged(nameof(IsRobotTabActive));
         }
     }
 
     public bool IsOutlinerTabActive  => _activeTab == LeftPanelTab.Outliner;
-    public bool IsAssetsTabActive    => _activeTab == LeftPanelTab.Assets;
     public bool IsViewportTabActive  => _activeTab == LeftPanelTab.Viewport;
+    public bool IsRobotTabActive     => _activeTab == LeftPanelTab.Robot;
 
     private bool _isCollapsed;
 
