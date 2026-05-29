@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using StbImageSharp;
@@ -32,7 +32,7 @@ public sealed class BackdropRenderer : IDisposable
 
     // Z-up right-hand equirectangular mapping.
     // atan(y,x) gives azimuth around Z; asin(z) gives elevation.
-    // Linear→sRGB gamma correction matches how Unity displays the same images.
+    // Linear->sRGB gamma correction matches how Unity displays the same images.
     private static readonly string FragSrc = """
         #version 330 core
         in vec3 vRayDir;

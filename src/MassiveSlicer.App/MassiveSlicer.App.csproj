@@ -22,10 +22,8 @@
     <Compile Remove="Views\GlHostControl.NonWindows.cs" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="Views\GlHostControl.Windows.cs"
-             Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
-    <Compile Include="Views\GlHostControl.NonWindows.cs"
-             Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Compile Include="Views\GlHostControl.Windows.cs" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Compile Include="Views\GlHostControl.NonWindows.cs" Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,6 +36,8 @@
     <PackageReference Include="Avalonia.Desktop" Version="12.0.3" />
     <PackageReference Include="Avalonia.Themes.Simple" Version="12.0.3" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
+    <PackageReference Include="Optris.Icons.Avalonia" Version="12.0.6" />
+    <PackageReference Include="Optris.Icons.Avalonia.MaterialDesign" Version="12.0.6" />
   </ItemGroup>
 
 </Project>

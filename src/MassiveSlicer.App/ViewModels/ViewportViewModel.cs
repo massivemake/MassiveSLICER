@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
@@ -64,6 +64,34 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _showBead = false;
+    public bool ShowBead
+    {
+        get => _showBead;
+        set => SetField(ref _showBead, value);
+    }
+
+    private bool _showExtrusionMoves = true;
+    public bool ShowExtrusionMoves
+    {
+        get => _showExtrusionMoves;
+        set => SetField(ref _showExtrusionMoves, value);
+    }
+
+    private bool _showTravelMoves = true;
+    public bool ShowTravelMoves
+    {
+        get => _showTravelMoves;
+        set => SetField(ref _showTravelMoves, value);
+    }
+
+    private bool _showSeam = true;
+    public bool ShowSeam
+    {
+        get => _showSeam;
+        set => SetField(ref _showSeam, value);
+    }
+
     private bool _showDimensions;
 
     /// <summary>Whether the bounding-box dimension overlay is visible.</summary>
@@ -75,7 +103,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private NavigationPresetId _activePreset = NavigationPresetId.Rhino;
 
-    /// <summary>Active mouse-button navigation preset — controls which buttons perform orbit/pan.</summary>
+    /// <summary>Active mouse-button navigation preset -- controls which buttons perform orbit/pan.</summary>
     public NavigationPresetId ActivePreset
     {
         get => _activePreset;
@@ -124,7 +152,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public CellConfig? ActiveCell { get; set; }
 
-    // ── Render request ────────────────────────────────────────────────────────
+    // -- Render request --------------------------------------------------------
 
     /// <summary>
     /// Raised when state has changed that requires the viewport to redraw.
@@ -135,7 +163,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Signals the viewport to repaint on the next composition frame.</summary>
     public void NotifyRenderNeeded() => RenderNeeded?.Invoke(this, EventArgs.Empty);
 
-    // ── Backdrop ──────────────────────────────────────────────────────────────
+    // -- Backdrop --------------------------------------------------------------
 
     /// <summary>A named backdrop option shown in the selector. <see cref="Path"/> is <c>null</c> for "None".</summary>
     public sealed record BackdropOption(string Name, string? Path);
@@ -181,7 +209,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Callback invoked when the user sets a new default backdrop. Wired by MainWindowViewModel.</summary>
     internal Action<string?>? OnSetDefaultBackdrop { get; set; }
 
-    // ── World light ───────────────────────────────────────────────────────────
+    // -- World light -----------------------------------------------------------
 
     private float _lightAzimuth   = 45f;
     private float _lightElevation = 45f;
@@ -208,7 +236,7 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _lightIntensity, value);
     }
 
-    // ── Shader mode ───────────────────────────────────────────────────────────
+    // -- Shader mode -----------------------------------------------------------
 
     private ShaderMode _activeShaderMode = ShaderMode.Standard;
 
@@ -222,7 +250,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Sets <see cref="ActiveShaderMode"/> from a string enum name (e.g. "Clay").</summary>
     public RelayCommand<string> SetShaderModeCommand { get; }
 
-    // ── Gizmo mode (synced to renderer via OnRender) ─────────────────────────
+    // -- Gizmo mode (synced to renderer via OnRender) -------------------------
 
     private GizmoMode _activeGizmoMode;
 
@@ -248,7 +276,7 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand GizmoRotateCommand { get; }
     public RelayCommand GizmoScaleCommand  { get; }
 
-    // ── Gizmo visibility toggle ───────────────────────────────────────────────
+    // -- Gizmo visibility toggle -----------------------------------------------
 
     private bool _gizmoEnabled = true;
 
@@ -268,7 +296,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public RelayCommand GizmoToggleCommand { get; }
 
-    // ── Selection / focus overlay ─────────────────────────────────────────────
+    // -- Selection / focus overlay ---------------------------------------------
 
     private bool _hasSelection;
 
@@ -289,7 +317,11 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool IsToolpathSelected
     {
         get => _isToolpathSelected;
-        set => SetField(ref _isToolpathSelected, value);
+        set
+        {
+            if (SetField(ref _isToolpathSelected, value))
+                ExportKrlCommand?.RaiseCanExecuteChanged();
+        }
     }
 
     /// <summary>
@@ -458,13 +490,17 @@ public sealed class ViewportViewModel : ViewModelBase
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
         FocusCommand       = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
-        GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Translate);
-        GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Rotate);
-        GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = GizmoMode.Scale);
+        GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Translate ? GizmoMode.None : GizmoMode.Translate);
+        GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Rotate    ? GizmoMode.None : GizmoMode.Rotate);
+        GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Scale     ? GizmoMode.None : GizmoMode.Scale);
         GizmoToggleCommand = new RelayCommand(() => GizmoEnabled = !GizmoEnabled);
         SliceCommand = new RelayCommand(
-            execute:  () => _ = OnSliceRequested?.Invoke(),
+            execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasSelection);
+
+        ExportKrlCommand = new RelayCommand(
+            execute:    () => _ = OnExportKrlRequested?.Invoke(),
+            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
 
         var options = new List<BackdropOption> { new("None", null) };
         if (Directory.Exists("assets/Images"))
@@ -478,7 +514,7 @@ public sealed class ViewportViewModel : ViewModelBase
         _activeBackdrop    = options[0];
     }
 
-    // ── Lay Flat ──────────────────────────────────────────────────────────────
+    // -- Lay Flat --------------------------------------------------------------
 
     private bool _isLayFlatMode;
 
@@ -495,7 +531,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Toggles <see cref="IsLayFlatMode"/> to begin or cancel face-pick mode.</summary>
     public RelayCommand LayFlatCommand { get; }
 
-    // ── Slicing ───────────────────────────────────────────────────────────────
+    // -- Slicing ---------------------------------------------------------------
 
     private bool _isSlicing;
 
@@ -513,9 +549,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>
     /// Completed toolpaths queued for upload on the GL thread.
     /// Produced by the slice task; consumed by the render loop.
-    /// Each entry is a freshly-created SceneNode — never re-uses an existing node.
+    /// Each entry is a freshly-created SceneNode -- never re-uses an existing node.
     /// </summary>
-    public ConcurrentQueue<(Toolpath Toolpath, SceneNode Node)> PendingToolpath { get; } = new();
+    public ConcurrentQueue<(Toolpath Toolpath, SceneNode Node, float BeadWidth, float LayerHeight, System.Numerics.Vector3 MaterialColor)> PendingToolpath { get; } = new();
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
@@ -523,16 +559,52 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public AdditiveSettingsViewModel? AdditiveSettings { get; set; }
 
+    // -- Toolpath stats --------------------------------------------------------
+
+    private bool _hasToolpathStats;
+    public bool HasToolpathStats
+    {
+        get => _hasToolpathStats;
+        set => SetField(ref _hasToolpathStats, value);
+    }
+
+    private string _statsTime = "";
+    public string StatsTime
+    {
+        get => _statsTime;
+        set => SetField(ref _statsTime, value);
+    }
+
+    private string _statsWeight = "";
+    public string StatsWeight
+    {
+        get => _statsWeight;
+        set => SetField(ref _statsWeight, value);
+    }
+
+    private string _statsCost = "";
+    public string StatsCost
+    {
+        get => _statsCost;
+        set => SetField(ref _statsCost, value);
+    }
+
     /// <summary>
     /// Callback registered by the viewport code-behind to perform the actual slice
     /// computation on a background thread.
     /// </summary>
     internal Func<Task>? OnSliceRequested { get; set; }
 
+    /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
+    internal Func<Task>? OnExportKrlRequested { get; set; }
+
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
 
-    // ── Outliner / user scene objects ─────────────────────────────────────────
+    /// <summary>Opens a save dialog and exports the selected toolpath as a KUKA KRL .src file.</summary>
+    public RelayCommand ExportKrlCommand { get; }
+
+    // -- Outliner / user scene objects -----------------------------------------
 
     /// <summary>User-imported scene objects shown in the outliner panel.</summary>
     public ObservableCollection<OutlinerItemViewModel> OutlinerItems { get; } = [];

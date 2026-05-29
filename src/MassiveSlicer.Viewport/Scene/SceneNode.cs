@@ -1,4 +1,4 @@
-using MassiveSlicer.Viewport.Rendering;
+﻿using MassiveSlicer.Viewport.Rendering;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Scene;
@@ -10,7 +10,7 @@ namespace MassiveSlicer.Viewport.Scene;
 /// </summary>
 public sealed class SceneNode
 {
-    // ── Identity ──────────────────────────────────────────────────────────────
+    // -- Identity --------------------------------------------------------------
 
     /// <summary>Display name used in the outliner.</summary>
     public string Name { get; set; } = "Node";
@@ -41,7 +41,7 @@ public sealed class SceneNode
     /// </summary>
     public bool Visible { get; set; } = true;
 
-    // ── Hierarchy ─────────────────────────────────────────────────────────────
+    // -- Hierarchy -------------------------------------------------------------
 
     /// <summary>Parent node, or <c>null</c> for a root node.</summary>
     public SceneNode? Parent { get; private set; }
@@ -49,7 +49,7 @@ public sealed class SceneNode
     /// <summary>Ordered list of child nodes.</summary>
     public List<SceneNode> Children { get; } = [];
 
-    // ── Transform ─────────────────────────────────────────────────────────────
+    // -- Transform -------------------------------------------------------------
 
     /// <summary>Transform relative to the parent (or world if no parent).</summary>
     public Matrix4 LocalTransform { get; set; } = Matrix4.Identity;
@@ -58,7 +58,7 @@ public sealed class SceneNode
     public Matrix4 WorldTransform
         => Parent is null ? LocalTransform : LocalTransform * Parent.WorldTransform;
 
-    // ── Renderable ────────────────────────────────────────────────────────────
+    // -- Renderable ------------------------------------------------------------
 
     /// <summary>
     /// CPU-side mesh set by loaders. Consumed on the GL thread by the render loop,
@@ -69,7 +69,7 @@ public sealed class SceneNode
     /// <summary>Mesh attached to this node, or <c>null</c> if it is a transform-only node.</summary>
     public MeshRenderer? Mesh { get; set; }
 
-    // ── Graph operations ──────────────────────────────────────────────────────
+    // -- Graph operations ------------------------------------------------------
 
     /// <summary>Adds <paramref name="child"/> as a child of this node and sets its parent.</summary>
     public void AddChild(SceneNode child)
@@ -85,7 +85,7 @@ public sealed class SceneNode
             child.Parent = null;
     }
 
-    // ── Rendering ─────────────────────────────────────────────────────────────
+    // -- Rendering -------------------------------------------------------------
 
     /// <summary>
     /// Draws this node's mesh (if any) and recurses into all children.
@@ -105,7 +105,7 @@ public sealed class SceneNode
             child.Draw(viewProj, viewPos, lightDir, lightIntensity);
     }
 
-    // ── Traversal ─────────────────────────────────────────────────────────────
+    // -- Traversal -------------------------------------------------------------
 
     /// <summary>Returns this node and all its descendants in depth-first order.</summary>
     public IEnumerable<SceneNode> SelfAndDescendants()

@@ -1,11 +1,11 @@
-using System.Globalization;
+﻿using System.Globalization;
 using Avalonia.Data.Converters;
 
 namespace MassiveSlicer.Converters;
 
 /// <summary>
 /// Converts a bool to bool (with optional inversion) for use with IsVisible bindings.
-/// Replaces WPF's BoolToVisibilityConverter — in Avalonia, IsVisible accepts bool directly.
+/// Replaces WPF's BoolToVisibilityConverter -- in Avalonia, IsVisible accepts bool directly.
 /// </summary>
 public sealed class BoolConverter : IValueConverter
 {

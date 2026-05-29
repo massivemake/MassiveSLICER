@@ -1,4 +1,4 @@
-namespace MassiveSlicer.Core.Models;
+﻿namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// Application-wide preferences persisted across sessions.
@@ -7,7 +7,7 @@ namespace MassiveSlicer.Core.Models;
 /// </summary>
 public sealed class AppPreferences
 {
-    // ── Navigation ────────────────────────────────────────────────────────
+    // -- Navigation --------------------------------------------------------
 
     /// <summary>
     /// When true, the orbit pivot depth adjusts to the geometry under the cursor
@@ -24,12 +24,12 @@ public sealed class AppPreferences
     /// <summary>Active mouse-button navigation preset.</summary>
     public NavigationPresetId ActivePreset { get; set; } = NavigationPresetId.Rhino;
 
-    // ── Performance ───────────────────────────────────────────────────────
+    // -- Performance -------------------------------------------------------
 
     /// <summary>Enable multi-sample anti-aliasing in the OpenGL viewport.</summary>
     public bool AntiAliasing { get; set; } = true;
 
-    // ── Appearance ────────────────────────────────────────────────────────
+    // -- Appearance --------------------------------------------------------
 
     /// <summary>Path of the backdrop image loaded at startup, or null for none.</summary>
     public string? DefaultBackdropPath { get; set; }
@@ -45,4 +45,13 @@ public sealed class AppPreferences
 
     /// <summary>Whether the print-bed boundary grid overlay is rendered.</summary>
     public bool ShowBedGrid { get; set; } = true;
+
+    /// <summary>
+    /// Per-cell default home position name, keyed by cell name (e.g. "LFAM 2" -> "Home").
+    /// Restored when the user switches to a cell.
+    /// </summary>
+    public Dictionary<string, string> DefaultHomePositionNames { get; set; } = [];
+
+    /// <summary>Name of the last selected material preset, or null for none.</summary>
+    public string? SelectedMaterialPresetName { get; set; }
 }

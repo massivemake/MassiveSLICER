@@ -1,4 +1,4 @@
-using System.Windows.Input;
+﻿using System.Windows.Input;
 using MassiveSlicer.Commands;
 using MassiveSlicer.ViewModels.Base;
 
@@ -10,7 +10,7 @@ namespace MassiveSlicer.ViewModels;
 ///</summary>
 public sealed class ToolbarViewModel : ViewModelBase
 {
-    // ── Mode ────────────────────────────────────────────────────────────────
+    // -- Mode ----------------------------------------------------------------
 
     private AppMode _activeMode = AppMode.Prepare;
 
@@ -24,7 +24,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         set => SetField(ref _activeMode, value);
     }
 
-    // ── View ────────────────────────────────────────────────────────────────
+    // -- View ----------------------------------------------------------------
 
     private ViewMode _activeViewMode = ViewMode.Shaded;
 
@@ -35,7 +35,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         set => SetField(ref _activeViewMode, value);
     }
 
-    // ── Robot connection ────────────────────────────────────────────────────
+    // -- Robot connection ----------------------------------------------------
 
     private ConnectionStatus _robotStatus = ConnectionStatus.Disconnected;
 
@@ -46,7 +46,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         set => SetField(ref _robotStatus, value);
     }
 
-    // ── UI visibility ───────────────────────────────────────────────────────
+    // -- UI visibility -------------------------------------------------------
 
     private bool _isRightPanelVisible = true;
 
@@ -66,7 +66,7 @@ public sealed class ToolbarViewModel : ViewModelBase
         set => SetField(ref _isConsoleVisible, value);
     }
 
-    // ── Commands ─────────────────────────────────────────────────────────────
+    // -- Commands -------------------------------------------------------------
 
     /// <summary>Opens a file-picker dialog to load a 3D model.</summary>
     public ICommand OpenModelCommand { get; }
@@ -121,7 +121,7 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         SyncRobotCommand        = new RelayCommand(SyncRobot);
     }
 
-    // ── Events ───────────────────────────────────────────────────────────────
+    // -- Events ---------------------------------------------------------------
 
     /// <summary>Raised when the user triggers the Open Model command.</summary>
     public event EventHandler? ModelLoadRequested;
@@ -132,10 +132,10 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     /// <summary>Raised when the user clicks the robot sync/connect button.</summary>
     public event EventHandler? SyncRobotRequested;
 
-    // ── Private handlers (wired up to real logic incrementally) ──────────────
+    // -- Private handlers (wired up to real logic incrementally) --------------
 
     private void OpenModel() => ModelLoadRequested?.Invoke(this, EventArgs.Empty);
-    private void ImportKrl()       { /* TODO: open file dialog → parse KRL    */ }
+    private void ImportKrl()       { /* TODO: open file dialog -> parse KRL    */ }
     private void OpenPreferences() => PreferencesRequested?.Invoke(this, EventArgs.Empty);
     private void FrameAll()        { /* TODO: notify viewport to frame scene   */ }
     private void TopView()         { /* TODO: notify viewport camera preset    */ }

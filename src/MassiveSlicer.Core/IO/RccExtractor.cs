@@ -1,4 +1,4 @@
-using System.IO.Compression;
+﻿using System.IO.Compression;
 using System.Text;
 
 namespace MassiveSlicer.Core.IO;
@@ -57,7 +57,7 @@ public static class RccExtractor
         uint dataOff  = RB32(raw, 12);
         uint namesOff = RB32(raw, 16);
 
-        // Build a node-index → byte-offset table so we can resolve firstChild indices.
+        // Build a node-index -> byte-offset table so we can resolve firstChild indices.
         // v1: all nodes are 14 bytes.
         // v2+: directory nodes stay 14 bytes; file nodes grow to 22 (extra 8 = lastModified).
         int[] nodeOffsets = BuildNodeOffsets(raw, treeOff, dataOff, namesOff, version);
@@ -67,7 +67,7 @@ public static class RccExtractor
         return result;
     }
 
-    // ── Tree walking ──────────────────────────────────────────────────────────
+    // -- Tree walking ----------------------------------------------------------
 
     // Walk the root node (node 0) without adding its name to the path.
     private static void WalkDirectory(
@@ -100,7 +100,7 @@ public static class RccExtractor
             uint size        = RB32(raw, dPos);
 
             if ((long)dPos + 4 + size > raw.Length)
-                return; // truncated or bad offset — skip
+                return; // truncated or bad offset -- skip
 
             byte[] data = new byte[size];
             Buffer.BlockCopy(raw, dPos + 4, data, 0, (int)size);
@@ -114,7 +114,7 @@ public static class RccExtractor
         }
     }
 
-    // ── Node offset table ─────────────────────────────────────────────────────
+    // -- Node offset table -----------------------------------------------------
 
     private static int[] BuildNodeOffsets(byte[] raw, uint treeOff, uint dataOff, uint namesOff, uint version)
     {
@@ -143,7 +143,7 @@ public static class RccExtractor
         }
         else
         {
-            // v2: directory nodes = 14 bytes, file nodes = 22 bytes — scan sequentially.
+            // v2: directory nodes = 14 bytes, file nodes = 22 bytes -- scan sequentially.
             var offsets = new List<int>();
             int pos = (int)treeOff;
             int end = (int)treeOff + treeLen;
@@ -157,7 +157,7 @@ public static class RccExtractor
         }
     }
 
-    // ── Names section ─────────────────────────────────────────────────────────
+    // -- Names section ---------------------------------------------------------
 
     private static string ReadName(byte[] raw, uint namesOff, uint nameOff)
     {
@@ -165,7 +165,7 @@ public static class RccExtractor
         ushort len = RB16(raw, pos);
         pos += 2 + 4; // skip length (2) + hash (4)
 
-        // Qt stores names as UTF-16 BE; .NET strings are UTF-16 LE — swap each pair.
+        // Qt stores names as UTF-16 BE; .NET strings are UTF-16 LE -- swap each pair.
         var chars = new byte[len * 2];
         for (int i = 0; i < len; i++)
         {
@@ -175,7 +175,7 @@ public static class RccExtractor
         return Encoding.Unicode.GetString(chars);
     }
 
-    // ── Decompression ─────────────────────────────────────────────────────────
+    // -- Decompression ---------------------------------------------------------
 
     private static byte[] ZlibDecompress(byte[] data)
     {
@@ -187,7 +187,7 @@ public static class RccExtractor
         return output.ToArray();
     }
 
-    // ── Big-endian readers ────────────────────────────────────────────────────
+    // -- Big-endian readers ----------------------------------------------------
 
     private static uint   RB32(byte[] b, int i) =>
         ((uint)b[i] << 24) | ((uint)b[i + 1] << 16) | ((uint)b[i + 2] << 8) | b[i + 3];

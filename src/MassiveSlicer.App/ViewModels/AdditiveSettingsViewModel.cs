@@ -1,5 +1,6 @@
-using System.Windows.Input;
+﻿using System.Collections.ObjectModel;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
@@ -13,15 +14,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 {
     public AdditiveSettingsViewModel()
     {
-        SetMethodPlanarCommand = new RelayCommand(() => Method = SliceMethod.Planar);
-        SetMethodAngledCommand = new RelayCommand(() => Method = SliceMethod.Angled);
+        SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
     }
 
-    // ── Geometry ─────────────────────────────────────────────────────────────
+    // -- Geometry -------------------------------------------------------------
 
     private double _layerHeight = 3.0;
 
-    /// <summary>Height of each deposited layer in mm (0.5 – 100).</summary>
+    /// <summary>Height of each deposited layer in mm (0.5 - 100).</summary>
     public double LayerHeight
     {
         get => _layerHeight;
@@ -30,7 +30,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private double _beadWidth = 6.0;
 
-    /// <summary>Width of the deposited bead in mm (1 – 100).</summary>
+    /// <summary>Width of the deposited bead in mm (1 - 100).</summary>
     public double BeadWidth
     {
         get => _beadWidth;
@@ -46,7 +46,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _firstLayerHeight, Math.Clamp(value, 0.5, 100.0));
     }
 
-    // ── Slicing method ───────────────────────────────────────────────────────
+    // -- Slicing method -------------------------------------------------------
 
     private SliceMethod _method = SliceMethod.Planar;
 
@@ -58,19 +58,31 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         {
             if (SetField(ref _method, value))
             {
-                OnPropertyChanged(nameof(IsMethodPlanar));
-                OnPropertyChanged(nameof(IsMethodAngled));
+                OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
             }
         }
     }
 
-    public bool IsMethodPlanar => Method == SliceMethod.Planar;
-    public bool IsMethodAngled => Method == SliceMethod.Angled;
-    public bool ShowTiltAngle  => Method == SliceMethod.Angled;
+    public string[] AvailableMethodNames { get; } = ["Planar", "Angled", "Geodesic"];
 
-    public ICommand SetMethodPlanarCommand { get; }
-    public ICommand SetMethodAngledCommand { get; }
+    public string MethodDisplayName
+    {
+        get => Method switch
+        {
+            SliceMethod.Angled   => "Angled",
+            SliceMethod.Geodesic => "Geodesic",
+            _                    => "Planar",
+        };
+        set => Method = value switch
+        {
+            "Angled"   => SliceMethod.Angled,
+            "Geodesic" => SliceMethod.Geodesic,
+            _          => SliceMethod.Planar,
+        };
+    }
+
+    public bool ShowTiltAngle => Method == SliceMethod.Angled;
 
     private double _passAngle;
 
@@ -99,29 +111,29 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _tiltAngleX, Math.Clamp(value, -89.0, 89.0));
     }
 
-    // ── Motion ───────────────────────────────────────────────────────────────
+    // -- Motion ---------------------------------------------------------------
 
-    private double _feedRate = 0.1;
+    private double _feedRate = 100.0;
 
-    /// <summary>Deposition feed rate in m/s.</summary>
+    /// <summary>Deposition print speed in mm/s.</summary>
     public double FeedRate
     {
         get => _feedRate;
-        set => SetField(ref _feedRate, Math.Clamp(value, 0.001, 2.0));
+        set => SetField(ref _feedRate, Math.Clamp(value, 1.0, 2000.0));
     }
 
-    private double _ptpSpeed = 1.0;
+    private double _travelSpeed = 120.0;
 
-    /// <summary>Point-to-point travel speed in m/min.</summary>
-    public double PtpSpeed
+    /// <summary>Travel (non-extrusion) move speed in mm/s.</summary>
+    public double TravelSpeed
     {
-        get => _ptpSpeed;
-        set => SetField(ref _ptpSpeed, Math.Clamp(value, 0.01, 10.0));
+        get => _travelSpeed;
+        set => SetField(ref _travelSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
     private int _acceleration = 100;
 
-    /// <summary>Acceleration as a percentage of robot-rated maximum (1 – 100).</summary>
+    /// <summary>Acceleration as a percentage of robot-rated maximum (1 - 100).</summary>
     public int Acceleration
     {
         get => _acceleration;
@@ -137,11 +149,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _approachZ, value);
     }
 
-    // ── KUKA frame indices ────────────────────────────────────────────────────
+    // -- KUKA frame indices ----------------------------------------------------
 
     private int _toolDataIndex = 1;
 
-    /// <summary>KUKA TOOL_DATA index (1 – 16) used in the generated KRL program.</summary>
+    /// <summary>KUKA TOOL_DATA index (1 - 16) used in the generated KRL program.</summary>
     public int ToolDataIndex
     {
         get => _toolDataIndex;
@@ -150,20 +162,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private int _baseDataIndex = 1;
 
-    /// <summary>KUKA BASE_DATA index (1 – 32) used in the generated KRL program.</summary>
+    /// <summary>KUKA BASE_DATA index (1 - 32) used in the generated KRL program.</summary>
     public int BaseDataIndex
     {
         get => _baseDataIndex;
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
 
-    // ── Toolhead approach orientation ─────────────────────────────────────────
+    // -- Toolhead approach orientation -----------------------------------------
     // These ABC angles (KUKA ZYX Euler, degrees) define the target tool orientation
     // used by the IK solver when scrubbing through a toolpath.  They are analogous
     // to the "toolhead ABC" setting in Eidos CAM: a fixed approach orientation applied
     // uniformly to every toolpath point.
     //
-    // Defaults: A=0, B=0, C=0 — identity (no additional rotation).
+    // Defaults: A=0, B=0, C=0 -- identity (no additional rotation).
     // With these defaults the IK behaviour is identical to before this setting was added.
     // Increasing A rotates the tool around its own approach axis (e.g. spin the nozzle);
     // B/C tilt the tool relative to the plane-normal-derived approach direction.
@@ -171,7 +183,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     private double _toolheadA = 0.0;
 
     /// <summary>KUKA A angle (deg, rotation about Z) applied locally after the
-    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    /// plane-normal-derived orientation. 0deg = no additional rotation.</summary>
     public double ToolheadA
     {
         get => _toolheadA;
@@ -181,7 +193,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     private double _toolheadB = 0.0;
 
     /// <summary>KUKA B angle (deg, rotation about Y') applied locally after the
-    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    /// plane-normal-derived orientation. 0deg = no additional rotation.</summary>
     public double ToolheadB
     {
         get => _toolheadB;
@@ -191,10 +203,140 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     private double _toolheadC = 0.0;
 
     /// <summary>KUKA C angle (deg, rotation about X'') applied locally after the
-    /// plane-normal-derived orientation. 0° = no additional rotation.</summary>
+    /// plane-normal-derived orientation. 0deg = no additional rotation.</summary>
     public double ToolheadC
     {
         get => _toolheadC;
         set => SetField(ref _toolheadC, Math.Clamp(value, -180.0, 180.0));
+    }
+
+    // -- Material temperatures -------------------------------------------------
+
+    // T1/T2/T3 are set by the selected material preset (see ApplyPreset).
+    // They are not shown in the ADDITIVE tab; the TOOLPATH tab's material dropdown drives them.
+    // Defaults to 230deg C when no material is selected.
+
+    private double _temperature1 = 230.0;
+    public double Temperature1
+    {
+        get => _temperature1;
+        set => SetField(ref _temperature1, Math.Clamp(value, 0.0, 450.0));
+    }
+
+    private double _temperature2 = 230.0;
+    public double Temperature2
+    {
+        get => _temperature2;
+        set => SetField(ref _temperature2, Math.Clamp(value, 0.0, 450.0));
+    }
+
+    private double _temperature3 = 230.0;
+    public double Temperature3
+    {
+        get => _temperature3;
+        set => SetField(ref _temperature3, Math.Clamp(value, 0.0, 450.0));
+    }
+
+    // -- Material presets ------------------------------------------------------
+
+    /// <summary>User's saved material preset library. Loaded at startup, persisted on each add.</summary>
+    public ObservableCollection<MaterialPreset> MaterialPresets { get; } = [];
+
+    private int _selectedPresetIndex = -1;
+
+    /// <summary>
+    /// Index of the selected material preset, or -1 for none.
+    /// Setting this applies the preset's temperatures to T1/T2/T3.
+    /// </summary>
+    public int SelectedPresetIndex
+    {
+        get => _selectedPresetIndex;
+        set
+        {
+            if (!SetField(ref _selectedPresetIndex, value)) return;
+            OnPropertyChanged(nameof(HasSelectedPreset));
+            if (value >= 0 && value < MaterialPresets.Count)
+                ApplyPreset(MaterialPresets[value]);
+        }
+    }
+
+    public bool HasSelectedPreset => _selectedPresetIndex >= 0 && _selectedPresetIndex < MaterialPresets.Count;
+
+    private void ApplyPreset(MaterialPreset p)
+    {
+        Temperature1 = p.Temperature1;
+        Temperature2 = p.Temperature2;
+        Temperature3 = p.Temperature3;
+    }
+
+    // -- Home positions --------------------------------------------------------
+
+    private List<(string Name, float[] Angles)> _homePositions =
+        [("Default", [0f, -90f, 90f, 0f, 15f, 0f])];
+
+    private string[] _availableHomePositionNames = ["Default"];
+
+    /// <summary>Names of the home positions available for the active cell.</summary>
+    public string[] AvailableHomePositionNames
+    {
+        get => _availableHomePositionNames;
+        private set => SetField(ref _availableHomePositionNames, value);
+    }
+
+    private int _selectedHomePositionIndex = 0;
+    private string _selectedHomePositionName = "Default";
+
+    /// <summary>
+    /// Name of the selected home position. Bound as SelectedItem (string) to avoid the
+    /// Avalonia ComboBox SelectedIndex reset that occurs when ItemsSource changes.
+    /// </summary>
+    public string SelectedHomePositionName
+    {
+        get => _selectedHomePositionName;
+        set
+        {
+            if (value is null) return;
+            if (!SetField(ref _selectedHomePositionName, value)) return;
+            _selectedHomePositionIndex = Math.Max(0, _homePositions.FindIndex(p => p.Name == value));
+        }
+    }
+
+    /// <summary>Joint angles (A1-A6, KRL degrees) for the currently selected home position.</summary>
+    public float[] SelectedHomeAngles
+        => _selectedHomePositionIndex < _homePositions.Count
+            ? _homePositions[_selectedHomePositionIndex].Angles
+            : [0f, -90f, 90f, 0f, 15f, 0f];
+
+    /// <summary>Wired by ViewportView.axaml.cs; invoked when "Set as Default" is clicked.</summary>
+    internal Action? OnSetDefaultHomePositionRequested { get; set; }
+
+    /// <summary>Saves the currently selected home position as the default for this cell.</summary>
+    public RelayCommand SetDefaultHomePositionCommand { get; }
+
+    /// <summary>
+    /// Refreshes the available home position list from the given cell config and restores
+    /// <paramref name="defaultPositionName"/> as the selected entry (falls back to index 0).
+    /// </summary>
+    public void UpdateFromCell(CellConfig cell, string? defaultPositionName)
+    {
+        var positions = cell.Robot.HomePositions;
+        if (positions.Count == 0)
+        {
+            _homePositions             = [("Default", cell.Robot.HomePosition)];
+            AvailableHomePositionNames = ["Default"];
+        }
+        else
+        {
+            _homePositions             = positions.Select(p => (p.Name, p.Angles)).ToList();
+            AvailableHomePositionNames = positions.Select(p => p.Name).ToArray();
+        }
+
+        string nameToSelect = _homePositions.Count > 0 ? _homePositions[0].Name : "Default";
+        if (defaultPositionName is not null)
+        {
+            int found = _homePositions.FindIndex(p => p.Name == defaultPositionName);
+            if (found >= 0) nameToSelect = _homePositions[found].Name;
+        }
+        SelectedHomePositionName = nameToSelect;
     }
 }

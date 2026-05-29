@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace MassiveSlicer.Core.Kinematics;
 
@@ -7,7 +7,7 @@ public enum RotationAxis { X, Y, Z }
 
 /// <summary>
 /// Per-joint angle conversion constants.
-/// KRL → bone:  <c>bone_rad = KrlSign × krl_deg × π/180</c>
+/// KRL -> bone:  <c>bone_rad = KrlSign × krl_deg × π/180</c>
 /// KrlOffset is a KRL↔math convention artifact used only for IK, not FK.
 /// </summary>
 public sealed record JointConfig

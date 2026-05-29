@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.IO;
 #pragma warning disable CA1416  // Windows-only app
 using Avalonia;
@@ -52,6 +52,8 @@ public partial class ViewportView : UserControl
     private Vector3  _gizmoDragStartHit;
     private Matrix4  _gizmoDragInitialLocal;
     private float    _gizmoDragStartAngle;
+    private float    _gizmoDragStartScreenX;
+    private float    _gizmoDragCurrScreenX;
 
     // Keyboard-initiated transform state (Blender-style G/R/S)
     private bool      _kbTransformActive;
@@ -59,27 +61,33 @@ public partial class ViewportView : UserControl
     private GizmoAxis _kbTransformAxis = GizmoAxis.None;
     private Point     _kbTransformStartPos;
     private Matrix4   _kbTransformInitialLocal;
+    private Vector2   _kbObjScreenCenter;
 
     // Pointer capture
     private IPointer? _capturedPointer;
 
-    // Cached VM reference — set on the UI thread in WireGlCanvas, read from GL thread in OnRender.
+    // Cached VM reference -- set on the UI thread in WireGlCanvas, read from GL thread in OnRender.
     // Avoids accessing the Avalonia DataContext property (UI-thread-only) from the GL thread.
     private ViewportViewModel? _vm;
 
-    // Toolpath-to-node map — populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
-    private readonly ConcurrentDictionary<SceneNode, Toolpath>   _toolpathByNode       = new();
+    // Toolpath-to-node map -- populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
+    private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _toolpathByNode       = new();
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
     // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
-    private readonly ConcurrentDictionary<SceneNode, NVec3>       _toolpathOriginByNode = new();
+    private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
+    // Flat (pos, normal) array per toolpath -- built once at upload for O(1) scrub lookup.
+    private readonly ConcurrentDictionary<SceneNode, (NVec3 pos, NVec3 normal)[]> _scrubCacheByNode     = new();
 
     // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
-    // UpdateFocusOverlay; read on the UI thread in ScrubIk — no cross-thread access.
+    // UpdateFocusOverlay; read on the UI thread in ScrubIk -- no cross-thread access.
     private SceneNode? _activeScrubNode;
 
-    // Cancellation for in-flight scrub-IK tasks — replaced on each scrub step so only
+    // Cancellation for in-flight scrub-IK tasks -- replaced on each scrub step so only
     // the most recent index drives the robot.
     private CancellationTokenSource? _scrubIkCts;
+
+    // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
+    private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
 
     // Robot cell state
     private Vector3 _robrootWorldPos;
@@ -90,7 +98,7 @@ public partial class ViewportView : UserControl
     private Matrix3 _gltfToKukaLocal = Matrix3.Identity;
     private Matrix4 _toolMeshMatrix  = Matrix4.Identity;
 
-    // Simple button enum — avoids dependency on WPF MouseButton.
+    // Simple button enum -- avoids dependency on WPF MouseButton.
     private enum AvaBtn { Left, Right, Middle }
 
     public ViewportView()
@@ -114,7 +122,7 @@ public partial class ViewportView : UserControl
         AddHandler(DragDrop.DropEvent,      OnDrop);
     }
 
-    // ── GL lifecycle ──────────────────────────────────────────────────────────
+    // -- GL lifecycle ----------------------------------------------------------
 
     private void WireGlCanvas()
     {
@@ -124,28 +132,48 @@ public partial class ViewportView : UserControl
         _vm = vm;
 
         {
-            vm.PropertyChanged   += (_, _) => GlCanvas.RequestNextFrameRendering();
-            vm.PropertyChanged   += (_, pe) =>
+            vm.PropertyChanged += (_, pe) =>
             {
-                if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
+                if (pe.PropertyName is
+                    nameof(ViewportViewModel.ShowGrid)            or
+                    nameof(ViewportViewModel.ShowAxes)            or
+                    nameof(ViewportViewModel.ShowBedGrid)         or
+                    nameof(ViewportViewModel.ShowDimensions)      or
+                    nameof(ViewportViewModel.ActiveShaderMode)    or
+                    nameof(ViewportViewModel.LightAzimuth)        or
+                    nameof(ViewportViewModel.LightElevation)      or
+                    nameof(ViewportViewModel.LightIntensity)      or
+                    nameof(ViewportViewModel.ShowExtrusionMoves)  or
+                    nameof(ViewportViewModel.ShowTravelMoves)     or
+                    nameof(ViewportViewModel.ShowSeam)            or
+                    nameof(ViewportViewModel.ShowBead))
+                    GlCanvas.RequestNextFrameRendering();
+                else if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
                     Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
             };
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
+            vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnFocusRequested       = FocusSelected;
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnScrubIkRequested     = ScrubIk;
 
             // OverlayView is declared in the XAML Grid above GlCanvas. Because
-            // there is no native HWND, normal Avalonia z-order works — no
+            // there is no native HWND, normal Avalonia z-order works -- no
             // OverlayLayer needed. Just wire the DataContext.
             OverlayView.DataContext = vm;
         }
 
         if (vm.Robot is { } robot)
         {
-            robot.PropertyChanged += (_, _) => GlCanvas.RequestNextFrameRendering();
-            robot.OnToolSelected   = OnToolSwapRequested;
+            robot.PropertyChanged += (_, pe) =>
+            {
+                if (pe.PropertyName is nameof(RobotPanelViewModel.A1) or nameof(RobotPanelViewModel.A2) or
+                    nameof(RobotPanelViewModel.A3) or nameof(RobotPanelViewModel.A4) or
+                    nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6))
+                    GlCanvas.RequestNextFrameRendering();
+            };
+            robot.OnToolSelected = OnToolSwapRequested;
         }
 
         if (vm.AdditiveSettings is { } additive)
@@ -167,6 +195,8 @@ public partial class ViewportView : UserControl
                         ScrubIk(vm.ToolpathScrubIndex);
                 }
             };
+
+            additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
         }
     }
 
@@ -179,6 +209,10 @@ public partial class ViewportView : UserControl
             _renderer.ShowGrid    = vm.ShowGrid;
             _renderer.ShowAxes    = vm.ShowAxes;
             _renderer.ShowBedGrid = vm.ShowBedGrid;
+            _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
+            _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
+            _renderer.ShowSeam           = vm.ShowSeam;
+            _renderer.ShowBead           = vm.ShowBead;
             _renderer.GizmoEnabled   = vm.GizmoEnabled;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode     = vm.ActiveShaderMode;
@@ -197,6 +231,7 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
+                _scrubCacheByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 foreach (var n in removing.SelfAndDescendants())
                     n.Mesh?.Dispose();
@@ -219,6 +254,9 @@ public partial class ViewportView : UserControl
                 if (_fkController is null)
                     _fkController = RobotFkController.TryBuild(incoming,
                         vm.ActiveCell?.Robot.Joints ?? []);
+
+                _renderer.Select(incoming);
+                Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
             while (vm.PendingToolNodes.TryDequeue(out var toolNode))
@@ -265,8 +303,10 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
-                _toolpathByNode[entry.Node] = entry.Toolpath;
-                _renderer.AddToolpath(entry.Toolpath, entry.Node);
+                _toolpathByNode[entry.Node]   = entry.Toolpath;
+                _scrubCacheByNode[entry.Node] = BuildScrubCache(entry.Toolpath);
+                _renderer.AddToolpath(entry.Toolpath, entry.Node,
+                    entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
                 // Capture the centroid that AddToolpath stamped onto the node's LocalTransform.
                 // ScrubIk uses this to convert stored Toolpath positions (original world space)
                 // back to local space before applying the node's current WorldTransform.
@@ -278,24 +318,31 @@ public partial class ViewportView : UserControl
 
             UpdateAnglePlanePreview(vm);
 
-            if (_fkController is not null && vm.Robot is not null)
+            if (_fkController is not null && vm.Robot is { } fkRobot)
             {
-                _fkController.Apply(
-                    (float)vm.Robot.A1, (float)vm.Robot.A2, (float)vm.Robot.A3,
-                    (float)vm.Robot.A4, (float)vm.Robot.A5, (float)vm.Robot.A6);
+                double a1 = fkRobot.A1, a2 = fkRobot.A2, a3 = fkRobot.A3,
+                       a4 = fkRobot.A4, a5 = fkRobot.A5, a6 = fkRobot.A6;
+
+                _fkController.Apply((float)a1, (float)a2, (float)a3,
+                                    (float)a4, (float)a5, (float)a6);
 
                 if (_currentToolNode is not null && _fkController.FlangeNode is { } flange && !_toolIsDragging)
                     _currentToolNode.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
-            }
 
-            if (_fkController is not null && vm.Robot is not null)
-                SyncTcpReadout(vm);
+                if (a1 != _lastSyncA1 || a2 != _lastSyncA2 || a3 != _lastSyncA3 ||
+                    a4 != _lastSyncA4 || a5 != _lastSyncA5 || a6 != _lastSyncA6)
+                {
+                    _lastSyncA1 = a1; _lastSyncA2 = a2; _lastSyncA3 = a3;
+                    _lastSyncA4 = a4; _lastSyncA5 = a5; _lastSyncA6 = a6;
+                    SyncTcpReadout(vm);
+                }
+            }
         }
 
         _renderer.Render(w, h);
     }
 
-    // ── TCP readout ───────────────────────────────────────────────────────────
+    // -- TCP readout -----------------------------------------------------------
 
     private void SyncTcpReadout(ViewportViewModel vm)
     {
@@ -351,7 +398,7 @@ public partial class ViewportView : UserControl
         vm.Robot.TcpC = Math.Round(c, 2);
     }
 
-    // ── Tool helpers ──────────────────────────────────────────────────────────
+    // -- Tool helpers ----------------------------------------------------------
 
     private void RebuildFrameMatrices()
     {
@@ -385,7 +432,7 @@ public partial class ViewportView : UserControl
             vm.Robot.IkSolver = _ikSolver;
     }
 
-    // ── Cell swap ─────────────────────────────────────────────────────────────
+    // -- Cell swap -------------------------------------------------------------
 
     private void ApplyCellSwap(CellSwapPayload swap, ViewportViewModel vm)
     {
@@ -406,6 +453,16 @@ public partial class ViewportView : UserControl
         if (vm.Robot is not null) vm.Robot.IkSolver = null;
 
         vm.ActiveCell = swap.Config;
+        var swapCellForPost = swap.Config;
+        Dispatcher.UIThread.Post(() =>
+        {
+            var additive = vm.AdditiveSettings;
+            if (additive is null) return;
+            string? defaultName = null;
+            if (TopLevel.GetTopLevel(this) is Window { DataContext: MainWindowViewModel mainVm })
+                mainVm.AppPreferences.DefaultHomePositionNames.TryGetValue(swapCellForPost.Name, out defaultName);
+            additive.UpdateFromCell(swapCellForPost, defaultName);
+        });
         var b          = swap.Config.Bed;
         var gridCorner = b.GridOrigin ?? b.Origin;
         _renderer.SetBedBoundary(new Vector3(gridCorner.X, gridCorner.Y, gridCorner.Z), b.Width, b.Depth);
@@ -540,7 +597,7 @@ public partial class ViewportView : UserControl
         }
     }
 
-    // ── Navigation helpers ────────────────────────────────────────────────────
+    // -- Navigation helpers ----------------------------------------------------
 
     private NavigationPresetId ActivePreset
         => (DataContext as ViewportViewModel)?.ActivePreset ?? NavigationPresetId.Rhino;
@@ -577,7 +634,7 @@ public partial class ViewportView : UserControl
         _                             => btn == AvaBtn.Middle,
     };
 
-    // ── Pointer input ─────────────────────────────────────────────────────────
+    // -- Pointer input ---------------------------------------------------------
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
@@ -589,7 +646,7 @@ public partial class ViewportView : UserControl
         var btn  = ToButton(kind);
         _lastMousePos = pos;
 
-        // Keyboard transform is active — right click cancels, everything else is suppressed
+        // Keyboard transform is active -- right click cancels, everything else is suppressed
         // (left release will commit via OnPointerReleased)
         if (_kbTransformActive)
         {
@@ -792,12 +849,18 @@ public partial class ViewportView : UserControl
                 else StartKbTransform(GizmoMode.Translate);
                 e.Handled = true; break;
             case Key.R:
-                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Rotate);
-                else StartKbTransform(GizmoMode.Rotate);
+                if (!IsToolNodeSelected())
+                {
+                    if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Rotate);
+                    else StartKbTransform(GizmoMode.Rotate);
+                }
                 e.Handled = true; break;
             case Key.S:
-                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Scale);
-                else StartKbTransform(GizmoMode.Scale);
+                if (!IsToolNodeSelected())
+                {
+                    if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Scale);
+                    else StartKbTransform(GizmoMode.Scale);
+                }
                 e.Handled = true; break;
             case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
             case Key.Escape:
@@ -820,7 +883,7 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    // ── Drag and drop ─────────────────────────────────────────────────────────
+    // -- Drag and drop ---------------------------------------------------------
 
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
@@ -846,7 +909,6 @@ public partial class ViewportView : UserControl
 
         if (files.Count == 0) return;
 
-        // TODO Phase 3: replace with Avalonia dialog asking "Center on bed?"
         bool place = true;
 
         foreach (var file in files)
@@ -856,7 +918,7 @@ public partial class ViewportView : UserControl
         }
     }
 
-    // ── Slice ─────────────────────────────────────────────────────────────────
+    // -- Slice -----------------------------------------------------------------
 
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
@@ -891,8 +953,8 @@ public partial class ViewportView : UserControl
                     LayerHeight      = (float)s.LayerHeight,
                     FirstLayerHeight = (float)s.FirstLayerHeight,
                     BeadWidth        = (float)s.BeadWidth,
-                    FeedRate         = (float)s.FeedRate,
-                    PtpSpeed         = (float)s.PtpSpeed,
+                    FeedRate         = (float)(s.FeedRate / 1000.0),
+                    TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
                     ApproachZ        = (float)s.ApproachZ,
                     TiltAngle        = (float)s.TiltAngle,
                     TiltAngleX       = (float)s.TiltAngleX,
@@ -921,18 +983,38 @@ public partial class ViewportView : UserControl
                     flatMeshes.Add(flat);
                 }
 
-                return method == SliceMethod.Angled
-                    ? AngledPlanarSlicer.Slice(flatMeshes, settings)
-                    : PlanarSlicer.Slice(flatMeshes, settings);
+                if (method == SliceMethod.Angled)   return AngledPlanarSlicer.Slice(flatMeshes, settings);
+                if (method == SliceMethod.Geodesic) return GeodesicSlicer.Slice(flatMeshes, settings);
+                return PlanarSlicer.Slice(flatMeshes, settings);
             });
 
             var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
-            var toolpathName = method == SliceMethod.Angled
-                ? $"Toolpath {settings.TiltAngle:0.##}° W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm"
-                : $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm";
+            var toolpathName = method switch
+            {
+                SliceMethod.Angled => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                _                  => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+            };
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
-            vm.PendingToolpath.Enqueue((toolpath, toolpathNode));
+            var selectedPreset = vm.AdditiveSettings is { } asp
+                && asp.SelectedPresetIndex >= 0
+                && asp.SelectedPresetIndex < asp.MaterialPresets.Count
+                ? asp.MaterialPresets[asp.SelectedPresetIndex] : null;
+            vm.PendingToolpath.Enqueue((
+                toolpath, toolpathNode,
+                (float)(vm.AdditiveSettings?.BeadWidth   ?? 6.0),
+                (float)(vm.AdditiveSettings?.LayerHeight  ?? 3.0),
+                MapMaterialColor(selectedPreset?.Color)));
+
+            // Compute and display stats overlay.
+            if (vm.AdditiveSettings is { } as2)
+            {
+                var (t, w, c) = ComputeToolpathStats(toolpath, as2);
+                vm.StatsTime        = t;
+                vm.StatsWeight      = w;
+                vm.StatsCost        = c;
+                vm.HasToolpathStats = true;
+            }
 
             // Hide source meshes so the toolpath is unobstructed, then drop selection.
             foreach (var item in sourceItems)
@@ -949,6 +1031,55 @@ public partial class ViewportView : UserControl
         }
     }
 
+    private static NVec3 MapMaterialColor(string? name) => name switch
+    {
+        "White"   => new(0.95f, 0.95f, 0.95f),
+        "Gray"    => new(0.60f, 0.60f, 0.60f),
+        "Clear"   => new(0.80f, 0.88f, 0.95f),
+        "Red"     => new(0.85f, 0.15f, 0.15f),
+        "Blue"    => new(0.15f, 0.35f, 0.85f),
+        "Green"   => new(0.15f, 0.70f, 0.25f),
+        "Yellow"  => new(0.95f, 0.85f, 0.10f),
+        "Orange"  => new(0.95f, 0.45f, 0.10f),
+        "Natural" => new(0.92f, 0.88f, 0.75f),
+        "Black"   => new(0.15f, 0.15f, 0.15f),
+        _         => new(0.15f, 0.35f, 0.85f),  // Other / no preset → blue
+    };
+
+    private static (string time, string weight, string cost) ComputeToolpathStats(
+        Toolpath toolpath, AdditiveSettingsViewModel s)
+    {
+        double printMmS   = s.FeedRate;
+        double travelMmS  = s.TravelSpeed;
+        double beadW      = s.BeadWidth;
+        double layerH     = s.LayerHeight;
+
+        var preset = s.SelectedPresetIndex >= 0 && s.SelectedPresetIndex < s.MaterialPresets.Count
+            ? s.MaterialPresets[s.SelectedPresetIndex] : null;
+
+        double densityGCm3 = preset?.MaterialDensity ?? 1.05;
+        double costPerLb   = preset?.CostPerLb       ?? 0.0;
+
+        double timeSecs = 0.0, volMm3 = 0.0;
+        foreach (var layer in toolpath.Layers)
+            foreach (var move in layer.Moves)
+            {
+                double dist = NVec3.Distance(move.From, move.To);
+                if (move.Kind == MoveKind.Extrude) { timeSecs += dist / printMmS;  volMm3 += dist * beadW * layerH; }
+                else                               { timeSecs += dist / travelMmS; }
+            }
+
+        double massLbs = volMm3 / 1000.0 * densityGCm3 / 453.592;
+        double cost    = massLbs * costPerLb;
+
+        var ts      = TimeSpan.FromSeconds(timeSecs);
+        string time = ts.TotalHours >= 1
+            ? $"{(int)ts.TotalHours}h {ts.Minutes:D2}m {ts.Seconds:D2}s"
+            : $"{ts.Minutes}m {ts.Seconds:D2}s";
+
+        return (time, $"{massLbs:F3} lbs", preset is not null ? $"${cost:F2}" : "--");
+    }
+
     private static NVec3 TransformPoint(TkVector3 p, TkMatrix4 m)
     {
         // OpenTK row-vector: world = local * M
@@ -958,7 +1089,7 @@ public partial class ViewportView : UserControl
         return new NVec3(x, y, z);
     }
 
-    // ── Lay Flat / Drop to Plate ──────────────────────────────────────────────
+    // -- Lay Flat / Drop to Plate ----------------------------------------------
 
     private void DropToPlate()
     {
@@ -991,7 +1122,7 @@ public partial class ViewportView : UserControl
             }
             else
             {
-                // 180° — flip around any axis perpendicular to the face normal.
+                // 180deg -- flip around any axis perpendicular to the face normal.
                 var perp = MathF.Abs(from.X) < 0.9f ? TkVector3.UnitX : TkVector3.UnitY;
                 perp = TkVector3.Normalize(TkVector3.Cross(from, perp));
                 rot  = TkMatrix4.CreateFromAxisAngle(perp, MathF.PI);
@@ -1004,7 +1135,7 @@ public partial class ViewportView : UserControl
 
         // Rotate around the world-space bounding-box centre so the object doesn't drift.
         var center = LayFlatWorldCenter(node);
-        // Row-vector: p_new = p_old * M  →  W_new = W_old * M
+        // Row-vector: p_new = p_old * M  ->  W_new = W_old * M
         var M = TkMatrix4.CreateTranslation(-center) * rot * TkMatrix4.CreateTranslation(center);
         node.LocalTransform = node.LocalTransform * M;
 
@@ -1045,17 +1176,29 @@ public partial class ViewportView : UserControl
         return minZ;
     }
 
-    // ── Gizmo mode switching ──────────────────────────────────────────────────
+    // -- Toolhead selection check ----------------------------------------------
+
+    private bool IsToolNodeSelected()
+    {
+        var sel = _renderer.SelectedNode;
+        if (sel is null || _currentToolNode is null) return false;
+        foreach (var n in _currentToolNode.SelfAndDescendants())
+            if (n == sel) return true;
+        return false;
+    }
+
+    // -- Gizmo mode switching --------------------------------------------------
 
     private void SetGizmoMode(GizmoMode mode)
     {
+        if (IsToolNodeSelected() && mode != GizmoMode.Translate && mode != GizmoMode.None) return;
         _renderer.GizmoMode = mode;
         if (DataContext is ViewportViewModel vm)
             vm.ActiveGizmoModeInternal = mode;
         GlCanvas.RequestNextFrameRendering();
     }
 
-    // ── Keyboard-initiated transform (Blender-style G/R/S + X/Y/Z) ───────────
+    // -- Keyboard-initiated transform (Blender-style G/R/S + X/Y/Z) -----------
 
     private void StartKbTransform(GizmoMode op)
     {
@@ -1067,6 +1210,26 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
+
+        // Project the node's world position to screen so KbRotate can use atan2.
+        float vpW0 = (float)GlCanvas.Bounds.Width;
+        float vpH0 = (float)GlCanvas.Bounds.Height;
+        if (vpW0 > 0 && vpH0 > 0)
+        {
+            float aspect0  = vpW0 / vpH0;
+            var   vp0      = _renderer.Camera.GetViewMatrix() * _renderer.Camera.GetProjectionMatrix(aspect0);
+            var   nodePos0 = node.WorldTransform.Row3.Xyz;
+            var   clip0    = new Vector4(nodePos0, 1f) * vp0;
+            _kbObjScreenCenter = clip0.W > 1e-5f
+                ? new Vector2(
+                    (clip0.X / clip0.W * 0.5f + 0.5f) * vpW0,
+                    (1f - (clip0.Y / clip0.W * 0.5f + 0.5f)) * vpH0)
+                : new Vector2(vpW0 * 0.5f, vpH0 * 0.5f);
+        }
+        else
+        {
+            _kbObjScreenCenter = Vector2.Zero;
+        }
 
         _toolIsDragging = (node == _currentToolNode);
         if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
@@ -1159,7 +1322,7 @@ public partial class ViewportView : UserControl
         {
             case GizmoMode.Translate:
                 if (_kbTransformAxis != GizmoAxis.None)
-                    // Axis-constrained: plane-intersection via existing gizmo drag logic —
+                    // Axis-constrained: plane-intersection via existing gizmo drag logic --
                     // _gizmoDragInitialLocal was captured by StartGizmoDrag at SetKbTransformAxis time.
                     ProcessGizmoDrag(mx, my);
                 else
@@ -1167,8 +1330,7 @@ public partial class ViewportView : UserControl
                 break;
 
             case GizmoMode.Rotate:
-                // dx-based is stable for all camera angles; no plane-intersection singularity.
-                KbRotate(node, dx);
+                KbRotate(node, mousePos);
                 break;
 
             case GizmoMode.Scale:
@@ -1203,23 +1365,44 @@ public partial class ViewportView : UserControl
         node.LocalTransform = lt;
     }
 
-    private void KbRotate(SceneNode node, float dx)
+    private void KbRotate(SceneNode node, Point mousePos)
     {
         var axisDir = _kbTransformAxis switch
         {
             GizmoAxis.X => Vector3.UnitX,
             GizmoAxis.Y => Vector3.UnitY,
             GizmoAxis.Z => Vector3.UnitZ,
-            _           => Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye),
+            _           => Vector3.Normalize(_renderer.Camera.Eye - _renderer.Camera.Target),
         };
 
-        float angle = dx * 0.01f;
-        var   rot   = Matrix4.CreateFromAxisAngle(axisDir, angle);
+        // Compute rotation as the 2-D angle swept around the object's screen center.
+        // This makes the object "track" the mouse regardless of which axis is constrained.
+        var vStart = new Vector2((float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y)
+                   - _kbObjScreenCenter;
+        var vCurr  = new Vector2((float)mousePos.X, (float)mousePos.Y)
+                   - _kbObjScreenCenter;
 
-        var lt = _kbTransformInitialLocal;
-        var p  = new Vector3(lt.M41, lt.M42, lt.M43);
-        lt     = lt * rot;
-        lt.M41 = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
+        float angle;
+        if (vStart.LengthSquared < 4f || vCurr.LengthSquared < 4f)
+        {
+            // Too close to center -- fall back to pure horizontal drag.
+            angle = (float)(mousePos.X - _kbTransformStartPos.X) * 0.01f;
+        }
+        else
+        {
+            // Negate Y to convert screen-space (Y-down) to math-space (Y-up) before atan2,
+            // so the resulting angle follows the right-hand rule used by CreateFromAxisAngle.
+            angle = MathF.Atan2(-vCurr.Y, vCurr.X) - MathF.Atan2(-vStart.Y, vStart.X);
+            // Wrap to [-π, π] to avoid a sudden jump when crossing the ±180deg boundary.
+            if (angle >  MathF.PI) angle -= MathF.Tau;
+            if (angle < -MathF.PI) angle += MathF.Tau;
+        }
+
+        var rot = Matrix4.CreateFromAxisAngle(axisDir, angle);
+        var lt  = _kbTransformInitialLocal;
+        var p   = new Vector3(lt.M41, lt.M42, lt.M43);
+        lt      = lt * rot;
+        lt.M41  = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
         node.LocalTransform = lt;
     }
 
@@ -1259,8 +1442,11 @@ public partial class ViewportView : UserControl
         bool isToolpath       = selected is not null && _renderer.IsToolpathNode(selected);
         vm.IsToolpathSelected = isToolpath;
 
+        if (selected is null)
+            SetGizmoMode(GizmoMode.None);
+
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
-        // by the programmatic reset — the robot only follows scrubbing the user initiates.
+        // by the programmatic reset -- the robot only follows scrubbing the user initiates.
         if (isToolpath && selected is not null && _toolpathByNode.TryGetValue(selected, out var tp))
         {
             _activeScrubNode = selected;
@@ -1273,7 +1459,7 @@ public partial class ViewportView : UserControl
         }
     }
 
-    // ── Scrub IK ──────────────────────────────────────────────────────────────
+    // -- Scrub IK --------------------------------------------------------------
 
     /// <summary>
     /// Runs orientation-constrained IK for the toolpath move at <paramref name="index"/>
@@ -1294,9 +1480,10 @@ public partial class ViewportView : UserControl
         // Desync live feed so IK drives the robot instead of the C3Bridge stream.
         robot.Desync();
 
-        var info = GetScrubInfo(toolpath, index);
-        if (info is null) return;
-        var (pos, planeNormal) = info.Value;
+        if (_activeScrubNode is null ||
+            !_scrubCacheByNode.TryGetValue(_activeScrubNode, out var scrubCache) ||
+            scrubCache.Length == 0) return;
+        var (pos, planeNormal) = scrubCache[Math.Clamp(index, 0, scrubCache.Length - 1)];
 
         // Apply the node's current world transform so scrubbing follows a moved toolpath.
         // Stored Toolpath positions are in the original sliced world space; the renderer
@@ -1307,7 +1494,7 @@ public partial class ViewportView : UserControl
         TkVector3 worldNormal;
         if (node is not null && _toolpathOriginByNode.TryGetValue(node, out var origin))
         {
-            var wt = node.WorldTransform;                   // UI-thread — safe to read here
+            var wt = node.WorldTransform;                   // UI-thread -- safe to read here
             float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
             worldPos = new TkVector3(
                 lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
@@ -1322,7 +1509,7 @@ public partial class ViewportView : UserControl
         }
         else
         {
-            // Fallback: no node transform — use stored directions as-is.
+            // Fallback: no node transform -- use stored directions as-is.
             worldPos    = new TkVector3(pos.X,         pos.Y,         pos.Z);
             worldNormal = new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z);
         }
@@ -1331,17 +1518,14 @@ public partial class ViewportView : UserControl
         var robrootPos    = _robrootWorldPos;
         var targetRobroot = worldPos - robrootPos;
 
-        // Nozzle perpendicular to the slicing plane, with optional ABC offset on top.
-        // The offset is added directly to the Euler angles derived from the plane normal,
-        // so (0, 0, 0) is a true zero-offset — the tool sits exactly where the plane normal
-        // puts it.  Adjusting A/B/C shifts the final KUKA ABC by that delta, letting the
-        // operator nudge the wrist out of singularities without changing the approach direction.
+        // Tool orientation: approach along -normal, forward fixed to world +X.
+        // Fixing the forward eliminates azimuthal spin when tilt axis changes.
         var targetRot = vm.AdditiveSettings is { } addSettings
-            ? solver.TargetRotFromPlaneNormalWithOffset(worldNormal,
+            ? solver.TargetRotFromPathFrameWithOffset(worldNormal, TkVector3.UnitX,
                 (float)addSettings.ToolheadA,
                 (float)addSettings.ToolheadB,
                 (float)addSettings.ToolheadC)
-            : solver.TargetRotFromPlaneNormal(worldNormal);
+            : solver.TargetRotFromPathFrame(worldNormal, TkVector3.UnitX);
 
         // Seed from current joint angles (snapshot on UI thread, safe to read).
         var seed = new float[]
@@ -1376,34 +1560,28 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Maps a flat scrub <paramref name="index"/> to the TCP position and slicing-plane
-    /// normal for that move in the toolpath.
-    /// <list type="bullet">
-    ///   <item>Index 0  → first move's <c>From</c> and its layer's <c>PlaneNormal</c>.</item>
-    ///   <item>Index N  → N-th move's <c>To</c> and its layer's <c>PlaneNormal</c>.</item>
-    ///   <item>Index &gt; total → last move's <c>To</c> / normal (slider at maximum).</item>
-    /// </list>
+    /// Builds a flat cache of (pos, normal) entries for O(1) scrub index lookup.
+    /// Entry 0 = first move's From; entries 1..N = each move's To in order.
     /// </summary>
-    private static (NVec3 pos, NVec3 normal)? GetScrubInfo(Toolpath tp, int index)
+    private static (NVec3 pos, NVec3 normal)[] BuildScrubCache(Toolpath tp)
     {
-        NVec3 lastPos    = default;
-        NVec3 lastNormal = NVec3.UnitZ;
-        bool  hasAny     = false;
+        int total = 0;
+        foreach (var layer in tp.Layers) total += layer.Moves.Count;
+        if (total == 0) return [];
 
+        var arr   = new (NVec3 pos, NVec3 normal)[total + 1];
+        int i     = 0;
+        bool first = true;
         foreach (var layer in tp.Layers)
         {
-            var n = layer.PlaneNormal;
             foreach (var move in layer.Moves)
             {
-                if (index == 0) return (move.From, n);
-                lastPos    = move.To;
-                lastNormal = n;
-                hasAny     = true;
-                if (--index == 0) return (move.To, n);
+                NVec3 n = move.Normal;
+                if (first) { arr[i++] = (move.From, n); first = false; }
+                arr[i++] = (move.To, n);
             }
         }
-
-        return hasAny ? (lastPos, lastNormal) : null;
+        return arr[..i];
     }
 
     private void UpdateAnglePlanePreview(ViewportViewModel vm)
@@ -1526,20 +1704,32 @@ public partial class ViewportView : UserControl
         robot.A6 = Math.Round(result[5], 2);
     }
 
-    // ── Gizmo drag ────────────────────────────────────────────────────────────
+    // -- Gizmo drag ------------------------------------------------------------
 
     private void StartGizmoDrag(GizmoAxis axis, float mx, float my, float vpW, float vpH)
     {
         _gizmoDragAxis           = axis;
         _renderer.ActiveDragAxis = axis;
-        _gizmoDragAxisDir = axis switch
+        _gizmoDragStartScreenX   = mx;
+        _gizmoDragCurrScreenX    = mx;
+        if (axis == GizmoAxis.All)
         {
-            GizmoAxis.X => new Vector3(1f, 0f, 0f),
-            GizmoAxis.Y => new Vector3(0f, 1f, 0f),
-            _           => new Vector3(0f, 0f, 1f),
-        };
+            var camFwdAll = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+            var r = Vector3.Cross(Vector3.UnitZ, camFwdAll);
+            _gizmoDragAxisDir = r.LengthSquared > 1e-6f ? Vector3.Normalize(r) : Vector3.UnitX;
+        }
+        else
+        {
+            _gizmoDragAxisDir = axis switch
+            {
+                GizmoAxis.X => new Vector3(1f, 0f, 0f),
+                GizmoAxis.Y => new Vector3(0f, 1f, 0f),
+                _           => new Vector3(0f, 0f, 1f),
+            };
+        }
 
         if (_renderer.SelectedNode is not { } node) return;
+        if (IsToolNodeSelected() && _renderer.GizmoMode != GizmoMode.Translate) return;
         _gizmoDragInitialLocal = node.LocalTransform;
         _gizmoDragPlanePoint   = node.WorldTransform.Row3.Xyz;
         _toolIsDragging = (node == _currentToolNode);
@@ -1588,6 +1778,8 @@ public partial class ViewportView : UserControl
     {
         if (_renderer.SelectedNode is not { } node) return;
 
+        _gizmoDragCurrScreenX = mx;
+
         float vpW = (float)GlCanvas.Bounds.Width;
         float vpH = (float)GlCanvas.Bounds.Height;
         var ray   = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
@@ -1621,20 +1813,42 @@ public partial class ViewportView : UserControl
 
     private void ProcessScaleDrag(SceneNode node, Vector3 hitWorld)
     {
-        var relStart   = _gizmoDragStartHit - _gizmoDragPlanePoint;
-        var relCurrent = hitWorld           - _gizmoDragPlanePoint;
-        float startLen = Vector3.Dot(relStart,   _gizmoDragAxisDir);
-        float currLen  = Vector3.Dot(relCurrent, _gizmoDragAxisDir);
-        if (MathF.Abs(startLen) < 1e-5f) return;
-        float ratio = currLen / startLen;
-        if (ratio <= 0f) return;
+        float ratio;
+        if (_gizmoDragAxis == GizmoAxis.All)
+        {
+            float vpW = (float)GlCanvas.Bounds.Width;
+            float dx  = _gizmoDragCurrScreenX - _gizmoDragStartScreenX;
+            ratio = MathF.Exp(dx / (vpW * 0.3f) * MathF.Log(3f));
+            if (ratio <= 0f) return;
+        }
+        else
+        {
+            var relStart   = _gizmoDragStartHit - _gizmoDragPlanePoint;
+            var relCurrent = hitWorld           - _gizmoDragPlanePoint;
+            float startLen = Vector3.Dot(relStart,   _gizmoDragAxisDir);
+            float currLen  = Vector3.Dot(relCurrent, _gizmoDragAxisDir);
+            if (MathF.Abs(startLen) < 1e-5f) return;
+            ratio = currLen / startLen;
+            if (ratio <= 0f) return;
+        }
 
         var lt = _gizmoDragInitialLocal;
         switch (_gizmoDragAxis)
         {
-            case GizmoAxis.X: lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio; break;
-            case GizmoAxis.Y: lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio; break;
-            case GizmoAxis.Z: lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio; break;
+            case GizmoAxis.X:
+                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
+                break;
+            case GizmoAxis.Y:
+                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
+                break;
+            case GizmoAxis.Z:
+                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
+                break;
+            case GizmoAxis.All:
+                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
+                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
+                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
+                break;
         }
         node.LocalTransform = lt;
     }
@@ -1671,4 +1885,90 @@ public partial class ViewportView : UserControl
             d.X * m.M11 + d.Y * m.M21 + d.Z * m.M31,
             d.X * m.M12 + d.Y * m.M22 + d.Z * m.M32,
             d.X * m.M13 + d.Y * m.M23 + d.Z * m.M33);
+
+    // -- KRL export ------------------------------------------------------------
+
+    private void SaveDefaultHomePosition(ViewportViewModel vm)
+    {
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        if (cell is null || settings is null) return;
+        if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel mainVm }) return;
+        mainVm.AppPreferences.DefaultHomePositionNames[cell.Name] = settings.SelectedHomePositionName;
+        PreferencesLoader.Save(mainVm.AppPreferences);
+    }
+
+    private async Task ExportKrlAsync(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+
+        if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title              = "Export KRL",
+            DefaultExtension   = "src",
+            SuggestedFileName  = "print_job.src",
+            FileTypeChoices    = [new("KRL Source") { Patterns = ["*.src"] }],
+        });
+        if (file is null) return;
+
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        // Convert OpenTK Matrix4 -> System.Numerics.Matrix4x4 (same row-vector layout).
+        var wt    = node.WorldTransform;
+        var sysWt = new System.Numerics.Matrix4x4(
+            wt.M11, wt.M12, wt.M13, wt.M14,
+            wt.M21, wt.M22, wt.M23, wt.M24,
+            wt.M31, wt.M32, wt.M33, wt.M34,
+            wt.M41, wt.M42, wt.M43, wt.M44);
+
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        var selectedPreset = settings.SelectedPresetIndex >= 0 &&
+                             settings.SelectedPresetIndex < settings.MaterialPresets.Count
+            ? settings.MaterialPresets[settings.SelectedPresetIndex]
+            : null;
+
+        var exportSettings = new KrlExportSettings
+        {
+            ProgramName         = System.IO.Path.GetFileNameWithoutExtension(path),
+            ToolDataIndex       = settings.ToolDataIndex,
+            BaseDataIndex       = settings.BaseDataIndex,
+            FeedRateMps         = (float)(settings.FeedRate / 1000.0),
+            TravelSpeedMps      = (float)(settings.TravelSpeed / 1000.0),
+            AccelerationPercent = settings.Acceleration,
+            ApproachZMm         = (float)settings.ApproachZ,
+            ToolheadOffsetA     = (float)settings.ToolheadA,
+            ToolheadOffsetB     = (float)settings.ToolheadB,
+            ToolheadOffsetC     = (float)settings.ToolheadC,
+            Temperature1        = (float)settings.Temperature1,
+            Temperature2        = (float)settings.Temperature2,
+            Temperature3        = (float)settings.Temperature3,
+            BeadWidthMm         = (float)settings.BeadWidth,
+            LayerHeightMm       = (float)settings.LayerHeight,
+            FlowRate            = (float)(selectedPreset?.FlowRate ?? 1.0),
+            HomePosition        = settings.SelectedHomeAngles,
+            NodeWorldTransform = sysWt,
+            NodeOrigin         = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
+            RobrootWorldPos    = new System.Numerics.Vector3(
+                cell.Robot.WorldPosition.X,
+                cell.Robot.WorldPosition.Y,
+                cell.Robot.WorldPosition.Z),
+            BaseDataOffset     = new System.Numerics.Vector3(
+                cell.Bed.BaseData.X,
+                cell.Bed.BaseData.Y,
+                cell.Bed.BaseData.Z),
+        };
+
+        var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        await System.IO.File.WriteAllTextAsync(path, krl);
+    }
 }

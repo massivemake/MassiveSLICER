@@ -1,4 +1,4 @@
-using MassiveSlicer.Viewport.Scene;
+﻿using MassiveSlicer.Viewport.Scene;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -19,6 +19,7 @@ public sealed class GizmoRenderer : IDisposable
     // Scale
     private int _scaleShaftsVao, _scaleShaftsVbo, _scaleShaftCount;
     private int _scaleBoxesVao,  _scaleBoxesVbo,  _scaleBoxCount;
+    private int _scaleCenterVao, _scaleCenterVbo, _scaleCenterCount;
 
     // Rotate rings (normal + highlight)
     private int _rotateVao, _rotateVbo, _rotateCountPerRing;
@@ -72,7 +73,7 @@ public sealed class GizmoRenderer : IDisposable
         BuildAxisHighlight();
     }
 
-    // ── Draw ─────────────────────────────────────────────────────────────────
+    // -- Draw -----------------------------------------------------------------
 
     public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode)
     {
@@ -97,6 +98,8 @@ public sealed class GizmoRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, _scaleShaftCount);
                 GL.BindVertexArray(_scaleBoxesVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleBoxCount);
+                GL.BindVertexArray(_scaleCenterVao);
+                GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleCenterCount);
                 break;
 
             case GizmoMode.Rotate:
@@ -112,7 +115,7 @@ public sealed class GizmoRenderer : IDisposable
 
     public void DrawAxisHighlight(Vector3 worldPos, GizmoAxis axis, float lineLength, Matrix4 viewProj)
     {
-        if (axis == GizmoAxis.None) return;
+        if (axis == GizmoAxis.None || axis == GizmoAxis.All) return;
 
         var rotation = axis switch
         {
@@ -172,13 +175,13 @@ public sealed class GizmoRenderer : IDisposable
         GL.LineWidth(1f);
     }
 
-    // ── Hit testing ──────────────────────────────────────────────────────────
+    // -- Hit testing ----------------------------------------------------------
 
     /// <summary>Translate or scale gizmo: segment-based hit test on the three axis shafts.</summary>
     public static GizmoAxis HitTestAxes(
         Vector3 worldPos, float scale,
         float mx, float my, float vpW, float vpH,
-        Matrix4 viewProj)
+        Matrix4 viewProj, GizmoMode mode = GizmoMode.Translate)
     {
         const float Threshold = 10f;
 
@@ -188,6 +191,10 @@ public sealed class GizmoRenderer : IDisposable
         var tipZ   = ToScreen(worldPos + new Vector3(0f,    0f,    scale), viewProj, vpW, vpH);
 
         var   mouse = new Vector2(mx, my);
+
+        if (mode == GizmoMode.Scale && (mouse - origin).Length < 10f)
+            return GizmoAxis.All;
+
         float dX    = SegDist(mouse, origin, tipX);
         float dY    = SegDist(mouse, origin, tipY);
         float dZ    = SegDist(mouse, origin, tipZ);
@@ -234,7 +241,7 @@ public sealed class GizmoRenderer : IDisposable
         return GizmoAxis.Z;
     }
 
-    // ── Dispose ──────────────────────────────────────────────────────────────
+    // -- Dispose --------------------------------------------------------------
 
     public void Dispose()
     {
@@ -243,14 +250,15 @@ public sealed class GizmoRenderer : IDisposable
         _shader.Dispose();
         GL.DeleteVertexArray(_transLinesVao);  GL.DeleteBuffer(_transLinesVbo);
         GL.DeleteVertexArray(_transConesVao);  GL.DeleteBuffer(_transConesVbo);
-        GL.DeleteVertexArray(_scaleShaftsVao); GL.DeleteBuffer(_scaleShaftsVbo);
-        GL.DeleteVertexArray(_scaleBoxesVao);  GL.DeleteBuffer(_scaleBoxesVbo);
+        GL.DeleteVertexArray(_scaleShaftsVao);  GL.DeleteBuffer(_scaleShaftsVbo);
+        GL.DeleteVertexArray(_scaleBoxesVao);   GL.DeleteBuffer(_scaleBoxesVbo);
+        GL.DeleteVertexArray(_scaleCenterVao);  GL.DeleteBuffer(_scaleCenterVbo);
         GL.DeleteVertexArray(_rotateVao);      GL.DeleteBuffer(_rotateVbo);
         GL.DeleteVertexArray(_rotateHlVao);    GL.DeleteBuffer(_rotateHlVbo);
         GL.DeleteVertexArray(_axisHighlightVao); GL.DeleteBuffer(_axisHighlightVbo);
     }
 
-    // ── Geometry construction ─────────────────────────────────────────────────
+    // -- Geometry construction -------------------------------------------------
 
     private void BuildTranslate()
     {
@@ -298,6 +306,39 @@ public sealed class GizmoRenderer : IDisposable
         _scaleBoxCount   = boxes.Count  / 6;
         Upload(out _scaleShaftsVao, out _scaleShaftsVbo, shafts.ToArray());
         Upload(out _scaleBoxesVao,  out _scaleBoxesVbo,  boxes.ToArray());
+
+        var center = new List<float>();
+        GenCenterBox(center);
+        _scaleCenterCount = center.Count / 6;
+        Upload(out _scaleCenterVao, out _scaleCenterVbo, center.ToArray());
+    }
+
+    private static void GenCenterBox(List<float> verts)
+    {
+        var   col = Vector3.One;
+        float h   = BoxHalf * 1.2f;
+        Vector3[] corners =
+        [
+            new( h,  h,  h), new( h,  h, -h),
+            new( h, -h,  h), new( h, -h, -h),
+            new(-h,  h,  h), new(-h,  h, -h),
+            new(-h, -h,  h), new(-h, -h, -h),
+        ];
+        int[][] faces =
+        [
+            [0,1,3],[0,3,2],
+            [4,6,7],[4,7,5],
+            [0,2,6],[0,6,4],
+            [1,5,7],[1,7,3],
+            [0,4,5],[0,5,1],
+            [2,3,7],[2,7,6],
+        ];
+        foreach (var f in faces)
+        {
+            Vert(verts, corners[f[0]], col);
+            Vert(verts, corners[f[1]], col);
+            Vert(verts, corners[f[2]], col);
+        }
     }
 
     private static void GenScaleAxis(
@@ -405,7 +446,7 @@ public sealed class GizmoRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    // ── Screen-space utilities ────────────────────────────────────────────────
+    // -- Screen-space utilities ------------------------------------------------
 
     private static Vector2 ToScreen(Vector3 world, Matrix4 vp, float vpW, float vpH)
     {

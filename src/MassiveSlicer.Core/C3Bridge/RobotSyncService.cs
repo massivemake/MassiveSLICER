@@ -1,4 +1,4 @@
-namespace MassiveSlicer.Core.C3Bridge;
+﻿namespace MassiveSlicer.Core.C3Bridge;
 
 /// <summary>
 /// High-level robot sync service over C3Bridge.
@@ -13,7 +13,7 @@ public sealed class RobotSyncService : IDisposable
 
     public bool IsConnected => _client.IsConnected;
 
-    // ── Events ────────────────────────────────────────────────────────────────
+    // -- Events ----------------------------------------------------------------
 
     /// <summary>Fired after a successful TCP connect.</summary>
     public event EventHandler? Connected;
@@ -27,7 +27,7 @@ public sealed class RobotSyncService : IDisposable
     /// <summary>Fired each time $POS_ACT is read.</summary>
     public event EventHandler<(double X, double Y, double Z, double A, double B, double C)>? TcpUpdated;
 
-    // ── Lifecycle ─────────────────────────────────────────────────────────────
+    // -- Lifecycle -------------------------------------------------------------
 
     public RobotSyncService()
     {
@@ -58,7 +58,7 @@ public sealed class RobotSyncService : IDisposable
         _client.Disconnect();
     }
 
-    // ── One-shot sync ─────────────────────────────────────────────────────────
+    // -- One-shot sync ---------------------------------------------------------
 
     /// <summary>Reads $AXIS_ACT and $POS_ACT once and fires the corresponding events.</summary>
     public async Task SyncOnceAsync(CancellationToken ct = default)
@@ -70,12 +70,12 @@ public sealed class RobotSyncService : IDisposable
         TcpUpdated?.Invoke(this, KrlVarParser.ParsePosAct(posStr));
     }
 
-    // ── Continuous streaming ──────────────────────────────────────────────────
+    // -- Continuous streaming --------------------------------------------------
 
     /// <summary>
     /// Begins a background polling loop that calls <see cref="SyncOnceAsync"/>
     /// every <paramref name="intervalMs"/> milliseconds.
-    /// Safe to call multiple times — only one loop runs at a time.
+    /// Safe to call multiple times -- only one loop runs at a time.
     /// </summary>
     public void StartStreaming(int intervalMs = 100)
     {
@@ -97,14 +97,14 @@ public sealed class RobotSyncService : IDisposable
         {
             try   { await SyncOnceAsync(ct); }
             catch (OperationCanceledException) { break; }
-            catch { break; } // socket error — _client fires Disconnected
+            catch { break; } // socket error -- _client fires Disconnected
 
             try   { await Task.Delay(intervalMs, ct); }
             catch (OperationCanceledException) { break; }
         }
     }
 
-    // ── Dispose ───────────────────────────────────────────────────────────────
+    // -- Dispose ---------------------------------------------------------------
 
     public void Dispose()
     {

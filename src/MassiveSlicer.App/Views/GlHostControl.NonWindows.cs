@@ -1,7 +1,7 @@
-// ── Non-Windows GL host (macOS / Linux) ──────────────────────────────────────
+﻿// -- Non-Windows GL host (macOS / Linux) --------------------------------------
 //
 // This file is compiled on macOS and Linux only (see MassiveSlicer.App.csproj).
-// The Windows implementation is in GlHostControl.Windows.cs — see that file for
+// The Windows implementation is in GlHostControl.Windows.cs -- see that file for
 // a full explanation of why Windows requires a different approach (AMD GPU crash
 // inside atio6axx.dll caused by Avalonia's FBO teardown sequence).
 //
@@ -14,7 +14,7 @@
 //      framebuffer (fb parameter of OnOpenGlRender). Avalonia composites that into
 //      the window.
 //
-// RequestNextFrameRendering() is inherited from OpenGlControlBase — all callers
+// RequestNextFrameRendering() is inherited from OpenGlControlBase -- all callers
 // in ViewportView.axaml.cs can use it without changes.
 
 using Avalonia;
@@ -29,23 +29,23 @@ namespace MassiveSlicer.App.Views;
 
 internal sealed class GlHostControl : OpenGlControlBase, IDisposable
 {
-    // ── Public GL lifecycle events ────────────────────────────────────────────
+    // -- Public GL lifecycle events --------------------------------------------
 
     public event Action?                     GlInitialized;
     public event Action<TimeSpan, int, int>? GlRender;
     public event Action?                     GlDeinitialized;
 
-    // ── Output FBO (what SceneRenderer composites into) ───────────────────────
+    // -- Output FBO (what SceneRenderer composites into) -----------------------
 
     private int _outputFbo, _outputColorTex, _outputDepthRbo;
     private int _fboW, _fboH;
 
-    // ── Timing ────────────────────────────────────────────────────────────────
+    // -- Timing ----------------------------------------------------------------
 
     private TimeSpan _lastRenderTime;
     private bool _firstFrame = true;
 
-    // ── OpenGlControlBase lifecycle ───────────────────────────────────────────
+    // -- OpenGlControlBase lifecycle -------------------------------------------
 
     protected override void OnOpenGlInit(GlInterface gl)
     {
@@ -91,7 +91,7 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, fb);
     }
 
-    // ── FBO lifecycle ─────────────────────────────────────────────────────────
+    // -- FBO lifecycle ---------------------------------------------------------
 
     private void ResizeResources(int w, int h)
     {
@@ -138,7 +138,7 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
 
         GL.Finish();
 
-        // Detach before deletion — mirrors the AMD-safe sequence in the Windows
+        // Detach before deletion -- mirrors the AMD-safe sequence in the Windows
         // implementation (not strictly required here, but good practice everywhere).
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _outputFbo);
         GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
@@ -160,7 +160,7 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
     /// <inheritdoc/>
     public void Dispose() { } // GPU resources released in OnOpenGlDeinit
 
-    // ── OpenTK bindings context ───────────────────────────────────────────────
+    // -- OpenTK bindings context -----------------------------------------------
 
     /// <summary>
     /// Bridges Avalonia's <see cref="GlInterface"/> to OpenTK's

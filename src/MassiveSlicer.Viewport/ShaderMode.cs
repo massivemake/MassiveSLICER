@@ -1,4 +1,4 @@
-namespace MassiveSlicer.Viewport;
+﻿namespace MassiveSlicer.Viewport;
 
 /// <summary>Viewport material/shading mode selected from the toolbar.</summary>
 public enum ShaderMode
@@ -15,6 +15,6 @@ public enum ShaderMode
     MatteBlack,
     /// <summary>Overrides all materials with a purple shiny finish.</summary>
     Purple,
-    /// <summary>Renders world-space normals as RGB colour (X→R, Y→G, Z→B remapped to 0–1).</summary>
+    /// <summary>Renders world-space normals as RGB colour (X->R, Y->G, Z->B remapped to 0-1).</summary>
     Normals,
 }

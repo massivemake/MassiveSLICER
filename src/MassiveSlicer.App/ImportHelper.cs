@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
@@ -57,7 +57,7 @@ internal static class ImportHelper
         node.LocalTransform = lt;
     }
 
-    // ── AABB ──────────────────────────────────────────────────────────────────
+    // -- AABB ------------------------------------------------------------------
 
     /// <summary>
     /// Computes the world-space axis-aligned bounding box of all <see cref="MeshData"/>
@@ -98,7 +98,7 @@ internal static class ImportHelper
         return (min, max);
     }
 
-    // ── Bed helpers ───────────────────────────────────────────────────────────
+    // -- Bed helpers -----------------------------------------------------------
 
     private static Vector3 GetBedCenter(CellConfig? cell)
     {

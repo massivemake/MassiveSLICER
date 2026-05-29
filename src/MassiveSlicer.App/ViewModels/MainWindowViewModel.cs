@@ -48,6 +48,28 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Give the viewport direct access to additive settings for the slice command.
         Viewport.AdditiveSettings = RightPanel.Additive;
 
+        // Load persisted material presets and restore the last selection.
+        foreach (var preset in MaterialPresetsLoader.Load())
+            RightPanel.Additive.MaterialPresets.Add(preset);
+
+        if (AppPreferences.SelectedMaterialPresetName is { } savedPreset)
+        {
+            int idx = RightPanel.Additive.MaterialPresets
+                .Select((p, i) => (p, i))
+                .FirstOrDefault(t => t.p.Name == savedPreset, (null!, -1)).i;
+            if (idx >= 0) RightPanel.Additive.SelectedPresetIndex = idx;
+        }
+
+        RightPanel.Additive.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(AdditiveSettingsViewModel.SelectedPresetIndex)) return;
+            var idx = RightPanel.Additive.SelectedPresetIndex;
+            AppPreferences.SelectedMaterialPresetName = idx >= 0 && idx < RightPanel.Additive.MaterialPresets.Count
+                ? RightPanel.Additive.MaterialPresets[idx].Name
+                : null;
+            PreferencesLoader.Save(AppPreferences);
+        };
+
         // Share the viewport's authoritative outliner list with the left panel.
         LeftPanel.OutlinerItems = Viewport.OutlinerItems;
 

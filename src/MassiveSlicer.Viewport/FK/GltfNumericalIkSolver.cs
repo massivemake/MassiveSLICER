@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.Kinematics;
+﻿using MassiveSlicer.Core.Kinematics;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.FK;
@@ -26,7 +26,7 @@ public sealed class GltfNumericalIkSolver
     /// <param name="chainRoot">WorldTransform of joint_1's parent, from <see cref="RobotFkController.ChainRootTransform"/>.</param>
     /// <param name="robotWorldPos">ROBROOT origin in scene space (mm).</param>
     /// <param name="tcpLocal">TCP offset as a GLTF-space local transform (pure translation).</param>
-    /// <param name="jointConfigs">Per-joint axis, sign, offset, and limits for A1–A6.</param>
+    /// <param name="jointConfigs">Per-joint axis, sign, offset, and limits for A1-A6.</param>
     public GltfNumericalIkSolver(IReadOnlyList<Matrix4> restPoses, Matrix4 chainRoot,
                                   Vector3 robotWorldPos, Matrix4 tcpLocal,
                                   IReadOnlyList<JointConfig> jointConfigs,
@@ -40,7 +40,7 @@ public sealed class GltfNumericalIkSolver
         _jcfg          = jointConfigs.ToArray();
     }
 
-    // ── FK ────────────────────────────────────────────────────────────────────
+    // -- FK --------------------------------------------------------------------
 
     private Matrix4 ComputeJoint6Transform(float[] krl)
     {
@@ -67,6 +67,15 @@ public sealed class GltfNumericalIkSolver
     /// <summary>Returns the TCP position in scene space (flange + TCP offset).</summary>
     public Vector3 ComputeTcpPosScene(float[] krl)
         => (_tcpLocal * ComputeJoint6Transform(krl)).Row3.Xyz;
+
+    /// <summary>Returns TCP position and normalized rotation rows in one FK pass.</summary>
+    private (Vector3 pos, Vector3 r0, Vector3 r1, Vector3 r2) ComputeTcpAndRot(float[] krl)
+    {
+        var   wt  = ComputeJoint6Transform(krl);
+        var   tcp = (_tcpLocal * wt).Row3.Xyz;
+        float sc  = wt.Row0.Xyz.Length;
+        return (tcp, wt.Row0.Xyz / sc, wt.Row1.Xyz / sc, wt.Row2.Xyz / sc);
+    }
 
     /// <summary>
     /// Returns the normalized rotation rows of joint_6 in scene space.
@@ -106,7 +115,7 @@ public sealed class GltfNumericalIkSolver
 
         // Invert the toolFrameRoll applied in SyncTcpReadout:
         //   kukaX = cr*r0 + sr*r2,  kukaY = sr*r0 − cr*r2,  kukaZ = r1
-        // → r0 = cr*kukaX + sr*kukaY,  r1 = kukaZ,  r2 = sr*kukaX − cr*kukaY
+        // -> r0 = cr*kukaX + sr*kukaY,  r1 = kukaZ,  r2 = sr*kukaX − cr*kukaY
         float cr = MathF.Cos(_toolFrameRoll);
         float sr = MathF.Sin(_toolFrameRoll);
         return (cr * kukaX + sr * kukaY, kukaZ, sr * kukaX - cr * kukaY);
@@ -120,7 +129,7 @@ public sealed class GltfNumericalIkSolver
     /// Setting <c>kukaX = -normal</c> and solving KUKA ZYX Euler gives:
     /// <code>
     ///   B = asin(normal.Z)
-    ///   A = atan2(-normal.Y, -normal.X)   (0 when cos(B) ≈ 0 — gimbal lock)
+    ///   A = atan2(-normal.Y, -normal.X)   (0 when cos(B) ≈ 0 -- gimbal lock)
     ///   C = 0                              (no tool spin)
     /// </code>
     /// Then delegates to <see cref="TargetRotFromKukaAbc"/> so the result is
@@ -147,7 +156,7 @@ public sealed class GltfNumericalIkSolver
     /// angle offsets (degrees) on top of the plane-normal-derived A, B and zero C.
     ///
     /// Because the offset is added directly to the Euler angles before the GLTF/toolFrameRoll
-    /// mapping, <c>(0, 0, 0)</c> is a true identity offset — identical to calling
+    /// mapping, <c>(0, 0, 0)</c> is a true identity offset -- identical to calling
     /// <see cref="TargetRotFromPlaneNormal"/> with no offset.  This avoids the world-axis
     /// snap that occurs when composing a separate rotation matrix whose "identity" does
     /// not coincide with the plane-normal orientation.
@@ -168,9 +177,9 @@ public sealed class GltfNumericalIkSolver
     /// <summary>
     /// Builds a fully-determined tool orientation from the toolpath geometry:
     /// <code>
-    ///   kukaX = -normalize(normal)       — approach direction (tool → workpiece)
-    ///   kukaZ = normalize(tangent ⊥ X)  — travel direction (re-orthogonalised)
-    ///   kukaY = kukaZ × kukaX           — side vector (right-hand frame)
+    ///   kukaX = -normalize(normal)       -- approach direction (tool -> workpiece)
+    ///   kukaZ = normalize(tangent ⊥ X)  -- travel direction (re-orthogonalised)
+    ///   kukaY = kukaZ × kukaX           -- side vector (right-hand frame)
     /// </code>
     /// This eliminates the undefined spin-around-approach-axis present in
     /// <see cref="TargetRotFromPlaneNormal"/>.
@@ -183,7 +192,7 @@ public sealed class GltfNumericalIkSolver
         Vector3 normal, Vector3 tangent,
         (Vector3 r0, Vector3 r1, Vector3 r2)? offset = null)
     {
-        // ── Step 1: build the path-derived KUKA tool frame ───────────────────
+        // -- Step 1: build the path-derived KUKA tool frame -------------------
         var kukaX = -Vector3.Normalize(normal);       // approach = -planeNormal
 
         // Re-orthogonalise tangent against kukaX so kukaZ ⊥ kukaX.
@@ -196,13 +205,13 @@ public sealed class GltfNumericalIkSolver
         }
         else
         {
-            // Tangent degenerate (parallel to normal) — fall back to an arbitrary spin.
+            // Tangent degenerate (parallel to normal) -- fall back to an arbitrary spin.
             var arb = MathF.Abs(kukaX.X) < 0.9f ? Vector3.UnitX : Vector3.UnitY;
             kukaY = Vector3.Normalize(Vector3.Cross(arb, kukaX));
             kukaZ = Vector3.Cross(kukaX, kukaY);
         }
 
-        // ── Step 2: map to scene-space rows via toolFrameRoll ────────────────
+        // -- Step 2: map to scene-space rows via toolFrameRoll ----------------
         float cr = MathF.Cos(_toolFrameRoll);
         float sr = MathF.Sin(_toolFrameRoll);
         var r0 = cr * kukaX + sr * kukaY;
@@ -211,7 +220,7 @@ public sealed class GltfNumericalIkSolver
 
         if (offset is null) return (r0, r1, r2);
 
-        // ── Step 3: apply local post-rotation R_final = R_path * R_offset ────
+        // -- Step 3: apply local post-rotation R_final = R_path * R_offset ----
         // Column-vector: R_final = R_path * R_offset
         // Row-vector equivalent: M_final = M_offset * M_path
         var (or0, or1, or2) = offset.Value;
@@ -221,7 +230,36 @@ public sealed class GltfNumericalIkSolver
         return (Mf.Row0, Mf.Row1, Mf.Row2);
     }
 
-    // ── IK ────────────────────────────────────────────────────────────────────
+    /// <summary>
+    /// Convenience overload of <see cref="TargetRotFromPathFrame"/> that applies a KUKA ZYX
+    /// Euler offset (degrees) as a post-rotation in the path frame's local space.
+    /// Zero offset is a true identity -- identical to calling <see cref="TargetRotFromPathFrame"/>
+    /// with no offset parameter.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromPathFrameWithOffset(
+        Vector3 normal, Vector3 tangent,
+        float offsetADeg, float offsetBDeg, float offsetCDeg)
+    {
+        if (offsetADeg == 0f && offsetBDeg == 0f && offsetCDeg == 0f)
+            return TargetRotFromPathFrame(normal, tangent);
+
+        float a = offsetADeg * MathF.PI / 180f;
+        float b = offsetBDeg * MathF.PI / 180f;
+        float c = offsetCDeg * MathF.PI / 180f;
+        float ca = MathF.Cos(a), sa = MathF.Sin(a);
+        float cb = MathF.Cos(b), sb = MathF.Sin(b);
+        float cc = MathF.Cos(c), sc = MathF.Sin(c);
+
+        // Pure KUKA ZYX rotation matrix (no toolFrameRoll) expressed as row vectors.
+        // Row i = column i of R_kuka, so identity for (0,0,0).
+        var or0 = new Vector3(ca * cb,                  sa * cb,                  -sb);
+        var or1 = new Vector3(ca * sb * sc - sa * cc,   sa * sb * sc + ca * cc,    cb * sc);
+        var or2 = new Vector3(ca * sb * cc + sa * sc,   sa * sb * cc - ca * sc,    cb * cc);
+
+        return TargetRotFromPathFrame(normal, tangent, (or0, or1, or2));
+    }
+
+    // -- IK --------------------------------------------------------------------
 
     /// <summary>
     /// Position-only IK. Solves for a TCP target in ROBROOT frame (mm).
@@ -279,7 +317,7 @@ public sealed class GltfNumericalIkSolver
     /// Position + orientation constrained IK. Solves for a TCP target in ROBROOT
     /// frame (mm) while holding the flange orientation fixed.
     /// <paramref name="targetRot"/> is the desired normalized rotation rows in scene
-    /// space — obtain it by calling <see cref="ComputeFlangeRotNorm"/> at the seed
+    /// space -- obtain it by calling <see cref="ComputeFlangeRotNorm"/> at the seed
     /// angles before solving.
     /// Returns 6 KRL angles or <c>null</c> if position convergence fails within 10 mm.
     /// </summary>
@@ -289,7 +327,7 @@ public sealed class GltfNumericalIkSolver
         const float Eps    = 1.0f;
         const float Lambda = 10f;
         const float PosTol = 1.0f;    // mm
-        const float RotTol = 0.01f;   // rad (~0.57°)
+        const float RotTol = 0.01f;   // rad (~0.57deg)
         const int   MaxIt  = 300;
         // Orientation weight: scales radians to mm-equivalent so the 6D error
         // is balanced. Larger = stronger orientation constraint.
@@ -301,10 +339,9 @@ public sealed class GltfNumericalIkSolver
 
         for (int iter = 0; iter < MaxIt; iter++)
         {
-            var p0               = ComputeTcpPosScene(θ);
-            var ePos             = targetScene - p0;
-            var (cR0, cR1, cR2) = ComputeFlangeRotNorm(θ);
-            var eRot             = RotErr(tR0, tR1, tR2, cR0, cR1, cR2);
+            var (p0, cR0, cR1, cR2) = ComputeTcpAndRot(θ);
+            var ePos                 = targetScene - p0;
+            var eRot                 = RotErr(tR0, tR1, tR2, cR0, cR1, cR2);
 
             if (ePos.LengthSquared < PosTol * PosTol && eRot.LengthSquared < RotTol * RotTol) break;
 
@@ -314,8 +351,8 @@ public sealed class GltfNumericalIkSolver
             for (int j = 0; j < 6; j++)
             {
                 θ[j] += Eps;
-                Jp[j] = (ComputeTcpPosScene(θ) - p0) / Eps;
-                var (pR0, pR1, pR2) = ComputeFlangeRotNorm(θ);
+                var (pp, pR0, pR1, pR2) = ComputeTcpAndRot(θ);
+                Jp[j] = (pp - p0) / Eps;
                 Jr[j] = OW * RotErr(pR0, pR1, pR2, cR0, cR1, cR2) / Eps;
                 θ[j] -= Eps;
             }
@@ -354,11 +391,11 @@ public sealed class GltfNumericalIkSolver
         return (ComputeTcpPosScene(θ) - targetScene).Length <= 10f ? θ : null;
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // -- Helpers ---------------------------------------------------------------
 
     /// <summary>
     /// Orientation error as a rotation vector (axis × sin(angle/2) approximation).
-    /// Formula: ω = ½ Σ_k (cR_k × tR_k) — drives current frame toward target frame.
+    /// Formula: ω = ½ Σ_k (cR_k × tR_k) -- drives current frame toward target frame.
     /// </summary>
     private static Vector3 RotErr(
         Vector3 tR0, Vector3 tR1, Vector3 tR2,

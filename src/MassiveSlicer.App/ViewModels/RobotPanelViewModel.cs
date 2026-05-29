@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Numerics;
 using System.Windows.Input;
 using Avalonia.Threading;
@@ -12,13 +12,13 @@ using MassiveSlicer.ViewModels.Base;
 namespace MassiveSlicer.ViewModels;
 
 /// <summary>
-/// Manages the ROBOT settings sub-tab: six joint sliders (A1–A6) for the
+/// Manages the ROBOT settings sub-tab: six joint sliders (A1-A6) for the
 /// KR 210 R3100 Ultra (LFAM 2), plus TCP readout. Angles are in KRL degrees.
 /// Limits are LFAM 2 software limits; defaults are the LFAM 2 home position.
 /// </summary>
 public sealed class RobotPanelViewModel : ViewModelBase
 {
-    // ── Joint limits (driven by cell config) ────────────────────────────────
+    // -- Joint limits (driven by cell config) --------------------------------
 
     private double _minA1 = -360, _maxA1 = 360;
     private double _minA2 = -360, _maxA2 = 360;
@@ -40,7 +40,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double MinA6 { get => _minA6; set => SetField(ref _minA6, value); }
     public double MaxA6 { get => _maxA6; set => SetField(ref _maxA6, value); }
 
-    // ── Joint angles (KRL degrees) ───────────────────────────────────────────
+    // -- Joint angles (KRL degrees) -------------------------------------------
 
     private double _a1 =   0;
     private double _a2 = -90;
@@ -56,7 +56,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double A5 { get => _a5; set => SetField(ref _a5, Math.Clamp(value, _minA5, _maxA5)); }
     public double A6 { get => _a6; set => SetField(ref _a6, Math.Clamp(value, _minA6, _maxA6)); }
 
-    // ── C3Bridge connection ───────────────────────────────────────────────────
+    // -- C3Bridge connection ---------------------------------------------------
 
     private readonly RobotSyncService _sync = new();
     private string _bridgeIp   = "192.168.0.1";
@@ -77,7 +77,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>True while a live C3Bridge session is active.</summary>
     public bool IsConnected => _connectionStatus == ConnectionStatus.Ready;
 
-    /// <summary>Button label — "Sync Robot" when disconnected, "Desync Robot" when live.</summary>
+    /// <summary>Button label -- "Sync Robot" when disconnected, "Desync Robot" when live.</summary>
     public string SyncButtonLabel => IsConnected ? "Desync Robot" : "Sync Robot";
 
     public ICommand ConnectCommand { get; }
@@ -120,7 +120,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
         }
     }
 
-    // ── Joint limits (driven by cell config) ────────────────────────────────
+    // -- Joint limits (driven by cell config) --------------------------------
 
     /// <summary>Applies joint limits and home position from the loaded cell config.</summary>
     public void Configure(IReadOnlyList<JointConfig> joints, float[] home)
@@ -141,7 +141,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
         }
     }
 
-    // ── TCP readout ───────────────────────────────────────────────────────────
+    // -- TCP readout -----------------------------------------------------------
 
     private double _tcpX, _tcpY, _tcpZ;
     private double _tcpA, _tcpB, _tcpC;
@@ -152,38 +152,38 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double TcpY { get => _tcpY; set => SetField(ref _tcpY, value); }
     /// <summary>TCP Z position in mm.</summary>
     public double TcpZ { get => _tcpZ; set => SetField(ref _tcpZ, value); }
-    /// <summary>TCP A rotation (Euler Z) in degrees — flange orientation in ROBROOT.</summary>
+    /// <summary>TCP A rotation (Euler Z) in degrees -- flange orientation in ROBROOT.</summary>
     public double TcpA { get => _tcpA; set => SetField(ref _tcpA, value); }
     /// <summary>TCP B rotation (Euler Y) in degrees.</summary>
     public double TcpB { get => _tcpB; set => SetField(ref _tcpB, value); }
     /// <summary>TCP C rotation (Euler X) in degrees.</summary>
     public double TcpC { get => _tcpC; set => SetField(ref _tcpC, value); }
 
-    // ── Flange readout (ROBROOT frame, from scene graph) ─────────────────────
+    // -- Flange readout (ROBROOT frame, from scene graph) ---------------------
 
     private double _flangeX, _flangeY, _flangeZ;
 
-    /// <summary>Flange X position in ROBROOT frame (mm) — from scene graph FK.</summary>
+    /// <summary>Flange X position in ROBROOT frame (mm) -- from scene graph FK.</summary>
     public double FlangeX { get => _flangeX; set => SetField(ref _flangeX, value); }
-    /// <summary>Flange Y position in ROBROOT frame (mm) — from scene graph FK.</summary>
+    /// <summary>Flange Y position in ROBROOT frame (mm) -- from scene graph FK.</summary>
     public double FlangeY { get => _flangeY; set => SetField(ref _flangeY, value); }
-    /// <summary>Flange Z position in ROBROOT frame (mm) — from scene graph FK.</summary>
+    /// <summary>Flange Z position in ROBROOT frame (mm) -- from scene graph FK.</summary>
     public double FlangeZ { get => _flangeZ; set => SetField(ref _flangeZ, value); }
 
-    // ── Solver FK readout (ROBROOT frame, from solver FK) ────────────────────
+    // -- Solver FK readout (ROBROOT frame, from solver FK) --------------------
     // Updated by GoToBedCenter to show what the solver thinks the position is.
     // Should match FlangeX/Y/Z; a mismatch reveals an FK discrepancy.
 
     private double _solverFkX, _solverFkY, _solverFkZ;
 
-    /// <summary>Solver FK flange X in ROBROOT frame (mm) — from IK solver's internal FK.</summary>
+    /// <summary>Solver FK flange X in ROBROOT frame (mm) -- from IK solver's internal FK.</summary>
     public double SolverFkX { get => _solverFkX; set => SetField(ref _solverFkX, value); }
     /// <summary>Solver FK flange Y in ROBROOT frame (mm).</summary>
     public double SolverFkY { get => _solverFkY; set => SetField(ref _solverFkY, value); }
     /// <summary>Solver FK flange Z in ROBROOT frame (mm).</summary>
     public double SolverFkZ { get => _solverFkZ; set => SetField(ref _solverFkZ, value); }
 
-    // ── IK target orientation ────────────────────────────────────────────────
+    // -- IK target orientation ------------------------------------------------
     // Orientation held fixed while dragging the TCP marker in the viewport.
 
     private double _ikTargetA = 0;
@@ -197,7 +197,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>Target TCP C (Euler X) in degrees for IK drag.</summary>
     public double IkTargetC { get => _ikTargetC; set => SetField(ref _ikTargetC, value); }
 
-    // ── Tool selection ────────────────────────────────────────────────────────
+    // -- Tool selection --------------------------------------------------------
 
     private IReadOnlyList<ToolCellConfig> _toolLibrary = [];
     private int _selectedToolIndex = 0;
@@ -234,7 +234,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
         OnPropertyChanged(nameof(SelectedToolIndex));
     }
 
-    // ── IK ────────────────────────────────────────────────────────────────────
+    // -- IK --------------------------------------------------------------------
 
     private Vector3 _bedCenterRobot;
     private Vector3 _tcpOffsetLocal;
@@ -249,7 +249,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>
     /// Supplies bed-center position and TCP offset so <see cref="GoToBedCenterCommand"/> can run.
     /// <paramref name="bedCenterRobot"/> is the nozzle target in ROBROOT frame (mm).
-    /// <paramref name="robotWorldPos"/> is the robot base in world/scene frame (mm) — used for the TCP readout.
+    /// <paramref name="robotWorldPos"/> is the robot base in world/scene frame (mm) -- used for the TCP readout.
     /// </summary>
     public void SetIkData(Vector3 bedCenterRobot, Vector3 tcpOffset, Vector3 robotWorldPos)
     {

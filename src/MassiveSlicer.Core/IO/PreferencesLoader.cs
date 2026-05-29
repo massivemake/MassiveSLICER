@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 using MassiveSlicer.Core.Models;
 
@@ -52,6 +52,6 @@ public static class PreferencesLoader
             Directory.CreateDirectory(PrefsDir);
             File.WriteAllText(PrefsPath, JsonSerializer.Serialize(prefs, Options));
         }
-        catch { /* non-fatal — preferences are nice-to-have, not required */ }
+        catch { /* non-fatal -- preferences are nice-to-have, not required */ }
     }
 }

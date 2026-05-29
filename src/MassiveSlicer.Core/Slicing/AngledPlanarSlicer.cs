@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Runtime.CompilerServices;
 using MassiveSlicer.Core.Models;
 
@@ -14,7 +14,7 @@ public static class AngledPlanarSlicer
 {
     private const float SnapGrid = 0.01f;
 
-    // ── Public entry point ────────────────────────────────────────────────────
+    // -- Public entry point ----------------------------------------------------
 
     public static Toolpath Slice(
         IReadOnlyList<Vector3[]> meshes,
@@ -73,7 +73,7 @@ public static class AngledPlanarSlicer
         return toolpath;
     }
 
-    // ── Layer construction ────────────────────────────────────────────────────
+    // -- Layer construction ----------------------------------------------------
 
     private static List<AngledContourTrack> BuildLayer(
         IReadOnlyList<Vector3[]> meshes,
@@ -105,18 +105,18 @@ public static class AngledPlanarSlicer
             var start = contour[0];
 
             if (!float.IsNaN(lastPos.X))
-                layer.Moves.Add(new ToolpathMove(lastPos, start, MoveKind.Travel));
+                layer.Moves.Add(new ToolpathMove(lastPos, start, MoveKind.Travel) { Normal = normal });
 
             var prev = start;
             for (int i = 1; i < contour.Count; i++)
             {
                 var next = contour[i];
-                layer.Moves.Add(new ToolpathMove(prev, next, MoveKind.Extrude));
+                layer.Moves.Add(new ToolpathMove(prev, next, MoveKind.Extrude) { Normal = normal });
                 prev = next;
             }
 
             if (contour.Count > 2)
-                layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude));
+                layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude) { Normal = normal });
 
             lastPos = contour[^1];
         }
@@ -124,7 +124,7 @@ public static class AngledPlanarSlicer
         return tracks;
     }
 
-    // ── Intersection / segment collection ─────────────────────────────────────
+    // -- Intersection / segment collection -------------------------------------
 
     private static void CollectSegments(
         Vector3[]              verts,
@@ -171,7 +171,7 @@ public static class AngledPlanarSlicer
         pts[count++] = a + t * (b - a);
     }
 
-    // ── Seam alignment ────────────────────────────────────────────────────────
+    // -- Seam alignment --------------------------------------------------------
 
     private static void AlignSeam(
         List<Vector3> contour,
@@ -267,7 +267,7 @@ public static class AngledPlanarSlicer
         return t > -1e-4f && s >= -1e-4f && s <= 1f + 1e-4f;
     }
 
-    // ── Chain stitching ───────────────────────────────────────────────────────
+    // -- Chain stitching -------------------------------------------------------
 
     private static void StitchChains(List<List<Vector3>> chains, Vector3 planeNormal)
     {
@@ -317,7 +317,7 @@ public static class AngledPlanarSlicer
         }
     }
 
-    // ── Topological contour extraction ───────────────────────────────────────
+    // -- Topological contour extraction ---------------------------------------
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static (int, int, int) Quantise(Vector3 p)
@@ -400,7 +400,7 @@ public static class AngledPlanarSlicer
         return (closed, open);
     }
 
-    // ── Topology-aware seam assignment ────────────────────────────────────────
+    // -- Topology-aware seam assignment ----------------------------------------
 
     private const float OverlapThreshold = 0.05f;
 
@@ -457,7 +457,7 @@ public static class AngledPlanarSlicer
         return inside;
     }
 
-    // ── Per-contour seam tracking ─────────────────────────────────────────────
+    // -- Per-contour seam tracking ---------------------------------------------
 
     private sealed class AngledContourTrack(List<Vector3> contour, Vector2 seamXY)
     {

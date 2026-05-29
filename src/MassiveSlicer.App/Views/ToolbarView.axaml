@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.ToolbarView"
              x:CompileBindings="False">
 
@@ -41,8 +42,12 @@
                 <Button Content="Front"     Classes="ToolbarButton" Command="{Binding FrontViewCommand}"     Margin="0,0,4,0"/>
                 <Button Content="Iso"       Classes="ToolbarButton" Command="{Binding IsometricViewCommand}" Margin="0,0,12,0"/>
 
-                <Button Content="&gt;_"      Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}"    ToolTip.Tip="Toggle Console"         Margin="0,0,4,0"/>
-                <Button Content="&#x2630;"   Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel"/>
+                <Button Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
+                    <ia:Icon Value="mdi-console" FontSize="14"/>
+                </Button>
+                <Button Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel">
+                    <ia:Icon Value="mdi-menu" FontSize="14"/>
+                </Button>
             </StackPanel>
         </Grid>
     </Border>

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls;
@@ -20,8 +20,8 @@ namespace MassiveSlicer.App.Views;
 //
 // The natural cross-platform approach for embedding OpenGL in Avalonia is to
 // inherit from Avalonia.OpenGL.Controls.OpenGlControlBase. That worked on macOS
-// and Linux but CRASHED on Windows — specifically on AMD GPUs (driver atio6axx)
-// — because Avalonia's OpenGlControlBase allocates and disposes its own FBO on
+// and Linux but CRASHED on Windows -- specifically on AMD GPUs (driver atio6axx)
+// -- because Avalonia's OpenGlControlBase allocates and disposes its own FBO on
 // every resize, and AMD's Windows driver enforces a strict rule: you MUST detach
 // all texture/renderbuffer attachments from an FBO before calling glDeleteFramebuffer.
 // Avalonia's internal FBO teardown does not do this, causing an access violation
@@ -42,7 +42,7 @@ namespace MassiveSlicer.App.Views;
 // If OpenGlControlBase is ever fixed upstream to safely handle FBO teardown on AMD,
 // or if a GL extension path is found that avoids the crash, this file can be replaced
 // with a much simpler OpenGlControlBase subclass. Until then, DO NOT replace this
-// implementation on Windows — the crash is real and reproducible.
+// implementation on Windows -- the crash is real and reproducible.
 //
 // See also: DestroyResources() below for the AMD-safe detach-before-delete sequence.
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -57,46 +57,46 @@ namespace MassiveSlicer.App.Views;
 [SupportedOSPlatform("windows")]
 internal sealed class GlHostControl : UserControl, IDisposable
 {
-    // ── Public GL lifecycle events ────────────────────────────────────────────
+    // -- Public GL lifecycle events --------------------------------------------
 
     public event Action?                        GlInitialized;
     public event Action<TimeSpan, int, int>?    GlRender;
     public event Action?                        GlDeinitialized;
 
-    // ── Display ───────────────────────────────────────────────────────────────
+    // -- Display ---------------------------------------------------------------
 
     private readonly Image _image = new() { Stretch = Stretch.Fill };
     private WriteableBitmap? _bitmap;
 
-    // ── WGL context (hidden 1×1 HWND) ─────────────────────────────────────────
+    // -- WGL context (hidden 1×1 HWND) -----------------------------------------
 
     private IntPtr _hwnd, _hdc, _hglrc;
 
-    // ── Output FBO (what SceneRenderer composites into) ───────────────────────
+    // -- Output FBO (what SceneRenderer composites into) -----------------------
 
     private int _outputFbo, _outputColorTex, _outputDepthRbo;
     private int _fboW, _fboH;
 
-    // ── CPU pixel buffers ─────────────────────────────────────────────────────
+    // -- CPU pixel buffers -----------------------------------------------------
     // _rawPixels receives the bottom-up GL read; _staging holds the Y-flipped
     // result ready for the Avalonia WriteableBitmap.
 
     private byte[]? _rawPixels;
     private byte[]? _staging;
 
-    // ── GL thread ─────────────────────────────────────────────────────────────
+    // -- GL thread -------------------------------------------------------------
 
     private Thread? _glThread;
     private volatile bool _running;
     private volatile int _pendingW, _pendingH;
     private readonly System.Threading.ManualResetEventSlim _frameSignal = new(false);
 
-    // ── Timing ────────────────────────────────────────────────────────────────
+    // -- Timing ----------------------------------------------------------------
 
     private TimeSpan _lastRenderTime;
     private bool _firstFrame = true;
 
-    // ── Construction ──────────────────────────────────────────────────────────
+    // -- Construction ----------------------------------------------------------
 
     public GlHostControl()
     {
@@ -109,7 +109,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
     /// <summary>Queues one render frame on the GL thread. Safe to call from any thread.</summary>
     public void RequestNextFrameRendering() => _frameSignal.Set();
 
-    // ── Avalonia lifecycle ────────────────────────────────────────────────────
+    // -- Avalonia lifecycle ----------------------------------------------------
 
     private void OnAttached(object? sender, VisualTreeAttachmentEventArgs e)
     {
@@ -135,7 +135,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         RequestNextFrameRendering();
     }
 
-    // ── GL thread ─────────────────────────────────────────────────────────────
+    // -- GL thread -------------------------------------------------------------
 
     private void GlThreadProc()
     {
@@ -169,7 +169,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
                 GL.BindFramebuffer(FramebufferTarget.Framebuffer, _outputFbo);
                 GlRender?.Invoke(delta, w, h);
 
-                // Synchronous pixel readback: stalls ~1–3 ms until the GPU finishes,
+                // Synchronous pixel readback: stalls ~1-3 ms until the GPU finishes,
                 // then the frame is immediately available with zero presentation delay.
                 // For an on-demand viewer this is preferable to a one-frame async lag.
                 ReadPixelsAndPresent(w, h);
@@ -186,7 +186,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         }
     }
 
-    // ── Synchronous readback → WriteableBitmap ───────────────────────────────
+    // -- Synchronous readback -> WriteableBitmap -------------------------------
 
     private void ReadPixelsAndPresent(int w, int h)
     {
@@ -196,8 +196,8 @@ internal sealed class GlHostControl : UserControl, IDisposable
         if (_rawPixels is null || _rawPixels.Length != bufSize) _rawPixels = new byte[bufSize];
         if (_staging   is null || _staging.Length   != bufSize) _staging   = new byte[bufSize];
 
-        // Blocking read — GPU stalls until all prior draw calls complete and the
-        // pixels are transferred to _rawPixels.  Typically 1–3 ms on modern hardware.
+        // Blocking read -- GPU stalls until all prior draw calls complete and the
+        // pixels are transferred to _rawPixels.  Typically 1-3 ms on modern hardware.
         GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _outputFbo);
         GL.ReadPixels(0, 0, w, h, GlPixelFormat.Rgba, PixelType.UnsignedByte, _rawPixels);
 
@@ -229,7 +229,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         _image.InvalidateVisual();
     }
 
-    // ── Output FBO + PBO lifecycle ────────────────────────────────────────────
+    // -- Output FBO + PBO lifecycle --------------------------------------------
 
     private void ResizeResources(int w, int h)
     {
@@ -302,13 +302,13 @@ internal sealed class GlHostControl : UserControl, IDisposable
         _fboW = _fboH = 0;
     }
 
-    // ── WGL context creation / destruction ────────────────────────────────────
+    // -- WGL context creation / destruction ------------------------------------
 
     private void CreateContext()
     {
         EnsureWindowClassRegistered();
 
-        // Hidden 1×1 top-level window. We never display it — it exists only to
+        // Hidden 1×1 top-level window. We never display it -- it exists only to
         // give us a valid HDC from which WGL can create an OpenGL context.
         _hwnd = CreateWindowExW(
             0, GlWindowClassName, null,
@@ -339,7 +339,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         if (_hwnd  != IntPtr.Zero) { DestroyWindow(_hwnd); _hwnd = IntPtr.Zero; }
     }
 
-    // ── IDisposable ───────────────────────────────────────────────────────────
+    // -- IDisposable -----------------------------------------------------------
 
     public void Dispose()
     {
@@ -351,7 +351,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         _frameSignal.Dispose();
     }
 
-    // ── WGL helpers ───────────────────────────────────────────────────────────
+    // -- WGL helpers -----------------------------------------------------------
 
     private static void SetupPixelFormat(IntPtr hdc)
     {
@@ -377,7 +377,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
 
         var ptr = wglGetProcAddress("wglCreateContextAttribsARB");
         if (ptr == IntPtr.Zero)
-            return temp; // old driver — keep legacy context
+            return temp; // old driver -- keep legacy context
 
         var createAttribs =
             Marshal.GetDelegateForFunctionPointer<WglCreateContextAttribsARB>(ptr);
@@ -396,7 +396,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         return ctx;
     }
 
-    // ── Window class registration ─────────────────────────────────────────────
+    // -- Window class registration ---------------------------------------------
 
     private const string GlWindowClassName = "MassiveSlicerOffscreenGl";
     private static volatile bool _classRegistered;
@@ -428,7 +428,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         }
     }
 
-    // ── OpenTK bindings context ───────────────────────────────────────────────
+    // -- OpenTK bindings context -----------------------------------------------
 
     private sealed class WglBindingsContext : IBindingsContext
     {
@@ -441,7 +441,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
         }
     }
 
-    // ── P/Invoke ──────────────────────────────────────────────────────────────
+    // -- P/Invoke --------------------------------------------------------------
 
     private delegate IntPtr WglCreateContextAttribsARB(
         IntPtr hDC, IntPtr hShareContext, int[] attribList);

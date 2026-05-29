@@ -1,4 +1,4 @@
-using OpenTK.Graphics.OpenGL4;
+﻿using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Rendering;
@@ -6,7 +6,7 @@ namespace MassiveSlicer.Viewport.Rendering;
 /// <summary>
 /// Renders world-space X/Y/Z axis lines at the origin.
 /// Uses a single VAO with per-vertex colour so all three axes draw in one call.
-/// X = red, Y = green, Z = blue — standard robotics/CAD convention.
+/// X = red, Y = green, Z = blue -- standard robotics/CAD convention.
 /// </summary>
 public sealed class AxisRenderer : IDisposable
 {
@@ -49,13 +49,13 @@ public sealed class AxisRenderer : IDisposable
         // Layout per vertex: x, y, z, r, g, b
         float[] verts =
         [
-            // X axis — red
+            // X axis -- red
             0f,      0f, 0f,   0.90f, 0.22f, 0.22f,
             Length,  0f, 0f,   0.90f, 0.22f, 0.22f,
-            // Y axis — green
+            // Y axis -- green
             0f,      0f, 0f,   0.22f, 0.80f, 0.30f,
             0f, Length,  0f,   0.22f, 0.80f, 0.30f,
-            // Z axis — blue
+            // Z axis -- blue
             0f, 0f,      0f,   0.25f, 0.45f, 0.95f,
             0f, 0f, Length,    0.25f, 0.45f, 0.95f,
         ];

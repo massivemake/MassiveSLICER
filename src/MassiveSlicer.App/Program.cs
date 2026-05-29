@@ -1,6 +1,8 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using Avalonia;
-using Avalonia.Native; // AvaloniaNativePlatformOptions — lives in Avalonia.Desktop on all platforms
+using Avalonia.Native;
+using Optris.Icons.Avalonia;
+using Optris.Icons.Avalonia.MaterialDesign;
 
 namespace MassiveSlicer.App;
 
@@ -12,6 +14,8 @@ class Program
 
     public static AppBuilder BuildAvaloniaApp()
     {
+        IconProvider.Current.Register<MaterialDesignIconProvider>();
+
         var builder = AppBuilder.Configure<App>()
             .UsePlatformDetect()
             .LogToTrace();
