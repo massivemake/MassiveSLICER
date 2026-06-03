@@ -106,8 +106,8 @@ public sealed class AppPreferences
     /// <summary>Deposition feed rate in m/s.</summary>
     public double FeedRate { get; set; } = 0.1;
 
-    /// <summary>PTP travel speed in m/min.</summary>
-    public double PtpSpeed { get; set; } = 1.0;
+    /// <summary>Travel (PTP) speed in mm/min.</summary>
+    public double TravelSpeed { get; set; } = 120.0;
 
     /// <summary>Acceleration as a percentage of robot maximum (1–100).</summary>
     public int Acceleration { get; set; } = 100;

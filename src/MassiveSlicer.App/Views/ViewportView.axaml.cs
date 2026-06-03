@@ -613,8 +613,8 @@ public partial class ViewportView : UserControl
 
     private bool IsOrbitButton(AvaBtn btn, KeyModifiers mods) => ActivePreset switch
     {
-        NavigationPresetId.Rhino or
-        NavigationPresetId.Plasticity => btn == AvaBtn.Right,
+        NavigationPresetId.Rhino        => btn == AvaBtn.Right && !mods.HasFlag(KeyModifiers.Shift),
+        NavigationPresetId.Plasticity  => btn == AvaBtn.Right,
         NavigationPresetId.Blender    => btn == AvaBtn.Middle && !mods.HasFlag(KeyModifiers.Shift),
         NavigationPresetId.Maya       => btn == AvaBtn.Left   && mods.HasFlag(KeyModifiers.Alt),
         NavigationPresetId.Mol3D      => btn == AvaBtn.Left,
@@ -625,7 +625,7 @@ public partial class ViewportView : UserControl
 
     private bool IsPanButton(AvaBtn btn, KeyModifiers mods) => ActivePreset switch
     {
-        NavigationPresetId.Rhino or
+        NavigationPresetId.Rhino        => btn == AvaBtn.Right && mods.HasFlag(KeyModifiers.Shift),
         NavigationPresetId.Plasticity or
         NavigationPresetId.Mol3D      => btn == AvaBtn.Middle,
         NavigationPresetId.Blender    => btn == AvaBtn.Middle && mods.HasFlag(KeyModifiers.Shift),
