@@ -165,7 +165,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.TiltAngle    = p.TiltAngle;
         add.TiltAngleX   = p.TiltAngleX;
         add.FeedRate     = p.FeedRate;
-        add.PtpSpeed     = p.PtpSpeed;
+        add.TravelSpeed     = p.TravelSpeed;
         add.Acceleration = p.Acceleration;
         add.ApproachZ    = p.ApproachZ;
         add.ToolDataIndex = p.ToolDataIndex;
@@ -216,7 +216,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.TiltAngle        = add.TiltAngle;
         p.TiltAngleX       = add.TiltAngleX;
         p.FeedRate         = add.FeedRate;
-        p.PtpSpeed         = add.PtpSpeed;
+        p.TravelSpeed         = add.TravelSpeed;
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;
         p.ToolDataIndex    = add.ToolDataIndex;
