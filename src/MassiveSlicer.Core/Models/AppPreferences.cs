@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Models;
+namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// Application-wide preferences persisted across sessions.
@@ -7,7 +7,7 @@
 /// </summary>
 public sealed class AppPreferences
 {
-    // -- Navigation --------------------------------------------------------
+    // ── Navigation ────────────────────────────────────────────────────────
 
     /// <summary>
     /// When true, the orbit pivot depth adjusts to the geometry under the cursor
@@ -24,17 +24,17 @@ public sealed class AppPreferences
     /// <summary>Active mouse-button navigation preset.</summary>
     public NavigationPresetId ActivePreset { get; set; } = NavigationPresetId.Rhino;
 
-    // -- Performance -------------------------------------------------------
+    // ── Performance ───────────────────────────────────────────────────────
 
     /// <summary>Enable multi-sample anti-aliasing in the OpenGL viewport.</summary>
     public bool AntiAliasing { get; set; } = true;
 
-    // -- Appearance --------------------------------------------------------
+    // ── Appearance ────────────────────────────────────────────────────────
 
     /// <summary>Path of the backdrop image loaded at startup, or null for none.</summary>
     public string? DefaultBackdropPath { get; set; }
 
-    /// <summary>Mipmap LOD blur level saved alongside the default backdrop (0 = sharp, 7 = max).</summary>
+    /// <summary>Mipmap LOD blur level (0 = sharp, 7 = max).</summary>
     public float DefaultBackdropBlur { get; set; } = 2.5f;
 
     /// <summary>Whether the ground-plane grid lines are rendered.</summary>
@@ -47,11 +47,86 @@ public sealed class AppPreferences
     public bool ShowBedGrid { get; set; } = true;
 
     /// <summary>
-    /// Per-cell default home position name, keyed by cell name (e.g. "LFAM 2" -> "Home").
+    /// Per-cell default home position name, keyed by cell name (e.g. "LFAM 2" → "Home").
     /// Restored when the user switches to a cell.
     /// </summary>
     public Dictionary<string, string> DefaultHomePositionNames { get; set; } = [];
 
     /// <summary>Name of the last selected material preset, or null for none.</summary>
     public string? SelectedMaterialPresetName { get; set; }
+
+    // ── Lighting ──────────────────────────────────────────────────────────
+
+    /// <summary>Horizontal rotation of the key light around Z, in degrees.</summary>
+    public float LightAzimuth { get; set; } = 45f;
+
+    /// <summary>Vertical angle of the key light above the XY plane, in degrees.</summary>
+    public float LightElevation { get; set; } = 45f;
+
+    /// <summary>Directional light intensity multiplier.</summary>
+    public float LightIntensity { get; set; } = 1f;
+
+    // ── Shader / view ─────────────────────────────────────────────────────
+
+    /// <summary>Active viewport shader mode name (matches ShaderMode enum).</summary>
+    public string ShaderMode { get; set; } = "Standard";
+
+    /// <summary>Active UI colour theme name (matches AppTheme enum).</summary>
+    public string AppTheme { get; set; } = "Obsidian";
+
+    /// <summary>Whether mesh edges are drawn over the shaded surface.</summary>
+    public bool ShowEdges { get; set; } = false;
+
+    /// <summary>Whether the ground-plane shadow catcher is active.</summary>
+    public bool ShadowCatcherEnabled { get; set; } = false;
+
+    // ── Additive slicing ──────────────────────────────────────────────────
+
+    /// <summary>Layer height in mm.</summary>
+    public double LayerHeight { get; set; } = 3.0;
+
+    /// <summary>Bead width in mm.</summary>
+    public double BeadWidth { get; set; } = 6.0;
+
+    /// <summary>First-layer height override in mm.</summary>
+    public double FirstLayerHeight { get; set; } = 3.0;
+
+    /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
+    public string SliceMethod { get; set; } = "Planar";
+
+    /// <summary>Pass rotation angle in degrees.</summary>
+    public double PassAngle { get; set; } = 0.0;
+
+    /// <summary>Tilt around Y-axis in degrees.</summary>
+    public double TiltAngle { get; set; } = 0.0;
+
+    /// <summary>Tilt around X-axis in degrees.</summary>
+    public double TiltAngleX { get; set; } = 0.0;
+
+    /// <summary>Deposition feed rate in m/s.</summary>
+    public double FeedRate { get; set; } = 0.1;
+
+    /// <summary>PTP travel speed in m/min.</summary>
+    public double PtpSpeed { get; set; } = 1.0;
+
+    /// <summary>Acceleration as a percentage of robot maximum (1–100).</summary>
+    public int Acceleration { get; set; } = 100;
+
+    /// <summary>Approach Z height above part in mm.</summary>
+    public double ApproachZ { get; set; } = 50.0;
+
+    /// <summary>KUKA TOOL_DATA index (1–16).</summary>
+    public int ToolDataIndex { get; set; } = 1;
+
+    /// <summary>KUKA BASE_DATA index (1–32).</summary>
+    public int BaseDataIndex { get; set; } = 1;
+
+    /// <summary>Toolhead A angle in degrees.</summary>
+    public double ToolheadA { get; set; } = 0.0;
+
+    /// <summary>Toolhead B angle in degrees.</summary>
+    public double ToolheadB { get; set; } = 0.0;
+
+    /// <summary>Toolhead C angle in degrees.</summary>
+    public double ToolheadC { get; set; } = 0.0;
 }

@@ -132,12 +132,15 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     /// <summary>Raised when the user clicks the robot sync/connect button.</summary>
     public event EventHandler? SyncRobotRequested;
 
-    // -- Private handlers (wired up to real logic incrementally) --------------
+    /// <summary>Raised when the user clicks Frame All to fit all scene objects in view.</summary>
+    public event EventHandler? FrameAllRequested;
+
+    // ── Private handlers (wired up to real logic incrementally) ──────────────
 
     private void OpenModel() => ModelLoadRequested?.Invoke(this, EventArgs.Empty);
     private void ImportKrl()       { /* TODO: open file dialog -> parse KRL    */ }
     private void OpenPreferences() => PreferencesRequested?.Invoke(this, EventArgs.Empty);
-    private void FrameAll()        { /* TODO: notify viewport to frame scene   */ }
+    private void FrameAll()        => FrameAllRequested?.Invoke(this, EventArgs.Empty);
     private void TopView()         { /* TODO: notify viewport camera preset    */ }
     private void FrontView()       { /* TODO: notify viewport camera preset    */ }
     private void IsometricView()   { /* TODO: notify viewport camera preset    */ }
