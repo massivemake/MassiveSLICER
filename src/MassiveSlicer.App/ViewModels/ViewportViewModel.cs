@@ -478,6 +478,8 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnFocusRequested      { get; set; }
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
+    internal Action? OnFrameAllRequested    { get; set; }
 
     public ViewportViewModel()
     {
