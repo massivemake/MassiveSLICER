@@ -23,6 +23,8 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
     private int  _beadVao, _beadVbo, _beadCount;
+    private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
+    private int[] _singularityVertexCumulative = [];
     private bool _disposed;
 
     private readonly Shader _shader;
@@ -96,6 +98,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int[] _extrudeVertexCumulative = [];
     private int[] _travelVertexCumulative  = [];
     private int[] _beadVertexCumulative    = [];
+    private int[] _seamVertexCumulative    = [];
 
     public ToolpathRenderer(Toolpath toolpath, NVec3 origin = default,
         float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default)
@@ -324,52 +327,64 @@ public sealed class ToolpathRenderer : IDisposable
 
     private float[] BuildSeamData()
     {
-        int totalContours = 0;
+        // Collect one event per seam point, keyed by the flat-move index that makes it visible.
+        // Start seam → triggered by the first extrude move of a contour.
+        // End seam   → triggered by the last  extrude move of a contour.
+        var events = new List<(int FlatIdx, NVec3 Pos)>();
+
+        int fi = 0;
         foreach (var layer in _toolpath.Layers)
         {
-            bool inEx = false;
-            foreach (var m in layer.Moves)
-            {
-                if (m.Kind == MoveKind.Extrude && !inEx) { totalContours++; inEx = true; }
-                else if (m.Kind == MoveKind.Travel)       inEx = false;
-            }
-        }
-
-        var ptData = new float[totalContours * 2 * 6];
-        int pi = 0;
-
-        void WritePoint(NVec3 p, Vector3 col)
-        {
-            ptData[pi++] = p.X - _origin.X; ptData[pi++] = p.Y - _origin.Y; ptData[pi++] = p.Z - _origin.Z;
-            ptData[pi++] = col.X;           ptData[pi++] = col.Y;           ptData[pi++] = col.Z;
-        }
-
-        foreach (var layer in _toolpath.Layers)
-        {
-            bool inExtrude = false;
-            NVec3 extStart = default, extEnd = default;
+            int   firstFi  = -1;
+            NVec3 firstPos = default;
+            int   lastFi   = -1;
+            NVec3 lastPos  = default;
 
             foreach (var move in layer.Moves)
             {
                 if (move.Kind == MoveKind.Extrude)
                 {
-                    if (!inExtrude) { extStart = move.From; inExtrude = true; }
-                    extEnd = move.To;
+                    if (firstFi < 0) { firstFi = fi; firstPos = move.From; }
+                    lastFi = fi; lastPos = move.To;
                 }
-                else
+                else if (firstFi >= 0)
                 {
-                    if (inExtrude)
-                    {
-                        WritePoint(extStart, _seamColor);
-                        WritePoint(extEnd,   _seamColor);
-                        inExtrude = false;
-                    }
+                    events.Add((firstFi, firstPos));
+                    events.Add((lastFi,  lastPos));
+                    firstFi = -1;
                 }
+                fi++;
             }
-            if (inExtrude)
+            if (firstFi >= 0)
             {
-                WritePoint(extStart, _seamColor);
-                WritePoint(extEnd,   _seamColor);
+                events.Add((firstFi, firstPos));
+                events.Add((lastFi,  lastPos));
+            }
+        }
+
+        // Sort so VBO entries are ordered by appearance time.
+        events.Sort((a, b) => a.FlatIdx.CompareTo(b.FlatIdx));
+
+        // Build VBO.
+        var ptData = new float[events.Count * 6];
+        int pi = 0;
+        foreach (var (_, pos) in events)
+        {
+            ptData[pi++] = pos.X - _origin.X; ptData[pi++] = pos.Y - _origin.Y; ptData[pi++] = pos.Z - _origin.Z;
+            ptData[pi++] = _seamColor.X;      ptData[pi++] = _seamColor.Y;      ptData[pi++] = _seamColor.Z;
+        }
+
+        // Build prefix-sum: _seamVertexCumulative[i] = seam points visible after i flat moves.
+        // An event at FlatIdx fi becomes visible once move fi has been drawn (i.e. at cumulative[fi+1]).
+        _seamVertexCumulative = new int[_totalMoveCount + 1];
+        int ei = 0;
+        for (int i = 1; i <= _totalMoveCount; i++)
+        {
+            _seamVertexCumulative[i] = _seamVertexCumulative[i - 1];
+            while (ei < events.Count && events[ei].FlatIdx < i)
+            {
+                _seamVertexCumulative[i]++;
+                ei++;
             }
         }
 
@@ -518,9 +533,10 @@ public sealed class ToolpathRenderer : IDisposable
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
 
-        int extCount  = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
-        int trCount   = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
-        int beadCount = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
+        int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
+        int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
+        int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
+        int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
 
         if (!selected)
         {
@@ -548,12 +564,24 @@ public sealed class ToolpathRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
             }
 
-            if (showSeam && _pointCount > 0)
+            if (showSeam && seamCount > 0)
             {
                 GL.PointSize(8f);
                 GL.BindVertexArray(_ptVao);
-                GL.DrawArrays(PrimitiveType.Points, 0, _pointCount);
+                GL.DrawArrays(PrimitiveType.Points, 0, seamCount);
                 GL.PointSize(1f);
+            }
+
+            if (_singularityPtVao != 0)
+            {
+                int singCount = ScrubCount(_singularityVertexCumulative, _singularityPointCount, scrubIndex);
+                if (singCount > 0)
+                {
+                    GL.PointSize(8f);
+                    GL.BindVertexArray(_singularityPtVao);
+                    GL.DrawArrays(PrimitiveType.Points, 0, singCount);
+                    GL.PointSize(1f);
+                }
             }
         }
 
@@ -571,14 +599,59 @@ public sealed class ToolpathRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
+    /// <summary>
+    /// Builds or rebuilds the singularity-point VBO from a per-move flag array.
+    /// Each flagged move gets a purple GL_POINT at its midpoint. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateSingularityPoints(bool[] singularity)
+    {
+        if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
+        _singularityPtVao = _singularityPtVbo = _singularityPointCount = 0;
+        _singularityVertexCumulative = new int[_totalMoveCount + 1];
+
+        var events = new List<(int FlatIdx, NVec3 Pos)>();
+        int fi = 0;
+        foreach (var layer in _toolpath.Layers)
+            foreach (var move in layer.Moves)
+            {
+                if (fi < singularity.Length && singularity[fi])
+                    events.Add((fi, (move.From + move.To) * 0.5f));
+                fi++;
+            }
+
+        if (events.Count > 0)
+        {
+            var ptData = new float[events.Count * 6];
+            int pi = 0;
+            var col = new Vector3(0.60f, 0.15f, 0.90f); // purple
+            foreach (var (_, pos) in events)
+            {
+                ptData[pi++] = pos.X - _origin.X; ptData[pi++] = pos.Y - _origin.Y; ptData[pi++] = pos.Z - _origin.Z;
+                ptData[pi++] = col.X;              ptData[pi++] = col.Y;              ptData[pi++] = col.Z;
+            }
+            (_singularityPtVao, _singularityPtVbo) = BuildVao(ptData);
+            _singularityPointCount = events.Count;
+        }
+
+        // Prefix sum: singularity point at move fi becomes visible after fi+1 ticks.
+        int ei = 0;
+        for (int i = 1; i <= _totalMoveCount; i++)
+        {
+            _singularityVertexCumulative[i] = _singularityVertexCumulative[i - 1];
+            while (ei < events.Count && events[ei].FlatIdx < i)
+            { _singularityVertexCumulative[i]++; ei++; }
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        if (_extrudeVao != 0) { GL.DeleteVertexArray(_extrudeVao); GL.DeleteBuffer(_extrudeVbo); }
-        if (_travelVao  != 0) { GL.DeleteVertexArray(_travelVao);  GL.DeleteBuffer(_travelVbo);  }
-        if (_ptVao      != 0) { GL.DeleteVertexArray(_ptVao);      GL.DeleteBuffer(_ptVbo);      }
-        if (_beadVao    != 0) { GL.DeleteVertexArray(_beadVao);    GL.DeleteBuffer(_beadVbo);    }
+        if (_extrudeVao       != 0) { GL.DeleteVertexArray(_extrudeVao);       GL.DeleteBuffer(_extrudeVbo);       }
+        if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
+        if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
+        if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
+        if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();
     }

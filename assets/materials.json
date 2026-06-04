@@ -7,7 +7,7 @@
     "Temperature2": 220,
     "Temperature3": 220,
     "FlowRate": 1,
-    "MaterialDensity": 1.05,
+    "MaterialDensity": 1,
     "CostPerLb": 5
   }
 ]

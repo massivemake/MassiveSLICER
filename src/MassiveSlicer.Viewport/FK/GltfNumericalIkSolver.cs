@@ -436,16 +436,25 @@ public sealed class GltfNumericalIkSolver
         const float Lambda        = 10f;
         const float PosTol        = 1.0f;   // mm
         const float RotTol        = 0.01f;  // rad (~0.57 deg)
-        const float StagnantMinMm = 0.1f;   // must improve combined error by >0.1 mm-equivalent per iter
+        const float StagnantMinMm = 0.1f;
         const int   StagnantMax   = 5;
-        // Orientation weight: scales radians to mm-equivalent so the 6D error is balanced.
-        const float OW = 200f;
+        const float OW            = 200f;
 
         var targetScene     = targetRobroot + _robotWorldPos;
         var θ               = (float[])seed.Clone();
         var (tR0, tR1, tR2) = targetRot;
         float bestErr       = float.MaxValue;
         int   stagnant      = 0;
+
+        // All working storage is stack-allocated once outside the iteration loop so
+        // repeated Solve calls from Parallel validation never pressure the GC.
+        // aug: 6×7 augmented matrix stored row-major (stride 7).
+        // cv:  shared column buffer reused across j-loops.
+        // Jp/Jr: Jacobian columns (position mm/deg, orientation OW*rad/deg).
+        Span<float>   aug = stackalloc float[42]; // 6 rows × 7 cols
+        Span<float>   cv  = stackalloc float[6];
+        Span<Vector3> Jp  = stackalloc Vector3[6];
+        Span<Vector3> Jr  = stackalloc Vector3[6];
 
         for (int iter = 0; iter < maxIterations; iter++)
         {
@@ -455,7 +464,6 @@ public sealed class GltfNumericalIkSolver
 
             if (ePos.LengthSquared < PosTol * PosTol && eRot.LengthSquared < RotTol * RotTol) break;
 
-            // Combined error in mm-equivalent units (same weighting as the 6D vector below).
             float err     = ePos.Length + OW * eRot.Length;
             float improve = bestErr - err;
             if (err < bestErr) bestErr = err;
@@ -464,9 +472,6 @@ public sealed class GltfNumericalIkSolver
             else if (++stagnant >= StagnantMax)
                 break;
 
-            // Jacobian: Jp = position (mm/deg), Jr = orientation (OW*rad/deg)
-            var Jp = new Vector3[6];
-            var Jr = new Vector3[6];
             for (int j = 0; j < 6; j++)
             {
                 θ[j] += Eps;
@@ -476,33 +481,36 @@ public sealed class GltfNumericalIkSolver
                 θ[j] -= Eps;
             }
 
-            // 6D error vector: [pos (mm); orientation (OW*rad)]
-            float[] e6 = [ePos.X, ePos.Y, ePos.Z, OW * eRot.X, OW * eRot.Y, OW * eRot.Z];
+            // Initialise augmented matrix: diagonal = λI, last column = 6D error.
+            aug.Clear();
+            for (int r = 0; r < 6; r++) aug[r * 7 + r] = Lambda;
+            aug[ 6] = ePos.X;         aug[13] = ePos.Y;         aug[20] = ePos.Z;
+            aug[27] = OW * eRot.X;   aug[34] = OW * eRot.Y;   aug[41] = OW * eRot.Z;
 
-            // Build 6×7 augmented matrix [M | e] where M = J*J^T + λI
-            var aug = new float[6, 7];
-            for (int r = 0; r < 6; r++)
-            {
-                aug[r, r] = Lambda;
-                aug[r, 6] = e6[r];
-            }
+            // Accumulate J·Jᵀ into aug (symmetric outer-product update).
             for (int j = 0; j < 6; j++)
             {
-                float[] col = [Jp[j].X, Jp[j].Y, Jp[j].Z, Jr[j].X, Jr[j].Y, Jr[j].Z];
+                cv[0] = Jp[j].X; cv[1] = Jp[j].Y; cv[2] = Jp[j].Z;
+                cv[3] = Jr[j].X; cv[4] = Jr[j].Y; cv[5] = Jr[j].Z;
                 for (int r = 0; r < 6; r++)
+                {
+                    float cr = cv[r];
+                    int   ri = r * 7;
                     for (int c = 0; c < 6; c++)
-                        aug[r, c] += col[r] * col[c];
+                        aug[ri + c] += cr * cv[c];
+                }
             }
 
-            SolveAugmented(aug, 6);
+            SolveAugmented6(aug);
 
-            // Δθ = J^T * x  (x extracted as aug[r,6] / aug[r,r] after elimination)
+            // Δθⱼ = Jⱼᵀ · x  where x[r] = aug[r*7+6] / aug[r*7+r] after elimination.
             for (int j = 0; j < 6; j++)
             {
-                float[] col = [Jp[j].X, Jp[j].Y, Jp[j].Z, Jr[j].X, Jr[j].Y, Jr[j].Z];
-                float   dθ  = 0f;
+                cv[0] = Jp[j].X; cv[1] = Jp[j].Y; cv[2] = Jp[j].Z;
+                cv[3] = Jr[j].X; cv[4] = Jr[j].Y; cv[5] = Jr[j].Z;
+                float dθ = 0f;
                 for (int r = 0; r < 6; r++)
-                    dθ += col[r] * (aug[r, 6] / aug[r, r]);
+                    dθ += cv[r] * (aug[r * 7 + 6] / aug[r * 7 + r]);
                 θ[j] = Math.Clamp(θ[j] + dθ, _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
             }
         }
@@ -544,6 +552,36 @@ public sealed class GltfNumericalIkSolver
                 if (r == col) continue;
                 float f = m[r, col] * inv;
                 for (int c = col; c <= n; c++) m[r, c] -= f * m[col, c];
+            }
+        }
+    }
+
+    /// <summary>
+    /// In-place Gauss-Jordan elimination on a 6×7 augmented matrix stored row-major
+    /// in <paramref name="m"/> with stride 7. After the call, x[i] = m[i*7+6] / m[i*7+i].
+    /// </summary>
+    private static void SolveAugmented6(Span<float> m)
+    {
+        const int N = 6, Stride = 7;
+        for (int col = 0; col < N; col++)
+        {
+            int best = col;
+            for (int r = col + 1; r < N; r++)
+                if (MathF.Abs(m[r * Stride + col]) > MathF.Abs(m[best * Stride + col])) best = r;
+
+            if (MathF.Abs(m[best * Stride + col]) < 1e-12f) continue;
+
+            if (best != col)
+                for (int c = 0; c <= N; c++)
+                    (m[col * Stride + c], m[best * Stride + c]) = (m[best * Stride + c], m[col * Stride + c]);
+
+            float inv = 1f / m[col * Stride + col];
+            for (int r = 0; r < N; r++)
+            {
+                if (r == col) continue;
+                float f = m[r * Stride + col] * inv;
+                for (int c = col; c <= N; c++)
+                    m[r * Stride + c] -= f * m[col * Stride + c];
             }
         }
     }

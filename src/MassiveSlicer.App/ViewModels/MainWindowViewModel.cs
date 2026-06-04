@@ -174,7 +174,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.PassAngle     = p.PassAngle;
         add.TiltAngle     = p.TiltAngle;
         add.TiltAngleX    = p.TiltAngleX;
-        add.FeedRate      = p.FeedRate;
+        add.PrintSpeed      = p.PrintSpeed;
         add.TravelSpeed   = p.TravelSpeed;
         add.Acceleration  = p.Acceleration;
         add.ApproachZ     = p.ApproachZ;
@@ -183,6 +183,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadA     = p.ToolheadA;
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
+        add.ApoCvel                = p.ApoCvel;
+        add.LayerChangeMinTravelMm = p.LayerChangeMinTravelMm;
     }
 
     /// <summary>
@@ -225,7 +227,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.PassAngle        = add.PassAngle;
         p.TiltAngle        = add.TiltAngle;
         p.TiltAngleX       = add.TiltAngleX;
-        p.FeedRate         = add.FeedRate;
+        p.PrintSpeed         = add.PrintSpeed;
         p.TravelSpeed      = add.TravelSpeed;
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;
@@ -234,6 +236,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadA        = add.ToolheadA;
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
+        p.ApoCvel                = add.ApoCvel;
+        p.LayerChangeMinTravelMm = add.LayerChangeMinTravelMm;
 
         PreferencesLoader.Save(p);
     }

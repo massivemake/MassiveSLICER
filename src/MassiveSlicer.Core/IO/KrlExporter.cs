@@ -11,8 +11,8 @@ public sealed record KrlExportSettings
     public required string ProgramName { get; init; }
     public int ToolDataIndex { get; init; } = 1;
     public int BaseDataIndex { get; init; } = 1;
-    /// <summary>Deposition feed rate in m/s.</summary>
-    public float FeedRateMps { get; init; } = 0.1f;
+    /// <summary>Deposition print speed in m/s.</summary>
+    public float PrintSpeedMps { get; init; } = 0.1f;
     /// <summary>Travel (non-extrusion) move speed in m/s.</summary>
     public float TravelSpeedMps { get; init; } = 0.5f;
     public int AccelerationPercent { get; init; } = 100;
@@ -97,7 +97,7 @@ public static class KrlExporter
 
                 if (move.Kind == MoveKind.Travel)
                 {
-                    sb.AppendLine(";travel");
+                    sb.AppendLine(move.IsLayerChange ? ";layer change" : ";travel");
                     // TRIGGER fires exactly when the preceding extrude ends (exact-stop means
                     // DISTANCE=0 coincides with the actual waypoint, not a C_VEL blend zone).
                     sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
@@ -111,7 +111,7 @@ public static class KrlExporter
                     if (needsRpmOn)
                     {
                         sb.AppendLine(FormatTriggerAnout4(RpmVoltage(s), "RPM on"));
-                        sb.AppendLine($"$VEL.CP = {s.FeedRateMps.ToString("F6", Inv)}");
+                        sb.AppendLine($"$VEL.CP = {s.PrintSpeedMps.ToString("F6", Inv)}");
                         needsRpmOn = false;
                     }
                     sb.AppendLine(FormatLin(to, la, lb, lc));
@@ -121,22 +121,6 @@ public static class KrlExporter
             }
 
             lastAbc = (la, lb, lc);
-
-            // -- Inter-layer travel -----------------------------------------------
-            if (li >= toolpath.Layers.Count - 1) continue;
-
-            var nextLayer = toolpath.Layers[li + 1];
-            if (nextLayer.Moves.Count == 0) continue;
-
-            var (na, nb, nc) = KukaAbc(nextLayer.PlaneNormal, s);
-            var nextStart    = ToBase(nextLayer.Moves[0].From, s);
-
-            sb.AppendLine(";travel");
-            sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
-            sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-            sb.AppendLine(FormatLinExact(nextStart, na, nb, nc));
-            sb.AppendLine();
-            needsRpmOn = true;
         }
 
         // -- Final retreat --------------------------------------------------------
@@ -183,7 +167,7 @@ public static class KrlExporter
         sb.AppendLine("BAS (#PTP_PARAMS,6)");
         sb.AppendLine("$ADVANCE=3");
         sb.AppendLine("$APO.CVEL=50");
-        sb.AppendLine($"$VEL.CP={s.FeedRateMps.ToString("F6", Inv)}");
+        sb.AppendLine($"$VEL.CP={s.PrintSpeedMps.ToString("F6", Inv)}");
         sb.AppendLine(";ENDFOLD (PRESETS)");
         sb.AppendLine();
 
@@ -243,7 +227,7 @@ public static class KrlExporter
     // rpm_percent  = volume × flowRate [rev/cm³] × 60
     // voltage      = rpm_percent × 0.1  (PLC convention: 0.1 V per 1%)
     private static float RpmVoltage(KrlExportSettings s)
-        => s.BeadWidthMm * s.LayerHeightMm * s.FeedRateMps * s.FlowRate * 6f;
+        => s.BeadWidthMm * s.LayerHeightMm * s.PrintSpeedMps * s.FlowRate * 6f;
 
     // -- Line formatting -------------------------------------------------------
 
