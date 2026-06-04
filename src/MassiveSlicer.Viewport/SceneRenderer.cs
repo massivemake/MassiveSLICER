@@ -251,6 +251,16 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>
+    /// Builds or rebuilds the singularity-point VBO for a registered toolpath.
+    /// Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathSingularityPoints(SceneNode node, bool[] singularity)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateSingularityPoints(singularity);
+    }
+
+    /// <summary>
     /// Disposes the toolpath renderer for <paramref name="node"/> if one is registered.
     /// Call before removing the node from the scene. Safe to call on non-toolpath nodes.
     /// </summary>

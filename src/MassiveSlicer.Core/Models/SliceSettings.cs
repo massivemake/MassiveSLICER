@@ -15,7 +15,7 @@ public sealed class SliceSettings
     public float BeadWidth { get; init; } = 6f;
 
     /// <summary>Deposition print speed in m/s.</summary>
-    public float FeedRate { get; init; } = 0.1f;
+    public float PrintSpeedMps { get; init; } = 0.1f;
 
     /// <summary>Travel move speed in m/s.</summary>
     public float TravelSpeed { get; init; } = 0.5f;
@@ -49,4 +49,12 @@ public sealed class SliceSettings
     /// for parts that will be finish-milled after printing.
     /// </summary>
     public bool DisableContourOffset { get; init; } = false;
+
+    /// <summary>
+    /// Minimum XY displacement (mm) between the end of one layer and the start of the next
+    /// that triggers a full layer-change travel (stop extrusion, move at travel speed, restart).
+    /// Below this threshold the transition is a short extrude stitch — the robot keeps printing
+    /// through the seam without stopping. Set to 0 to always travel between layers.
+    /// </summary>
+    public float LayerChangeMinTravelMm { get; init; } = 2.0f;
 }

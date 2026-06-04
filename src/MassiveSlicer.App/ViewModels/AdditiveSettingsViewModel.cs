@@ -125,13 +125,13 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     // -- Motion ---------------------------------------------------------------
 
-    private double _feedRate = 100.0;
+    private double _printSpeed = 100.0;
 
     /// <summary>Deposition print speed in mm/s.</summary>
-    public double FeedRate
+    public double PrintSpeed
     {
-        get => _feedRate;
-        set => SetField(ref _feedRate, Math.Clamp(value, 1.0, 2000.0));
+        get => _printSpeed;
+        set => SetField(ref _printSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
     private double _travelSpeed = 120.0;
@@ -141,6 +141,33 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _travelSpeed;
         set => SetField(ref _travelSpeed, Math.Clamp(value, 1.0, 2000.0));
+    }
+
+    private double _layerChangeMinTravelMm = 2.0;
+
+    /// <summary>
+    /// XY distance threshold (mm) above which a layer transition becomes a travel move
+    /// (stop extrusion, move at travel speed). Below this the robot stitches through
+    /// the seam with extrusion on.
+    /// </summary>
+    public double LayerChangeMinTravelMm
+    {
+        get => _layerChangeMinTravelMm;
+        set => SetField(ref _layerChangeMinTravelMm, Math.Clamp(value, 0.0, 1000.0));
+    }
+
+    private double _apoCvel = 50.0;
+
+    /// <summary>
+    /// KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction the robot
+    /// must maintain through corners. 50 = slow to at most 50% of programmed speed
+    /// at a sharp turn; 100 = maintain full speed (no blending slowdown).
+    /// Used only by the simulation velocity profile — set this to match your KRL preset.
+    /// </summary>
+    public double ApoCvel
+    {
+        get => _apoCvel;
+        set => SetField(ref _apoCvel, Math.Clamp(value, 0.0, 100.0));
     }
 
     private int _acceleration = 100;
@@ -368,5 +395,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (found >= 0) nameToSelect = _homePositions[found].Name;
         }
         SelectedHomePositionName = nameToSelect;
+
+        // Apply cell-specific toolhead orientation defaults.
+        ToolheadA = cell.Robot.DefaultToolheadA;
+        ToolheadB = cell.Robot.DefaultToolheadB;
+        ToolheadC = cell.Robot.DefaultToolheadC;
     }
 }

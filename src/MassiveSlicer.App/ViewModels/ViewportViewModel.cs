@@ -46,7 +46,7 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showGrid, value);
     }
 
-    private bool _showAxes = true;
+    private bool _showAxes = false;
 
     /// <summary>Whether the world-space axis indicator is visible.</summary>
     public bool ShowAxes
@@ -234,15 +234,6 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    /// <summary>
-    /// Saves <see cref="ActiveBackdropPath"/> as the default via <see cref="OnSetDefaultBackdrop"/>.
-    /// Wired by <c>MainWindowViewModel</c>.
-    /// </summary>
-    public ICommand SetDefaultBackdropCommand { get; }
-
-    /// <summary>Callback invoked when the user sets a new default backdrop. Wired by MainWindowViewModel.</summary>
-    internal Action<string?>? OnSetDefaultBackdrop { get; set; }
-
     // -- World light -----------------------------------------------------------
 
     private float _lightAzimuth   = 45f;
@@ -409,6 +400,13 @@ public sealed class ViewportViewModel : ViewModelBase
                     ToolpathScrubText = value.ToString();
                     _scrubSyncing = false;
                 }
+                // Pause playback if the user manually moves the scrubber.
+                if (_isPlaying)
+                {
+                    _isPlaying = false;
+                    OnPropertyChanged(nameof(IsPlaying));
+                    OnPlaybackToggled?.Invoke(false);
+                }
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected)
                     OnScrubIkRequested?.Invoke(value);
@@ -489,6 +487,21 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
     }
 
+    /// <summary>
+    /// Updates the scrub index and slider UI without triggering IK — used during playback
+    /// when joints are driven directly from pre-solved angles.
+    /// </summary>
+    internal void SetPlaybackIndex(int index)
+    {
+        if (!SetField(ref _toolpathScrubIndex, index)) return;
+        OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
+        OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+        _scrubSyncing     = true;
+        ToolpathScrubText = index.ToString();
+        _scrubSyncing     = false;
+    }
+
     // Slider geometry constants (must match the Slider Height / thumb size in the AXAML).
     private const double ScrubSliderHeight     = 480.0; // Slider control Height
     private const double ScrubThumbSize        = 20.0;  // Avalonia 12 SimpleTheme thumb MinHeight
@@ -512,7 +525,6 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get
         {
-            // Thumb centre measured from the top of the Canvas (= top of the slider Border).
             double trackLength  = ScrubSliderHeight - ScrubThumbSize;
             double normalised   = _toolpathScrubMax > 0
                 ? (double)_toolpathScrubIndex / _toolpathScrubMax
@@ -523,9 +535,49 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    public RelayCommand FocusCommand          { get; }
-    public RelayCommand DropToPlateCommand    { get; }
-    public RelayCommand TogglePlaybackCommand { get; }
+    // -- Scrubber markers (unreachable = red, singularity = purple) ---------------
+
+    private IReadOnlyList<double> _scrubUnreachableMarkers = [];
+    public IReadOnlyList<double> ScrubUnreachableMarkers
+    {
+        get => _scrubUnreachableMarkers;
+        private set => SetField(ref _scrubUnreachableMarkers, value);
+    }
+
+    private IReadOnlyList<double> _scrubSingularityMarkers = [];
+    public IReadOnlyList<double> ScrubSingularityMarkers
+    {
+        get => _scrubSingularityMarkers;
+        private set => SetField(ref _scrubSingularityMarkers, value);
+    }
+
+    /// <summary>
+    /// Recomputes scrubber highlight markers from per-move reachability and singularity arrays.
+    /// Y positions are in slider-height coordinates (0 = slider top, 480 = slider bottom).
+    /// Must be called on the UI thread.
+    /// </summary>
+    internal void SetScrubMarkers(bool[] reachable, bool[] singular)
+    {
+        int max = _toolpathScrubMax;
+        var unr = new List<double>();
+        var sin = new List<double>();
+        for (int i = 0; i < reachable.Length; i++)
+        {
+            double y = max > 0 ? 10 + (1.0 - (double)i / max) * 460 : 0;
+            if (!reachable[i]) unr.Add(y);
+        }
+        for (int i = 0; i < singular.Length; i++)
+        {
+            double y = max > 0 ? 10 + (1.0 - (double)i / max) * 460 : 0;
+            if (singular[i]) sin.Add(y);
+        }
+        ScrubUnreachableMarkers = unr;
+        ScrubSingularityMarkers = sin;
+    }
+
+    public RelayCommand FocusCommand                { get; }
+    public RelayCommand DropToPlateCommand          { get; }
+    public RelayCommand TogglePlaybackCommand       { get; }
 
     private bool _isPlaying;
     public bool IsPlaying
@@ -533,6 +585,44 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _isPlaying;
         set => SetField(ref _isPlaying, value);
     }
+
+    private bool _isValidating;
+    /// <summary>True while the background IK validation pass is running for the selected toolpath.</summary>
+    public bool IsValidating
+    {
+        get => _isValidating;
+        set => SetField(ref _isValidating, value);
+    }
+
+    public string[] PlaybackSpeedOptions { get; } = ["25%", "50%", "100%", "200%", "400%"];
+
+    private string _playbackSpeedOption = "100%";
+    public string PlaybackSpeedOption
+    {
+        get => _playbackSpeedOption;
+        set
+        {
+            if (!SetField(ref _playbackSpeedOption, value ?? "100%")) return;
+            if (value is not null && value.EndsWith('%') &&
+                double.TryParse(value[..^1], System.Globalization.NumberStyles.Any,
+                    System.Globalization.CultureInfo.InvariantCulture, out var d))
+            {
+                // Notify before changing speed so the code-behind can reseed the
+                // elapsed base at the current position (prevents position jump).
+                if (_isPlaying) OnPlaybackSpeedChanging?.Invoke();
+                _playbackSpeed = Math.Clamp(d, 1.0, 1000.0);
+            }
+        }
+    }
+
+    private double _playbackSpeed = 100.0;
+    public double PlaybackSpeed => _playbackSpeed;
+
+    /// <summary>
+    /// Fired immediately before <see cref="PlaybackSpeed"/> changes while playing,
+    /// so the code-behind can freeze the current simulated position as the new elapsed base.
+    /// </summary>
+    internal Action? OnPlaybackSpeedChanging { get; set; }
 
     /// <summary>Callback set by the viewport code-behind to start/stop playback.</summary>
     internal Action<bool>? OnPlaybackToggled { get; set; }
@@ -551,13 +641,15 @@ public sealed class ViewportViewModel : ViewModelBase
             if (Enum.TryParse<ShaderMode>(name, out var mode))
                 ActiveShaderMode = mode;
         });
-        SetDefaultBackdropCommand = new RelayCommand(() => OnSetDefaultBackdrop?.Invoke(ActiveBackdropPath));
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
         TogglePlaybackCommand = new RelayCommand(() =>
         {
-            IsPlaying = !IsPlaying;
+            bool starting = !IsPlaying;
+            if (starting && ToolpathScrubIndex >= ToolpathScrubMax)
+                ToolpathScrubIndex = 0;
+            IsPlaying = starting;
             OnPlaybackToggled?.Invoke(IsPlaying);
         }, canExecute: () => _isToolpathSelected);
         GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Translate ? GizmoMode.None : GizmoMode.Translate);

@@ -85,6 +85,11 @@ public sealed record RobotCellConfig
     /// to the GLTF joint_6 frame (e.g. LFAM 3 = 15deg).
     /// </summary>
     public float FlangeDisplayRoll { get; init; } = 0f;
+
+    /// <summary>Default toolhead ABC orientation loaded when this cell is selected (degrees, KUKA ZYX Euler).</summary>
+    public double DefaultToolheadA { get; init; } = 0.0;
+    public double DefaultToolheadB { get; init; } = 0.0;
+    public double DefaultToolheadC { get; init; } = 0.0;
 }
 
 public sealed record BedCellConfig

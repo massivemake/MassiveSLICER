@@ -78,7 +78,9 @@ public partial class ViewportView : UserControl
     // Flat (pos, normal) array per toolpath -- built once at upload for O(1) scrub lookup.
     private readonly ConcurrentDictionary<SceneNode, (NVec3 pos, NVec3 normal)[]> _scrubCacheByNode     = new();
     // Pending reachability results from background validation -- consumed on the GL thread.
-    private readonly ConcurrentQueue<(SceneNode node, bool[] reachable)>          _pendingReachability  = new();
+    private readonly ConcurrentQueue<(SceneNode node, bool[] reachable)>          _pendingReachability      = new();
+    // Pending singularity results from background validation -- consumed on the GL thread.
+    private readonly ConcurrentQueue<(SceneNode node, bool[] singularity)>        _pendingSingularityPoints = new();
 
     // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
     // UpdateFocusOverlay; read on the UI thread in ScrubIk -- no cross-thread access.
@@ -95,8 +97,18 @@ public partial class ViewportView : UserControl
     private SceneNode?   _validationNode;
     private TkMatrix4    _validationTransform;
     private bool         _validationDone;
-    // Timer that drives playback by advancing the scrub index each tick.
-    private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(80) };
+
+    // Pre-computed playback data -- populated by ValidateToolpathAsync on the background thread.
+    private readonly ConcurrentDictionary<SceneNode, float[][]>  _ikSolutionsByNode  = new();
+    private readonly ConcurrentDictionary<SceneNode, float[]>    _moveTimesMsByNode   = new(); // ms per move
+    private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
+
+    // Playback timing state.
+    private double           _playbackStartElapsedMs;
+    private readonly System.Diagnostics.Stopwatch _playbackStopwatch = new();
+
+    // Timer that drives playback.  16 ms ≈ 60 fps for smooth real-time motion.
+    private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(16) };
 
     // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
@@ -170,22 +182,100 @@ public partial class ViewportView : UserControl
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnFrameAllRequested = FrameAll;
-            vm.OnPlaybackToggled   = playing =>
+            vm.OnPlaybackSpeedChanging = () =>
             {
-                if (playing) _playbackTimer.Start();
-                else         _playbackTimer.Stop();
+                // Freeze the current simulated position so changing speed doesn't jump the toolhead.
+                _playbackStartElapsedMs += _playbackStopwatch.Elapsed.TotalMilliseconds * (vm.PlaybackSpeed / 100.0);
+                _playbackStopwatch.Restart();
+            };
+
+            vm.OnPlaybackToggled = playing =>
+            {
+                if (playing)
+                {
+                    // Seed elapsed time from the current scrub position so playback
+                    // resumes from wherever the slider is, not always from the start.
+                    _playbackStartElapsedMs = 0;
+                    var node = _activeScrubNode;
+                    if (node is not null && _moveTimesMsByNode.TryGetValue(node, out var mt))
+                    {
+                        int idx = vm.ToolpathScrubIndex;
+                        for (int i = 0; i < idx && i < mt.Length; i++)
+                            _playbackStartElapsedMs += mt[i];
+                    }
+                    _playbackStopwatch.Restart();
+                    _playbackTimer.Start();
+                }
+                else
+                {
+                    _playbackTimer.Stop();
+                    _playbackStopwatch.Stop();
+                }
             };
 
             _playbackTimer.Tick += (_, _) =>
             {
                 if (_vm is not { IsToolpathSelected: true } pvm) { _playbackTimer.Stop(); return; }
-                if (pvm.ToolpathScrubIndex >= pvm.ToolpathScrubMax)
+                var node = _activeScrubNode;
+                if (node is null) { _playbackTimer.Stop(); return; }
+
+                _ikSolutionsByNode.TryGetValue(node, out var solutions);
+                _moveTimesMsByNode.TryGetValue(node, out var moveTimes);
+                bool hasData = solutions is { Length: > 0 } && moveTimes is { Length: > 0 };
+
+                if (hasData)
                 {
-                    pvm.IsPlaying = false;
-                    _playbackTimer.Stop();
-                    return;
+                    double elapsed = _playbackStartElapsedMs
+                        + _playbackStopwatch.Elapsed.TotalMilliseconds * (pvm.PlaybackSpeed / 100.0);
+
+                    // Find which move contains this elapsed time, and the fraction within it.
+                    double cumTime  = 0;
+                    int    moveIdx  = moveTimes!.Length; // default: finished
+                    float  tFrac    = 1f;
+                    for (int i = 0; i < moveTimes.Length; i++)
+                    {
+                        double segEnd = cumTime + moveTimes[i];
+                        if (elapsed < segEnd)
+                        {
+                            moveIdx = i;
+                            tFrac   = moveTimes[i] > 0f ? (float)((elapsed - cumTime) / moveTimes[i]) : 1f;
+                            break;
+                        }
+                        cumTime = segEnd;
+                    }
+
+                    if (moveIdx >= pvm.ToolpathScrubMax)
+                    {
+                        pvm.IsPlaying = false;
+                        _playbackTimer.Stop();
+                        _playbackStopwatch.Stop();
+                        pvm.SetPlaybackIndex(pvm.ToolpathScrubMax);
+                        return;
+                    }
+
+                    pvm.SetPlaybackIndex(moveIdx);
+
+                    // solutions[i] = joint config at the END of move i.
+                    // Interpolate from end-of-previous (= start of this move) to end-of-this.
+                    int prevIdx = Math.Max(0, moveIdx - 1);
+                    var a = solutions![prevIdx];
+                    var b = solutions![moveIdx];
+                    if (a is not null && b is not null)
+                    {
+                        float t = Math.Clamp(tFrac, 0f, 1f);
+                        var interp = new float[6];
+                        for (int j = 0; j < 6; j++)
+                            interp[j] = a[j] + (b[j] - a[j]) * t;
+                        SetRobotAnglesDirectly(interp);
+                    }
                 }
-                pvm.ToolpathScrubIndex++;
+                else
+                {
+                    // Validation not yet complete — pause the stopwatch and wait.
+                    // The play button is disabled while IsValidating, so this branch
+                    // only fires in the rare window between button enable and first tick.
+                    _playbackStopwatch.Stop();
+                }
             };
 
             // OverlayView is declared in the XAML Grid above GlCanvas. Because
@@ -218,12 +308,32 @@ public partial class ViewportView : UserControl
 
                 // Re-solve IK live when the toolhead orientation offset changes so the
                 // user can see the effect in the viewport without moving the scrubber.
+                // Also re-run full validation so reachability and singularity markers update.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ToolheadA)
                                     or nameof(AdditiveSettingsViewModel.ToolheadB)
                                     or nameof(AdditiveSettingsViewModel.ToolheadC))
                 {
                     if (vm.IsToolpathSelected)
                         ScrubIk(vm.ToolpathScrubIndex);
+
+                    if (_activeScrubNode is { } nd
+                        && _toolpathByNode.TryGetValue(nd, out var tp))
+                    {
+                        _validationCts?.Cancel();
+                        _validationDone = false;
+                        ValidateToolpathAsync(nd, tp);
+                    }
+                }
+
+                if (pe.PropertyName == nameof(AdditiveSettingsViewModel.ApoCvel))
+                {
+                    if (vm.IsToolpathSelected && _activeScrubNode is { } nd
+                        && _toolpathByNode.TryGetValue(nd, out var tp))
+                    {
+                        _validationCts?.Cancel();
+                        _validationDone = false;
+                        ValidateToolpathAsync(nd, tp);
+                    }
                 }
             };
 
@@ -271,6 +381,9 @@ public partial class ViewportView : UserControl
                 _toolpathByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
                 _scrubCacheByNode.TryRemove(removing, out _);
+                _ikSolutionsByNode.TryRemove(removing, out _);
+                _moveTimesMsByNode.TryRemove(removing, out _);
+                _singularityByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 foreach (var n in removing.SelfAndDescendants())
                     n.Mesh?.Dispose();
@@ -358,6 +471,9 @@ public partial class ViewportView : UserControl
             // Apply any completed reachability results on the GL thread.
             while (_pendingReachability.TryDequeue(out var reach))
                 _renderer.UpdateToolpathReachability(reach.node, reach.reachable);
+
+            while (_pendingSingularityPoints.TryDequeue(out var sing))
+                _renderer.UpdateToolpathSingularityPoints(sing.node, sing.singularity);
 
             UpdateAnglePlanePreview(vm);
 
@@ -1006,12 +1122,13 @@ public partial class ViewportView : UserControl
                     LayerHeight      = (float)s.LayerHeight,
                     FirstLayerHeight = (float)s.FirstLayerHeight,
                     BeadWidth        = (float)s.BeadWidth,
-                    FeedRate         = (float)(s.FeedRate / 1000.0),
+                    PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
                     TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
                     ApproachZ        = (float)s.ApproachZ,
                     TiltAngle        = (float)s.TiltAngle,
                     TiltAngleX       = (float)s.TiltAngleX,
-                    DisableContourOffset = s.DisableContourOffset,
+                    DisableContourOffset     = s.DisableContourOffset,
+                    LayerChangeMinTravelMm   = (float)s.LayerChangeMinTravelMm,
                 }
                 : new SliceSettings();
 
@@ -1103,7 +1220,7 @@ public partial class ViewportView : UserControl
     private static (string time, string weight, string cost) ComputeToolpathStats(
         Toolpath toolpath, AdditiveSettingsViewModel s)
     {
-        double printMmS   = s.FeedRate;
+        double printMmS   = s.PrintSpeed;
         double travelMmS  = s.TravelSpeed;
         double beadW      = s.BeadWidth;
         double layerH     = s.LayerHeight;
@@ -1519,12 +1636,23 @@ public partial class ViewportView : UserControl
             _activeScrubNode = selected;
             vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
             ValidateToolpathAsync(selected, tp);
+            if (vm.AdditiveSettings is { } ads)
+            {
+                var (t, w, c) = ComputeToolpathStats(tp, ads);
+                vm.StatsTime        = t;
+                vm.StatsWeight      = w;
+                vm.StatsCost        = c;
+                vm.HasToolpathStats = true;
+            }
         }
         else
         {
             _activeScrubNode = null;
             vm.ResetScrubIndex(0, null);
+            vm.HasToolpathStats  = false;
             vm.StatsReachability = "";
+            vm.IsValidating      = false;
+            vm.SetScrubMarkers([], []);
             _validationCts?.Cancel();
         }
     }
@@ -1636,19 +1764,16 @@ public partial class ViewportView : UserControl
     /// </summary>
     private void ValidateToolpathAsync(SceneNode node, Toolpath toolpath)
     {
-        return; // TEMP: reachability disabled while debugging slicer
         var currentTransform = node.WorldTransform;
         bool sameKey = ReferenceEquals(_validationNode, node)
                        && _validationTransform == currentTransform;
 
-        // Already done for this (node, transform) pair — nothing to do.
         if (sameKey && _validationDone) return;
-        // In-flight for the same pair — don't cancel and restart.
         if (sameKey && _validationCts is { IsCancellationRequested: false }) return;
 
-        _validationNode = node;
+        _validationNode      = node;
         _validationTransform = currentTransform;
-        _validationDone = false;
+        _validationDone      = false;
         _validationCts?.Cancel();
         var cts = new CancellationTokenSource();
         _validationCts = cts;
@@ -1657,19 +1782,18 @@ public partial class ViewportView : UserControl
         var vm          = _vm;
         var addSettings = vm?.AdditiveSettings;
         var robot       = vm?.Robot;
-        System.Diagnostics.Debug.WriteLine($"[Validate] solver={solver is not null}, robot={robot is not null}");
         if (solver is null || robot is null) return;
 
         if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
-        if (vm is not null) vm.StatsReachability = "…";
+        if (vm is not null) { vm.StatsReachability = "…"; vm.IsValidating = true; vm.SetScrubMarkers([], []); }
         _toolpathOriginByNode.TryGetValue(node, out var origin);
-        var wt       = node.WorldTransform;
-        var robroot  = _robrootWorldPos;
-        float offA   = addSettings is not null ? (float)addSettings.ToolheadA : 0f;
-        float offB   = addSettings is not null ? (float)addSettings.ToolheadB : 0f;
-        float offC   = addSettings is not null ? (float)addSettings.ToolheadC : 0f;
-        bool hasOff  = addSettings is not null;
-        var seed = new float[]
+        var   wt      = node.WorldTransform;
+        var   robroot = _robrootWorldPos;
+        float offA    = addSettings is not null ? (float)addSettings.ToolheadA : 0f;
+        float offB    = addSettings is not null ? (float)addSettings.ToolheadB : 0f;
+        float offC    = addSettings is not null ? (float)addSettings.ToolheadC : 0f;
+        bool  hasOff  = addSettings is not null;
+        var   seed    = new float[]
         {
             (float)robot.A1, (float)robot.A2, (float)robot.A3,
             (float)robot.A4, (float)robot.A5, (float)robot.A6,
@@ -1677,13 +1801,12 @@ public partial class ViewportView : UserControl
 
         Task.Run(() =>
         {
-            // Pre-compute ROBROOT-frame positions AND world-space normals for all moves.
             int total = 0;
             foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
 
-            var targets = new TkVector3[total];
-            var normals = new TkVector3[total];
-            int mi = 0;
+            var targets    = new TkVector3[total];
+            var normals    = new TkVector3[total];
+            int mi         = 0;
             foreach (var layer in toolpath.Layers)
             {
                 foreach (var move in layer.Moves)
@@ -1694,7 +1817,6 @@ public partial class ViewportView : UserControl
                         lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
                         lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
                         lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43) - robroot;
-                    // Normals transform by rotation part only (no translation, then normalize).
                     float nx = planeNormal.X, ny = planeNormal.Y, nz = planeNormal.Z;
                     normals[mi] = TkVector3.Normalize(new TkVector3(
                         nx * wt.M11 + ny * wt.M21 + nz * wt.M31,
@@ -1706,7 +1828,6 @@ public partial class ViewportView : UserControl
 
             if (cts.IsCancellationRequested) return;
 
-            // Build per-move orientation targets (same frame as the scrubber: normal + world +X tangent).
             var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
             for (int i = 0; i < total; i++)
             {
@@ -1717,27 +1838,91 @@ public partial class ViewportView : UserControl
 
             if (cts.IsCancellationRequested) return;
 
-            // Parallel orientation-constrained IK: matches exactly what the scrubber solves,
-            // so a move marked reachable here will also succeed at scrub time.
-            var result = new bool[total];
+            // Chunked parallel IK: each chunk propagates solutions sequentially so each
+            // move seeds from its predecessor.  Adjacent toolpath moves are ~1–6 mm apart,
+            // so the previous solution typically converges in 2–5 iterations instead of
+            // 20–80 from the static home-position seed.
+            var result      = new bool[total];
+            var ikSolutions = new float[]?[total]; // null = unreachable
+            int numChunks   = Math.Max(1, Math.Min(Environment.ProcessorCount, total));
+            int chunkSize   = (total + numChunks - 1) / numChunks;
+
             try
             {
-                Parallel.For(0, total,
+                Parallel.For(0, numChunks,
                     new ParallelOptions { CancellationToken = cts.Token },
-                    i => { result[i] = solver.Solve(targets[i], seed, targetRots[i], maxIterations: 80) is not null; });
+                    ci =>
+                    {
+                        int start     = ci * chunkSize;
+                        int end       = Math.Min(start + chunkSize, total);
+                        var chunkSeed = (float[])seed.Clone();
+
+                        for (int i = start; i < end; i++)
+                        {
+                            if (cts.IsCancellationRequested) return;
+                            var sol = solver.Solve(targets[i], chunkSeed, targetRots[i], maxIterations: 40);
+                            result[i]      = sol is not null;
+                            ikSolutions[i] = sol;
+                            if (sol is not null) chunkSeed = sol;
+                        }
+                    });
             }
             catch (OperationCanceledException) { return; }
 
-            int falseCount = result.Count(x => !x);
-            System.Diagnostics.Debug.WriteLine($"[Validate] done: {result.Length} moves, {falseCount} unreachable");
+            // Fill unreachable gaps with nearest valid solution so playback stays smooth.
+            var solutions = new float[total][];
+            var lastValid = seed;
+            for (int i = 0; i < total; i++)
+            {
+                if (ikSolutions[i] is not null) lastValid = ikSolutions[i]!;
+                solutions[i] = (float[])lastValid.Clone();
+            }
+
+            // Unwrap joint angles to prevent ±360° configuration discontinuities at
+            // chunk boundaries and travel→extrude transitions.  Each axis is adjusted
+            // by the nearest multiple of 360° so consecutive solutions stay continuous.
+            for (int i = 1; i < total; i++)
+            {
+                for (int j = 0; j < 6; j++)
+                {
+                    float diff = solutions[i][j] - solutions[i - 1][j];
+                    if      (diff >  180f) solutions[i][j] -= 360f;
+                    else if (diff < -180f) solutions[i][j] += 360f;
+                }
+            }
+
+            // Velocity profile: time (ms) per move accounting for C_VEL corner blending.
+            float printMmS       = addSettings is not null ? (float)addSettings.PrintSpeed  : 60f;
+            float travelMmS      = addSettings is not null ? (float)addSettings.TravelSpeed : 150f;
+            float apoCvelFrac    = addSettings is not null ? (float)(addSettings.ApoCvel / 100.0) : 0.5f;
+            var (moveTimes, peakVelocities) = BuildMoveProfile(toolpath, printMmS, travelMmS, apoCvelFrac);
+
+            // Singularity detection: flag moves where |A5| < 5° (wrist singularity).
+            var singularity = new bool[total];
+            for (int i = 0; i < total; i++)
+                singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
+
+            _ikSolutionsByNode[node]  = solutions;
+            _moveTimesMsByNode[node]  = moveTimes;
+            _singularityByNode[node]  = singularity;
+
+            int failCount = 0;
+            foreach (var r in result) if (!r) failCount++;
+
             _pendingReachability.Enqueue((node, result));
-            string reachLabel = falseCount == 0
+            _pendingSingularityPoints.Enqueue((node, singularity));
+            string reachLabel = failCount == 0
                 ? $"All {result.Length} reachable"
-                : $"{falseCount} / {result.Length} unreachable";
+                : $"{failCount} / {result.Length} unreachable";
             Dispatcher.UIThread.Post(() =>
             {
                 _validationDone = true;
-                if (vm is not null) vm.StatsReachability = reachLabel;
+                if (vm is not null)
+                {
+                    vm.StatsReachability = reachLabel;
+                    vm.IsValidating = false;
+                    vm.SetScrubMarkers(result, singularity);
+                }
                 GlCanvas.RequestNextFrameRendering();
             });
         });
@@ -1766,6 +1951,116 @@ public partial class ViewportView : UserControl
             }
         }
         return arr[..i];
+    }
+
+    /// <summary>
+    /// Drives the robot joints directly from pre-solved angles without launching an IK task.
+    /// Used by the playback timer to animate Cartesian motion in real time.
+    /// </summary>
+    private void SetRobotAnglesDirectly(float[] angles)
+    {
+        var robot = _vm?.Robot;
+        if (robot is null) return;
+        robot.Desync();
+        robot.A1 = Math.Round(angles[0], 2);
+        robot.A2 = Math.Round(angles[1], 2);
+        robot.A3 = Math.Round(angles[2], 2);
+        robot.A4 = Math.Round(angles[3], 2);
+        robot.A5 = Math.Round(angles[4], 2);
+        robot.A6 = Math.Round(angles[5], 2);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Computes per-move timing (ms) and peak velocity (mm/s) for the toolpath using a
+    /// two-pass trapezoidal velocity profile with KUKA C_VEL corner-speed limits.
+    /// <para>
+    /// Corner speed at each junction = <c>apoCvelFraction × min(v_in, v_out)</c> scaled by
+    /// the cosine of the direction change — straight runs carry full speed, sharp turns
+    /// slow to <paramref name="apoCvelFraction"/> × programmed speed (default 0.5, matching
+    /// <c>$APO.CVEL=50</c>). A two-pass forward/backward sweep propagates acceleration
+    /// constraints so short segments between close corners also show realistic slowdowns.
+    /// </para>
+    /// </summary>
+    private static (float[] timesMs, float[] peakVelocities) BuildMoveProfile(
+        Toolpath tp, float printMmS, float travelMmS,
+        float apoCvelFraction = 0.5f, float accelMmS2 = 2000f)
+    {
+        var moves = new List<ToolpathMove>(tp.Layers.Sum(l => l.Moves.Count));
+        foreach (var layer in tp.Layers) moves.AddRange(layer.Moves);
+
+        int n = moves.Count;
+        if (n == 0) return ([], []);
+
+        var vProg = new float[n];
+        var dist  = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            vProg[i] = moves[i].Kind == MoveKind.Extrude ? printMmS : travelMmS;
+            dist[i]  = NVec3.Distance(moves[i].From, moves[i].To);
+        }
+
+        // Junction speeds: the robot must not exceed this speed at waypoint i.
+        // At each junction the factor blends linearly between apoCvel (sharp reversal)
+        // and 1.0 (perfectly straight) based on the cosine of the direction change.
+        var jV = new float[n + 1]; // jV[0]=0 (start at rest), jV[n]=0 (end at rest)
+        for (int i = 1; i < n; i++)
+        {
+            var d1 = moves[i - 1].To - moves[i - 1].From;
+            var d2 = moves[i].To     - moves[i].From;
+            float l1 = d1.Length(), l2 = d2.Length();
+            float cosA = l1 > 1e-6f && l2 > 1e-6f
+                ? NVec3.Dot(d1 / l1, d2 / l2)
+                : 1f;
+            float factor = apoCvelFraction + (1f - apoCvelFraction) * 0.5f * (cosA + 1f);
+            jV[i] = factor * MathF.Min(vProg[i - 1], vProg[i]);
+        }
+
+        // Forward pass: max speed reachable by accelerating from entry junction speed.
+        var vFwd = new float[n];
+        for (int i = 0; i < n; i++)
+            vFwd[i] = MathF.Min(vProg[i], MathF.Sqrt(jV[i] * jV[i] + 2f * accelMmS2 * dist[i]));
+
+        // Backward pass: cap so the robot can decelerate to the exit junction speed.
+        var vPeak = (float[])vFwd.Clone();
+        for (int i = n - 1; i >= 0; i--)
+        {
+            float vReachable = MathF.Sqrt(jV[i + 1] * jV[i + 1] + 2f * accelMmS2 * dist[i]);
+            vPeak[i] = MathF.Min(vFwd[i], MathF.Min(vProg[i], vReachable));
+        }
+
+        // Compute time per move using a trapezoidal (or triangular) velocity profile.
+        var timesMs = new float[n];
+        for (int i = 0; i < n; i++)
+        {
+            float d    = dist[i];
+            float v0   = jV[i];
+            float v1   = jV[i + 1];
+            float vTop = vPeak[i];
+
+            if (d < 1e-6f)  { timesMs[i] = 1f;    continue; }
+            if (vTop < 1e-6f) { timesMs[i] = 1000f; continue; }
+
+            float dAccel  = (vTop * vTop - v0 * v0) / (2f * accelMmS2);
+            float dDecel  = (vTop * vTop - v1 * v1) / (2f * accelMmS2);
+            float dCruise = d - dAccel - dDecel;
+
+            float t;
+            if (dCruise >= 0f)
+            {
+                t = (vTop - v0) / accelMmS2 + dCruise / vTop + (vTop - v1) / accelMmS2;
+            }
+            else
+            {
+                // Triangle: didn't reach vTop — solve for actual peak.
+                float vActual = MathF.Sqrt((2f * accelMmS2 * d + v0 * v0 + v1 * v1) * 0.5f);
+                vActual = MathF.Max(vActual, MathF.Max(v0, v1));
+                t       = (vActual - v0) / accelMmS2 + (vActual - v1) / accelMmS2;
+            }
+            timesMs[i] = MathF.Max(t * 1000f, 0.1f);
+        }
+
+        return (timesMs, vPeak);
     }
 
     private void UpdateAnglePlanePreview(ViewportViewModel vm)
@@ -2190,7 +2485,7 @@ public partial class ViewportView : UserControl
             ProgramName         = System.IO.Path.GetFileNameWithoutExtension(path),
             ToolDataIndex       = settings.ToolDataIndex,
             BaseDataIndex       = settings.BaseDataIndex,
-            FeedRateMps         = (float)(settings.FeedRate / 1000.0),
+            PrintSpeedMps       = (float)(settings.PrintSpeed / 1000.0),
             TravelSpeedMps      = (float)(settings.TravelSpeed / 1000.0),
             AccelerationPercent = settings.Acceleration,
             ApproachZMm         = (float)settings.ApproachZ,

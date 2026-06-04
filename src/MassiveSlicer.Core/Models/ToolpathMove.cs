@@ -7,5 +7,7 @@ public enum MoveKind { Extrude, Travel }
 /// <summary>A single move segment in a toolpath -- from one point to another with a deposition intent.</summary>
 public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
 {
-    public Vector3 Normal { get; init; } = Vector3.UnitZ;
+    public Vector3 Normal      { get; init; } = Vector3.UnitZ;
+    /// <summary>True when this travel move crosses a layer boundary (triggers ;layer change in KRL).</summary>
+    public bool    IsLayerChange { get; init; } = false;
 }

@@ -142,7 +142,7 @@
                             <ColumnDefinition Width="80"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="Print speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.FeedRate}"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.PrintSpeed}"/>
                     </Grid>
 
                     <Grid Margin="8,4,8,4">
@@ -152,6 +152,16 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="Travel speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
+                    </Grid>
+
+                    <Grid Margin="8,4,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Layer change threshold (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                   ToolTip.Tip="XY distance above which a layer transition stops extrusion and travels. Below this the robot stitches through the seam with extrusion on. Set to 0 to always travel."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerChangeMinTravelMm}"/>
                     </Grid>
 
                     <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
@@ -312,6 +322,20 @@
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowTravelMoves, Mode=TwoWay}"/>
                         <CheckBox Content="Show seam"            Margin="12,2,8,6"
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowSeam, Mode=TwoWay}"/>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <TextBlock Text="SIMULATION" Classes="SectionHeader"/>
+
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="$APO.CVEL (%)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
+                        </Grid>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

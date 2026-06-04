@@ -188,13 +188,6 @@
                                 </DataTemplate>
                             </ComboBox.ItemTemplate>
                         </ComboBox>
-                        <Button Content="Set as Default"
-                                Classes="ToolbarButton"
-                                HorizontalAlignment="Right"
-                                Margin="0,0,0,8"
-                                Command="{Binding DataContext.Viewport.SetDefaultBackdropCommand,
-                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
-
                         <!-- Blur -->
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>

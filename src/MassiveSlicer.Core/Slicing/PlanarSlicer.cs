@@ -50,16 +50,46 @@ public static class PlanarSlicer
         float reach = (xMax - xMin + yMax - yMin) + 10f;
         var seamOrigin = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
 
-        var toolpath   = new Toolpath();
-        float z        = zMin + settings.FirstLayerHeight;
-        int   idx      = 0;
-        var   prevTracks = new List<ContourTrack>();
+        var toolpath      = new Toolpath();
+        float z           = zMin + settings.FirstLayerHeight;
+        int   idx         = 0;
+        var   prevTracks  = new List<ContourTrack>();
+        ToolpathLayer? prevLayer = null;
+
         while (z < zMax - 1e-4f)
         {
             var layer = new ToolpathLayer(idx++, z);
             prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer);
+
             if (layer.Moves.Count > 0)
+            {
+                // Insert a connecting move from the end of the previous layer to the
+                // start of this one.  A large XY jump gets a travel (stop extrusion);
+                // a small jump gets an extrude stitch (keep printing through the seam).
+                if (prevLayer is { } pl && pl.Moves.Count > 0)
+                {
+                    var endPos   = pl.Moves[^1].To;
+                    var startPos = layer.Moves[0].From;
+                    float dx = endPos.X - startPos.X;
+                    float dy = endPos.Y - startPos.Y;
+                    float xyDist = MathF.Sqrt(dx * dx + dy * dy);
+
+                    if (xyDist > settings.LayerChangeMinTravelMm)
+                    {
+                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Travel)
+                            { IsLayerChange = true });
+                    }
+                    else if (xyDist > 0.01f || MathF.Abs(endPos.Z - startPos.Z) > 0.01f)
+                    {
+                        // Close enough to stitch without stopping extrusion.
+                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Extrude));
+                    }
+                    // else: identical position (perfect seam alignment) — no move needed.
+                }
+
                 toolpath.Layers.Add(layer);
+                prevLayer = layer;
+            }
             z += settings.LayerHeight;
         }
 

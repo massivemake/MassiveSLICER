@@ -110,10 +110,10 @@ public sealed class AppPreferences
     /// <summary>Tilt around X-axis in degrees.</summary>
     public double TiltAngleX { get; set; } = 0.0;
 
-    /// <summary>Deposition feed rate in m/s.</summary>
-    public double FeedRate { get; set; } = 0.1;
+    /// <summary>Deposition print speed in mm/s.</summary>
+    public double PrintSpeed { get; set; } = 100.0;
 
-    /// <summary>Travel (PTP) speed in mm/min.</summary>
+    /// <summary>Travel (PTP) speed in mm/s.</summary>
     public double TravelSpeed { get; set; } = 120.0;
 
     /// <summary>Acceleration as a percentage of robot maximum (1–100).</summary>
@@ -136,4 +136,10 @@ public sealed class AppPreferences
 
     /// <summary>Toolhead C angle in degrees.</summary>
     public double ToolheadC { get; set; } = 0.0;
+
+    /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
+    public double ApoCvel { get; set; } = 50.0;
+
+    /// <summary>XY threshold (mm) above which a layer transition emits a travel move.</summary>
+    public double LayerChangeMinTravelMm { get; set; } = 2.0;
 }

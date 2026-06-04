@@ -16,11 +16,6 @@
                 CornerRadius="4"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="V" Classes="ToolbarButton" ToolTip.Tip="Vertex (1)" Padding="6,4" Margin="0,0,2,0"/>
-                <Button Content="E" Classes="ToolbarButton" ToolTip.Tip="Edge (2)"   Padding="6,4" Margin="0,0,2,0"/>
-                <Button Content="F" Classes="ToolbarButton" ToolTip.Tip="Face (3)"   Padding="6,4" Margin="0,0,2,0"/>
-                <Button Content="O" Classes="ToolbarButton" ToolTip.Tip="Object (4)" Padding="6,4" Margin="0,0,8,0"/>
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="0,4"/>
                 <Button Classes="ToolbarButton" ToolTip.Tip="Move (G)"   Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsMoveActive}"
                         Command="{Binding GizmoMoveCommand}">
@@ -149,22 +144,74 @@
                             Value="{Binding ToolpathScrubIndex}"
                             IsSnapToTickEnabled="True"
                             TickFrequency="1"/>
+                    <!-- Unreachable move markers — red horizontal dashes -->
+                    <ItemsControl ItemsSource="{Binding ScrubUnreachableMarkers}"
+                                  Height="480" IsHitTestVisible="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerTheme>
+                            <ControlTheme TargetType="ContentPresenter">
+                                <Setter Property="Canvas.Top" Value="{Binding}"/>
+                                <Setter Property="Canvas.Left" Value="0"/>
+                            </ControlTheme>
+                        </ItemsControl.ItemContainerTheme>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Rectangle Width="10" Height="2" Fill="#CC3030" IsHitTestVisible="False"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <!-- Singularity markers — purple horizontal dashes -->
+                    <ItemsControl ItemsSource="{Binding ScrubSingularityMarkers}"
+                                  Height="480" IsHitTestVisible="False">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemContainerTheme>
+                            <ControlTheme TargetType="ContentPresenter">
+                                <Setter Property="Canvas.Top" Value="{Binding}"/>
+                                <Setter Property="Canvas.Left" Value="0"/>
+                            </ControlTheme>
+                        </ItemsControl.ItemContainerTheme>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Rectangle Width="10" Height="2" Fill="#9955DD" IsHitTestVisible="False"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </Grid>
             </Border>
 
         </Grid>
 
-        <!-- Play / pause button -->
-        <Button HorizontalAlignment="Stretch"
-                HorizontalContentAlignment="Center"
-                Classes="ToolbarButton"
-                Command="{Binding TogglePlaybackCommand}"
-                ToolTip.Tip="Play / pause simulation (Space)">
-            <Panel>
-                <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
-                <ia:Icon Value="mdi-pause" FontSize="16" IsVisible="{Binding IsPlaying}"/>
-            </Panel>
-        </Button>
+        <!-- Analysing indicator — visible while IK validation is running -->
+        <TextBlock IsVisible="{Binding IsValidating}"
+                   Text="Analysing…"
+                   Foreground="{DynamicResource TextSecondary}"
+                   FontSize="10"
+                   HorizontalAlignment="Right"
+                   Margin="0,0,0,4"/>
+
+        <!-- Play / pause + playback speed -->
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Spacing="4">
+            <Button HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Center"
+                    Classes="ToolbarButton"
+                    IsEnabled="{Binding !IsValidating}"
+                    Command="{Binding TogglePlaybackCommand}"
+                    ToolTip.Tip="Play / pause simulation (Space)">
+                <Panel>
+                    <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
+                    <ia:Icon Value="mdi-pause" FontSize="16" IsVisible="{Binding IsPlaying}"/>
+                </Panel>
+            </Button>
+            <ComboBox ItemsSource="{Binding PlaybackSpeedOptions}"
+                      SelectedItem="{Binding PlaybackSpeedOption, Mode=TwoWay}"
+                      FontSize="11"
+                      Width="64"
+                      ToolTip.Tip="Playback speed"/>
+        </StackPanel>
 
         </StackPanel>
 
@@ -189,7 +236,6 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Time"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding StatsTime}"   Classes="Readout" FontSize="11"/>
@@ -197,8 +243,6 @@
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding StatsWeight}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Cost"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding StatsCost}"   Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="3" Grid.Column="0" Text="Reach"    Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding StatsReachability}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
             </Grid>
         </Border>
 

@@ -16,7 +16,8 @@
       { "axis": "X", "krlSign": -1, "krlOffset":   0, "minDeg": -125, "maxDeg":  125 },
       { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg": -350, "maxDeg":  350 }
     ],
-    "flangeDisplayRoll": -15
+    "flangeDisplayRoll": -15,
+    "defaultToolheadB": -15
   },
   "bed": {
     "modelPath": "assets/cells/LFAM3/LFAM3Bed.stl",
