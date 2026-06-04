@@ -79,6 +79,7 @@
                     <StackPanel Margin="0,8">
                         <Button x:Name="BtnNavigation"  Content="⊙  Navigation"  Classes="NavBtn Active" Click="NavNavigation_Click"/>
                         <Button x:Name="BtnPerformance" Content="▫  Performance" Classes="NavBtn"        Click="NavPerformance_Click"/>
+                        <Button x:Name="BtnAppearance"  Content="◈  Appearance"  Classes="NavBtn"        Click="NavAppearance_Click"/>
                     </StackPanel>
                 </Border>
 
@@ -167,6 +168,66 @@
                                     <TextBlock Text="Requires restart to take effect." Classes="LabelMuted" FontSize="11" Margin="0,2,0,0"/>
                                 </StackPanel>
                                 <CheckBox Grid.Column="1" IsChecked="{Binding AntiAliasing}" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+
+                        <!-- APPEARANCE section -->
+                        <StackPanel x:Name="SectionAppearance" IsVisible="False">
+                            <TextBlock Text="APPEARANCE" Classes="SectionHeader" Margin="0,0,0,12"/>
+                            <Grid Margin="0,0,0,10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="140"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Theme" Foreground="{DynamicResource TextPrimary}" FontSize="12"/>
+                                    <TextBlock Text="Changes take effect immediately." Classes="LabelMuted" FontSize="11" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <ComboBox Grid.Column="1"
+                                          ItemsSource="{Binding AvailableThemes}"
+                                          SelectedItem="{Binding ActiveTheme}"
+                                          VerticalAlignment="Center"
+                                          HorizontalAlignment="Stretch"/>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,8,0,14"/>
+
+                            <TextBlock Text="TOOLPATH COLORS" Classes="SectionHeader" Margin="0,0,0,12"/>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Extrusion moves" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                                <ColorPicker Grid.Column="1" Color="{Binding ToolpathExtrudeColor, Mode=TwoWay}" IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
+                            </Grid>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Travel moves" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                                <ColorPicker Grid.Column="1" Color="{Binding ToolpathTravelColor, Mode=TwoWay}" IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
+                            </Grid>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Seam" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                                <ColorPicker Grid.Column="1" Color="{Binding ToolpathSeamColor, Mode=TwoWay}" IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
+                            </Grid>
+
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Unselected" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                                <ColorPicker Grid.Column="1" Color="{Binding ToolpathUnselectedColor, Mode=TwoWay}" IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
                             </Grid>
                         </StackPanel>
 

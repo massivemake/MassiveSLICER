@@ -80,13 +80,15 @@
             </StackPanel>
         </Border>
 
-        <!-- Toolpath scrubber — right-center.
-             Label lays out at the top of its column and tracks the thumb via RenderTransform,
-             so no fixed pixel widths are needed and the slider auto-sizes naturally. -->
-        <Grid IsVisible="{Binding IsToolpathSelected}"
-              HorizontalAlignment="Right"
-              VerticalAlignment="Center"
-              Margin="8">
+        <!-- Toolpath scrubber + playback — right-center. -->
+        <StackPanel IsVisible="{Binding IsToolpathSelected}"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Center"
+                    Orientation="Vertical"
+                    Spacing="6"
+                    Margin="8">
+
+        <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="6"/>
@@ -152,6 +154,20 @@
 
         </Grid>
 
+        <!-- Play / pause button -->
+        <Button HorizontalAlignment="Stretch"
+                HorizontalContentAlignment="Center"
+                Classes="ToolbarButton"
+                Command="{Binding TogglePlaybackCommand}"
+                ToolTip.Tip="Play / pause simulation (Space)">
+            <Panel>
+                <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
+                <ia:Icon Value="mdi-pause" FontSize="16" IsVisible="{Binding IsPlaying}"/>
+            </Panel>
+        </Button>
+
+        </StackPanel>
+
         <!-- Toolpath stats — top-right -->
         <Border IsVisible="{Binding HasToolpathStats}"
                 HorizontalAlignment="Right"
@@ -173,6 +189,7 @@
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Time"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding StatsTime}"   Classes="Readout" FontSize="11"/>
@@ -180,6 +197,8 @@
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding StatsWeight}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Cost"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding StatsCost}"   Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="3" Grid.Column="0" Text="Reach"    Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
+                <TextBlock Grid.Row="3" Grid.Column="2" Text="{Binding StatsReachability}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
             </Grid>
         </Border>
 

@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "MassiveSlicer": {
+      "commandName": "Project",
+      "workingDirectory": "../.."
+    }
+  }
+}

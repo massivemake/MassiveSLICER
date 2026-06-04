@@ -9,6 +9,7 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 internal record CellSwapPayload(
     CellConfig      Config,
+    string          CellPath,
     SceneNode?      RobotBaseNode,
     SceneNode?      BoosterNode,
     SceneNode?      BedNode,

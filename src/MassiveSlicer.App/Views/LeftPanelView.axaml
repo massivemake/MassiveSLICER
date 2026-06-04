@@ -542,6 +542,21 @@
                                 Margin="8,4,8,8"/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>
+                        <TextBox Margin="8,0,8,4"
+                                 Classes="PanelTextBox"
+                                 Text="{Binding DataContext.RightPanel.Settings.Robot.NewHomePositionName,
+                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                 PlaceholderText="Home Target..."
+                                 VerticalContentAlignment="Center"
+                                 Padding="6,4"/>
+                        <Button Content="SAVE AS HOME POSITION"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.SaveAsHomePositionCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                HorizontalAlignment="Stretch"
+                                Margin="8,0,8,8"/>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
                         <!-- Flange position readout -->
                         <TextBlock Text="FLANGE POSITION (ROBROOT)" Classes="SectionHeader"/>

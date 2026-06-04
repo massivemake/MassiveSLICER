@@ -1,19 +1,19 @@
-﻿using System.Numerics;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Linq;
+using Clipper2Lib;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing;
 
 /// <summary>
 /// Angled-planar slicer. Like <see cref="PlanarSlicer"/> but cuts with planes tilted at
-/// <see cref="SliceSettings.TiltAngle"/> degrees from horizontal, reducing stair-stepping
-/// on inclined surfaces. Layers are still spaced by <see cref="SliceSettings.LayerHeight"/>
-/// in Z so vertical material deposition height is preserved.
+/// <see cref="SliceSettings.TiltAngle"/> / <see cref="SliceSettings.TiltAngleX"/> degrees
+/// from horizontal. Contours are projected to a plane-local 2D frame for chaining and
+/// Clipper2 bead-width offsetting, then unprojected back to 3D for move emission.
 /// </summary>
 public static class AngledPlanarSlicer
 {
-    private const float SnapGrid = 0.01f;
-
     // -- Public entry point ----------------------------------------------------
 
     public static Toolpath Slice(
@@ -28,43 +28,63 @@ public static class AngledPlanarSlicer
             -MathF.Sin(tx) * MathF.Cos(ty),
              MathF.Cos(tx) * MathF.Cos(ty)));
 
-        // Project every vertex onto the plane normal to find the full extent along
-        // that direction. Marching in this coordinate (not world Z) ensures complete
-        // mesh coverage regardless of tilt angle or mesh XY position.
+        // Local 2D frame in the cutting plane.
+        // u = cross(worldY, normal) → "x-slope" direction; zero Z for pure Y-tilt.
+        // v = cross(normal, u)     → "y-slope" direction; equals worldY for pure Y-tilt.
+        // Both are unit vectors perpendicular to normal, so projecting to (u,v) preserves distances.
+        var worldY = new Vector3(0f, 1f, 0f);
+        var u = Vector3.Normalize(Vector3.Cross(worldY, normal));
+        var v = Vector3.Cross(normal, u);
+
+        // Extent along the plane normal and in world XY (for seam ray origin).
         float tMin = float.MaxValue, tMax = float.MinValue;
         float xMin = float.MaxValue, xMax = float.MinValue;
         float yMin = float.MaxValue, yMax = float.MinValue;
         foreach (var verts in meshes)
-            foreach (var v in verts)
+            foreach (var vert in verts)
             {
-                float t = Vector3.Dot(v, normal);
+                float t = Vector3.Dot(vert, normal);
                 if (t < tMin) tMin = t; if (t > tMax) tMax = t;
-                if (v.X < xMin) xMin = v.X; if (v.X > xMax) xMax = v.X;
-                if (v.Y < yMin) yMin = v.Y; if (v.Y > yMax) yMax = v.Y;
+                if (vert.X < xMin) xMin = vert.X; if (vert.X > xMax) xMax = vert.X;
+                if (vert.Y < yMin) yMin = vert.Y; if (vert.Y > yMax) yMax = vert.Y;
             }
 
         if (tMax <= tMin) return new Toolpath();
 
-        // Seam ray origin: outside the mesh along SeamDirection in XY.
-        // Used only to initialise the arc-length seam parameter on the first layer.
         var sd = settings.SeamDirection;
         float sdLen = sd.Length();
         if (sdLen < 1e-6f) sd = new Vector2(0f, 1f); else sd /= sdLen;
         float cx    = (xMin + xMax) * 0.5f;
         float cy    = (yMin + yMax) * 0.5f;
         float reach = (xMax - xMin + yMax - yMin) + 10f;
-        var seamOrigin = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
+        var seamOriginXY = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
+
+        // Project seam direction to plane-local once — independent of planeD.
+        var sd3d = new Vector3(sd.X, sd.Y, 0f);
+        sd3d -= Vector3.Dot(sd3d, normal) * normal;
+        float sd3dLen = sd3d.Length();
+        if (sd3dLen < 1e-6f) sd3d = u; else sd3d /= sd3dLen;
+        var seamDirLocal = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
 
         var   toolpath   = new Toolpath();
         float step       = tMin + settings.FirstLayerHeight;
         int   idx        = 0;
-        var   prevTracks = new List<AngledContourTrack>();
+        var   prevTracks = new List<ContourTrack>();
 
         while (step < tMax - 1e-4f)
         {
+            // origin = closest point on this plane to the world origin.
+            var origin = normal * step;
+
+            // Project seam ray origin to plane-local (depends on planeD via origin).
+            var seamOriginLocal = ToLocal(seamOriginXY, normal, step, origin, u, v);
+
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
             var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
-            prevTracks = BuildLayer(meshes, normal, step, seamOrigin, sd, prevTracks, layer);
+
+            prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer);
+
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);
             step += settings.LayerHeight;
@@ -73,90 +93,167 @@ public static class AngledPlanarSlicer
         return toolpath;
     }
 
+    // Projects a world-XY point to plane-local (u,v) by solving the plane equation for Z.
+    private static Vector2 ToLocal(Vector2 xy, Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v)
+    {
+        float sz = MathF.Abs(normal.Z) > 1e-6f
+            ? (planeD - normal.X * xy.X - normal.Y * xy.Y) / normal.Z
+            : origin.Z;
+        var rel = new Vector3(xy.X, xy.Y, sz) - origin;
+        return new Vector2(Vector3.Dot(rel, u), Vector3.Dot(rel, v));
+    }
+
     // -- Layer construction ----------------------------------------------------
 
-    private static List<AngledContourTrack> BuildLayer(
+    private static List<ContourTrack> BuildLayer(
         IReadOnlyList<Vector3[]> meshes,
-        Vector3 normal,
-        float   planeD,
-        Vector2 seamOrigin,
-        Vector2 seamDir,
-        List<AngledContourTrack> prevTracks,
+        Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v,
+        Vector2 seamOrigin2d, Vector2 seamDir2d,
+        SliceSettings settings,
+        List<ContourTrack> prevTracks,
         ToolpathLayer layer)
     {
-        var segments = new List<(Vector3 A, Vector3 B)>(64);
+        // ── Stage 1: collect 3D intersection segments, project to plane-local 2D ─
+        var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
+        Span<Vector3> buf = stackalloc Vector3[2];
         foreach (var verts in meshes)
-            CollectSegments(verts, normal, planeD, segments);
-
-        if (segments.Count == 0) return new List<AngledContourTrack>();
-
-        var (closed, open) = ChainSegments(segments, normal);
-        StitchChains(open, normal);
-        var rawContours = closed;
-        rawContours.AddRange(open);
-        var tracks = AssignSeams(rawContours, prevTracks, seamOrigin, seamDir);
-
-        var lastPos = new Vector3(float.NaN);
-        foreach (var track in tracks)
         {
-            var contour = track.Contour;
-            if (contour.Count < 2) continue;
-
-            var start = contour[0];
-
-            if (!float.IsNaN(lastPos.X))
-                layer.Moves.Add(new ToolpathMove(lastPos, start, MoveKind.Travel) { Normal = normal });
-
-            var prev = start;
-            for (int i = 1; i < contour.Count; i++)
+            var segs = new List<(Vector2, Vector2)>(64);
+            for (int i = 0; i + 2 < verts.Length; i += 3)
             {
-                var next = contour[i];
-                layer.Moves.Add(new ToolpathMove(prev, next, MoveKind.Extrude) { Normal = normal });
-                prev = next;
+                var v0 = verts[i]; var v1 = verts[i + 1]; var v2 = verts[i + 2];
+                float d0 = Vector3.Dot(v0, normal) - planeD;
+                float d1 = Vector3.Dot(v1, normal) - planeD;
+                float d2 = Vector3.Dot(v2, normal) - planeD;
+                if (MathF.Abs(d0) < 1e-5f) d0 = d0 >= 0f ? 1e-5f : -1e-5f;
+                if (MathF.Abs(d1) < 1e-5f) d1 = d1 >= 0f ? 1e-5f : -1e-5f;
+                if (MathF.Abs(d2) < 1e-5f) d2 = d2 >= 0f ? 1e-5f : -1e-5f;
+                int count = 0;
+                TryEdge(v0, v1, d0, d1, buf, ref count);
+                TryEdge(v1, v2, d1, d2, buf, ref count);
+                TryEdge(v2, v0, d2, d0, buf, ref count);
+                if (count == 2)
+                {
+                    var relA = buf[0] - origin;
+                    var relB = buf[1] - origin;
+                    segs.Add((
+                        new Vector2(Vector3.Dot(relA, u), Vector3.Dot(relA, v)),
+                        new Vector2(Vector3.Dot(relB, u), Vector3.Dot(relB, v))));
+                }
             }
+            if (segs.Count > 0) perMeshSegs.Add(segs);
+        }
+        if (perMeshSegs.Count == 0) return new List<ContourTrack>();
 
-            if (contour.Count > 2)
-                layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude) { Normal = normal });
+        // ── Stage 2: chain by endpoint proximity in 2D ───────────────────────
+        var rawContours = new List<List<Vector2>>();
+        foreach (var segs in perMeshSegs)
+            rawContours.AddRange(ChainByProximity(segs));
 
-            lastPos = contour[^1];
+        // ── Stage 3: nesting depth + bead-width offset + seam ────────────────
+        if (rawContours.Count == 0) return new List<ContourTrack>();
+
+        int nc = rawContours.Count;
+        var depths = new int[nc];
+        for (int i = 0; i < nc; i++)
+        {
+            var ci = rawContours[i];
+            if (ci.Count == 0) continue;
+            var samples = new[] { ci[0], ci[ci.Count / 2], ci[ci.Count - 1] };
+            for (int j = 0; j < nc; j++)
+            {
+                if (i == j) continue;
+                int hits = 0;
+                foreach (var s in samples) if (PointInPolygon(s, rawContours[j])) hits++;
+                if (hits >= 2) depths[i]++;
+            }
         }
 
+        float halfBead = settings.BeadWidth * 0.5f;
+        float simpTol  = settings.SimplificationTolerance;
+        var insetContours = new List<List<Vector2>>(nc);
+        for (int ci = 0; ci < nc; ci++)
+        {
+            var  c      = rawContours[ci];
+            bool isHole = depths[ci] % 2 != 0;
+
+            bool wantCCW = !isHole;
+            bool isCCW   = SignedArea(c) > 0f;
+            IReadOnlyList<Vector2> oriented;
+            if (wantCCW == isCCW) oriented = c;
+            else { var r = new List<Vector2>(c); r.Reverse(); oriented = r; }
+
+            if (settings.DisableContourOffset)
+            {
+                var ol = oriented is List<Vector2> ol2 ? ol2 : oriented.ToList();
+                if (ol.Count >= 3)
+                    insetContours.Add(simpTol > 0f ? SimplifyContour2D(ol, simpTol) : ol);
+            }
+            else
+            {
+                float delta   = isHole ? -halfBead : halfBead;
+                var   results = InsetContour2D(oriented, delta);
+                foreach (var r in results)
+                    if (r.Count >= 3)
+                        insetContours.Add(simpTol > 0f ? SimplifyContour2D(r, simpTol) : r);
+            }
+        }
+        if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);
+        EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour),
+            origin, u, v, normal, layer);
         return tracks;
     }
 
-    // -- Intersection / segment collection -------------------------------------
-
-    private static void CollectSegments(
-        Vector3[]              verts,
-        Vector3                normal,
-        float                  planeD,
-        List<(Vector3, Vector3)> segments)
+    // Unprojects 2D plane-local contours to 3D and emits toolpath moves.
+    private static void EmitContours(
+        IEnumerable<IEnumerable<Vector2>> contours,
+        Vector3 origin, Vector3 u, Vector3 v,
+        Vector3 normal,
+        ToolpathLayer layer)
     {
-        Span<Vector3> pts = stackalloc Vector3[2];
-
-        for (int i = 0; i + 2 < verts.Length; i += 3)
+        var lastPos = new Vector3(float.NaN);
+        foreach (var c in contours)
         {
-            var v0 = verts[i];
-            var v1 = verts[i + 1];
-            var v2 = verts[i + 2];
-
-            float d0 = Vector3.Dot(v0, normal) - planeD;
-            float d1 = Vector3.Dot(v1, normal) - planeD;
-            float d2 = Vector3.Dot(v2, normal) - planeD;
-
-            if (MathF.Abs(d0) < 1e-5f) d0 = d0 >= 0f ? 1e-5f : -1e-5f;
-            if (MathF.Abs(d1) < 1e-5f) d1 = d1 >= 0f ? 1e-5f : -1e-5f;
-            if (MathF.Abs(d2) < 1e-5f) d2 = d2 >= 0f ? 1e-5f : -1e-5f;
-
+            Vector3? first = null;
+            Vector3 prev = default;
             int count = 0;
-            TryEdge(v0, v1, d0, d1, pts, ref count);
-            TryEdge(v1, v2, d1, d2, pts, ref count);
-            TryEdge(v2, v0, d2, d0, pts, ref count);
-
-            if (count == 2)
-                segments.Add((pts[0], pts[1]));
+            foreach (var p2d in c)
+            {
+                var p3d = origin + p2d.X * u + p2d.Y * v;
+                if (count == 0)
+                {
+                    first = p3d;
+                    if (!float.IsNaN(lastPos.X))
+                        layer.Moves.Add(new ToolpathMove(lastPos, p3d, MoveKind.Travel) { Normal = normal });
+                }
+                else
+                {
+                    layer.Moves.Add(new ToolpathMove(prev, p3d, MoveKind.Extrude) { Normal = normal });
+                }
+                prev = p3d; count++;
+            }
+            if (count > 2 && first.HasValue)
+            {
+                // Always close the loop. Clipper2 polygons have a genuine last→first edge
+                // that can be longer than 1mm, so capping on distance caused a visible gap.
+                // Only skip the closing move when the gap is effectively zero (first == last).
+                float gapSq = (prev - first.Value).LengthSquared();
+                if (gapSq > 1e-8f)
+                    layer.Moves.Add(new ToolpathMove(prev, first.Value, MoveKind.Extrude) { Normal = normal });
+                lastPos = first.Value;
+            }
+            else if (count > 0)
+            {
+                lastPos = prev;
+            }
         }
     }
+
+    // -- Intersection / segment collection (3D) --------------------------------
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static void TryEdge(
@@ -166,15 +263,111 @@ public static class AngledPlanarSlicer
     {
         if (count >= 2) return;
         if (da * db >= 0f) return;
-
         float t = da / (da - db);
         pts[count++] = a + t * (b - a);
     }
 
-    // -- Seam alignment --------------------------------------------------------
+    // -- Contour chaining (2D) -------------------------------------------------
+
+    // Greedy nearest-endpoint walk — identical logic to PlanarSlicer.ChainByProximity.
+    private static List<List<Vector2>> ChainByProximity(List<(Vector2 A, Vector2 B)> segs)
+    {
+        int n = segs.Count;
+        var used     = new bool[n];
+        var contours = new List<List<Vector2>>();
+
+        for (int start = 0; start < n; start++)
+        {
+            if (used[start]) continue;
+            used[start] = true;
+
+            var chain = new List<Vector2> { segs[start].A, segs[start].B };
+
+            while (true)
+            {
+                var   tail = chain[^1];
+                float best = float.MaxValue;
+                int   bi   = -1;
+                bool  flip = false;
+
+                for (int i = 0; i < n; i++)
+                {
+                    if (used[i]) continue;
+                    float dA = Dist2(tail, segs[i].A);
+                    float dB = Dist2(tail, segs[i].B);
+                    if (dA < best) { best = dA; bi = i; flip = false; }
+                    if (dB < best) { best = dB; bi = i; flip = true;  }
+                }
+
+                if (bi < 0 || best > 1.0f) break;
+
+                used[bi] = true;
+                chain.Add(flip ? segs[bi].A : segs[bi].B);
+            }
+
+            if (chain.Count >= 3)
+                contours.Add(chain);
+        }
+
+        return contours;
+    }
+
+    // -- Clipper2 contour offset (2D) ------------------------------------------
+
+    private static List<List<Vector2>> InsetContour2D(IReadOnlyList<Vector2> contour, float delta)
+    {
+        var path = new PathD(contour.Count);
+        foreach (var p in contour)
+            path.Add(new PointD(p.X, p.Y));
+        var result = Clipper.InflatePaths(
+            new PathsD { path }, -delta,
+            JoinType.Miter, EndType.Polygon, miterLimit: 3.0);
+        return result
+            .Select(r => r.Select(p => new Vector2((float)p.x, (float)p.y)).ToList())
+            .ToList();
+    }
+
+    // -- Douglas-Peucker simplification (2D) -----------------------------------
+
+    private static List<Vector2> SimplifyContour2D(List<Vector2> pts, float tolerance)
+    {
+        int n = pts.Count;
+        if (n <= 3) return pts;
+        float tolSq = tolerance * tolerance;
+        var keep = new bool[n];
+        keep[0] = keep[n - 1] = true;
+        DPReduce2D(pts, 0, n - 1, tolSq, keep);
+        var result = new List<Vector2>(n);
+        for (int i = 0; i < n; i++)
+            if (keep[i]) result.Add(pts[i]);
+        return result.Count >= 3 ? result : pts;
+    }
+
+    private static void DPReduce2D(IReadOnlyList<Vector2> pts, int lo, int hi,
+        float tolSq, bool[] keep)
+    {
+        if (hi - lo < 2) return;
+        float abx = pts[hi].X - pts[lo].X, aby = pts[hi].Y - pts[lo].Y;
+        float abLen2 = abx * abx + aby * aby;
+        float maxDSq = 0; int maxI = lo + 1;
+        for (int i = lo + 1; i < hi; i++)
+        {
+            float cx = pts[i].X - pts[lo].X, cy = pts[i].Y - pts[lo].Y;
+            float dSq = abLen2 < 1e-10f
+                ? cx * cx + cy * cy
+                : (cx * aby - cy * abx) * (cx * aby - cy * abx) / abLen2;
+            if (dSq > maxDSq) { maxDSq = dSq; maxI = i; }
+        }
+        if (maxDSq <= tolSq) return;
+        keep[maxI] = true;
+        DPReduce2D(pts, lo, maxI, tolSq, keep);
+        DPReduce2D(pts, maxI, hi, tolSq, keep);
+    }
+
+    // -- Seam alignment (2D) ---------------------------------------------------
 
     private static void AlignSeam(
-        List<Vector3> contour,
+        List<Vector2> contour,
         Vector2 seamOrigin, Vector2 seamDir,
         ref Vector2 prevSeamXY)
     {
@@ -194,42 +387,38 @@ public static class AngledPlanarSlicer
             float bestDist = float.MaxValue;
             for (int i = 0; i < n; i++)
             {
-                var a = new Vector2(contour[i].X, contour[i].Y);
-                var b = new Vector2(contour[(i + 1) % n].X, contour[(i + 1) % n].Y);
+                var a = contour[i];
+                var b = contour[(i + 1) % n];
                 float t = ClosestT(a, b, prevSeamXY);
                 var pt = a + t * (b - a);
-                float dx = pt.X - prevSeamXY.X, dy = pt.Y - prevSeamXY.Y;
-                float d = dx * dx + dy * dy;
+                float d = Dist2(pt, prevSeamXY);
                 if (d < bestDist) { bestDist = d; bestEdge = i; bestT = t; }
             }
         }
 
-        var pa3    = contour[bestEdge];
-        var pb3    = contour[(bestEdge + 1) % n];
-        var seamPt = pa3 + bestT * (pb3 - pa3);
-
-        float d2a = (seamPt.X - pa3.X) * (seamPt.X - pa3.X) + (seamPt.Y - pa3.Y) * (seamPt.Y - pa3.Y);
-        float d2b = (seamPt.X - pb3.X) * (seamPt.X - pb3.X) + (seamPt.Y - pb3.Y) * (seamPt.Y - pb3.Y);
+        var pa     = contour[bestEdge];
+        var pb     = contour[(bestEdge + 1) % n];
+        var seamPt = pa + bestT * (pb - pa);
 
         int insertAt = bestEdge + 1;
-        if      (d2a < 1e-4f) insertAt = bestEdge;
-        else if (d2b < 1e-4f) insertAt = (bestEdge + 1) % n;
-        else                  contour.Insert(insertAt, seamPt);
+        if      (Dist2(seamPt, pa) < 1e-4f) insertAt = bestEdge;
+        else if (Dist2(seamPt, pb) < 1e-4f) insertAt = (bestEdge + 1) % n;
+        else                                contour.Insert(insertAt, seamPt);
 
         if (insertAt % contour.Count != 0)
         {
-            var rotated = new List<Vector3>(contour.Count);
+            var rotated = new List<Vector2>(contour.Count);
             rotated.AddRange(contour.GetRange(insertAt, contour.Count - insertAt));
             rotated.AddRange(contour.GetRange(0, insertAt));
             contour.Clear();
             contour.AddRange(rotated);
         }
 
-        prevSeamXY = new Vector2(contour[0].X, contour[0].Y);
+        prevSeamXY = contour[0];
     }
 
     private static void SeamEdgeFromRay(
-        List<Vector3> contour, Vector2 seamOrigin, Vector2 seamDir,
+        List<Vector2> contour, Vector2 seamOrigin, Vector2 seamDir,
         out int edge, out float t)
     {
         var   rayDir   = -seamDir;
@@ -238,21 +427,13 @@ public static class AngledPlanarSlicer
 
         for (int i = 0; i < contour.Count; i++)
         {
-            var a2 = new Vector2(contour[i].X, contour[i].Y);
-            var b2 = new Vector2(contour[(i + 1) % contour.Count].X, contour[(i + 1) % contour.Count].Y);
-            if (RaySegment(seamOrigin, rayDir, a2, b2, out float rayT, out float segS) && rayT < bestRayT)
+            var a = contour[i];
+            var b = contour[(i + 1) % contour.Count];
+            if (RaySegment(seamOrigin, rayDir, a, b, out float rayT, out float segS) && rayT < bestRayT)
             {
                 bestRayT = rayT; edge = i; t = segS;
             }
         }
-    }
-
-    private static float ClosestT(Vector2 a, Vector2 b, Vector2 p)
-    {
-        var ab = b - a;
-        float d = ab.LengthSquared();
-        if (d < 1e-10f) return 0f;
-        return Math.Clamp(Vector2.Dot(p - a, ab) / d, 0f, 1f);
     }
 
     private static bool RaySegment(Vector2 origin, Vector2 dir, Vector2 a, Vector2 b,
@@ -267,155 +448,22 @@ public static class AngledPlanarSlicer
         return t > -1e-4f && s >= -1e-4f && s <= 1f + 1e-4f;
     }
 
-    // -- Chain stitching -------------------------------------------------------
-
-    private static void StitchChains(List<List<Vector3>> chains, Vector3 planeNormal)
-    {
-        const float ClosedSq = 1.0f;
-
-        while (true)
-        {
-            float best = float.MaxValue;
-            int bi = -1, bj = -1, bc = -1;
-
-            for (int i = 0; i < chains.Count; i++)
-            {
-                var ci = chains[i];
-                if ((ci[^1] - ci[0]).LengthSquared() < ClosedSq) continue;
-
-                for (int j = 0; j < chains.Count; j++)
-                {
-                    if (j == i) continue;
-                    var cj = chains[j];
-                    float d;
-                    d = (ci[^1] - cj[0]).LengthSquared();  if (d < best) { best = d; bi = i; bj = j; bc = 0; }
-                    d = (ci[^1] - cj[^1]).LengthSquared(); if (d < best) { best = d; bi = i; bj = j; bc = 1; }
-                    d = (ci[0]  - cj[^1]).LengthSquared(); if (d < best) { best = d; bi = i; bj = j; bc = 2; }
-                    d = (ci[0]  - cj[0]).LengthSquared();  if (d < best) { best = d; bi = i; bj = j; bc = 3; }
-                }
-            }
-
-            if (bi < 0) break;
-
-            var ca = chains[bi];
-            var cb = new List<Vector3>(chains[bj]);
-            switch (bc)
-            {
-                case 0: ca.AddRange(cb); break;
-                case 1: cb.Reverse(); ca.AddRange(cb); break;
-                case 2: cb.AddRange(ca); chains[bi] = ca = cb; break;
-                case 3: cb.Reverse(); cb.AddRange(ca); chains[bi] = ca = cb; break;
-            }
-            var polyNormal = Vector3.Zero;
-            int n = ca.Count;
-            for (int k = 0; k < n; k++)
-                polyNormal += Vector3.Cross(ca[k], ca[(k + 1) % n]);
-            if (Vector3.Dot(polyNormal, planeNormal) < 0f)
-                ca.Reverse();
-
-            chains.RemoveAt(bj);
-        }
-    }
-
-    // -- Topological contour extraction ---------------------------------------
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (int, int, int) Quantise(Vector3 p)
-        => ((int)MathF.Round(p.X / SnapGrid),
-            (int)MathF.Round(p.Y / SnapGrid),
-            (int)MathF.Round(p.Z / SnapGrid));
-
-    private static (List<List<Vector3>>, List<List<Vector3>>) ChainSegments(
-        List<(Vector3 A, Vector3 B)> segs,
-        Vector3 planeNormal)
-    {
-        var keyToId = new Dictionary<(int, int, int), int>();
-        var verts   = new List<Vector3>();
-        var adj     = new List<List<int>>();
-
-        int Weld(Vector3 p)
-        {
-            var key = Quantise(p);
-            if (!keyToId.TryGetValue(key, out int id))
-            {
-                id = verts.Count;
-                keyToId[key] = id;
-                verts.Add(p);
-                adj.Add(new List<int>(2));
-            }
-            return id;
-        }
-
-        foreach (var (A, B) in segs)
-        {
-            int va = Weld(A), vb = Weld(B);
-            if (va == vb) continue;
-            adj[va].Add(vb);
-            adj[vb].Add(va);
-        }
-
-        var visited = new bool[verts.Count];
-        var closed  = new List<List<Vector3>>();
-        var open    = new List<List<Vector3>>();
-
-        for (int s = 0; s < verts.Count; s++)
-        {
-            if (visited[s] || adj[s].Count == 0) continue;
-
-            var  chain    = new List<Vector3>();
-            int  cur      = s, prev = -1;
-            bool isClosed = false;
-
-            while (true)
-            {
-                visited[cur] = true;
-                chain.Add(verts[cur]);
-
-                int next = -1;
-                foreach (int nb in adj[cur])
-                {
-                    if (nb == prev) continue;
-                    if (nb == s && chain.Count >= 3) { next = -2; isClosed = true; break; }
-                    if (!visited[nb]) { next = nb; break; }
-                }
-
-                if (next < 0) break;
-                prev = cur;
-                cur  = next;
-            }
-
-            if (chain.Count >= 3)
-            {
-                var polyNormal = Vector3.Zero;
-                int n = chain.Count;
-                for (int i = 0; i < n; i++)
-                    polyNormal += Vector3.Cross(chain[i], chain[(i + 1) % n]);
-                if (Vector3.Dot(polyNormal, planeNormal) < 0f)
-                    chain.Reverse();
-
-                (isClosed ? closed : open).Add(chain);
-            }
-        }
-
-        return (closed, open);
-    }
-
-    // -- Topology-aware seam assignment ----------------------------------------
+    // -- Topology-aware seam assignment (2D) -----------------------------------
 
     private const float OverlapThreshold = 0.05f;
 
-    private static List<AngledContourTrack> AssignSeams(
-        List<List<Vector3>> contours,
-        List<AngledContourTrack> prevTracks,
+    private static List<ContourTrack> AssignSeams(
+        List<List<Vector2>> contours,
+        List<ContourTrack> prevTracks,
         Vector2 seamOrigin, Vector2 seamDir)
     {
-        var tracks = new List<AngledContourTrack>(contours.Count);
+        var tracks = new List<ContourTrack>(contours.Count);
         foreach (var raw in contours)
         {
-            var contour = new List<Vector3>(raw);
+            var contour = new List<Vector2>(raw);
 
             float bestScore = 0f;
-            AngledContourTrack? bestParent = null;
+            ContourTrack? bestParent = null;
             foreach (var prev in prevTracks)
             {
                 float score = OverlapScore(prev.Contour, contour);
@@ -427,23 +475,24 @@ public static class AngledPlanarSlicer
                 : new Vector2(float.NaN, float.NaN);
 
             AlignSeam(contour, seamOrigin, seamDir, ref seamRef);
-            tracks.Add(new AngledContourTrack(contour, seamRef));
+            tracks.Add(new ContourTrack(contour, seamRef));
         }
         return tracks;
     }
 
-    // XY-projected point-in-polygon overlap via vertex sampling.
-    private static float OverlapScore(List<Vector3> a, List<Vector3> b)
+    private static float OverlapScore(List<Vector2> a, List<Vector2> b)
     {
         int aInB = 0, bInA = 0;
-        foreach (var p in a) if (PointInPolygonXY(p, b)) aInB++;
-        foreach (var p in b) if (PointInPolygonXY(p, a)) bInA++;
+        foreach (var p in a) if (PointInPolygon(p, b)) aInB++;
+        foreach (var p in b) if (PointInPolygon(p, a)) bInA++;
         float rA = a.Count > 0 ? (float)aInB / a.Count : 0f;
         float rB = b.Count > 0 ? (float)bInA / b.Count : 0f;
         return MathF.Max(rA, rB);
     }
 
-    private static bool PointInPolygonXY(Vector3 p, List<Vector3> poly)
+    // -- Geometry helpers ------------------------------------------------------
+
+    private static bool PointInPolygon(Vector2 p, List<Vector2> poly)
     {
         int n = poly.Count;
         bool inside = false;
@@ -457,11 +506,39 @@ public static class AngledPlanarSlicer
         return inside;
     }
 
+    private static float SignedArea(List<Vector2> poly)
+    {
+        float area = 0f;
+        int n = poly.Count;
+        for (int i = 0; i < n; i++)
+        {
+            var a = poly[i];
+            var b = poly[(i + 1) % n];
+            area += a.X * b.Y - b.X * a.Y;
+        }
+        return area * 0.5f;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float Dist2(Vector2 a, Vector2 b)
+    {
+        float dx = a.X - b.X, dy = a.Y - b.Y;
+        return dx * dx + dy * dy;
+    }
+
+    private static float ClosestT(Vector2 a, Vector2 b, Vector2 p)
+    {
+        var ab = b - a;
+        float d = ab.LengthSquared();
+        if (d < 1e-10f) return 0f;
+        return Math.Clamp(Vector2.Dot(p - a, ab) / d, 0f, 1f);
+    }
+
     // -- Per-contour seam tracking ---------------------------------------------
 
-    private sealed class AngledContourTrack(List<Vector3> contour, Vector2 seamXY)
+    private sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY)
     {
-        public readonly List<Vector3> Contour = contour;
+        public readonly List<Vector2> Contour = contour;
         public readonly Vector2 SeamXY = seamXY;
     }
 }

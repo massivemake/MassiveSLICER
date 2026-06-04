@@ -68,6 +68,7 @@ logs/
 #Models
 assets/rcc_models/*
 assets/KukaData/*
+assets/development_assets/*
 
 .claude/*
 

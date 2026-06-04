@@ -77,6 +77,8 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
     // Flat (pos, normal) array per toolpath -- built once at upload for O(1) scrub lookup.
     private readonly ConcurrentDictionary<SceneNode, (NVec3 pos, NVec3 normal)[]> _scrubCacheByNode     = new();
+    // Pending reachability results from background validation -- consumed on the GL thread.
+    private readonly ConcurrentQueue<(SceneNode node, bool[] reachable)>          _pendingReachability  = new();
 
     // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
     // UpdateFocusOverlay; read on the UI thread in ScrubIk -- no cross-thread access.
@@ -85,6 +87,16 @@ public partial class ViewportView : UserControl
     // Cancellation for in-flight scrub-IK tasks -- replaced on each scrub step so only
     // the most recent index drives the robot.
     private CancellationTokenSource? _scrubIkCts;
+    // Cancellation for in-flight toolpath reachability validation.
+    private CancellationTokenSource? _validationCts;
+    // Cache for the last validation run. Prevents redundant restarts on every click.
+    // _validationDone flips to true in the UI-thread dispatch when results are enqueued,
+    // so cancelled tasks don't block a future re-run for the same key.
+    private SceneNode?   _validationNode;
+    private TkMatrix4    _validationTransform;
+    private bool         _validationDone;
+    // Timer that drives playback by advancing the scrub index each tick.
+    private readonly DispatcherTimer _playbackTimer = new() { Interval = TimeSpan.FromMilliseconds(80) };
 
     // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
@@ -156,8 +168,25 @@ public partial class ViewportView : UserControl
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnFocusRequested       = FocusSelected;
             vm.OnDropToPlateRequested = DropToPlate;
-            vm.OnScrubIkRequested     = ScrubIk;
-            vm.OnFrameAllRequested    = FrameAll;
+            vm.OnScrubIkRequested  = ScrubIk;
+            vm.OnFrameAllRequested = FrameAll;
+            vm.OnPlaybackToggled   = playing =>
+            {
+                if (playing) _playbackTimer.Start();
+                else         _playbackTimer.Stop();
+            };
+
+            _playbackTimer.Tick += (_, _) =>
+            {
+                if (_vm is not { IsToolpathSelected: true } pvm) { _playbackTimer.Stop(); return; }
+                if (pvm.ToolpathScrubIndex >= pvm.ToolpathScrubMax)
+                {
+                    pvm.IsPlaying = false;
+                    _playbackTimer.Stop();
+                    return;
+                }
+                pvm.ToolpathScrubIndex++;
+            };
 
             // OverlayView is declared in the XAML Grid above GlCanvas. Because
             // there is no native HWND, normal Avalonia z-order works -- no
@@ -174,7 +203,8 @@ public partial class ViewportView : UserControl
                     nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6))
                     GlCanvas.RequestNextFrameRendering();
             };
-            robot.OnToolSelected = OnToolSwapRequested;
+            robot.OnToolSelected              = OnToolSwapRequested;
+            robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
         }
 
         if (vm.AdditiveSettings is { } additive)
@@ -213,7 +243,15 @@ public partial class ViewportView : UserControl
             _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
-            _renderer.ShowBead           = vm.ShowBead;
+            _renderer.ShowBead                  = vm.ShowBead;
+            _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
+                ? vm.ToolpathScrubIndex
+                : int.MaxValue;
+            _renderer.SetToolpathColors(
+                new TkVector3(vm.ToolpathExtrudeColor.X,    vm.ToolpathExtrudeColor.Y,    vm.ToolpathExtrudeColor.Z),
+                new TkVector3(vm.ToolpathTravelColor.X,     vm.ToolpathTravelColor.Y,     vm.ToolpathTravelColor.Z),
+                new TkVector3(vm.ToolpathSeamColor.X,       vm.ToolpathSeamColor.Y,       vm.ToolpathSeamColor.Z),
+                new TkVector3(vm.ToolpathUnselectedColor.X, vm.ToolpathUnselectedColor.Y, vm.ToolpathUnselectedColor.Z));
             _renderer.GizmoEnabled   = vm.GizmoEnabled;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode     = vm.ActiveShaderMode;
@@ -316,6 +354,10 @@ public partial class ViewportView : UserControl
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
+
+            // Apply any completed reachability results on the GL thread.
+            while (_pendingReachability.TryDequeue(out var reach))
+                _renderer.UpdateToolpathReachability(reach.node, reach.reachable);
 
             UpdateAnglePlanePreview(vm);
 
@@ -453,16 +495,18 @@ public partial class ViewportView : UserControl
         _renderer.FlangeFrameMatrix = null;
         if (vm.Robot is not null) vm.Robot.IkSolver = null;
 
-        vm.ActiveCell = swap.Config;
+        vm.ActiveCell     = swap.Config;
+        vm.ActiveCellPath = swap.CellPath;
         var swapCellForPost = swap.Config;
+        var swapCellPath    = swap.CellPath;
         Dispatcher.UIThread.Post(() =>
         {
             var additive = vm.AdditiveSettings;
             if (additive is null) return;
-            string? defaultName = null;
-            if (TopLevel.GetTopLevel(this) is Window { DataContext: MainWindowViewModel mainVm })
-                mainVm.AppPreferences.DefaultHomePositionNames.TryGetValue(swapCellForPost.Name, out defaultName);
-            additive.UpdateFromCell(swapCellForPost, defaultName);
+            var posData = CellLoader.LoadPositionData(swapCellPath);
+            additive.UpdateFromCell(swapCellForPost, posData.Default, posData.Positions);
+            if (vm.Robot is not null)
+                vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
         });
         var b          = swap.Config.Bed;
         var gridCorner = b.GridOrigin ?? b.Origin;
@@ -775,6 +819,7 @@ public partial class ViewportView : UserControl
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
                 GlCanvas.RequestNextFrameRendering();
+                RevalidateSelectedToolpath();
             }
             else if (!_leftDragged)
             {
@@ -864,6 +909,13 @@ public partial class ViewportView : UserControl
                 }
                 e.Handled = true; break;
             case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
+            case Key.Space:
+                if (DataContext is ViewportViewModel spaceVm && spaceVm.IsToolpathSelected)
+                {
+                    spaceVm.TogglePlaybackCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
             case Key.Escape:
                 if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
                 {
@@ -959,6 +1011,7 @@ public partial class ViewportView : UserControl
                     ApproachZ        = (float)s.ApproachZ,
                     TiltAngle        = (float)s.TiltAngle,
                     TiltAngleX       = (float)s.TiltAngleX,
+                    DisableContourOffset = s.DisableContourOffset,
                 }
                 : new SliceSettings();
 
@@ -1295,6 +1348,18 @@ public partial class ViewportView : UserControl
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
         GlCanvas.RequestNextFrameRendering();
+        RevalidateSelectedToolpath();
+    }
+
+    /// <summary>
+    /// Re-runs reachability validation if the selected toolpath's transform changed since
+    /// the last completed validation. Called after gizmo-drag-end and keyboard transforms.
+    /// </summary>
+    private void RevalidateSelectedToolpath()
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (_toolpathByNode.TryGetValue(node, out var tp))
+            ValidateToolpathAsync(node, tp);
     }
 
     private void CancelKbTransform()
@@ -1442,6 +1507,7 @@ public partial class ViewportView : UserControl
         vm.HasSelection       = selected is not null;
         bool isToolpath       = selected is not null && _renderer.IsToolpathNode(selected);
         vm.IsToolpathSelected = isToolpath;
+        vm.HasMeshSelected    = selected is not null && !isToolpath && !IsToolNodeSelected();
 
         if (selected is null)
             SetGizmoMode(GizmoMode.None);
@@ -1452,11 +1518,14 @@ public partial class ViewportView : UserControl
         {
             _activeScrubNode = selected;
             vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+            ValidateToolpathAsync(selected, tp);
         }
         else
         {
             _activeScrubNode = null;
             vm.ResetScrubIndex(0, null);
+            vm.StatsReachability = "";
+            _validationCts?.Cancel();
         }
     }
 
@@ -1558,6 +1627,120 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
             });
         }, cts.Token);
+    }
+
+    /// <summary>
+    /// Runs IK for every move in <paramref name="toolpath"/> (background task) and enqueues
+    /// a reachability bool[] into <see cref="_pendingReachability"/> for the GL thread to apply.
+    /// Any previous validation for a different toolpath is cancelled first.
+    /// </summary>
+    private void ValidateToolpathAsync(SceneNode node, Toolpath toolpath)
+    {
+        return; // TEMP: reachability disabled while debugging slicer
+        var currentTransform = node.WorldTransform;
+        bool sameKey = ReferenceEquals(_validationNode, node)
+                       && _validationTransform == currentTransform;
+
+        // Already done for this (node, transform) pair — nothing to do.
+        if (sameKey && _validationDone) return;
+        // In-flight for the same pair — don't cancel and restart.
+        if (sameKey && _validationCts is { IsCancellationRequested: false }) return;
+
+        _validationNode = node;
+        _validationTransform = currentTransform;
+        _validationDone = false;
+        _validationCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _validationCts = cts;
+
+        var solver      = _ikSolver;
+        var vm          = _vm;
+        var addSettings = vm?.AdditiveSettings;
+        var robot       = vm?.Robot;
+        System.Diagnostics.Debug.WriteLine($"[Validate] solver={solver is not null}, robot={robot is not null}");
+        if (solver is null || robot is null) return;
+
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+        if (vm is not null) vm.StatsReachability = "…";
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+        var wt       = node.WorldTransform;
+        var robroot  = _robrootWorldPos;
+        float offA   = addSettings is not null ? (float)addSettings.ToolheadA : 0f;
+        float offB   = addSettings is not null ? (float)addSettings.ToolheadB : 0f;
+        float offC   = addSettings is not null ? (float)addSettings.ToolheadC : 0f;
+        bool hasOff  = addSettings is not null;
+        var seed = new float[]
+        {
+            (float)robot.A1, (float)robot.A2, (float)robot.A3,
+            (float)robot.A4, (float)robot.A5, (float)robot.A6,
+        };
+
+        Task.Run(() =>
+        {
+            // Pre-compute ROBROOT-frame positions AND world-space normals for all moves.
+            int total = 0;
+            foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
+
+            var targets = new TkVector3[total];
+            var normals = new TkVector3[total];
+            int mi = 0;
+            foreach (var layer in toolpath.Layers)
+            {
+                foreach (var move in layer.Moves)
+                {
+                    var (pos, planeNormal) = cache[Math.Min(mi + 1, cache.Length - 1)];
+                    float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+                    targets[mi] = new TkVector3(
+                        lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                        lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                        lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43) - robroot;
+                    // Normals transform by rotation part only (no translation, then normalize).
+                    float nx = planeNormal.X, ny = planeNormal.Y, nz = planeNormal.Z;
+                    normals[mi] = TkVector3.Normalize(new TkVector3(
+                        nx * wt.M11 + ny * wt.M21 + nz * wt.M31,
+                        nx * wt.M12 + ny * wt.M22 + nz * wt.M32,
+                        nx * wt.M13 + ny * wt.M23 + nz * wt.M33));
+                    mi++;
+                }
+            }
+
+            if (cts.IsCancellationRequested) return;
+
+            // Build per-move orientation targets (same frame as the scrubber: normal + world +X tangent).
+            var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
+            for (int i = 0; i < total; i++)
+            {
+                targetRots[i] = hasOff
+                    ? solver.TargetRotFromPathFrameWithOffset(normals[i], TkVector3.UnitX, offA, offB, offC)
+                    : solver.TargetRotFromPathFrame(normals[i], TkVector3.UnitX);
+            }
+
+            if (cts.IsCancellationRequested) return;
+
+            // Parallel orientation-constrained IK: matches exactly what the scrubber solves,
+            // so a move marked reachable here will also succeed at scrub time.
+            var result = new bool[total];
+            try
+            {
+                Parallel.For(0, total,
+                    new ParallelOptions { CancellationToken = cts.Token },
+                    i => { result[i] = solver.Solve(targets[i], seed, targetRots[i], maxIterations: 80) is not null; });
+            }
+            catch (OperationCanceledException) { return; }
+
+            int falseCount = result.Count(x => !x);
+            System.Diagnostics.Debug.WriteLine($"[Validate] done: {result.Length} moves, {falseCount} unreachable");
+            _pendingReachability.Enqueue((node, result));
+            string reachLabel = falseCount == 0
+                ? $"All {result.Length} reachable"
+                : $"{falseCount} / {result.Length} unreachable";
+            Dispatcher.UIThread.Post(() =>
+            {
+                _validationDone = true;
+                if (vm is not null) vm.StatsReachability = reachLabel;
+                GlCanvas.RequestNextFrameRendering();
+            });
+        });
     }
 
     /// <summary>
@@ -1935,12 +2118,32 @@ public partial class ViewportView : UserControl
 
     private void SaveDefaultHomePosition(ViewportViewModel vm)
     {
-        var cell     = vm.ActiveCell;
+        var cellPath = vm.ActiveCellPath;
         var settings = vm.AdditiveSettings;
-        if (cell is null || settings is null) return;
-        if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel mainVm }) return;
-        mainVm.AppPreferences.DefaultHomePositionNames[cell.Name] = settings.SelectedHomePositionName;
-        PreferencesLoader.Save(mainVm.AppPreferences);
+        if (cellPath is null || settings is null) return;
+        var data = CellLoader.LoadPositionData(cellPath);
+        data.Default = settings.SelectedHomePositionName;
+        CellLoader.SavePositionData(cellPath, data);
+    }
+
+    private void SaveHomePosition(ViewportViewModel vm, string name, float[] angles)
+    {
+        var cellPath = vm.ActiveCellPath;
+        var additive = vm.AdditiveSettings;
+        var robot    = vm.Robot;
+        if (cellPath is null || additive is null || robot is null) return;
+
+        var data     = CellLoader.LoadPositionData(cellPath);
+        var existing = data.Positions.FindIndex(p => p.Name == name);
+        var config   = new HomePositionConfig { Name = name, Angles = angles };
+        if (existing >= 0)
+            data.Positions[existing] = config;
+        else
+            data.Positions.Add(config);
+
+        CellLoader.SavePositionData(cellPath, data);
+        additive.AddHomePosition(name, angles);
+        robot.SetNextPositionName(data.Positions.Count + 1);
     }
 
     private async Task ExportKrlAsync(ViewportViewModel vm)

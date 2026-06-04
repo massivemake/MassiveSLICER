@@ -33,6 +33,11 @@ public sealed class SceneRenderer : IDisposable
     private bool _disposed;
     private bool _initialised;
 
+    private Vector3 _toolpathExtrudeColor    = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _toolpathTravelColor     = new(0.85f, 0.18f, 0.18f);
+    private Vector3 _toolpathSeamColor       = new(1.0f,  0.9f,  0.0f);
+    private Vector3 _toolpathUnselectedColor = new(0.38f, 0.38f, 0.38f);
+
     // -- Off-screen FBOs -------------------------------------------------------
     // Scene is rendered into _sceneFbo so it can be read back as a texture.
     // The selected object is rendered into _maskFbo (white-on-black) sharing the
@@ -181,6 +186,12 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
 
+    /// <summary>
+    /// Scrubber move index applied to the selected toolpath renderer.
+    /// int.MaxValue (default) means render the full toolpath.
+    /// </summary>
+    public int ToolpathActiveScrubIndex { get; set; } = int.MaxValue;
+
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode { get; set; } = ShaderMode.Standard;
 
@@ -189,6 +200,27 @@ public sealed class SceneRenderer : IDisposable
 
     /// <summary>Mipmap LOD level for backdrop blur. 0 = sharp, 7 = maximum blur.</summary>
     public float BackdropBlur { get; set; } = 2.5f;
+
+    /// <summary>
+    /// Updates toolpath line colours for all registered renderers. Must be called on the GL thread.
+    /// No-op when the values are unchanged to avoid unnecessary VBO rebuilds.
+    /// </summary>
+    public void SetToolpathColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected)
+    {
+        if (_toolpathExtrudeColor    == extrude   &&
+            _toolpathTravelColor     == travel    &&
+            _toolpathSeamColor       == seam      &&
+            _toolpathUnselectedColor == unselected)
+            return;
+
+        _toolpathExtrudeColor    = extrude;
+        _toolpathTravelColor     = travel;
+        _toolpathSeamColor       = seam;
+        _toolpathUnselectedColor = unselected;
+
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.UpdateColors(extrude, travel, seam, unselected);
+    }
 
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
@@ -200,9 +232,22 @@ public sealed class SceneRenderer : IDisposable
     {
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
+        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
         _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
         SceneRoot.AddChild(node);
+    }
+
+    /// <summary>
+    /// Updates the extrude-move colours for a registered toolpath to show reachability.
+    /// <paramref name="reachable"/>[i] == false turns move i red. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathReachability(SceneNode node, bool[] reachable)
+    {
+        bool found = _toolpaths.TryGetValue(node, out var entry);
+        System.Diagnostics.Debug.WriteLine($"[Renderer] UpdateReachability: nodeFound={found}, unreachable={reachable.Count(x => !x)}/{reachable.Length}");
+        if (found)
+            entry.Renderer.UpdateReachability(reachable);
     }
 
     /// <summary>
@@ -383,9 +428,11 @@ public sealed class SceneRenderer : IDisposable
         {
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
-            entry.Renderer.Draw(toolpathMvp, selected: tpNode == SelectedNode,
+            bool isSelected = tpNode == SelectedNode;
+            entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
-                showSeam: ShowSeam, showBead: ShowBead);
+                showSeam: ShowSeam, showBead: ShowBead,
+                scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue);
         }
 
         // Draw the angled-slice plane preview (only present when Angled method is active).

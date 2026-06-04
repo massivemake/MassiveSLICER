@@ -38,6 +38,16 @@ public sealed record CellConfig
     public int BridgePort { get; init; } = 7000;
 }
 
+/// <summary>Contents of the per-cell <c>home_positions.json</c> sidecar file.</summary>
+public sealed class CellPositionData
+{
+    /// <summary>Name of the position that should be pre-selected when the cell loads.</summary>
+    public string? Default { get; set; }
+
+    /// <summary>All named positions for this cell (built-in + user-saved).</summary>
+    public List<HomePositionConfig> Positions { get; set; } = [];
+}
+
 /// <summary>A named robot home/start position (A1-A6 joint angles in KRL degrees).</summary>
 public sealed record HomePositionConfig
 {
@@ -64,6 +74,9 @@ public sealed record RobotCellConfig
 
     /// <summary>Named home/start positions available for this cell. Shown in the TOOLPATH panel dropdown.</summary>
     public IReadOnlyList<HomePositionConfig> HomePositions { get; init; } = [];
+
+    /// <summary>Name of the position pre-selected when the cell loads. Null means use the first entry.</summary>
+    public string? DefaultHomePosition { get; init; }
 
     /// <summary>
     /// Extra rotation (degrees, CCW positive) applied around the flange outward axis

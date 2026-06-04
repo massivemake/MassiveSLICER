@@ -22,6 +22,15 @@ public sealed class GltfNumericalIkSolver
 
     private readonly JointConfig[] _jcfg;
 
+    // Workspace bounds measured directly from FK, not derived from abstract L1/L2.
+    // Sampling A2/A3 over their full joint ranges gives the exact TCP reach envelope
+    // for this specific GLTF model and TCP offset — no assumption about which FK
+    // iteration corresponds to the wrist center.
+    private readonly float _minReachFromShoulder;
+    private readonly float _maxReachFromShoulder;
+    private readonly float _shoulderZ;       // ROBROOT Z of the A2 (shoulder) pivot
+    private readonly float _shoulderHorizR;  // horizontal offset of shoulder from A1 axis
+
     /// <param name="restPoses">Per-joint rest-pose local transforms, from <see cref="RobotFkController.RestPoses"/>.</param>
     /// <param name="chainRoot">WorldTransform of joint_1's parent, from <see cref="RobotFkController.ChainRootTransform"/>.</param>
     /// <param name="robotWorldPos">ROBROOT origin in scene space (mm).</param>
@@ -38,6 +47,75 @@ public sealed class GltfNumericalIkSolver
         _tcpLocal      = tcpLocal;
         _toolFrameRoll = toolFrameRoll;
         _jcfg          = jointConfigs.ToArray();
+
+        // FK iteration 1 (i=0 only) → A2 pivot (shoulder) in scene space.
+        var home         = new float[6];
+        var shoulderScene = ComputePartialFkPos(home, 1);
+        var shoulder      = shoulderScene - robotWorldPos;
+        _shoulderZ      = shoulder.Z;
+        _shoulderHorizR = MathF.Sqrt(shoulder.X * shoulder.X + shoulder.Y * shoulder.Y);
+
+        // Sample A2 × A3 over full joint ranges to get the real TCP reach envelope.
+        // 25×25 = 625 FK evaluations at construction — negligible cost.
+        const int Steps = 24;
+        float minD = float.MaxValue, maxD = 0f;
+        var θ = new float[6];
+        for (int i = 0; i <= Steps; i++)
+        for (int j = 0; j <= Steps; j++)
+        {
+            θ[1] = _jcfg[1].MinDeg + (_jcfg[1].MaxDeg - _jcfg[1].MinDeg) * i / Steps;
+            θ[2] = _jcfg[2].MinDeg + (_jcfg[2].MaxDeg - _jcfg[2].MinDeg) * j / Steps;
+            float d = (ComputeTcpPosScene(θ) - shoulderScene).Length;
+            if (d < minD) minD = d;
+            if (d > maxD) maxD = d;
+        }
+        _minReachFromShoulder = minD;
+        _maxReachFromShoulder = maxD;
+    }
+
+    /// <summary>Returns the scene-space position after applying the first <paramref name="joints"/> FK steps at the given KRL angles.</summary>
+    private Vector3 ComputePartialFkPos(float[] krl, int joints)
+    {
+        var wt = _chainRoot;
+        for (int i = 0; i < joints; i++)
+        {
+            var   cfg       = _jcfg[i];
+            float boneAngle = cfg.KrlSign * krl[i] * MathF.PI / 180f;
+            var   rot       = cfg.Axis switch
+            {
+                RotationAxis.X => Matrix4.CreateRotationX(boneAngle),
+                RotationAxis.Z => Matrix4.CreateRotationZ(boneAngle),
+                _              => Matrix4.CreateRotationY(boneAngle),
+            };
+            wt = rot * _restPose[i] * wt;
+        }
+        return wt.Row3.Xyz;
+    }
+
+    /// <summary>
+    /// Workspace reachability test using sampled TCP reach from the shoulder pivot.
+    ///
+    /// The shoulder (A2 axis) sweeps a circle of radius <c>_shoulderHorizR</c> around
+    /// the A1 axis.  With A1 free to rotate, the shoulder-to-target 3D distance ranges:
+    ///   r_min = √((dxy − shoulderHorizR)² + dz²)   — A1 aligned toward target
+    ///   r_max = √((dxy + shoulderHorizR)² + dz²)   — A1 aligned away from target
+    ///
+    /// A target is reachable iff there exists some A1 angle where the shoulder-to-target
+    /// distance falls within the sampled TCP reach band [_minReach, _maxReach]:
+    ///   r_min ≤ _maxReachFromShoulder   (arm can extend far enough)
+    ///   r_max ≥ _minReachFromShoulder   (arm can fold close enough)
+    /// </summary>
+    private bool IsWorkspaceReachable(Vector3 targetRobroot)
+    {
+        float dxy        = MathF.Sqrt(targetRobroot.X * targetRobroot.X + targetRobroot.Y * targetRobroot.Y);
+        float dz         = targetRobroot.Z - _shoulderZ;
+        float dHorizNear = dxy - _shoulderHorizR;
+        float dHorizFar  = dxy + _shoulderHorizR;
+
+        float rMin = MathF.Sqrt(dHorizNear * dHorizNear + dz * dz);
+        float rMax = MathF.Sqrt(dHorizFar  * dHorizFar  + dz * dz);
+
+        return rMin <= _maxReachFromShoulder && rMax >= _minReachFromShoulder;
     }
 
     // -- FK --------------------------------------------------------------------
@@ -264,24 +342,51 @@ public sealed class GltfNumericalIkSolver
     /// <summary>
     /// Position-only IK. Solves for a TCP target in ROBROOT frame (mm).
     /// Returns 6 KRL angles or <c>null</c> if convergence fails within 10 mm.
+    ///
+    /// Two early-exit conditions keep this fast:
+    /// • Convergence : exits as soon as error &lt; 1 mm (~10–20 iterations for reachable points).
+    /// • Stagnation  : exits after 5 consecutive iterations that improve by &lt; 0.1 mm absolute.
+    ///   Using an absolute threshold (not %) is important: close-to-base targets require the arm
+    ///   to fold slowly — each iteration may improve by only 0.2–0.5 mm, which looks stagnant
+    ///   under a relative threshold but is real progress. Truly unreachable targets plateau at
+    ///   ~0 mm/iter regardless of distance, so the absolute threshold catches them immediately.
+    /// <paramref name="maxIterations"/> is a safety cap; stagnation detection typically exits
+    /// well before it. 40 is sufficient for reachability checks.
     /// </summary>
-    public float[]? Solve(Vector3 targetRobroot, float[] seed)
+    public float[]? Solve(Vector3 targetRobroot, float[] seed, int maxIterations = 200, float finalTolerance = 10f)
     {
-        const float Eps    = 1.0f;
-        const float Lambda = 10f;
-        const float Tol    = 1.0f;
-        const int   MaxIt  = 200;
+        // Analytical workspace test: rejects targets that are geometrically unreachable
+        // (both too far AND too close) before spending iterations on the DLS loop.
+        if (!IsWorkspaceReachable(targetRobroot)) return null;
+
+        const float Eps            = 1.0f;
+        const float Lambda         = 10f;
+        const float Tol            = 1.0f;
+        const float StagnantMinMm  = 0.1f; // must improve by >0.1 mm absolute per iter
+        const int   StagnantMax    = 5;    // consecutive stagnant iterations before giving up
 
         var targetScene = targetRobroot + _robotWorldPos;
         var θ           = (float[])seed.Clone();
+        float bestErr   = float.MaxValue;
+        int   stagnant  = 0;
 
-        for (int iter = 0; iter < MaxIt; iter++)
+        for (int iter = 0; iter < maxIterations; iter++)
         {
-            var p0    = ComputeTcpPosScene(θ);
-            var error = targetScene - p0;
-            if (error.LengthSquared < Tol * Tol) break;
+            var   p0  = ComputeTcpPosScene(θ);
+            float err = (targetScene - p0).Length;
 
-            var J = new Vector3[6];
+            if (err < Tol) break;
+
+            // Stagnation: track best-ever error; reset counter only on meaningful improvement.
+            float improve = bestErr - err;
+            if (err < bestErr) bestErr = err;
+            if (improve >= StagnantMinMm)
+                stagnant = 0;
+            else if (++stagnant >= StagnantMax)
+                break;
+
+            var error = targetScene - p0;
+            var J     = new Vector3[6];
             for (int j = 0; j < 6; j++)
             {
                 θ[j] += Eps;
@@ -310,7 +415,7 @@ public sealed class GltfNumericalIkSolver
                 θ[j] = Math.Clamp(θ[j] + Vector3.Dot(J[j], x), _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
         }
 
-        return (ComputeTcpPosScene(θ) - targetScene).Length <= 10f ? θ : null;
+        return (ComputeTcpPosScene(θ) - targetScene).Length <= finalTolerance ? θ : null;
     }
 
     /// <summary>
@@ -322,28 +427,42 @@ public sealed class GltfNumericalIkSolver
     /// Returns 6 KRL angles or <c>null</c> if position convergence fails within 10 mm.
     /// </summary>
     public float[]? Solve(Vector3 targetRobroot, float[] seed,
-                          (Vector3 r0, Vector3 r1, Vector3 r2) targetRot)
+                          (Vector3 r0, Vector3 r1, Vector3 r2) targetRot,
+                          int maxIterations = 300)
     {
-        const float Eps    = 1.0f;
-        const float Lambda = 10f;
-        const float PosTol = 1.0f;    // mm
-        const float RotTol = 0.01f;   // rad (~0.57deg)
-        const int   MaxIt  = 300;
-        // Orientation weight: scales radians to mm-equivalent so the 6D error
-        // is balanced. Larger = stronger orientation constraint.
+        if (!IsWorkspaceReachable(targetRobroot)) return null;
+
+        const float Eps           = 1.0f;
+        const float Lambda        = 10f;
+        const float PosTol        = 1.0f;   // mm
+        const float RotTol        = 0.01f;  // rad (~0.57 deg)
+        const float StagnantMinMm = 0.1f;   // must improve combined error by >0.1 mm-equivalent per iter
+        const int   StagnantMax   = 5;
+        // Orientation weight: scales radians to mm-equivalent so the 6D error is balanced.
         const float OW = 200f;
 
-        var targetScene    = targetRobroot + _robotWorldPos;
-        var θ              = (float[])seed.Clone();
+        var targetScene     = targetRobroot + _robotWorldPos;
+        var θ               = (float[])seed.Clone();
         var (tR0, tR1, tR2) = targetRot;
+        float bestErr       = float.MaxValue;
+        int   stagnant      = 0;
 
-        for (int iter = 0; iter < MaxIt; iter++)
+        for (int iter = 0; iter < maxIterations; iter++)
         {
             var (p0, cR0, cR1, cR2) = ComputeTcpAndRot(θ);
             var ePos                 = targetScene - p0;
             var eRot                 = RotErr(tR0, tR1, tR2, cR0, cR1, cR2);
 
             if (ePos.LengthSquared < PosTol * PosTol && eRot.LengthSquared < RotTol * RotTol) break;
+
+            // Combined error in mm-equivalent units (same weighting as the 6D vector below).
+            float err     = ePos.Length + OW * eRot.Length;
+            float improve = bestErr - err;
+            if (err < bestErr) bestErr = err;
+            if (improve >= StagnantMinMm)
+                stagnant = 0;
+            else if (++stagnant >= StagnantMax)
+                break;
 
             // Jacobian: Jp = position (mm/deg), Jr = orientation (OW*rad/deg)
             var Jp = new Vector3[6];

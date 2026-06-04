@@ -175,7 +175,17 @@
                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
                     </Grid>
 
-                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,12"/>
+                    <StackPanel IsVisible="{Binding Additive.ShowContourOffsetOption}" Margin="0,0,0,0">
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,8,8,4"/>
+                        <CheckBox Content="Disable contour offset"
+                                  IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
+                                  Margin="8,4,8,2"/>
+                        <TextBlock TextWrapping="Wrap"
+                                   Classes="LabelMuted"
+                                   FontSize="10"
+                                   Margin="28,0,8,8"
+                                   Text="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+                    </StackPanel>
 
                     <Button Content="Generate Slice"
                             Classes="PrimaryButton"

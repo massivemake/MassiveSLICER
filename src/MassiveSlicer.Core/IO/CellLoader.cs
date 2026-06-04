@@ -28,4 +28,52 @@ public static class CellLoader
         Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory, "*.json", SearchOption.AllDirectories)
             : [];
+
+    // -- Per-cell position data (stored inside the cell JSON) -----------------
+
+    private static readonly JsonSerializerOptions WriteOptions = new(Options)
+    {
+        WriteIndented        = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    /// <summary>
+    /// Reads the named home positions and selected default from the cell JSON at
+    /// <paramref name="cellPath"/>.
+    /// </summary>
+    public static CellPositionData LoadPositionData(string cellPath)
+    {
+        try
+        {
+            var cell = Load(cellPath);
+            return new CellPositionData
+            {
+                Default   = cell.Robot.DefaultHomePosition,
+                Positions = [.. cell.Robot.HomePositions],
+            };
+        }
+        catch { return new CellPositionData(); }
+    }
+
+    /// <summary>
+    /// Writes updated home positions and selected default back into the cell JSON at
+    /// <paramref name="cellPath"/>, preserving all other cell settings.
+    /// </summary>
+    public static void SavePositionData(string cellPath, CellPositionData data)
+    {
+        try
+        {
+            var cell    = Load(cellPath);
+            var updated = cell with
+            {
+                Robot = cell.Robot with
+                {
+                    HomePositions       = data.Positions,
+                    DefaultHomePosition = data.Default,
+                },
+            };
+            File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));
+        }
+        catch { /* non-fatal */ }
+    }
 }

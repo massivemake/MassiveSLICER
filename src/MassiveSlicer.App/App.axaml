@@ -74,6 +74,7 @@
 
     <Application.Styles>
         <SimpleTheme/>
+        <StyleInclude Source="avares://Avalonia.Controls.ColorPicker/Themes/Simple/Simple.xaml"/>
         <StyleInclude Source="avares://MassiveSlicer.App/Resources/Styles/BaseStyles.axaml"/>
     </Application.Styles>
 
