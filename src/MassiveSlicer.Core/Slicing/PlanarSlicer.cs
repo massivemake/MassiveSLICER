@@ -1,5 +1,7 @@
 ﻿using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Linq;
+using Clipper2Lib;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing;
@@ -75,47 +77,121 @@ public static class PlanarSlicer
         List<ContourTrack> prevTracks,
         ToolpathLayer layer)
     {
-        var segments = new List<(Vector2 A, Vector2 B)>(64);
+        // ── Stage 1: raw intersection segments ───────────────────────────────
+        var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
         foreach (var verts in meshes)
-            CollectSegments(verts, z, segments);
-
-        if (segments.Count == 0) return new List<ContourTrack>();
-
-        var (closed, open) = ChainSegments(segments);
-        StitchChains(open);
-        var rawContours = closed;
-        rawContours.AddRange(open);
-        var tracks = AssignSeams(rawContours, prevTracks, seamOrigin, seamDir);
-
-        var lastPos = new Vector2(float.NaN);
-        foreach (var track in tracks)
         {
-            var contour = track.Contour;
-            if (contour.Count < 2) continue;
+            var segs = new List<(Vector2, Vector2)>(64);
+            CollectSegments(verts, z, segs);
+            if (segs.Count > 0) perMeshSegs.Add(segs);
+        }
+        if (perMeshSegs.Count == 0) return new List<ContourTrack>();
 
-            var start = new Vector3(contour[0].X, contour[0].Y, z);
+        // ── Stage 2: chain by endpoint proximity (per mesh) ─────────────────
+        // Adjacent segments from a manifold mesh share an endpoint to floating-point
+        // precision. A greedy nearest-neighbour walk is sufficient and avoids all the
+        // graph/degree-3+/pruning machinery that caused corner artifacts.
+        var rawContours = new List<List<Vector2>>();
+        foreach (var segs in perMeshSegs)
+            rawContours.AddRange(ChainByProximity(segs));
 
-            if (!float.IsNaN(lastPos.X))
+        // ── Stage 3: nesting depth + contour offset + seam ───────────────────
+        if (rawContours.Count == 0) return new List<ContourTrack>();
+
+        // Determine nesting depth via point-in-polygon so outer (even depth) and
+        // hole (odd depth) contours can be distinguished, then orient and offset each.
+        // Clipper2 InflatePaths contracts a CCW path with -delta and a CW path with
+        // +delta, so holes need flipped delta to move their boundary into the material.
+        //
+        // Robustness: vote with three sample points (first, middle, last vertex) rather
+        // than a single vertex so that a vertex landing on another contour's boundary
+        // (common in non-manifold / disconnected-shell models at shared Z levels)
+        // doesn't flip the depth count for the whole contour.
+        int nc = rawContours.Count;
+        var depths = new int[nc];
+        for (int i = 0; i < nc; i++)
+        {
+            var ci = rawContours[i];
+            if (ci.Count == 0) continue;
+            var samples = new[] { ci[0], ci[ci.Count / 2], ci[ci.Count - 1] };
+            for (int j = 0; j < nc; j++)
             {
-                var travelFrom = new Vector3(lastPos.X, lastPos.Y, z);
-                layer.Moves.Add(new ToolpathMove(travelFrom, start, MoveKind.Travel));
+                if (i == j) continue;
+                int hits = 0;
+                foreach (var s in samples) if (PointInPolygon(s, rawContours[j])) hits++;
+                if (hits >= 2) depths[i]++;
             }
-
-            var prev = start;
-            for (int i = 1; i < contour.Count; i++)
-            {
-                var next = new Vector3(contour[i].X, contour[i].Y, z);
-                layer.Moves.Add(new ToolpathMove(prev, next, MoveKind.Extrude));
-                prev = next;
-            }
-
-            if (contour.Count > 2)
-                layer.Moves.Add(new ToolpathMove(prev, start, MoveKind.Extrude));
-
-            lastPos = contour[^1];
         }
 
+        float halfBead = settings.BeadWidth * 0.5f;
+        float simpTol  = settings.SimplificationTolerance;
+        var insetContours = new List<List<Vector2>>(nc);
+        for (int ci = 0; ci < nc; ci++)
+        {
+            var  c      = rawContours[ci];
+            bool isHole = depths[ci] % 2 != 0;
+
+            bool wantCCW = !isHole;
+            bool isCCW   = SignedArea(c) > 0f;
+            IReadOnlyList<Vector2> oriented;
+            if (wantCCW == isCCW) oriented = c;
+            else { var r = new List<Vector2>(c); r.Reverse(); oriented = r; }
+
+            if (settings.DisableContourOffset)
+            {
+                var ol = oriented is List<Vector2> ol2 ? ol2 : oriented.ToList();
+                if (ol.Count >= 3)
+                    insetContours.Add(simpTol > 0f ? SimplifyContour2D(ol, simpTol) : ol);
+            }
+            else
+            {
+                float delta   = isHole ? -halfBead : halfBead;
+                var   results = InsetContour2D(oriented, delta);
+                if (results.Count >= 1)
+                {
+                    foreach (var r in results)
+                        if (r.Count >= 3)
+                            insetContours.Add(simpTol > 0f ? SimplifyContour2D(r, simpTol) : r);
+                }
+            }
+        }
+        if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        var tracks = AssignSeams(insetContours, prevTracks, seamOrigin, seamDir);
+        EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour), z, layer);
         return tracks;
+    }
+
+    // Emits contours as extrude loops with travel moves between them.
+    // Accepts any enumerable of vertex sequences — used by debug stages and the normal path.
+    private static void EmitContours(IEnumerable<IEnumerable<Vector2>> contours, float z, ToolpathLayer layer)
+    {
+        var lastPos = new Vector2(float.NaN);
+        foreach (var c in contours)
+        {
+            Vector2? first = null;
+            Vector3  prev  = default;
+            int      count = 0;
+            foreach (var v in c)
+            {
+                var p = new Vector3(v.X, v.Y, z);
+                if (count == 0)
+                {
+                    first = v;
+                    if (!float.IsNaN(lastPos.X))
+                        layer.Moves.Add(new ToolpathMove(new Vector3(lastPos.X, lastPos.Y, z), p, MoveKind.Travel));
+                }
+                else
+                {
+                    layer.Moves.Add(new ToolpathMove(prev, p, MoveKind.Extrude));
+                }
+                prev = p; count++;
+            }
+            if (count > 2 && first.HasValue)
+                layer.Moves.Add(new ToolpathMove(prev, new Vector3(first.Value.X, first.Value.Y, z), MoveKind.Extrude));
+            if (count > 0)
+                lastPos = new Vector2(prev.X, prev.Y); // last vertex before closing move
+        }
     }
 
     // -- Intersection / segment collection -------------------------------------
@@ -134,18 +210,15 @@ public static class PlanarSlicer
             var v1 = verts[i + 1];
             var v2 = verts[i + 2];
 
-            // Signed distances from the cutting plane.
             float d0 = v0.Z - z;
             float d1 = v1.Z - z;
             float d2 = v2.Z - z;
 
             // Push nearly-on-plane vertices slightly off to avoid degenerate intersections.
-            // Preserve sign so a vertex just below the plane stays below.
             if (MathF.Abs(d0) < 1e-5f) d0 = d0 >= 0f ? 1e-5f : -1e-5f;
             if (MathF.Abs(d1) < 1e-5f) d1 = d1 >= 0f ? 1e-5f : -1e-5f;
             if (MathF.Abs(d2) < 1e-5f) d2 = d2 >= 0f ? 1e-5f : -1e-5f;
 
-            // Collect up to 2 edge crossing points.
             int count = 0;
             TryEdge(v0, v1, d0, d1, pts, ref count);
             TryEdge(v1, v2, d1, d2, pts, ref count);
@@ -171,101 +244,52 @@ public static class PlanarSlicer
             a.Y + t * (b.Y - a.Y));
     }
 
-    // -- Topological contour extraction ---------------------------------------
-
-    // Welding tolerance: two endpoints within this distance share the same topological vertex.
-    private const float SnapGrid = 0.01f;
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static (int, int) Quantise(Vector2 p)
-        => ((int)MathF.Round(p.X / SnapGrid),
-            (int)MathF.Round(p.Y / SnapGrid));
+    // -- Contour extraction ---------------------------------------------------
 
     /// <summary>
-    /// Converts raw intersection segments into ordered closed contours using a topological graph.
-    ///
-    /// Pipeline (per the reference document):
-    ///   1. Weld nearby endpoints into unique vertex IDs (quantised grid hash).
-    ///   2. Build an adjacency graph: vertex -> [neighbour, ...].
-    ///      For a manifold mesh every vertex has degree 2, making cycles unambiguous.
-    ///   3. Traverse each connected component as a cycle (walk to unvisited neighbour
-    ///      that isn't the vertex we came from; stop when we return to start).
-    ///   4. Fix CCW winding via signed area.
-    ///
-    /// Limitations:
-    ///   Degree-1 vertices (open mesh boundary) produce open chains handled by StitchChains.
-    ///   Degree-3+ vertices (non-manifold) are resolved greedily (first available neighbour),
-    ///   which may split one logical contour into two -- StitchChains merges them afterward.
-    /// </summary>
-    // Returns (closed cycles, open chains). Only open chains need stitching.
-    // Keeping them separate prevents StitchChains from merging distinct closed contours
-    // whose first↔last vertex gap equals a full edge length (always >> the 1mm threshold).
-    private static (List<List<Vector2>>, List<List<Vector2>>) ChainSegments(
-        List<(Vector2 A, Vector2 B)> segs)
+    // Chains raw intersection segments into contours by greedily connecting nearest endpoints.
+    // Adjacent segments from a manifold mesh share endpoints to floating-point precision,
+    // so a simple proximity walk is sufficient — no graph, no vertex welding, no stub pruning.
+    private static List<List<Vector2>> ChainByProximity(List<(Vector2 A, Vector2 B)> segs)
     {
-        var keyToId = new Dictionary<(int, int), int>();
-        var verts   = new List<Vector2>();
-        var adj     = new List<List<int>>();
+        int n = segs.Count;
+        var used     = new bool[n];
+        var contours = new List<List<Vector2>>();
 
-        int Weld(Vector2 p)
+        for (int start = 0; start < n; start++)
         {
-            var key = Quantise(p);
-            if (!keyToId.TryGetValue(key, out int id))
-            {
-                id = verts.Count;
-                keyToId[key] = id;
-                verts.Add(p);
-                adj.Add(new List<int>(2));
-            }
-            return id;
-        }
+            if (used[start]) continue;
+            used[start] = true;
 
-        foreach (var (A, B) in segs)
-        {
-            int va = Weld(A), vb = Weld(B);
-            if (va == vb) continue;
-            adj[va].Add(vb);
-            adj[vb].Add(va);
-        }
-
-        var visited = new bool[verts.Count];
-        var closed  = new List<List<Vector2>>();
-        var open    = new List<List<Vector2>>();
-
-        for (int s = 0; s < verts.Count; s++)
-        {
-            if (visited[s] || adj[s].Count == 0) continue;
-
-            var  chain    = new List<Vector2>();
-            int  cur      = s, prev = -1;
-            bool isClosed = false;
+            var chain = new List<Vector2> { segs[start].A, segs[start].B };
 
             while (true)
             {
-                visited[cur] = true;
-                chain.Add(verts[cur]);
+                var   tail = chain[^1];
+                float best = float.MaxValue;
+                int   bi   = -1;
+                bool  flip = false;
 
-                int next = -1;
-                foreach (int nb in adj[cur])
+                for (int i = 0; i < n; i++)
                 {
-                    if (nb == prev) continue;
-                    if (nb == s && chain.Count >= 3) { next = -2; isClosed = true; break; }
-                    if (!visited[nb]) { next = nb; break; }
+                    if (used[i]) continue;
+                    float dA = Dist2(tail, segs[i].A);
+                    float dB = Dist2(tail, segs[i].B);
+                    if (dA < best) { best = dA; bi = i; flip = false; }
+                    if (dB < best) { best = dB; bi = i; flip = true;  }
                 }
 
-                if (next < 0) break;
-                prev = cur;
-                cur  = next;
+                if (bi < 0 || best > 1.0f) break;
+
+                used[bi] = true;
+                chain.Add(flip ? segs[bi].A : segs[bi].B);
             }
 
             if (chain.Count >= 3)
-            {
-                if (SignedArea(chain) < 0f) chain.Reverse();
-                (isClosed ? closed : open).Add(chain);
-            }
+                contours.Add(chain);
         }
 
-        return (closed, open);
+        return contours;
     }
 
     private static void AlignSeam(
@@ -348,52 +372,6 @@ public static class PlanarSlicer
         t = (ao.X * ab.Y - ao.Y * ab.X) / den;
         s = (ao.X * dir.Y - ao.Y * dir.X) / den;
         return t > -1e-4f && s >= -1e-4f && s <= 1f + 1e-4f;
-    }
-
-    // Repeatedly find the closest pair of open chain endpoints (globally) and merge them
-    // until no open chains remain. "Open" = gap between first and last vertex > 1 mm.
-    // No fixed distance limit -- for a single-shell object all open ends are artifacts.
-    private static void StitchChains(List<List<Vector2>> chains)
-    {
-        const float ClosedSq = 1.0f; // < 1 mm gap = already closed
-
-        while (true)
-        {
-            // Scan every pair of open endpoints across all chains.
-            float best = float.MaxValue;
-            int bi = -1, bj = -1, bc = -1;
-
-            for (int i = 0; i < chains.Count; i++)
-            {
-                var ci = chains[i];
-                if (Dist2(ci[0], ci[^1]) < ClosedSq) continue;
-
-                for (int j = 0; j < chains.Count; j++)
-                {
-                    if (j == i) continue;
-                    var cj = chains[j];
-                    float d;
-                    d = Dist2(ci[^1], cj[0]);  if (d < best) { best = d; bi = i; bj = j; bc = 0; }
-                    d = Dist2(ci[^1], cj[^1]); if (d < best) { best = d; bi = i; bj = j; bc = 1; }
-                    d = Dist2(ci[0],  cj[^1]); if (d < best) { best = d; bi = i; bj = j; bc = 2; }
-                    d = Dist2(ci[0],  cj[0]);  if (d < best) { best = d; bi = i; bj = j; bc = 3; }
-                }
-            }
-
-            if (bi < 0) break;
-
-            var ca = chains[bi];
-            var cb = new List<Vector2>(chains[bj]);
-            switch (bc)
-            {
-                case 0: ca.AddRange(cb); break;
-                case 1: cb.Reverse(); ca.AddRange(cb); break;
-                case 2: cb.AddRange(ca); chains[bi] = ca = cb; break;
-                case 3: cb.Reverse(); cb.AddRange(ca); chains[bi] = ca = cb; break;
-            }
-            if (SignedArea(ca) < 0f) ca.Reverse();
-            chains.RemoveAt(bj);
-        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -493,5 +471,62 @@ public static class PlanarSlicer
     {
         public readonly List<Vector2> Contour = contour;
         public readonly Vector2 SeamXY = seamXY;
+    }
+
+    // -- Clipper2 contour offset --------------------------------------------------
+
+    // Outer (CCW) contours contract with delta = +halfBead → Clipper receives -halfBead.
+    // Hole (CW) contours contract with delta = -halfBead → Clipper receives +halfBead.
+    // Callers must orient contours and choose delta sign before calling here.
+    private static List<List<Vector2>> InsetContour2D(IReadOnlyList<Vector2> contour, float delta)
+    {
+        var path = new PathD(contour.Count);
+        foreach (var p in contour)
+            path.Add(new PointD(p.X, p.Y));
+        var result = Clipper.InflatePaths(
+            new PathsD { path }, -delta,
+            JoinType.Miter, EndType.Polygon, miterLimit: 3.0);
+        return result
+            .Select(r => r.Select(p => new Vector2((float)p.x, (float)p.y)).ToList())
+            .ToList();
+    }
+
+    // -- Douglas-Peucker contour simplification --------------------------------
+
+    // Removes the intermediate collinear vertices Clipper2 adds on straight segments,
+    // keeping only points that deviate more than `tolerance` from the simplified line.
+    private static List<Vector2> SimplifyContour2D(List<Vector2> pts, float tolerance)
+    {
+        int n = pts.Count;
+        if (n <= 3) return pts;
+        float tolSq = tolerance * tolerance;
+        var keep = new bool[n];
+        keep[0] = keep[n - 1] = true;
+        DPReduce2D(pts, 0, n - 1, tolSq, keep);
+        var result = new List<Vector2>(n);
+        for (int i = 0; i < n; i++)
+            if (keep[i]) result.Add(pts[i]);
+        return result.Count >= 3 ? result : pts;
+    }
+
+    private static void DPReduce2D(IReadOnlyList<Vector2> pts, int lo, int hi,
+        float tolSq, bool[] keep)
+    {
+        if (hi - lo < 2) return;
+        float abx = pts[hi].X - pts[lo].X, aby = pts[hi].Y - pts[lo].Y;
+        float abLen2 = abx * abx + aby * aby;
+        float maxDSq = 0; int maxI = lo + 1;
+        for (int i = lo + 1; i < hi; i++)
+        {
+            float cx = pts[i].X - pts[lo].X, cy = pts[i].Y - pts[lo].Y;
+            float dSq = abLen2 < 1e-10f
+                ? cx * cx + cy * cy
+                : (cx * aby - cy * abx) * (cx * aby - cy * abx) / abLen2;
+            if (dSq > maxDSq) { maxDSq = dSq; maxI = i; }
+        }
+        if (maxDSq <= tolSq) return;
+        keep[maxI] = true;
+        DPReduce2D(pts, lo, maxI, tolSq, keep);
+        DPReduce2D(pts, maxI, hi, tolSq, keep);
     }
 }

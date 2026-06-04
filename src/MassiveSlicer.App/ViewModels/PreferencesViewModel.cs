@@ -1,4 +1,6 @@
 ﻿using System.Windows.Input;
+using Avalonia.Media;
+using MassiveSlicer.App;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
@@ -53,6 +55,65 @@ public sealed class PreferencesViewModel : ViewModelBase
         set { if (SetField(ref _antiAliasing, value)) Commit(() => _prefs.AntiAliasing = value); }
     }
 
+    // -- Appearance --------------------------------------------------------
+
+    private AppTheme _activeTheme;
+    public AppTheme ActiveTheme
+    {
+        get => _activeTheme;
+        set { if (SetField(ref _activeTheme, value)) Commit(() => _prefs.ActiveTheme = value.ToString()); }
+    }
+
+    /// <summary>All available themes for the dropdown.</summary>
+    public IReadOnlyList<AppTheme> AvailableThemes { get; } = Enum.GetValues<AppTheme>();
+
+    // -- Toolpath colors -------------------------------------------------------
+
+    private Color _toolpathExtrudeColor;
+    public Color ToolpathExtrudeColor
+    {
+        get => _toolpathExtrudeColor;
+        set { if (SetField(ref _toolpathExtrudeColor, value)) Commit(() => _prefs.ToolpathExtrudeColor = ColorToHex(value)); }
+    }
+
+    private Color _toolpathTravelColor;
+    public Color ToolpathTravelColor
+    {
+        get => _toolpathTravelColor;
+        set { if (SetField(ref _toolpathTravelColor, value)) Commit(() => _prefs.ToolpathTravelColor = ColorToHex(value)); }
+    }
+
+    private Color _toolpathSeamColor;
+    public Color ToolpathSeamColor
+    {
+        get => _toolpathSeamColor;
+        set { if (SetField(ref _toolpathSeamColor, value)) Commit(() => _prefs.ToolpathSeamColor = ColorToHex(value)); }
+    }
+
+    private Color _toolpathUnselectedColor;
+    public Color ToolpathUnselectedColor
+    {
+        get => _toolpathUnselectedColor;
+        set { if (SetField(ref _toolpathUnselectedColor, value)) Commit(() => _prefs.ToolpathUnselectedColor = ColorToHex(value)); }
+    }
+
+    private static string ColorToHex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
+
+    private static Color HexToColor(string hex)
+    {
+        try
+        {
+            var s = hex.TrimStart('#');
+            if (s.Length == 6) s = "FF" + s;
+            return new Color(
+                Convert.ToByte(s[0..2], 16),
+                Convert.ToByte(s[2..4], 16),
+                Convert.ToByte(s[4..6], 16),
+                Convert.ToByte(s[6..8], 16));
+        }
+        catch { return Colors.White; }
+    }
+
     // -- Commands ----------------------------------------------------------
 
     /// <summary>Selects a navigation preset by its ID.</summary>
@@ -79,12 +140,17 @@ public sealed class PreferencesViewModel : ViewModelBase
     /// <summary>Populates UI-bound fields from the underlying preferences object.</summary>
     public void LoadFromPrefs()
     {
-        _loading             = true;
-        AutoDepth            = _prefs.AutoDepth;
-        OrbitAroundSelection = _prefs.OrbitAroundSelection;
-        ActivePreset         = _prefs.ActivePreset;
-        AntiAliasing         = _prefs.AntiAliasing;
-        _loading             = false;
+        _loading                = true;
+        AutoDepth               = _prefs.AutoDepth;
+        OrbitAroundSelection    = _prefs.OrbitAroundSelection;
+        ActivePreset            = _prefs.ActivePreset;
+        AntiAliasing            = _prefs.AntiAliasing;
+        ActiveTheme             = Enum.TryParse<AppTheme>(_prefs.ActiveTheme, out var t) ? t : AppTheme.Obsidian;
+        ToolpathExtrudeColor    = HexToColor(_prefs.ToolpathExtrudeColor);
+        ToolpathTravelColor     = HexToColor(_prefs.ToolpathTravelColor);
+        ToolpathSeamColor       = HexToColor(_prefs.ToolpathSeamColor);
+        ToolpathUnselectedColor = HexToColor(_prefs.ToolpathUnselectedColor);
+        _loading                = false;
     }
 
     // -- Private -----------------------------------------------------------
@@ -103,4 +169,5 @@ public enum PrefsSection
 {
     Navigation,
     Performance,
+    Appearance,
 }

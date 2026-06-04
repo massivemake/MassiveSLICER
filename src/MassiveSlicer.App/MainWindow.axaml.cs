@@ -179,7 +179,7 @@ public partial class MainWindow : Window
         }
 
         vm.Viewport.PendingCellSwap.Enqueue(new CellSwapPayload(
-            cell, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool));
+            cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool));
         vm.Viewport.NotifyRenderNeeded();
     }
 

@@ -125,18 +125,22 @@ public enum SliceMethod
 /// <summary>Application colour theme.</summary>
 public enum AppTheme
 {
-    /// <summary>Near-black background, high contrast.</summary>
-    Void,
-    /// <summary>Dark grey, the default theme.</summary>
+    /// <summary>Dark grey with lime-green accent (default).</summary>
     Obsidian,
-    /// <summary>Cool dark-blue grey.</summary>
-    Slate,
-    /// <summary>Warm charcoal.</summary>
-    Graphite,
-    /// <summary>Light grey, low contrast.</summary>
-    Ash,
-    /// <summary>Solarized dark palette.</summary>
-    Solarized
+    /// <summary>Cool dark blue with cyan accent.</summary>
+    Arctic,
+    /// <summary>Warm charcoal with red accent.</summary>
+    Crimson,
+    /// <summary>Deep teal blue with turquoise accent.</summary>
+    Nautical,
+    /// <summary>Warm brown with orange accent.</summary>
+    Solar,
+    /// <summary>Deep space void with violet backgrounds and nova magenta accent.</summary>
+    Cosmic,
+    /// <summary>Ultra-dark navy with electric blue accent.</summary>
+    Midnight,
+    /// <summary>Old-growth dark greens with emerald accent.</summary>
+    Forest,
 }
 
 // ShaderMode enum lives in MassiveSlicer.Viewport.ShaderMode (Viewport project).

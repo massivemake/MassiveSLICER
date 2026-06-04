@@ -60,29 +60,41 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
+                OnPropertyChanged(nameof(ShowContourOffsetOption));
             }
         }
     }
 
-    public string[] AvailableMethodNames { get; } = ["Planar", "Angled", "Geodesic"];
+    public string[] AvailableMethodNames { get; } = ["Planar", "Angled", "Geodesic (Experimental)"];
 
     public string MethodDisplayName
     {
         get => Method switch
         {
             SliceMethod.Angled   => "Angled",
-            SliceMethod.Geodesic => "Geodesic",
+            SliceMethod.Geodesic => "Geodesic (Experimental)",
             _                    => "Planar",
         };
         set => Method = value switch
         {
-            "Angled"   => SliceMethod.Angled,
-            "Geodesic" => SliceMethod.Geodesic,
-            _          => SliceMethod.Planar,
+            "Angled"                  => SliceMethod.Angled,
+            "Geodesic (Experimental)" => SliceMethod.Geodesic,
+            "Geodesic"                => SliceMethod.Geodesic,
+            _                         => SliceMethod.Planar,
         };
     }
 
-    public bool ShowTiltAngle => Method == SliceMethod.Angled;
+    public bool ShowTiltAngle           => Method == SliceMethod.Angled;
+    public bool ShowContourOffsetOption => Method != SliceMethod.Geodesic;
+
+    private bool _disableContourOffset;
+
+    /// <summary>When true, skips the bead-width/2 inset so the raw contour is the centerline.</summary>
+    public bool DisableContourOffset
+    {
+        get => _disableContourOffset;
+        set => SetField(ref _disableContourOffset, value);
+    }
 
     private double _passAngle;
 
@@ -307,6 +319,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             ? _homePositions[_selectedHomePositionIndex].Angles
             : [0f, -90f, 90f, 0f, 15f, 0f];
 
+    /// <summary>
+    /// Adds or replaces a named home position in the active list.
+    /// If a position with the same name already exists it is updated in place; otherwise it is appended.
+    /// </summary>
+    public void AddHomePosition(string name, float[] angles)
+    {
+        var idx = _homePositions.FindIndex(p => p.Name == name);
+        if (idx >= 0)
+            _homePositions[idx] = (name, angles);
+        else
+            _homePositions.Add((name, angles));
+        AvailableHomePositionNames = _homePositions.Select(p => p.Name).ToArray();
+    }
+
     /// <summary>Wired by ViewportView.axaml.cs; invoked when "Set as Default" is clicked.</summary>
     internal Action? OnSetDefaultHomePositionRequested { get; set; }
 
@@ -316,20 +342,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>
     /// Refreshes the available home position list from the given cell config and restores
     /// <paramref name="defaultPositionName"/> as the selected entry (falls back to index 0).
+    /// <paramref name="userPositions"/> are appended after the cell's built-in positions.
     /// </summary>
-    public void UpdateFromCell(CellConfig cell, string? defaultPositionName)
+    public void UpdateFromCell(CellConfig cell, string? defaultPositionName,
+                               IReadOnlyList<HomePositionConfig>? userPositions = null)
     {
-        var positions = cell.Robot.HomePositions;
-        if (positions.Count == 0)
+        if (userPositions is { Count: > 0 })
         {
-            _homePositions             = [("Default", cell.Robot.HomePosition)];
-            AvailableHomePositionNames = ["Default"];
+            _homePositions = userPositions.Select(p => (p.Name, p.Angles)).ToList();
         }
         else
         {
-            _homePositions             = positions.Select(p => (p.Name, p.Angles)).ToList();
-            AvailableHomePositionNames = positions.Select(p => p.Name).ToArray();
+            var positions = cell.Robot.HomePositions;
+            _homePositions = positions.Count > 0
+                ? positions.Select(p => (p.Name, p.Angles)).ToList()
+                : [("Default", cell.Robot.HomePosition)];
         }
+
+        AvailableHomePositionNames = _homePositions.Select(p => p.Name).ToArray();
 
         string nameToSelect = _homePositions.Count > 0 ? _homePositions[0].Name : "Default";
         if (defaultPositionName is not null)

@@ -260,10 +260,40 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     public ICommand GoToBedCenterCommand { get; }
 
+    // -- Save as home position -------------------------------------------------
+
+    private string _newHomePositionName = "Home Target 1";
+
+    /// <summary>Name field for a new user-saved home position (bound to the TextBox in the Robot tab).</summary>
+    public string NewHomePositionName
+    {
+        get => _newHomePositionName;
+        set => SetField(ref _newHomePositionName, value);
+    }
+
+    /// <summary>Updates the suggested name after a cell load or a save (e.g. "Home Target 3").</summary>
+    public void SetNextPositionName(int nextIndex)
+        => NewHomePositionName = $"Home Target {nextIndex}";
+
+    /// <summary>Callback invoked when the user saves the current orientation as a home position.</summary>
+    internal Action<string, float[]>? OnSaveHomePositionRequested { get; set; }
+
+    public ICommand SaveAsHomePositionCommand { get; }
+
+    private void SaveAsHomePosition()
+    {
+        var name   = string.IsNullOrWhiteSpace(NewHomePositionName)
+                         ? "Home Target 1"
+                         : NewHomePositionName.Trim();
+        var angles = new float[] { (float)A1, (float)A2, (float)A3, (float)A4, (float)A5, (float)A6 };
+        OnSaveHomePositionRequested?.Invoke(name, angles);
+    }
+
     public RobotPanelViewModel()
     {
-        GoToBedCenterCommand = new RelayCommand(GoToBedCenter);
-        ConnectCommand       = new RelayCommand(ToggleConnect);
+        GoToBedCenterCommand       = new RelayCommand(GoToBedCenter);
+        ConnectCommand             = new RelayCommand(ToggleConnect);
+        SaveAsHomePositionCommand  = new RelayCommand(SaveAsHomePosition);
 
         _sync.Connected     += (_, _)  => Dispatcher.UIThread.Post(() => ConnectionStatus = ConnectionStatus.Ready);
         _sync.Disconnected  += (_, _)  => Dispatcher.UIThread.Post(() => ConnectionStatus = ConnectionStatus.Disconnected);

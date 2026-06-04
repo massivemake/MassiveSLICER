@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "Name": "PETG - Clear",
+    "MaterialType": "PETG",
+    "Color": "Clear",
+    "Temperature1": 220,
+    "Temperature2": 220,
+    "Temperature3": 220,
+    "FlowRate": 1,
+    "MaterialDensity": 1.05,
+    "CostPerLb": 5
+  }
+]

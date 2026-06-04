@@ -101,6 +101,37 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showDimensions, value);
     }
 
+    // -- Toolpath colors -------------------------------------------------------
+
+    private System.Numerics.Vector3 _toolpathExtrudeColor    = new(0.1f,  0.45f, 0.9f);
+    private System.Numerics.Vector3 _toolpathTravelColor     = new(0.85f, 0.18f, 0.18f);
+    private System.Numerics.Vector3 _toolpathSeamColor       = new(1.0f,  0.9f,  0.0f);
+    private System.Numerics.Vector3 _toolpathUnselectedColor = new(0.38f, 0.38f, 0.38f);
+
+    public System.Numerics.Vector3 ToolpathExtrudeColor
+    {
+        get => _toolpathExtrudeColor;
+        set => SetField(ref _toolpathExtrudeColor, value);
+    }
+
+    public System.Numerics.Vector3 ToolpathTravelColor
+    {
+        get => _toolpathTravelColor;
+        set => SetField(ref _toolpathTravelColor, value);
+    }
+
+    public System.Numerics.Vector3 ToolpathSeamColor
+    {
+        get => _toolpathSeamColor;
+        set => SetField(ref _toolpathSeamColor, value);
+    }
+
+    public System.Numerics.Vector3 ToolpathUnselectedColor
+    {
+        get => _toolpathUnselectedColor;
+        set => SetField(ref _toolpathUnselectedColor, value);
+    }
+
     private NavigationPresetId _activePreset = NavigationPresetId.Rhino;
 
     /// <summary>Active mouse-button navigation preset -- controls which buttons perform orbit/pan.</summary>
@@ -151,6 +182,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// The viewport render loop applies bed boundary settings on the GL thread.
     /// </summary>
     public CellConfig? ActiveCell { get; set; }
+
+    /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
+    public string? ActiveCellPath { get; set; }
 
     // -- Render request --------------------------------------------------------
 
@@ -304,9 +338,18 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool HasSelection
     {
         get => _hasSelection;
+        set => SetField(ref _hasSelection, value);
+    }
+
+    private bool _hasMeshSelected;
+
+    /// <summary>True when a sliceable user mesh (not a toolpath or toolhead) is selected.</summary>
+    public bool HasMeshSelected
+    {
+        get => _hasMeshSelected;
         set
         {
-            if (SetField(ref _hasSelection, value))
+            if (SetField(ref _hasMeshSelected, value))
                 SliceCommand?.RaiseCanExecuteChanged();
         }
     }
@@ -320,7 +363,10 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (SetField(ref _isToolpathSelected, value))
+            {
                 ExportKrlCommand?.RaiseCanExecuteChanged();
+                TogglePlaybackCommand?.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -422,14 +468,20 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void ResetScrubIndex(int max, Toolpath? toolpath)
     {
+        if (_isPlaying)
+        {
+            _isPlaying = false;
+            OnPropertyChanged(nameof(IsPlaying));
+            OnPlaybackToggled?.Invoke(false);
+        }
         ActiveScrubToolpath = toolpath;
 
         _toolpathScrubMax   = max;
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
 
-        _toolpathScrubIndex = 0;
-        _toolpathScrubText  = "0";
+        _toolpathScrubIndex = max;
+        _toolpathScrubText  = max.ToString();
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
@@ -471,8 +523,19 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    public RelayCommand FocusCommand       { get; }
-    public RelayCommand DropToPlateCommand { get; }
+    public RelayCommand FocusCommand          { get; }
+    public RelayCommand DropToPlateCommand    { get; }
+    public RelayCommand TogglePlaybackCommand { get; }
+
+    private bool _isPlaying;
+    public bool IsPlaying
+    {
+        get => _isPlaying;
+        set => SetField(ref _isPlaying, value);
+    }
+
+    /// <summary>Callback set by the viewport code-behind to start/stop playback.</summary>
+    internal Action<bool>? OnPlaybackToggled { get; set; }
 
     /// <summary>Callback set by the viewport code-behind to perform focus-on-selection.</summary>
     internal Action? OnFocusRequested      { get; set; }
@@ -490,15 +553,20 @@ public sealed class ViewportViewModel : ViewModelBase
         });
         SetDefaultBackdropCommand = new RelayCommand(() => OnSetDefaultBackdrop?.Invoke(ActiveBackdropPath));
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
-        FocusCommand       = new RelayCommand(() => OnFocusRequested?.Invoke());
-        DropToPlateCommand = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
+        DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        TogglePlaybackCommand = new RelayCommand(() =>
+        {
+            IsPlaying = !IsPlaying;
+            OnPlaybackToggled?.Invoke(IsPlaying);
+        }, canExecute: () => _isToolpathSelected);
         GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Translate ? GizmoMode.None : GizmoMode.Translate);
         GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Rotate    ? GizmoMode.None : GizmoMode.Rotate);
         GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Scale     ? GizmoMode.None : GizmoMode.Scale);
         GizmoToggleCommand = new RelayCommand(() => GizmoEnabled = !GizmoEnabled);
         SliceCommand = new RelayCommand(
             execute:    () => _ = OnSliceRequested?.Invoke(),
-            canExecute: () => !IsSlicing && HasSelection);
+            canExecute: () => !IsSlicing && HasMeshSelected);
 
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
@@ -589,6 +657,13 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get => _statsCost;
         set => SetField(ref _statsCost, value);
+    }
+
+    private string _statsReachability = "";
+    public string StatsReachability
+    {
+        get => _statsReachability;
+        set => SetField(ref _statsReachability, value);
     }
 
     /// <summary>

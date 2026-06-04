@@ -197,6 +197,32 @@
         <Setter Property="FontSize"        Value="11"/>
     </Style>
 
+    <!-- ── ColorPicker ──────────────────────────────────────────────────────── -->
+    <!-- ColorPicker is a DropDownButton wrapping a color swatch + flyout ColorView. -->
+    <Style Selector="ColorPicker">
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Height"       Value="28"/>
+    </Style>
+    <!-- Theme the outer DropDownButton to match Obsidian palette -->
+    <Style Selector="ColorPicker /template/ DropDownButton">
+        <Setter Property="Background"      Value="{DynamicResource Bg3}"/>
+        <Setter Property="BorderBrush"     Value="{DynamicResource Border2}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius"    Value="6"/>
+    </Style>
+    <!-- Target the inner Border that actually renders the button chrome -->
+    <Style Selector="ColorPicker /template/ DropDownButton /template/ Border#border">
+        <Setter Property="Background"  Value="{DynamicResource Bg3}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+    </Style>
+    <Style Selector="ColorPicker /template/ DropDownButton:pointerover /template/ Border#border">
+        <Setter Property="Background"  Value="{DynamicResource Bg4}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+    </Style>
+    <Style Selector="ColorPicker /template/ DropDownButton:pressed /template/ Border#border">
+        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+    </Style>
+
     <!-- ── Scrubber label input ─────────────────────────────────────────────── -->
     <!-- Inline move-number input in the floating scrubber label.
          Invisible until hovered/focused so it reads as a normal label at a glance. -->

@@ -35,4 +35,18 @@ public sealed class SliceSettings
     /// Defaults to (0, 1) -- back of model (max Y).
     /// </summary>
     public Vector2 SeamDirection { get; init; } = new(0f, 1f);
+
+    /// <summary>
+    /// Maximum perpendicular deviation (mm) for Douglas-Peucker simplification applied after
+    /// the Clipper2 inset. Removes the redundant collinear vertices Clipper adds on straight
+    /// segments. 0 disables simplification. Defaults to 0.1 mm.
+    /// </summary>
+    public float SimplificationTolerance { get; init; } = 0.1f;
+
+    /// <summary>
+    /// When true, the bead-width/2 contour inset step is skipped. The raw intersection
+    /// contour becomes the print centerline, adding extra material on the outside. Useful
+    /// for parts that will be finish-milled after printing.
+    /// </summary>
+    public bool DisableContourOffset { get; init; } = false;
 }

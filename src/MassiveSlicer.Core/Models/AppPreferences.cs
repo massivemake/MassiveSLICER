@@ -31,6 +31,9 @@ public sealed class AppPreferences
 
     // ── Appearance ────────────────────────────────────────────────────────
 
+    /// <summary>Active colour theme name (matches a Resources/Themes/*.axaml file).</summary>
+    public string ActiveTheme { get; set; } = "Obsidian";
+
     /// <summary>Path of the backdrop image loaded at startup, or null for none.</summary>
     public string? DefaultBackdropPath { get; set; }
 
@@ -71,14 +74,18 @@ public sealed class AppPreferences
     /// <summary>Active viewport shader mode name (matches ShaderMode enum).</summary>
     public string ShaderMode { get; set; } = "Standard";
 
-    /// <summary>Active UI colour theme name (matches AppTheme enum).</summary>
-    public string AppTheme { get; set; } = "Obsidian";
-
     /// <summary>Whether mesh edges are drawn over the shaded surface.</summary>
     public bool ShowEdges { get; set; } = false;
 
     /// <summary>Whether the ground-plane shadow catcher is active.</summary>
     public bool ShadowCatcherEnabled { get; set; } = false;
+
+    // ── Toolpath colors (AARRGGBB hex) ────────────────────────────────────
+
+    public string ToolpathExtrudeColor    { get; set; } = "#FF1A73E6";
+    public string ToolpathTravelColor     { get; set; } = "#FFD92E2E";
+    public string ToolpathSeamColor       { get; set; } = "#FFFFE600";
+    public string ToolpathUnselectedColor { get; set; } = "#FF616161";
 
     // ── Additive slicing ──────────────────────────────────────────────────
 

@@ -3,7 +3,7 @@
   "robot": {
     "modelPath": "assets/cells/LFAM2/LFAM2Robot.glb",
     "worldPosition": { "x": 0, "y": 0, "z": 1000 },
-    "homePosition": [ 0, -90, 90, 0, 15, 0 ],
+    "defaultHomePosition": "Home",
     "homePositions": [
       { "name": "Home",    "angles": [ 0, -90,  90, 0, 15, 0 ] },
       { "name": "Service", "angles": [ 0, -90, 110, 0, 35, 0 ] }

@@ -1,3 +1,4 @@
+using Avalonia;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport;
@@ -132,6 +133,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         vp.ShowBedGrid  = p.ShowBedGrid;
         vp.ActivePreset = p.ActivePreset;
 
+        // Toolpath colors
+        vp.ToolpathExtrudeColor    = HexToVec3(p.ToolpathExtrudeColor);
+        vp.ToolpathTravelColor     = HexToVec3(p.ToolpathTravelColor);
+        vp.ToolpathSeamColor       = HexToVec3(p.ToolpathSeamColor);
+        vp.ToolpathUnselectedColor = HexToVec3(p.ToolpathUnselectedColor);
+
         // Lighting
         vp.LightAzimuth   = p.LightAzimuth;
         vp.LightElevation = p.LightElevation;
@@ -149,9 +156,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         vp.BackdropBlur = p.DefaultBackdropBlur;
 
-        // View settings panel
-        if (Enum.TryParse<AppTheme>(p.AppTheme, out var theme))
+        // Theme: update swatch selection and apply visually
+        if (Enum.TryParse<AppTheme>(p.ActiveTheme, out var theme))
+        {
             view.ActiveTheme = theme;
+            (Application.Current as MassiveSlicer.App.App)?.ApplyTheme(theme);
+        }
         view.ShowEdges            = p.ShowEdges;
         view.ShadowCatcherEnabled = p.ShadowCatcherEnabled;
 
@@ -161,18 +171,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.FirstLayerHeight = p.FirstLayerHeight;
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
-        add.PassAngle    = p.PassAngle;
-        add.TiltAngle    = p.TiltAngle;
-        add.TiltAngleX   = p.TiltAngleX;
-        add.FeedRate     = p.FeedRate;
-        add.TravelSpeed     = p.TravelSpeed;
-        add.Acceleration = p.Acceleration;
-        add.ApproachZ    = p.ApproachZ;
+        add.PassAngle     = p.PassAngle;
+        add.TiltAngle     = p.TiltAngle;
+        add.TiltAngleX    = p.TiltAngleX;
+        add.FeedRate      = p.FeedRate;
+        add.TravelSpeed   = p.TravelSpeed;
+        add.Acceleration  = p.Acceleration;
+        add.ApproachZ     = p.ApproachZ;
         add.ToolDataIndex = p.ToolDataIndex;
         add.BaseDataIndex = p.BaseDataIndex;
-        add.ToolheadA    = p.ToolheadA;
-        add.ToolheadB    = p.ToolheadB;
-        add.ToolheadC    = p.ToolheadC;
+        add.ToolheadA     = p.ToolheadA;
+        add.ToolheadB     = p.ToolheadB;
+        add.ToolheadC     = p.ToolheadC;
     }
 
     /// <summary>
@@ -203,7 +213,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.DefaultBackdropBlur = vp.BackdropBlur;
 
         // View settings panel
-        p.AppTheme             = view.ActiveTheme.ToString();
+        p.ActiveTheme          = view.ActiveTheme.ToString();
         p.ShowEdges            = view.ShowEdges;
         p.ShadowCatcherEnabled = view.ShadowCatcherEnabled;
 
@@ -216,7 +226,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.TiltAngle        = add.TiltAngle;
         p.TiltAngleX       = add.TiltAngleX;
         p.FeedRate         = add.FeedRate;
-        p.TravelSpeed         = add.TravelSpeed;
+        p.TravelSpeed      = add.TravelSpeed;
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;
         p.ToolDataIndex    = add.ToolDataIndex;
@@ -226,5 +236,19 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadC        = add.ToolheadC;
 
         PreferencesLoader.Save(p);
+    }
+
+    private static System.Numerics.Vector3 HexToVec3(string hex)
+    {
+        try
+        {
+            var s = hex.TrimStart('#');
+            if (s.Length == 8) s = s[2..]; // strip alpha → RRGGBB
+            return new System.Numerics.Vector3(
+                Convert.ToInt32(s[0..2], 16) / 255f,
+                Convert.ToInt32(s[2..4], 16) / 255f,
+                Convert.ToInt32(s[4..6], 16) / 255f);
+        }
+        catch { return System.Numerics.Vector3.Zero; }
     }
 }

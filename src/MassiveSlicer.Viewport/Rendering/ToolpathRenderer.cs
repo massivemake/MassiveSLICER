@@ -79,20 +79,116 @@ public sealed class ToolpathRenderer : IDisposable
         }
         """;
 
-    private static readonly Vector3 TravelColor    = new(0.18f, 0.42f, 0.18f);  // green
-    private static readonly Vector3 ExtrudeColor   = new(0.1f,  0.45f, 0.9f);   // blue
-    private static readonly Vector3 SeamStart      = new(1.0f,  0.9f,  0.0f);   // yellow
-    private static readonly Vector3 SeamEnd        = new(1.0f,  0.2f,  0.1f);   // red
-    private static readonly Vector3 UnselectedGray = new(0.38f, 0.38f, 0.38f);  // neutral gray
+    private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
+
+    private Vector3 _extrudeColor   = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _travelColor    = new(0.85f, 0.18f, 0.18f);
+    private Vector3 _seamColor      = new(1.0f,  0.9f,  0.0f);
+    private Vector3 _unselectedGray = new(0.38f, 0.38f, 0.38f);
+
+    private Toolpath _toolpath;
+    private NVec3    _origin;
+    private bool[]?  _reachability;  // per flat-move index; null = all reachable
+
+    // Prefix-sum arrays: cumulative[i] = total VBO vertices for the first i flat moves.
+    // Index 0 = 0 (nothing drawn), index _totalMoveCount = full count.
+    private int   _totalMoveCount;
+    private int[] _extrudeVertexCumulative = [];
+    private int[] _travelVertexCumulative  = [];
+    private int[] _beadVertexCumulative    = [];
 
     public ToolpathRenderer(Toolpath toolpath, NVec3 origin = default,
         float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default)
     {
+        _toolpath   = toolpath;
+        _origin     = origin;
         _shader     = new Shader(VertSrc,     FragSrc);
         _beadShader = new Shader(BeadVertSrc, BeadFragSrc);
         Upload(toolpath, origin);
         UploadBead(toolpath, origin, beadWidth, layerHeight,
             materialColor == NVec3.Zero ? new NVec3(0.1f, 0.45f, 0.9f) : materialColor);
+    }
+
+    /// <summary>
+    /// Re-uploads the extrude VBO with per-move reachability colours.
+    /// <paramref name="reachable"/>[i] == false colours move i red. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateReachability(bool[] reachable)
+    {
+        _reachability = reachable;
+        if (_extrudeVao != 0) { GL.DeleteVertexArray(_extrudeVao); GL.DeleteBuffer(_extrudeVbo); }
+        _extrudeVao = _extrudeVbo = _extrudeCount = 0;
+        var extData = BuildExtrudeData();
+        if (extData.Length > 0)
+        {
+            (_extrudeVao, _extrudeVbo) = BuildVao(extData);
+            _extrudeCount = extData.Length / 6;
+        }
+    }
+
+    /// <summary>
+    /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected)
+    {
+        bool vbosDirty = _extrudeColor != extrude || _travelColor != travel || _seamColor != seam;
+        _extrudeColor   = extrude;
+        _travelColor    = travel;
+        _seamColor      = seam;
+        _unselectedGray = unselected;
+        if (vbosDirty) RebuildLineVbos();
+    }
+
+    private void RebuildLineVbos()
+    {
+        if (_extrudeVao != 0) { GL.DeleteVertexArray(_extrudeVao); GL.DeleteBuffer(_extrudeVbo); }
+        _extrudeVao = _extrudeVbo = _extrudeCount = 0;
+        var extData = BuildExtrudeData();
+        if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
+
+        if (_travelVao != 0) { GL.DeleteVertexArray(_travelVao); GL.DeleteBuffer(_travelVbo); }
+        _travelVao = _travelVbo = _travelCount = 0;
+        var trData = BuildTravelData();
+        if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
+
+        if (_ptVao != 0) { GL.DeleteVertexArray(_ptVao); GL.DeleteBuffer(_ptVbo); }
+        _ptVao = _ptVbo = _pointCount = 0;
+        var ptData = BuildSeamData();
+        _pointCount = ptData.Length / 6;
+        if (_pointCount > 0) (_ptVao, _ptVbo) = BuildVao(ptData);
+    }
+
+    private float[] BuildExtrudeData()
+    {
+        int extrudeCount = 0;
+        foreach (var layer in _toolpath.Layers)
+            foreach (var move in layer.Moves)
+                if (move.Kind == MoveKind.Extrude) extrudeCount++;
+
+        var extData = new float[extrudeCount * 2 * 6];
+        int ei = 0, mi = 0;
+
+        void WriteVert(NVec3 p, Vector3 c)
+        {
+            extData[ei++] = p.X - _origin.X; extData[ei++] = p.Y - _origin.Y; extData[ei++] = p.Z - _origin.Z;
+            extData[ei++] = c.X;             extData[ei++] = c.Y;             extData[ei++] = c.Z;
+        }
+
+        foreach (var layer in _toolpath.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    var color = _reachability is not null && mi < _reachability.Length && !_reachability[mi]
+                        ? UnreachableColor : _extrudeColor;
+                    WriteVert(move.From, color);
+                    WriteVert(move.To,   color);
+                }
+                mi++;
+            }
+        }
+        return extData;
     }
 
     /// <summary>Creates and populates a VAO+VBO pair. Both handles are returned.</summary>
@@ -112,61 +208,124 @@ public sealed class ToolpathRenderer : IDisposable
         return (vao, vbo);
     }
 
-    private void Upload(Toolpath toolpath, System.Numerics.Vector3 origin)
+    /// <summary>
+    /// Builds prefix-sum arrays so Draw() can clamp each VBO to a scrub index.
+    /// Called once during Upload(); safe to skip on color/reachability rebuilds
+    /// because the move structure never changes after construction.
+    /// </summary>
+    private void ComputeMovePrefixSums()
     {
-        // -- Count extrude and travel moves separately ------------------------
-        int extrudeCount = 0, travelCount = 0;
-        foreach (var layer in toolpath.Layers)
+        int total = 0;
+        foreach (var layer in _toolpath.Layers)
+            total += layer.Moves.Count;
+        _totalMoveCount = total;
+
+        _extrudeVertexCumulative = new int[total + 1];
+        _travelVertexCumulative  = new int[total + 1];
+
+        int ei = 0, ti = 0, fi = 0;
+        foreach (var layer in _toolpath.Layers)
+        {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
-                else                               travelCount++;
+                if (move.Kind == MoveKind.Extrude) ei += 2;
+                else                               ti += 2;
+                fi++;
+                _extrudeVertexCumulative[fi] = ei;
+                _travelVertexCumulative[fi]  = ti;
             }
-
-        // -- Pack interleaved [x,y,z, r,g,b] per vertex (2 verts per segment) -
-        // Points stored in local space so the node's LocalTransform(origin) places them correctly.
-        var extData = new float[extrudeCount * 2 * 6];
-        var trData  = new float[travelCount  * 2 * 6];
-        int ei = 0, ti = 0;
-
-        void WriteVert(float[] buf, ref int idx, System.Numerics.Vector3 p, Vector3 c)
-        {
-            buf[idx++] = p.X - origin.X; buf[idx++] = p.Y - origin.Y; buf[idx++] = p.Z - origin.Z;
-            buf[idx++] = c.X;            buf[idx++] = c.Y;            buf[idx++] = c.Z;
         }
+    }
 
-        foreach (var layer in toolpath.Layers)
+    /// <summary>
+    /// Builds the bead prefix-sum array by mirroring UploadBead's contour logic
+    /// without emitting any vertex data. Must be called after ComputeMovePrefixSums.
+    /// </summary>
+    private void BuildBeadVertexCumulative()
+    {
+        _beadVertexCumulative = new int[_totalMoveCount + 1];
+        int cumulative = 0;
+
+        var contourFlatIndices = new List<List<int>>();
+        int flatIdx = 0;
+        foreach (var layer in _toolpath.Layers)
         {
+            List<int>? cur = null;
             foreach (var move in layer.Moves)
             {
                 if (move.Kind == MoveKind.Extrude)
                 {
-                    WriteVert(extData, ref ei, move.From, ExtrudeColor);
-                    WriteVert(extData, ref ei, move.To,   ExtrudeColor);
+                    if (cur is null) { cur = new List<int>(); contourFlatIndices.Add(cur); }
+                    cur.Add(flatIdx);
                 }
-                else
-                {
-                    WriteVert(trData, ref ti, move.From, TravelColor);
-                    WriteVert(trData, ref ti, move.To,   TravelColor);
-                }
+                else cur = null;
+                flatIdx++;
             }
         }
 
-        if (extrudeCount > 0)
+        foreach (var contour in contourFlatIndices)
         {
-            (_extrudeVao, _extrudeVbo) = BuildVao(extData);
-            _extrudeCount = extrudeCount * 2;
+            int n = contour.Count;
+            for (int i = 0; i < n; i++)
+            {
+                if (i == 0)     cumulative += 6;   // back cap  (1 Quad = 6 verts)
+                cumulative += 24;                   // 4 side Quads = 4×6 = 24 verts
+                if (i == n - 1) cumulative += 6;   // front cap
+                _beadVertexCumulative[contour[i] + 1] = cumulative;
+            }
         }
 
-        if (travelCount > 0)
+        // Propagate for non-extrude moves so every index has the correct value.
+        for (int i = 1; i <= _totalMoveCount; i++)
+            if (_beadVertexCumulative[i] == 0)
+                _beadVertexCumulative[i] = _beadVertexCumulative[i - 1];
+    }
+
+    private void Upload(Toolpath toolpath, NVec3 origin)
+    {
+        ComputeMovePrefixSums();
+        var extData = BuildExtrudeData();
+        if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
+
+        var trData = BuildTravelData();
+        if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
+
+        var ptData = BuildSeamData();
+        _pointCount = ptData.Length / 6;
+        if (_pointCount > 0) (_ptVao, _ptVbo) = BuildVao(ptData);
+    }
+
+    private float[] BuildTravelData()
+    {
+        int travelCount = 0;
+        foreach (var layer in _toolpath.Layers)
+            foreach (var move in layer.Moves)
+                if (move.Kind != MoveKind.Extrude) travelCount++;
+
+        var trData = new float[travelCount * 2 * 6];
+        int ti = 0;
+
+        void WriteTr(NVec3 p, Vector3 c)
         {
-            (_travelVao, _travelVbo) = BuildVao(trData);
-            _travelCount = travelCount * 2;
+            trData[ti++] = p.X - _origin.X; trData[ti++] = p.Y - _origin.Y; trData[ti++] = p.Z - _origin.Z;
+            trData[ti++] = c.X;             trData[ti++] = c.Y;             trData[ti++] = c.Z;
         }
 
-        // -- Seam points: start (yellow) and end (red) per contour -----------
+        foreach (var layer in _toolpath.Layers)
+            foreach (var move in layer.Moves)
+                if (move.Kind != MoveKind.Extrude)
+                {
+                    WriteTr(move.From, _travelColor);
+                    WriteTr(move.To,   _travelColor);
+                }
+
+        return trData;
+    }
+
+    private float[] BuildSeamData()
+    {
         int totalContours = 0;
-        foreach (var layer in toolpath.Layers)
+        foreach (var layer in _toolpath.Layers)
         {
             bool inEx = false;
             foreach (var m in layer.Moves)
@@ -179,16 +338,16 @@ public sealed class ToolpathRenderer : IDisposable
         var ptData = new float[totalContours * 2 * 6];
         int pi = 0;
 
-        void WritePoint(System.Numerics.Vector3 p, Vector3 col)
+        void WritePoint(NVec3 p, Vector3 col)
         {
-            ptData[pi++] = p.X - origin.X; ptData[pi++] = p.Y - origin.Y; ptData[pi++] = p.Z - origin.Z;
+            ptData[pi++] = p.X - _origin.X; ptData[pi++] = p.Y - _origin.Y; ptData[pi++] = p.Z - _origin.Z;
             ptData[pi++] = col.X;           ptData[pi++] = col.Y;           ptData[pi++] = col.Z;
         }
 
-        foreach (var layer in toolpath.Layers)
+        foreach (var layer in _toolpath.Layers)
         {
             bool inExtrude = false;
-            System.Numerics.Vector3 extStart = default, extEnd = default;
+            NVec3 extStart = default, extEnd = default;
 
             foreach (var move in layer.Moves)
             {
@@ -201,22 +360,20 @@ public sealed class ToolpathRenderer : IDisposable
                 {
                     if (inExtrude)
                     {
-                        WritePoint(extStart, SeamStart);
-                        WritePoint(extEnd,   SeamEnd);
+                        WritePoint(extStart, _seamColor);
+                        WritePoint(extEnd,   _seamColor);
                         inExtrude = false;
                     }
                 }
             }
             if (inExtrude)
             {
-                WritePoint(extStart, SeamStart);
-                WritePoint(extEnd,   SeamEnd);
+                WritePoint(extStart, _seamColor);
+                WritePoint(extEnd,   _seamColor);
             }
         }
 
-        _pointCount = pi / 6;
-        if (_pointCount > 0)
-            (_ptVao, _ptVbo) = BuildVao(ptData);
+        return ptData;
     }
 
     private void UploadBead(Toolpath toolpath, NVec3 origin,
@@ -230,11 +387,13 @@ public sealed class ToolpathRenderer : IDisposable
                 if (move.Kind == MoveKind.Extrude) extrudeCount++;
         if (extrudeCount == 0) return;
 
-        // 6 faces × 2 triangles × 3 verts × 6 floats (pos + normal) per segment
+        float hw = beadWidth  * 0.5f;
+        float hh = layerHeight * 0.5f;
+        var   up = NVec3.UnitZ;
+
+        // 4 side quads + 2 caps = 12 tris = 36 verts per segment (upper bound)
         var data = new float[extrudeCount * 36 * 6];
         int di = 0;
-        float hw = beadWidth   * 0.5f;
-        float hh = layerHeight * 0.5f;
 
         void WV(NVec3 p, NVec3 n)
         {
@@ -242,65 +401,93 @@ public sealed class ToolpathRenderer : IDisposable
             data[di++] = n.X;            data[di++] = n.Y;            data[di++] = n.Z;
         }
 
+        void Quad(NVec3 p0, NVec3 n0, NVec3 p1, NVec3 n1,
+                  NVec3 p2, NVec3 n2, NVec3 p3, NVec3 n3)
+        {
+            WV(p0, n0); WV(p1, n1); WV(p2, n2);
+            WV(p0, n0); WV(p2, n2); WV(p3, n3);
+        }
+
+        // Side normals: blend of adjacent face normals only (no fwd component).
+        // This makes normals identical on both sides of a junction regardless of
+        // how the segment direction changes, eliminating shading seams.
+        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r) => (
+            NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
+            NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
+
+        (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r)
+            => (pt - r*hw - up*hh, pt + r*hw - up*hh,
+                pt - r*hw + up*hh, pt + r*hw + up*hh);
+
+        // Group consecutive extrude moves within each layer into contours.
+        // Caps are only emitted at contour start/end; interior junctions get blended normals.
+        var contours = new List<List<ToolpathMove>>();
         foreach (var layer in toolpath.Layers)
         {
+            List<ToolpathMove>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind != MoveKind.Extrude) continue;
-                var A = move.From;
-                var B = move.To;
-                var diff = B - A;
-                if (diff.LengthSquared() < 1e-12f) continue;
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    if (cur is null) { cur = new List<ToolpathMove>(); contours.Add(cur); }
+                    cur.Add(move);
+                }
+                else cur = null;
+            }
+        }
 
-                var fwd   = NVec3.Normalize(diff);
-                var right = NVec3.Cross(fwd, NVec3.UnitZ);
-                if (right.LengthSquared() < 1e-6f)
-                    right = NVec3.Cross(fwd, NVec3.UnitX);
-                right = NVec3.Normalize(right);
-                var up = NVec3.UnitZ;
+        foreach (var contour in contours)
+        {
+            int n = contour.Count;
+            if (n == 0) continue;
 
-                var rHw = right * hw;
-                var uHh = up    * hh;
+            // Per-segment forward and right vectors.
+            var fwds   = new NVec3[n];
+            var rights = new NVec3[n];
+            for (int i = 0; i < n; i++)
+            {
+                var d = contour[i].To - contour[i].From;
+                fwds[i] = d.LengthSquared() > 1e-12f
+                    ? NVec3.Normalize(d)
+                    : (i > 0 ? fwds[i - 1] : NVec3.UnitX);
+                var r = NVec3.Cross(fwds[i], up);
+                if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwds[i], NVec3.UnitX);
+                rights[i] = NVec3.Normalize(r);
+            }
 
-                // 8 box corners (Back/Front × Left/Right × Bottom/Top)
-                NVec3 BLB = A - rHw - uHh, BRB = A + rHw - uHh;
-                NVec3 BLT = A - rHw + uHh, BRT = A + rHw + uHh;
-                NVec3 FLB = B - rHw - uHh, FRB = B + rHw - uHh;
-                NVec3 FLT = B - rHw + uHh, FRT = B + rHw + uHh;
+            // Cross-section right vectors: averaged at interior junctions.
+            // cs[0] = contour start, cs[i] = junction between seg i-1 and seg i, cs[n] = contour end.
+            var csR = new NVec3[n + 1];
+            csR[0] = rights[0];
+            for (int i = 1; i < n; i++) csR[i] = NVec3.Normalize(rights[i - 1] + rights[i]);
+            csR[n] = rights[n - 1];
 
-                // Averaged corner normals for smooth interpolation across faces
-                NVec3 nBLB = NVec3.Normalize(-fwd - right - up);
-                NVec3 nBRB = NVec3.Normalize(-fwd + right - up);
-                NVec3 nBLT = NVec3.Normalize(-fwd - right + up);
-                NVec3 nBRT = NVec3.Normalize(-fwd + right + up);
-                NVec3 nFLB = NVec3.Normalize( fwd - right - up);
-                NVec3 nFRB = NVec3.Normalize( fwd + right - up);
-                NVec3 nFLT = NVec3.Normalize( fwd - right + up);
-                NVec3 nFRT = NVec3.Normalize( fwd + right + up);
+            // Back cap (flat normal = -fwd of first segment).
+            {
+                var (lb, rb, lt, rt) = Corners(contour[0].From, csR[0]);
+                var cn = -fwds[0];
+                Quad(rb, cn, lb, cn, lt, cn, rt, cn);
+            }
 
-                // Top
-                WV(BLT, nBLT); WV(BRT, nBRT); WV(FRT, nFRT);
-                WV(BLT, nBLT); WV(FRT, nFRT); WV(FLT, nFLT);
+            // Four side quads per segment, using blended cross-section normals.
+            for (int i = 0; i < n; i++)
+            {
+                var (lbA, rbA, ltA, rtA) = Corners(contour[i].From, csR[i]);
+                var (lbB, rbB, ltB, rtB) = Corners(contour[i].To,   csR[i + 1]);
+                var (nLbA, nRbA, nLtA, nRtA) = SideNormals(csR[i]);
+                var (nLbB, nRbB, nLtB, nRtB) = SideNormals(csR[i + 1]);
 
-                // Bottom
-                WV(BRB, nBRB); WV(BLB, nBLB); WV(FLB, nFLB);
-                WV(BRB, nBRB); WV(FLB, nFLB); WV(FRB, nFRB);
+                Quad(ltA, nLtA, rtA, nRtA, rtB, nRtB, ltB, nLtB);  // top
+                Quad(rbA, nRbA, lbA, nLbA, lbB, nLbB, rbB, nRbB);  // bottom
+                Quad(lbA, nLbA, ltA, nLtA, ltB, nLtB, lbB, nLbB);  // left
+                Quad(rtA, nRtA, rbA, nRbA, rbB, nRbB, rtB, nRtB);  // right
+            }
 
-                // Left side
-                WV(BLB, nBLB); WV(BLT, nBLT); WV(FLT, nFLT);
-                WV(BLB, nBLB); WV(FLT, nFLT); WV(FLB, nFLB);
-
-                // Right side
-                WV(BRT, nBRT); WV(BRB, nBRB); WV(FRB, nFRB);
-                WV(BRT, nBRT); WV(FRB, nFRB); WV(FRT, nFRT);
-
-                // Back cap
-                WV(BRB, nBRB); WV(BRT, nBRT); WV(BLT, nBLT);
-                WV(BRB, nBRB); WV(BLT, nBLT); WV(BLB, nBLB);
-
-                // Front cap
-                WV(FLB, nFLB); WV(FLT, nFLT); WV(FRT, nFRT);
-                WV(FLB, nFLB); WV(FRT, nFRT); WV(FRB, nFRB);
+            // Front cap (flat normal = +fwd of last segment).
+            {
+                var (lb, rb, lt, rt) = Corners(contour[n - 1].To, csR[n]);
+                var cn = fwds[n - 1];
+                Quad(lb, cn, lt, cn, rt, cn, rb, cn);
             }
         }
 
@@ -310,41 +497,55 @@ public sealed class ToolpathRenderer : IDisposable
             float[] upload = di == data.Length ? data : data[..di];
             (_beadVao, _beadVbo) = BuildVao(upload);
         }
+        BuildBeadVertexCumulative();
+    }
+
+    // Returns the number of VBO vertices to draw when the scrubber is at `scrubIndex`.
+    // scrubIndex == int.MaxValue (default) means show everything.
+    private int ScrubCount(int[] cumulative, int totalCount, int scrubIndex)
+    {
+        if (scrubIndex >= _totalMoveCount || _totalMoveCount == 0) return totalCount;
+        if (scrubIndex <= 0) return 0;
+        return cumulative[scrubIndex];
     }
 
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
-                     bool showBead = false)
+                     bool showBead = false, int scrubIndex = int.MaxValue)
     {
         if (_disposed) return;
 
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
 
+        int extCount  = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
+        int trCount   = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
+        int beadCount = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
+
         if (!selected)
         {
-            if (showExtrusion && _extrudeCount > 0)
+            if (showExtrusion && extCount > 0)
             {
                 _shader.SetFloat("uOverride", 1f);
-                _shader.SetVector3("uOverrideColor", UnselectedGray);
+                _shader.SetVector3("uOverrideColor", _unselectedGray);
                 GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, _extrudeCount);
+                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
             }
         }
         else
         {
             _shader.SetFloat("uOverride", 0f);
 
-            if (showExtrusion && _extrudeCount > 0)
+            if (showExtrusion && extCount > 0)
             {
                 GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, _extrudeCount);
+                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
             }
 
-            if (showTravel && _travelCount > 0)
+            if (showTravel && trCount > 0)
             {
                 GL.BindVertexArray(_travelVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, _travelCount);
+                GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
             }
 
             if (showSeam && _pointCount > 0)
@@ -356,14 +557,14 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
-        if (showBead && _beadCount > 0)
+        if (showBead && beadCount > 0)
         {
             _beadShader.Use();
             _beadShader.SetMatrix4("uMVP", ref mvp);
             _beadShader.SetVector3("uColor", _beadMaterialColor);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _beadCount);
+            GL.DrawArrays(PrimitiveType.Triangles, 0, beadCount);
             GL.Enable(EnableCap.CullFace);
         }
 

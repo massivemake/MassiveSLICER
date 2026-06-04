@@ -76,21 +76,20 @@ public static class KrlExporter
         // -- Initial approach -----------------------------------------------------
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
         sb.AppendLine(FormatLin(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0));
-        sb.AppendLine(FormatLin(p0, a0, b0, c0));
-        sb.AppendLine(";travel end");
-        sb.AppendLine(";rpm change");
-        sb.AppendLine(FormatAnout4(RpmVoltage(s)));
-        sb.AppendLine($"$VEL.CP = {s.FeedRateMps.ToString("F6", Inv)}");
+        // Exact stop at the touch-down point so the RPM-on TRIGGER fires at the
+        // correct physical position (not inside a C_VEL blend zone).
+        sb.AppendLine(FormatLinExact(p0, a0, b0, c0));
         sb.AppendLine();
 
-        Vector3 lastPos            = p0;
+        Vector3 lastPos = p0;
         (float a, float b, float c) lastAbc = (a0, b0, c0);
+        bool needsRpmOn = true;
 
         // -- Layer loop -----------------------------------------------------------
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
-            var layer          = toolpath.Layers[li];
-            var (la, lb, lc)   = KukaAbc(layer.PlaneNormal, s);
+            var layer        = toolpath.Layers[li];
+            var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
 
             foreach (var move in layer.Moves)
             {
@@ -98,17 +97,23 @@ public static class KrlExporter
 
                 if (move.Kind == MoveKind.Travel)
                 {
-                    sb.AppendLine(";travel start");
+                    sb.AppendLine(";travel");
+                    // TRIGGER fires exactly when the preceding extrude ends (exact-stop means
+                    // DISTANCE=0 coincides with the actual waypoint, not a C_VEL blend zone).
+                    sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
                     sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-                    sb.AppendLine(FormatLin(to, la, lb, lc));
-                    sb.AppendLine(";travel end");
-                    sb.AppendLine(";rpm change");
-                    sb.AppendLine(FormatAnout4(RpmVoltage(s)));
-                    sb.AppendLine($"$VEL.CP = {s.FeedRateMps.ToString("F6", Inv)}");
+                    sb.AppendLine(FormatLinExact(to, la, lb, lc));
                     sb.AppendLine();
+                    needsRpmOn = true;
                 }
                 else
                 {
+                    if (needsRpmOn)
+                    {
+                        sb.AppendLine(FormatTriggerAnout4(RpmVoltage(s), "RPM on"));
+                        sb.AppendLine($"$VEL.CP = {s.FeedRateMps.ToString("F6", Inv)}");
+                        needsRpmOn = false;
+                    }
                     sb.AppendLine(FormatLin(to, la, lb, lc));
                 }
 
@@ -120,28 +125,26 @@ public static class KrlExporter
             // -- Inter-layer travel -----------------------------------------------
             if (li >= toolpath.Layers.Count - 1) continue;
 
-            var nextLayer          = toolpath.Layers[li + 1];
+            var nextLayer = toolpath.Layers[li + 1];
             if (nextLayer.Moves.Count == 0) continue;
 
             var (na, nb, nc) = KukaAbc(nextLayer.PlaneNormal, s);
             var nextStart    = ToBase(nextLayer.Moves[0].From, s);
 
-            sb.AppendLine(";travel start");
+            sb.AppendLine(";travel");
+            sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
             sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-            sb.AppendLine(FormatLin(nextStart, na, nb, nc));
-            sb.AppendLine(";travel end");
-            sb.AppendLine(";rpm change");
-            sb.AppendLine(FormatAnout4(RpmVoltage(s)));
-            sb.AppendLine($"$VEL.CP = {s.FeedRateMps.ToString("F6", Inv)}");
+            sb.AppendLine(FormatLinExact(nextStart, na, nb, nc));
             sb.AppendLine();
+            needsRpmOn = true;
         }
 
         // -- Final retreat --------------------------------------------------------
         var (fa, fb, fc) = lastAbc;
-        sb.AppendLine(";travel start");
+        sb.AppendLine(";retreat");
+        sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-        sb.AppendLine(FormatLin(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc));
-        sb.AppendLine($"$ANOUT[4] = 0.100 ; RPM idle");
+        sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc));
         sb.AppendLine();
         sb.AppendLine("END");
 
@@ -244,12 +247,24 @@ public static class KrlExporter
 
     // -- Line formatting -------------------------------------------------------
 
+    // C_VEL: approximate (blended) positioning — used for extrude moves so the robot
+    // never fully stops mid-bead and maintains a smooth velocity profile.
     private static string FormatLin(Vector3 p, float a, float b, float c)
         => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
            $"E1 0.000, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }} C_VEL";
 
-    private static string FormatAnout4(float v) => $"$ANOUT[4] = {v.ToString("F3", Inv)}";
+    // Exact stop — used for travel/approach/retreat moves so TRIGGER WHEN DISTANCE=0
+    // fires at the precise physical waypoint rather than inside a C_VEL blend zone.
+    // This is the fix for the $ADVANCE look-ahead timing issue: with exact stop the
+    // "path switchover point" (DISTANCE=0) coincides with the actual robot position.
+    private static string FormatLinExact(Vector3 p, float a, float b, float c)
+        => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
+           $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
+           $"E1 0.000, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
+
+    private static string FormatTriggerAnout4(float v, string comment)
+        => $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]={v.ToString("F3", Inv)} ; {comment}";
 
     private static string SafeName(string raw)
         => Regex.Replace(raw.Trim(), @"[^A-Za-z0-9_]", "_");
