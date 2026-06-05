@@ -9,10 +9,12 @@ namespace MassiveSlicer.ViewModels;
 public sealed class OutlinerItemViewModel : ViewModelBase
 {
     private readonly Action _notifyRender;
+    private readonly Action? _onHide;
 
     public SceneNode Node { get; }
     public string Name => Node.Name;
     public ICommand DeleteCommand { get; }
+    public ICommand ToggleVisibleCommand { get; }
 
     public bool Visible
     {
@@ -22,6 +24,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
             if (Node.Visible == value) return;
             Node.Visible = value;
             OnPropertyChanged();
+            if (!value) _onHide?.Invoke();
             _notifyRender();
         }
     }
@@ -41,10 +44,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasChildren));
     }
 
-    internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete)
+    internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete, Action? onHide = null)
     {
-        Node = node;
+        Node          = node;
         _notifyRender = notifyRender;
-        DeleteCommand = new RelayCommand(() => onDelete(this));
+        _onHide       = onHide;
+        DeleteCommand        = new RelayCommand(() => onDelete(this));
+        ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
     }
 }

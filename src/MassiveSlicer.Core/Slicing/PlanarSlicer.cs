@@ -50,15 +50,22 @@ public static class PlanarSlicer
         float reach = (xMax - xMin + yMax - yMin) + 10f;
         var seamOrigin = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
 
-        var toolpath      = new Toolpath();
-        float z           = zMin + settings.FirstLayerHeight;
-        int   idx         = 0;
-        var   prevTracks  = new List<ContourTrack>();
+        float[] zPositions = settings.AdaptiveLayerHeight
+            ? AdaptiveLayerHeights.ComputeZPositions(meshes, zMin, zMax,
+                  settings.FirstLayerHeight, settings.MinLayerHeight,
+                  settings.LayerHeight, settings.AdaptiveQuality)
+            : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
+
+        var toolpath     = new Toolpath();
+        int idx          = 0;
+        var prevTracks   = new List<ContourTrack>();
         ToolpathLayer? prevLayer = null;
 
-        while (z < zMax - 1e-4f)
+        for (int zi = 0; zi < zPositions.Length; zi++)
         {
-            var layer = new ToolpathLayer(idx++, z);
+            float z      = zPositions[zi];
+            float prevZ  = zi == 0 ? zMin : zPositions[zi - 1];
+            var layer    = new ToolpathLayer(idx++, z) { Height = z - prevZ };
             prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer);
 
             if (layer.Moves.Count > 0)
@@ -90,10 +97,19 @@ public static class PlanarSlicer
                 toolpath.Layers.Add(layer);
                 prevLayer = layer;
             }
-            z += settings.LayerHeight;
         }
 
         return toolpath;
+    }
+
+    // -- Z position helpers ----------------------------------------------------
+
+    private static float[] BuildUniformZPositions(float zMin, float zMax, float firstH, float layerH)
+    {
+        var positions = new List<float>();
+        for (float z = zMin + firstH; z < zMax - 1e-4f; z += layerH)
+            positions.Add(z);
+        return [.. positions];
     }
 
     // -- Layer construction ----------------------------------------------------

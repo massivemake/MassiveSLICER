@@ -407,8 +407,7 @@ public sealed class ToolpathRenderer : IDisposable
                 if (move.Kind == MoveKind.Extrude) extrudeCount++;
         if (extrudeCount == 0) return;
 
-        float hw = beadWidth  * 0.5f;
-        float hh = layerHeight * 0.5f;
+        float hw = beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
         // 4 side quads + 2 caps = 12 tris = 36 verts per segment (upper bound)
@@ -435,28 +434,32 @@ public sealed class ToolpathRenderer : IDisposable
             NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
             NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
 
-        (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r)
+        // hh is per-contour (layer height can vary with adaptive slicing).
+        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r, float hw, float hh, NVec3 up)
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
         // Group consecutive extrude moves within each layer into contours.
+        // Each contour stores its half-height so adaptive layers use the correct bead size.
         // Caps are only emitted at contour start/end; interior junctions get blended normals.
-        var contours = new List<List<ToolpathMove>>();
+        var contours = new List<(List<ToolpathMove> moves, float hh)>();
         foreach (var layer in toolpath.Layers)
         {
+            float lh  = layer.Height > 0f ? layer.Height : layerHeight;
+            float lhh = lh * 0.5f;
             List<ToolpathMove>? cur = null;
             foreach (var move in layer.Moves)
             {
                 if (move.Kind == MoveKind.Extrude)
                 {
-                    if (cur is null) { cur = new List<ToolpathMove>(); contours.Add(cur); }
+                    if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add(move);
                 }
                 else cur = null;
             }
         }
 
-        foreach (var contour in contours)
+        foreach (var (contour, hh) in contours)
         {
             int n = contour.Count;
             if (n == 0) continue;
@@ -484,7 +487,7 @@ public sealed class ToolpathRenderer : IDisposable
 
             // Back cap (flat normal = -fwd of first segment).
             {
-                var (lb, rb, lt, rt) = Corners(contour[0].From, csR[0]);
+                var (lb, rb, lt, rt) = Corners(contour[0].From, csR[0], hw, hh, up);
                 var cn = -fwds[0];
                 Quad(rb, cn, lb, cn, lt, cn, rt, cn);
             }
@@ -492,8 +495,8 @@ public sealed class ToolpathRenderer : IDisposable
             // Four side quads per segment, using blended cross-section normals.
             for (int i = 0; i < n; i++)
             {
-                var (lbA, rbA, ltA, rtA) = Corners(contour[i].From, csR[i]);
-                var (lbB, rbB, ltB, rtB) = Corners(contour[i].To,   csR[i + 1]);
+                var (lbA, rbA, ltA, rtA) = Corners(contour[i].From, csR[i],     hw, hh, up);
+                var (lbB, rbB, ltB, rtB) = Corners(contour[i].To,   csR[i + 1], hw, hh, up);
                 var (nLbA, nRbA, nLtA, nRtA) = SideNormals(csR[i]);
                 var (nLbB, nRbB, nLtB, nRtB) = SideNormals(csR[i + 1]);
 
@@ -505,7 +508,7 @@ public sealed class ToolpathRenderer : IDisposable
 
             // Front cap (flat normal = +fwd of last segment).
             {
-                var (lb, rb, lt, rt) = Corners(contour[n - 1].To, csR[n]);
+                var (lb, rb, lt, rt) = Corners(contour[n - 1].To, csR[n], hw, hh, up);
                 var cn = fwds[n - 1];
                 Quad(lb, cn, lt, cn, rt, cn, rb, cn);
             }
@@ -540,8 +543,7 @@ public sealed class ToolpathRenderer : IDisposable
 
     private float[] BuildBeadOverhangData(float[] overhangPerFlatMove)
     {
-        float hw = _beadWidth      * 0.5f;
-        float hh = _beadLayerHeight * 0.5f;
+        float hw = _beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
         int extrudeCount = 0;
@@ -565,21 +567,23 @@ public sealed class ToolpathRenderer : IDisposable
             WV(p0, col); WV(p2, col); WV(p3, col);
         }
 
-        (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r)
+        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r, float hw, float hh, NVec3 up)
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
-        // Group consecutive extrude moves into contours, tracking flat move indices.
-        var contours = new List<List<(ToolpathMove move, int flatIdx)>>();
+        // Group consecutive extrude moves into contours, tracking flat move indices and layer height.
+        var contours = new List<(List<(ToolpathMove move, int flatIdx)> moves, float hh)>();
         int flatIdx = 0;
         foreach (var layer in _toolpath.Layers)
         {
+            float lh  = layer.Height > 0f ? layer.Height : _beadLayerHeight;
+            float lhh = lh * 0.5f;
             List<(ToolpathMove, int)>? cur = null;
             foreach (var move in layer.Moves)
             {
                 if (move.Kind == MoveKind.Extrude)
                 {
-                    if (cur is null) { cur = []; contours.Add(cur); }
+                    if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add((move, flatIdx));
                 }
                 else cur = null;
@@ -587,7 +591,7 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
-        foreach (var contour in contours)
+        foreach (var (contour, hh) in contours)
         {
             int n = contour.Count;
             if (n == 0) continue;
@@ -614,13 +618,13 @@ public sealed class ToolpathRenderer : IDisposable
             NVec3 OverhangColor(int fi)
             {
                 float t = fi >= 0 && fi < overhangPerFlatMove.Length ? overhangPerFlatMove[fi] : 0f;
-                return new NVec3(1f, 1f - t, 1f - t); // white → red
+                return new NVec3(1f, 1f - t, 1f - t); // white to red
             }
 
             // Back cap.
             {
                 var c = OverhangColor(contour[0].flatIdx);
-                var (lb, rb, lt, rt) = Corners(contour[0].move.From, csR[0]);
+                var (lb, rb, lt, rt) = Corners(contour[0].move.From, csR[0], hw, hh, up);
                 Quad(rb, lb, lt, rt, c);
             }
 
@@ -628,8 +632,8 @@ public sealed class ToolpathRenderer : IDisposable
             for (int i = 0; i < n; i++)
             {
                 var c = OverhangColor(contour[i].flatIdx);
-                var (lbA, rbA, ltA, rtA) = Corners(contour[i].move.From, csR[i]);
-                var (lbB, rbB, ltB, rtB) = Corners(contour[i].move.To,   csR[i + 1]);
+                var (lbA, rbA, ltA, rtA) = Corners(contour[i].move.From, csR[i],     hw, hh, up);
+                var (lbB, rbB, ltB, rtB) = Corners(contour[i].move.To,   csR[i + 1], hw, hh, up);
                 Quad(ltA, rtA, rtB, ltB, c); // top
                 Quad(rbA, lbA, lbB, rbB, c); // bottom
                 Quad(lbA, ltA, ltB, lbB, c); // left
@@ -639,7 +643,7 @@ public sealed class ToolpathRenderer : IDisposable
             // Front cap.
             {
                 var c = OverhangColor(contour[n - 1].flatIdx);
-                var (lb, rb, lt, rt) = Corners(contour[n - 1].move.To, csR[n]);
+                var (lb, rb, lt, rt) = Corners(contour[n - 1].move.To, csR[n], hw, hh, up);
                 Quad(lb, lt, rt, rb, c);
             }
         }

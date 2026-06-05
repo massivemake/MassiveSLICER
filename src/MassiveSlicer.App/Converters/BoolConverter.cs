@@ -3,6 +3,15 @@ using Avalonia.Data.Converters;
 
 namespace MassiveSlicer.Converters;
 
+public sealed class BoolToEyeIconConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => value is true ? "mdi-eye" : "mdi-eye-off";
+
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture)
+        => throw new NotSupportedException();
+}
+
 /// <summary>
 /// Converts a bool to bool (with optional inversion) for use with IsVisible bindings.
 /// Replaces WPF's BoolToVisibilityConverter -- in Avalonia, IsVisible accepts bool directly.

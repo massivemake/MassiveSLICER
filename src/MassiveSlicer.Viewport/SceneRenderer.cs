@@ -44,6 +44,18 @@ public sealed class SceneRenderer : IDisposable
     // same depth buffer, then Roberts Cross edge detection composites the two
     // into the final output.
 
+    // Layer-preview heatmap texture (1D, RGB8). Uploaded after each slice.
+    // _layerColorTexDefault is a 1x1 grey fallback bound before the first slice.
+    private int   _layerColorTex;
+    private int   _layerColorTexDefault;
+    private float _layerColorZMin;
+    private float _layerColorZMax;
+
+    // Layer boundary texture (1D, R32F): exact world-Z of each boundary.
+    // Used by the fragment shader for screen-space seam line rendering.
+    private int _layerBoundaryTex;
+    private int _layerBoundaryCount;
+
     private int _sceneFbo,    _sceneColorTex, _sceneDepthRbo;
     private int _maskFbo,     _maskColorTex;
     private int _fsqVao,      _fsqVbo;          // fullscreen quad
@@ -196,6 +208,9 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode { get; set; } = ShaderMode.Standard;
 
+    /// <summary>Layer height (mm) used when <see cref="ShaderMode"/> is <see cref="ShaderMode.LayerPreview"/>.</summary>
+    public float LayerPreviewHeight { get; set; } = 3f;
+
     /// <summary>Path of the currently loaded backdrop image, or <c>null</c> for none.</summary>
     public string? BackdropPath { get; private set; }
 
@@ -327,6 +342,88 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>
+    /// Builds and uploads a 1-D heatmap texture from slice layer data so the layer-preview
+    /// shader can colour each fragment by the thickness of the layer it falls in.
+    /// Blue = thinnest layer, red = thickest. Must be called on the GL thread.
+    /// </summary>
+    /// <param name="zBoundaries">Sorted layer boundary Z positions (length = numLayers + 1).</param>
+    /// <param name="heights">Per-layer thickness in mm (length = numLayers).</param>
+    public void SetLayerPreview(float[] zBoundaries, float[] heights)
+    {
+        if (zBoundaries.Length < 2 || heights.Length == 0) return;
+
+        float zMin = zBoundaries[0];
+        float zMax = zBoundaries[^1];
+        float range = Math.Max(zMax - zMin, 0.001f);
+
+        float minH = heights.Min();
+        float maxH = heights.Max();
+        bool  uniform = maxH - minH < 0.001f;
+
+        const int TexWidth = 2048;
+        var pixels = new byte[TexWidth * 3];
+
+        for (int i = 0; i < TexWidth; i++)
+        {
+            float z = zMin + range * (i + 0.5f) / TexWidth;
+
+            // Binary search for layer containing z.
+            int layerIdx = Array.BinarySearch(zBoundaries, z);
+            if (layerIdx < 0) layerIdx = ~layerIdx - 1;
+            layerIdx = Math.Clamp(layerIdx, 0, heights.Length - 1);
+
+            float h = heights[layerIdx];
+            float t = uniform ? 0.5f : (h - minH) / (maxH - minH);
+
+            // Pure flat heatmap colour — seams are drawn entirely in the shader via
+            // screen-space derivatives so they are always a consistent width on screen.
+            var (r, g, b) = HeatmapColor(t);
+            pixels[i * 3 + 0] = (byte)(r * 255);
+            pixels[i * 3 + 1] = (byte)(g * 255);
+            pixels[i * 3 + 2] = (byte)(b * 255);
+        }
+
+        if (_layerColorTex != 0) GL.DeleteTexture(_layerColorTex);
+        _layerColorTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture1D, _layerColorTex);
+        GL.TexImage1D(TextureTarget.Texture1D, 0, PixelInternalFormat.Rgb8,
+                      TexWidth, 0, PixelFormat.Rgb, PixelType.UnsignedByte, pixels);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMinFilter,
+                        (int)TextureMinFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMagFilter,
+                        (int)TextureMagFilter.Linear);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureWrapS,
+                        (int)TextureWrapMode.ClampToEdge);
+        GL.BindTexture(TextureTarget.Texture1D, 0);
+
+        _layerColorZMin = zMin;
+        _layerColorZMax = zMax;
+
+        // Upload exact boundary Z positions (R32F) for the shader binary search.
+        if (_layerBoundaryTex != 0) GL.DeleteTexture(_layerBoundaryTex);
+        _layerBoundaryTex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture1D, _layerBoundaryTex);
+        GL.TexImage1D(TextureTarget.Texture1D, 0, PixelInternalFormat.R32f,
+                      zBoundaries.Length, 0, PixelFormat.Red, PixelType.Float, zBoundaries);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMinFilter,
+                        (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMagFilter,
+                        (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureWrapS,
+                        (int)TextureWrapMode.ClampToEdge);
+        GL.BindTexture(TextureTarget.Texture1D, 0);
+        _layerBoundaryCount = zBoundaries.Length;
+    }
+
+    private static (float r, float g, float b) HeatmapColor(float t)
+    {
+        // Green(thin=0) -> Yellow(0.5) -> Red(thick=1), matching OrcaSlicer convention.
+        t = Math.Clamp(t, 0f, 1f);
+        if (t < 0.5f) { float s = t * 2f;           return (s,  1f,       0f); }
+        {               float s = (t - 0.5f) * 2f;  return (1f, 1f - s,   0f); }
+    }
+
+    /// <summary>
     /// Loads (or clears) the backdrop image. Pass <c>null</c> to remove the backdrop.
     /// Must be called on the GL thread. Safe to call at any time after initialisation.
     /// </summary>
@@ -364,6 +461,18 @@ public sealed class SceneRenderer : IDisposable
         _gizmo            = new GizmoRenderer();
         _maskShader       = new Shader(MaskVertSrc, MaskFragSrc);
         _compositeShader  = new Shader(CompositeVertSrc, CompositeFragSrc);
+
+        // Default 1x1 grey layer texture used before any slice has been run.
+        _layerColorTexDefault = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture1D, _layerColorTexDefault);
+        byte[] grey = [128, 128, 128];
+        GL.TexImage1D(TextureTarget.Texture1D, 0, PixelInternalFormat.Rgb8, 1, 0,
+                      PixelFormat.Rgb, PixelType.UnsignedByte, grey);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMinFilter,
+                        (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture1D, TextureParameterName.TextureMagFilter,
+                        (int)TextureMagFilter.Nearest);
+        GL.BindTexture(TextureTarget.Texture1D, 0);
 
         BuildFsq();
     }
@@ -431,6 +540,14 @@ public sealed class SceneRenderer : IDisposable
             GL.BindTexture(TextureTarget.Texture2D, _backdrop.TextureId);
             GL.ActiveTexture(TextureUnit.Texture0);
         }
+
+        // Bind layer-preview heatmap to unit 2 and boundary texture to unit 3.
+        int activeLayerTex = _layerColorTex != 0 ? _layerColorTex : _layerColorTexDefault;
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture1D, activeLayerTex);
+        GL.ActiveTexture(TextureUnit.Texture3);
+        GL.BindTexture(TextureTarget.Texture1D, _layerBoundaryTex);  // 0 = nothing bound; safe when uLayerBoundCount=0
+        GL.ActiveTexture(TextureUnit.Texture0);
 
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1f, 1f);
@@ -512,8 +629,12 @@ public sealed class SceneRenderer : IDisposable
             GL.BindVertexArray(0);
         }
 
-        // Unbind both texture units so Avalonia's subsequent compositor pass
+        // Unbind all texture units so Avalonia's subsequent compositor pass
         // starts with a clean texture state (AMD is sensitive to stale bindings).
+        GL.ActiveTexture(TextureUnit.Texture3);
+        GL.BindTexture(TextureTarget.Texture1D, 0);
+        GL.ActiveTexture(TextureUnit.Texture2);
+        GL.BindTexture(TextureTarget.Texture1D, 0);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -702,6 +823,9 @@ public sealed class SceneRenderer : IDisposable
         _toolpaths.Clear();
         _maskShader?.Dispose();
         _compositeShader?.Dispose();
+        if (_layerColorTex != 0)        GL.DeleteTexture(_layerColorTex);
+        if (_layerColorTexDefault != 0) GL.DeleteTexture(_layerColorTexDefault);
+        if (_layerBoundaryTex != 0)     GL.DeleteTexture(_layerBoundaryTex);
         DestroyFbos();
         if (_fsqVao != 0) { GL.DeleteVertexArray(_fsqVao); GL.DeleteBuffer(_fsqVbo); }
     }
@@ -716,16 +840,31 @@ public sealed class SceneRenderer : IDisposable
 
     private void ApplyShaderModeToSubtree(SceneNode root)
     {
-        bool hasEnv = _backdrop is not null;
+        bool hasEnv          = _backdrop is not null;
+        bool forceLayerPreview = root.LayerPreview;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
-            mesh.HasEnvMap = hasEnv;
+            mesh.HasEnvMap        = hasEnv;
+            mesh.LayerPreviewMode = false;
+
+            if (forceLayerPreview)
+            {
+                mesh.NormalsMode      = false;
+                mesh.LayerPreviewMode = true;
+                mesh.LayerHeight      = LayerPreviewHeight;
+                mesh.LayerZOffset     = BedZ;
+                mesh.LayerZMin           = _layerColorZMin;
+                mesh.LayerZMax           = _layerColorZMax;
+                mesh.LayerBoundaryCount  = _layerBoundaryCount;
+                mesh.Metallic            = 0f;
+                continue;
+            }
+
             switch (ShaderMode)
             {
                 case ShaderMode.Standard:
                 {
-                    // Use PBR values baked in from the source file.
                     var pd = mesh.PickingData;
                     float smoothness = 1f - pd.Roughness;
                     mesh.NormalsMode      = false;
@@ -771,8 +910,8 @@ public sealed class SceneRenderer : IDisposable
                     mesh.Shininess        = 16f;
                     break;
                 case ShaderMode.Normals:
-                    mesh.NormalsMode      = true;
-                    mesh.Metallic         = 0f;
+                    mesh.NormalsMode = true;
+                    mesh.Metallic    = 0f;
                     break;
             }
         }

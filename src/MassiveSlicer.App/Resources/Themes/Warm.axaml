@@ -1,0 +1,36 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Backgrounds — warm cream / parchment tones -->
+    <SolidColorBrush x:Key="Bg0" Color="#fdf8f2"/>
+    <SolidColorBrush x:Key="Bg1" Color="#f6efe4"/>
+    <SolidColorBrush x:Key="Bg2" Color="#ede4d4"/>
+    <SolidColorBrush x:Key="Bg3" Color="#e2d7c4"/>
+    <SolidColorBrush x:Key="Bg4" Color="#d5c9b2"/>
+
+    <!-- Borders -->
+    <SolidColorBrush x:Key="Border0" Color="#c0b49c"/>
+    <SolidColorBrush x:Key="Border1" Color="#cec2a8"/>
+    <SolidColorBrush x:Key="Border2" Color="#b4a88e"/>
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextPrimary"   Color="#2a2218"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#5c4e3a"/>
+    <SolidColorBrush x:Key="TextMuted"     Color="#8c7c62"/>
+    <SolidColorBrush x:Key="TextDisabled"  Color="#b0a488"/>
+
+    <!-- Accent — terracotta -->
+    <SolidColorBrush x:Key="Accent"      Color="#c44b00"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#e05800"/>
+    <SolidColorBrush x:Key="AccentMuted" Color="#fbe0cc"/>
+
+    <!-- Semantic -->
+    <SolidColorBrush x:Key="ColorSuccess" Color="#2a7a38"/>
+    <SolidColorBrush x:Key="ColorWarning" Color="#a06800"/>
+    <SolidColorBrush x:Key="ColorError"   Color="#b82020"/>
+    <SolidColorBrush x:Key="ColorInfo"    Color="#1a6a9a"/>
+
+    <!-- Viewport clear colour -->
+    <SolidColorBrush x:Key="ViewportBackground" Color="#cec4ae"/>
+
+</ResourceDictionary>

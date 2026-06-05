@@ -41,6 +41,13 @@ public sealed class SceneNode
     /// </summary>
     public bool Visible { get; set; } = true;
 
+    /// <summary>
+    /// When <c>true</c> the layer-preview stripe shader is forced on for this node and its
+    /// descendants, regardless of the global <see cref="SceneRenderer.ShaderMode"/>.
+    /// Set by the Additive panel toggle; only applies to source mesh nodes.
+    /// </summary>
+    public bool LayerPreview { get; set; }
+
     // -- Hierarchy -------------------------------------------------------------
 
     /// <summary>Parent node, or <c>null</c> for a root node.</summary>

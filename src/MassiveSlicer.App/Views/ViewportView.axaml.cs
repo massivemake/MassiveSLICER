@@ -180,6 +180,14 @@ public partial class ViewportView : UserControl
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
+            vm.OnNodeHidden           = node =>
+            {
+                if (_renderer.SelectedNode is { } sel && node.SelfAndDescendants().Any(n => n == sel))
+                {
+                    _renderer.Select(null);
+                    UpdateFocusOverlay();
+                }
+            };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnScrubIkRequested  = ScrubIk;
@@ -303,6 +311,20 @@ public partial class ViewportView : UserControl
         {
             additive.PropertyChanged += (_, pe) =>
             {
+                // Recompute layer-preview heatmap when any relevant setting changes.
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ShowLayerPreview)
+                                    or nameof(AdditiveSettingsViewModel.LayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.FirstLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.AdaptiveQuality)
+                                    or nameof(AdditiveSettingsViewModel.MinLayerHeight))
+                {
+                    if (additive.ShowLayerPreview)
+                        _ = ComputeLayerPreviewAsync(vm);
+                    else
+                        GlCanvas.RequestNextFrameRendering();
+                }
+
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.TiltAngle)
                                     or nameof(AdditiveSettingsViewModel.TiltAngleX)
                                     or nameof(AdditiveSettingsViewModel.Method))
@@ -367,7 +389,14 @@ public partial class ViewportView : UserControl
                 new TkVector3(vm.ToolpathUnselectedColor.X, vm.ToolpathUnselectedColor.Y, vm.ToolpathUnselectedColor.Z));
             _renderer.GizmoEnabled   = vm.GizmoEnabled;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
-            _renderer.ShaderMode     = vm.ActiveShaderMode;
+            _renderer.ShaderMode         = vm.ActiveShaderMode;
+            _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
+            bool layerPreview = vm.AdditiveSettings?.ShowLayerPreview ?? false;
+            foreach (var item in vm.OutlinerItems)
+            {
+                if (!_renderer.IsToolpathNode(item.Node))
+                    item.Node.LayerPreview = layerPreview;
+            }
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
             _renderer.LightIntensity = vm.LightIntensity;
@@ -378,6 +407,9 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
                 ApplyCellSwap(swap, vm);
+
+            while (vm.PendingLayerPreview.TryDequeue(out var lp))
+                _renderer.SetLayerPreview(lp.zBounds, lp.heights);
 
             while (vm.PendingRemoveNodes.TryDequeue(out var removing))
             {
@@ -1146,6 +1178,9 @@ public partial class ViewportView : UserControl
                     WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
                     WaveShape      = (float)s.WaveShape,
                     WaveStagger    = (float)s.WaveStagger,
+                    AdaptiveLayerHeight = s.AdaptiveLayerHeight,
+                    AdaptiveQuality     = (float)s.AdaptiveQuality,
+                    MinLayerHeight      = (float)s.MinLayerHeight,
                 }
                 : new SliceSettings();
 
@@ -1219,6 +1254,89 @@ public partial class ViewportView : UserControl
         {
             vm.IsSlicing = false;
         }
+    }
+
+    // -- Layer preview ---------------------------------------------------------
+
+    private async Task ComputeLayerPreviewAsync(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is not { ShowLayerPreview: true } s) return;
+
+        // Snapshot mesh data on the UI thread.
+        var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
+        foreach (var item in vm.OutlinerItems)
+        {
+            if (!item.Visible || _renderer.IsToolpathNode(item.Node)) continue;
+            foreach (var node in item.Node.SelfAndDescendants())
+            {
+                if (node.Mesh?.PickingData is not { } md) continue;
+                meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
+            }
+        }
+        if (meshSnapshots.Count == 0) return;
+
+        float layerH   = (float)s.LayerHeight;
+        float firstH   = (float)s.FirstLayerHeight;
+        float minH     = (float)s.MinLayerHeight;
+        float quality  = (float)s.AdaptiveQuality;
+        bool  adaptive = s.AdaptiveLayerHeight && s.ShowAdaptiveLayerHeight;
+
+        var result = await Task.Run(() =>
+        {
+            var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
+            float zMin = float.MaxValue, zMax = float.MinValue;
+
+            foreach (var (positions, indices, world) in meshSnapshots)
+            {
+                NVec3[] flat;
+                if (indices is null)
+                {
+                    flat = new NVec3[positions.Length];
+                    for (int i = 0; i < positions.Length; i++)
+                        flat[i] = TransformPoint(positions[i], world);
+                }
+                else
+                {
+                    flat = new NVec3[indices.Length];
+                    for (int i = 0; i < indices.Length; i++)
+                        flat[i] = TransformPoint(positions[indices[i]], world);
+                }
+                foreach (var v in flat) { zMin = MathF.Min(zMin, v.Z); zMax = MathF.Max(zMax, v.Z); }
+                flatMeshes.Add(flat);
+            }
+
+            if (zMax <= zMin + 1e-4f) return ((float[])[], (float[])[]);
+
+            float[] zPositions = adaptive
+                ? AdaptiveLayerHeights.ComputeZPositions(flatMeshes, zMin, zMax, firstH, minH, layerH, quality)
+                : BuildUniformZPositions(zMin, zMax, firstH, layerH);
+
+            if (zPositions.Length == 0) return ((float[])[], (float[])[]);
+
+            var bounds  = new float[zPositions.Length + 1];
+            var heights = new float[zPositions.Length];
+            bounds[0] = zMin;
+            for (int i = 0; i < zPositions.Length; i++)
+            {
+                bounds[i + 1] = zPositions[i];
+                heights[i]    = zPositions[i] - (i == 0 ? zMin : zPositions[i - 1]);
+            }
+            return (bounds, heights);
+        });
+
+        if (result.Item1.Length >= 2)
+        {
+            vm.PendingLayerPreview.Enqueue(result);
+            GlCanvas.RequestNextFrameRendering();
+        }
+    }
+
+    private static float[] BuildUniformZPositions(float zMin, float zMax, float firstH, float layerH)
+    {
+        var list = new List<float>();
+        float z  = zMin + firstH;
+        while (z < zMax - 1e-4f) { list.Add(z); z += layerH; }
+        return [.. list];
     }
 
     private static NVec3 MapMaterialColor(string? name) => name switch
