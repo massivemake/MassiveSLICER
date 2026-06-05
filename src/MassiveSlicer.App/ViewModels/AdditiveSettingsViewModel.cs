@@ -208,6 +208,93 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
 
+    // -- Wave effect -------------------------------------------------------------
+
+    public string[] WaveEffectOptions { get; } = ["None", "Sine", "Sawtooth", "Triangle"];
+
+    private string _waveEffect = "None";
+
+    /// <summary>Selected wave effect type. "None" disables the effect.</summary>
+    public string WaveEffect
+    {
+        get => _waveEffect;
+        set
+        {
+            if (SetField(ref _waveEffect, value))
+                OnPropertyChanged(nameof(ShowWaveControls));
+        }
+    }
+
+    public bool ShowWaveControls => WaveEffect != "None";
+
+    private double _waveAmplitude = 3.0;
+
+    /// <summary>Peak displacement in mm (0.5 – 100).</summary>
+    public double WaveAmplitude
+    {
+        get => _waveAmplitude;
+        set => SetField(ref _waveAmplitude, Math.Clamp(value, 0.5, 100.0));
+    }
+
+    public string[] WaveFrequencyModeOptions { get; } = ["Wavelength", "Cycles"];
+
+    private string _waveFrequencyMode = "Wavelength";
+
+    public string WaveFrequencyMode
+    {
+        get => _waveFrequencyMode;
+        set
+        {
+            if (SetField(ref _waveFrequencyMode, value))
+            {
+                OnPropertyChanged(nameof(ShowWavelengthInput));
+                OnPropertyChanged(nameof(ShowCyclesInput));
+            }
+        }
+    }
+
+    public bool ShowWavelengthInput => WaveFrequencyMode == "Wavelength";
+    public bool ShowCyclesInput     => WaveFrequencyMode == "Cycles";
+
+    private double _waveWavelength = 20.0;
+
+    /// <summary>Length of one complete wave cycle in mm (1 – 1000).</summary>
+    public double WaveWavelength
+    {
+        get => _waveWavelength;
+        set => SetField(ref _waveWavelength, Math.Clamp(value, 1.0, 1000.0));
+    }
+
+    private int _waveCycles = 8;
+
+    /// <summary>Fixed number of complete wave cycles per layer (1 – 500). Used when WaveFrequencyMode == Cycles.</summary>
+    public int WaveCycles
+    {
+        get => _waveCycles;
+        set => SetField(ref _waveCycles, Math.Clamp(value, 1, 500));
+    }
+
+    private double _waveShape = 1.0;
+
+    /// <summary>Wave shape: 1.0 = full waveform, lower clips peaks toward a square wave (0.01 – 1.0).</summary>
+    public double WaveShape
+    {
+        get => _waveShape;
+        set => SetField(ref _waveShape, Math.Clamp(value, 0.01, 1.0));
+    }
+
+    private double _waveStagger = 0.0;
+
+    /// <summary>
+    /// Phase offset per layer as a fraction of one wavelength (0 – 1).
+    /// 0 = all layers identical. 0.5 = consecutive layers alternate peak/valley.
+    /// </summary>
+    public double WaveStagger
+    {
+        get => _waveStagger;
+        set => SetField(ref _waveStagger, Math.Clamp(value, 0.0, 1.0));
+    }
+
     // -- Toolhead approach orientation -----------------------------------------
     // These ABC angles (KUKA ZYX Euler, degrees) define the target tool orientation
     // used by the IK solver when scrubbing through a toolpath.  They are analogous

@@ -185,6 +185,91 @@
                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
                     </Grid>
 
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    <TextBlock Text="EFFECTS" Classes="SectionHeader"/>
+
+                    <Grid Margin="8,0,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="120"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Wave" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                   ItemsSource="{Binding Additive.WaveEffectOptions}"
+                                   SelectedItem="{Binding Additive.WaveEffect, Mode=TwoWay}"/>
+                    </Grid>
+
+                    <StackPanel IsVisible="{Binding Additive.ShowWaveControls}" Margin="0,2,0,4">
+                        <Grid Margin="8,4,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Peak displacement — how far the path swings left/right of the original line."/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitude}"/>
+                        </Grid>
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="100"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Frequency" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Wavelength: wave density set by mm per cycle. Cycles: fixed number of waves per layer — adapts to perimeter so vases and tapered forms stay visually consistent."/>
+                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                       ItemsSource="{Binding Additive.WaveFrequencyModeOptions}"
+                                       SelectedItem="{Binding Additive.WaveFrequencyMode, Mode=TwoWay}"/>
+                        </Grid>
+                        <Grid Margin="8,0,8,4" IsVisible="{Binding Additive.ShowWavelengthInput}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Length of one complete wave cycle along the toolpath."/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelength}"/>
+                        </Grid>
+                        <Grid Margin="8,0,8,4" IsVisible="{Binding Additive.ShowCyclesInput}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Cycles per layer" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Number of complete wave cycles per contour. The wave scales with the perimeter so every layer has exactly this many waves."/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveCycles}"/>
+                        </Grid>
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="52"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Shape" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="1.0 = full waveform. Lower values clip peaks toward a square/trapezoidal wave."/>
+                            <Slider    Grid.Column="1" Minimum="0.01" Maximum="1.0"
+                                       Value="{Binding Additive.WaveShape, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.WaveShape, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                        <Grid Margin="8,0,8,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="52"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Stagger" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Phase offset per layer as a fraction of one cycle. 0 = all layers identical, 0.5 = consecutive layers alternate peak↔valley."/>
+                            <Slider    Grid.Column="1" Minimum="0.0" Maximum="1.0"
+                                       Value="{Binding Additive.WaveStagger, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.WaveStagger, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
+
                     <StackPanel IsVisible="{Binding Additive.ShowContourOffsetOption}" Margin="0,0,0,0">
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,8,8,4"/>
                         <CheckBox Content="Disable contour offset"

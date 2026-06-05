@@ -185,6 +185,7 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowTravelMoves    { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
+    public bool ShowBeadOverhang   { get; set; } = false;
 
     /// <summary>
     /// Scrubber move index applied to the selected toolpath renderer.
@@ -258,6 +259,16 @@ public sealed class SceneRenderer : IDisposable
     {
         if (_toolpaths.TryGetValue(node, out var entry))
             entry.Renderer.UpdateSingularityPoints(singularity);
+    }
+
+    /// <summary>
+    /// Uploads per-move overhang scores to the bead-overhang VAO for the given toolpath node.
+    /// Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathBeadOverhang(SceneNode node, float[] overhangPerFlatMove)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateBeadOverhang(overhangPerFlatMove);
     }
 
     /// <summary>
@@ -441,7 +452,7 @@ public sealed class SceneRenderer : IDisposable
             bool isSelected = tpNode == SelectedNode;
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
-                showSeam: ShowSeam, showBead: ShowBead,
+                showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue);
         }
 

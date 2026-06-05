@@ -12,7 +12,7 @@ namespace MassiveSlicer.App;
 /// </summary>
 internal static class ImportHelper
 {
-    private static readonly HashSet<string> SupportedExtensions = [".glb", ".gltf", ".stl"];
+    private static readonly HashSet<string> SupportedExtensions = [".glb", ".gltf", ".stl", ".obj", ".3mf"];
 
     internal static bool IsSupported(string path)
         => SupportedExtensions.Contains(Path.GetExtension(path).ToLowerInvariant());
@@ -26,9 +26,14 @@ internal static class ImportHelper
         SceneNode node;
         try
         {
-            node = filePath.EndsWith(".stl", StringComparison.OrdinalIgnoreCase)
-                ? StlLoader.Load(filePath)
-                : GltfLoader.Load(filePath);
+            var ext = Path.GetExtension(filePath).ToLowerInvariant();
+            node = ext switch
+            {
+                ".stl" => StlLoader.Load(filePath),
+                ".obj" => ObjLoader.Load(filePath),
+                ".3mf" => ThreeMfLoader.Load(filePath),
+                _      => GltfLoader.Load(filePath),
+            };
             node.CullFaces = false;
         }
         catch { return null; }
