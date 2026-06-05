@@ -13,6 +13,7 @@ using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing;
+using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.FK;
 using MassiveSlicer.Viewport.Loading;
@@ -170,7 +171,8 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
                     nameof(ViewportViewModel.ShowSeam)            or
-                    nameof(ViewportViewModel.ShowBead))
+                    nameof(ViewportViewModel.ShowBead)            or
+                    nameof(ViewportViewModel.ShowBeadOverhang))
                     GlCanvas.RequestNextFrameRendering();
                 else if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
                     Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
@@ -353,7 +355,8 @@ public partial class ViewportView : UserControl
             _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
-            _renderer.ShowBead                  = vm.ShowBead;
+            _renderer.ShowBead          = vm.ShowBead;
+            _renderer.ShowBeadOverhang  = vm.ShowBeadOverhang;
             _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
                 ? vm.ToolpathScrubIndex
                 : int.MaxValue;
@@ -459,6 +462,8 @@ public partial class ViewportView : UserControl
                 _scrubCacheByNode[entry.Node] = BuildScrubCache(entry.Toolpath);
                 _renderer.AddToolpath(entry.Toolpath, entry.Node,
                     entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+                var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
+                _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
                 // Capture the centroid that AddToolpath stamped onto the node's LocalTransform.
                 // ScrubIk uses this to convert stored Toolpath positions (original world space)
                 // back to local space before applying the node's current WorldTransform.
@@ -1127,8 +1132,20 @@ public partial class ViewportView : UserControl
                     ApproachZ        = (float)s.ApproachZ,
                     TiltAngle        = (float)s.TiltAngle,
                     TiltAngleX       = (float)s.TiltAngleX,
-                    DisableContourOffset     = s.DisableContourOffset,
-                    LayerChangeMinTravelMm   = (float)s.LayerChangeMinTravelMm,
+                    DisableContourOffset   = s.DisableContourOffset,
+                    LayerChangeMinTravelMm = (float)s.LayerChangeMinTravelMm,
+                    WaveEffect    = s.WaveEffect switch
+                    {
+                        "Sine"     => WaveEffectType.Sine,
+                        "Sawtooth" => WaveEffectType.Sawtooth,
+                        "Triangle" => WaveEffectType.Triangle,
+                        _          => WaveEffectType.None,
+                    },
+                    WaveAmplitude  = (float)s.WaveAmplitude,
+                    WaveWavelength = (float)s.WaveWavelength,
+                    WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
+                    WaveShape      = (float)s.WaveShape,
+                    WaveStagger    = (float)s.WaveStagger,
                 }
                 : new SliceSettings();
 
@@ -1154,9 +1171,11 @@ public partial class ViewportView : UserControl
                     flatMeshes.Add(flat);
                 }
 
-                if (method == SliceMethod.Angled)   return AngledPlanarSlicer.Slice(flatMeshes, settings);
-                if (method == SliceMethod.Geodesic) return GeodesicSlicer.Slice(flatMeshes, settings);
-                return PlanarSlicer.Slice(flatMeshes, settings);
+                Toolpath tp;
+                if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
+                else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
+                else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
+                return WaveEffect.Apply(tp, settings);
             });
 
             var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
@@ -1926,6 +1945,61 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
             });
         });
+    }
+
+    /// <summary>
+    /// Computes a per-flat-move overhang score in [0,1].
+    /// 0 = move midpoint is within beadWidth of the previous layer (fully supported).
+    /// 1 = move midpoint has no nearby segment in the previous layer (unsupported).
+    /// Travel moves always score 0.
+    /// </summary>
+    private static float[] ComputeOverhangPerFlatMove(Toolpath tp, float beadWidth)
+    {
+        int total = tp.Layers.Sum(l => l.Moves.Count);
+        var result = new float[total];
+        if (total == 0) return result;
+
+        List<(NVec3 from, NVec3 to)>? prevSegs = null;
+        int fi = 0;
+        foreach (var layer in tp.Layers)
+        {
+            var curSegs = new List<(NVec3, NVec3)>();
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    if (prevSegs is { Count: > 0 })
+                    {
+                        var mid = (move.From + move.To) * 0.5f;
+                        float minD = float.MaxValue;
+                        foreach (var (a, b) in prevSegs)
+                        {
+                            float d = SegDist2D(mid, a, b);
+                            if (d < minD) minD = d;
+                        }
+                        result[fi] = Math.Clamp(minD / beadWidth, 0f, 1f);
+                    }
+                    curSegs.Add((move.From, move.To));
+                }
+                fi++;
+            }
+            prevSegs = curSegs;
+        }
+        return result;
+
+        static float SegDist2D(NVec3 p, NVec3 a, NVec3 b)
+        {
+            float dx = b.X - a.X, dy = b.Y - a.Y;
+            float lenSq = dx * dx + dy * dy;
+            if (lenSq < 1e-10f)
+            {
+                float ex = p.X - a.X, ey = p.Y - a.Y;
+                return MathF.Sqrt(ex * ex + ey * ey);
+            }
+            float t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lenSq, 0f, 1f);
+            float cx = a.X + t * dx - p.X, cy = a.Y + t * dy - p.Y;
+            return MathF.Sqrt(cx * cx + cy * cy);
+        }
     }
 
     /// <summary>

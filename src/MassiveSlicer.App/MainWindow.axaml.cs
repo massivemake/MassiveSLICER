@@ -65,9 +65,11 @@ public partial class MainWindow : Window
                 Title          = "Open 3D Model",
                 AllowMultiple  = false,
                 FileTypeFilter = [
-                    new("3D Files") { Patterns = ["*.glb", "*.gltf", "*.stl"] },
+                    new("3D Files") { Patterns = ["*.glb", "*.gltf", "*.stl", "*.obj", "*.3mf"] },
                     new("GL Transmission Format") { Patterns = ["*.glb", "*.gltf"] },
                     new("STL Files") { Patterns = ["*.stl"] },
+                    new("OBJ Files") { Patterns = ["*.obj"] },
+                    new("3MF Files") { Patterns = ["*.3mf"] },
                     new("All Files") { Patterns = ["*.*"] },
                 ],
             });

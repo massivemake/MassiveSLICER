@@ -23,6 +23,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
     private int  _beadVao, _beadVbo, _beadCount;
+    private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
     private int[] _singularityVertexCumulative = [];
     private bool _disposed;
@@ -88,6 +89,8 @@ public sealed class ToolpathRenderer : IDisposable
     private Vector3 _seamColor      = new(1.0f,  0.9f,  0.0f);
     private Vector3 _unselectedGray = new(0.38f, 0.38f, 0.38f);
 
+    private float    _beadWidth;
+    private float    _beadLayerHeight;
     private Toolpath _toolpath;
     private NVec3    _origin;
     private bool[]?  _reachability;  // per flat-move index; null = all reachable
@@ -395,6 +398,8 @@ public sealed class ToolpathRenderer : IDisposable
         float beadWidth, float layerHeight, NVec3 matColor)
     {
         _beadMaterialColor = new Vector3(matColor.X, matColor.Y, matColor.Z);
+        _beadWidth       = beadWidth;
+        _beadLayerHeight = layerHeight;
 
         int extrudeCount = 0;
         foreach (var layer in toolpath.Layers)
@@ -515,6 +520,133 @@ public sealed class ToolpathRenderer : IDisposable
         BuildBeadVertexCumulative();
     }
 
+    /// <summary>
+    /// Builds or rebuilds the bead-overhang VAO. Each segment is coloured white→red
+    /// by its overhang value (0 = fully supported, 1 = fully unsupported).
+    /// Must be called on the GL thread.
+    /// </summary>
+    public void UpdateBeadOverhang(float[] overhangPerFlatMove)
+    {
+        if (_beadOverhangVao != 0) { GL.DeleteVertexArray(_beadOverhangVao); GL.DeleteBuffer(_beadOverhangVbo); }
+        _beadOverhangVao = _beadOverhangVbo = _beadOverhangCount = 0;
+
+        var data = BuildBeadOverhangData(overhangPerFlatMove);
+        if (data.Length > 0)
+        {
+            (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data);
+            _beadOverhangCount = data.Length / 6;
+        }
+    }
+
+    private float[] BuildBeadOverhangData(float[] overhangPerFlatMove)
+    {
+        float hw = _beadWidth      * 0.5f;
+        float hh = _beadLayerHeight * 0.5f;
+        var   up = NVec3.UnitZ;
+
+        int extrudeCount = 0;
+        foreach (var layer in _toolpath.Layers)
+            foreach (var move in layer.Moves)
+                if (move.Kind == MoveKind.Extrude) extrudeCount++;
+        if (extrudeCount == 0) return [];
+
+        var data = new float[extrudeCount * 36 * 6];
+        int di = 0;
+
+        void WV(NVec3 p, NVec3 c)
+        {
+            data[di++] = p.X - _origin.X; data[di++] = p.Y - _origin.Y; data[di++] = p.Z - _origin.Z;
+            data[di++] = c.X;             data[di++] = c.Y;             data[di++] = c.Z;
+        }
+
+        void Quad(NVec3 p0, NVec3 p1, NVec3 p2, NVec3 p3, NVec3 col)
+        {
+            WV(p0, col); WV(p1, col); WV(p2, col);
+            WV(p0, col); WV(p2, col); WV(p3, col);
+        }
+
+        (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r)
+            => (pt - r*hw - up*hh, pt + r*hw - up*hh,
+                pt - r*hw + up*hh, pt + r*hw + up*hh);
+
+        // Group consecutive extrude moves into contours, tracking flat move indices.
+        var contours = new List<List<(ToolpathMove move, int flatIdx)>>();
+        int flatIdx = 0;
+        foreach (var layer in _toolpath.Layers)
+        {
+            List<(ToolpathMove, int)>? cur = null;
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude)
+                {
+                    if (cur is null) { cur = []; contours.Add(cur); }
+                    cur.Add((move, flatIdx));
+                }
+                else cur = null;
+                flatIdx++;
+            }
+        }
+
+        foreach (var contour in contours)
+        {
+            int n = contour.Count;
+            if (n == 0) continue;
+
+            // Per-segment forward and right vectors (same as UploadBead).
+            var fwds   = new NVec3[n];
+            var rights = new NVec3[n];
+            for (int i = 0; i < n; i++)
+            {
+                var d = contour[i].move.To - contour[i].move.From;
+                fwds[i] = d.LengthSquared() > 1e-12f
+                    ? NVec3.Normalize(d)
+                    : (i > 0 ? fwds[i - 1] : NVec3.UnitX);
+                var r = NVec3.Cross(fwds[i], up);
+                if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwds[i], NVec3.UnitX);
+                rights[i] = NVec3.Normalize(r);
+            }
+
+            var csR = new NVec3[n + 1];
+            csR[0] = rights[0];
+            for (int i = 1; i < n; i++) csR[i] = NVec3.Normalize(rights[i - 1] + rights[i]);
+            csR[n] = rights[n - 1];
+
+            NVec3 OverhangColor(int fi)
+            {
+                float t = fi >= 0 && fi < overhangPerFlatMove.Length ? overhangPerFlatMove[fi] : 0f;
+                return new NVec3(1f, 1f - t, 1f - t); // white → red
+            }
+
+            // Back cap.
+            {
+                var c = OverhangColor(contour[0].flatIdx);
+                var (lb, rb, lt, rt) = Corners(contour[0].move.From, csR[0]);
+                Quad(rb, lb, lt, rt, c);
+            }
+
+            // Four side quads per segment.
+            for (int i = 0; i < n; i++)
+            {
+                var c = OverhangColor(contour[i].flatIdx);
+                var (lbA, rbA, ltA, rtA) = Corners(contour[i].move.From, csR[i]);
+                var (lbB, rbB, ltB, rtB) = Corners(contour[i].move.To,   csR[i + 1]);
+                Quad(ltA, rtA, rtB, ltB, c); // top
+                Quad(rbA, lbA, lbB, rbB, c); // bottom
+                Quad(lbA, ltA, ltB, lbB, c); // left
+                Quad(rtA, rbA, rbB, rtB, c); // right
+            }
+
+            // Front cap.
+            {
+                var c = OverhangColor(contour[n - 1].flatIdx);
+                var (lb, rb, lt, rt) = Corners(contour[n - 1].move.To, csR[n]);
+                Quad(lb, lt, rt, rb, c);
+            }
+        }
+
+        return di == data.Length ? data : data[..di];
+    }
+
     // Returns the number of VBO vertices to draw when the scrubber is at `scrubIndex`.
     // scrubIndex == int.MaxValue (default) means show everything.
     private int ScrubCount(int[] cumulative, int totalCount, int scrubIndex)
@@ -526,7 +658,7 @@ public sealed class ToolpathRenderer : IDisposable
 
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
-                     bool showBead = false, int scrubIndex = int.MaxValue)
+                     bool showBead = false, bool showBeadOverhang = false, int scrubIndex = int.MaxValue)
     {
         if (_disposed) return;
 
@@ -585,7 +717,17 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
-        if (showBead && beadCount > 0)
+        if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
+        {
+            _shader.Use();
+            _shader.SetMatrix4("uMVP", ref mvp);
+            _shader.SetFloat("uOverride", 0f);
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_beadOverhangVao);
+            GL.DrawArrays(PrimitiveType.Triangles, 0, Math.Min(_beadOverhangCount, beadCount));
+            GL.Enable(EnableCap.CullFace);
+        }
+        else if (showBead && beadCount > 0)
         {
             _beadShader.Use();
             _beadShader.SetMatrix4("uMVP", ref mvp);
@@ -651,6 +793,7 @@ public sealed class ToolpathRenderer : IDisposable
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
+        if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();

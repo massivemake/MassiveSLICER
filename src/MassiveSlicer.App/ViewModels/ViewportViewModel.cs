@@ -71,6 +71,13 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBead, value);
     }
 
+    private bool _showBeadOverhang = false;
+    public bool ShowBeadOverhang
+    {
+        get => _showBeadOverhang;
+        set => SetField(ref _showBeadOverhang, value);
+    }
+
     private bool _showExtrusionMoves = true;
     public bool ShowExtrusionMoves
     {

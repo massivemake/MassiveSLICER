@@ -6,6 +6,26 @@
 
     <Grid>
 
+        <!-- Data Visualization panel — bottom-left, above gizmo toolbar -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,54"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,6">
+            <StackPanel>
+                <TextBlock Text="DATA VISUALIZATION"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,4"/>
+                <CheckBox Content="Bead Overhang"
+                          IsChecked="{Binding ShowBeadOverhang}"
+                          FontSize="11"/>
+            </StackPanel>
+        </Border>
+
         <!-- Selection toolbar — bottom-left -->
         <Border HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"

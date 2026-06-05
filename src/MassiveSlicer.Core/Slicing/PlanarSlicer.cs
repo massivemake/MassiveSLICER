@@ -82,7 +82,7 @@ public static class PlanarSlicer
                     else if (xyDist > 0.01f || MathF.Abs(endPos.Z - startPos.Z) > 0.01f)
                     {
                         // Close enough to stitch without stopping extrusion.
-                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Extrude));
+                        layer.Moves.Insert(0, new ToolpathMove(endPos, startPos, MoveKind.Extrude) { IsLayerStitch = true });
                     }
                     // else: identical position (perfect seam alignment) — no move needed.
                 }
