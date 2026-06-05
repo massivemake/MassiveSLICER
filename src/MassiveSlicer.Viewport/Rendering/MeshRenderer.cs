@@ -29,6 +29,21 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>When true, renders world-space normals as RGB instead of Phong shading.</summary>
     public bool NormalsMode { get; set; }
 
+    /// <summary>When true, renders horizontal layer-height stripes in world Z instead of Phong shading.</summary>
+    public bool LayerPreviewMode { get; set; }
+
+    /// <summary>Layer height (mm) used to scale the stripe frequency in LayerPreview mode.</summary>
+    public float LayerHeight { get; set; } = 3f;
+
+    /// <summary>World-space Z offset of the first layer (typically the bed Z).</summary>
+    public float LayerZOffset { get; set; } = 0f;
+
+    /// <summary>World Z of the first layer boundary (bottom of layer 0) for the heatmap texture.</summary>
+    public float LayerZMin { get; set; }
+
+    /// <summary>World Z of the last layer boundary (top of the tallest layer) for the heatmap texture.</summary>
+    public float LayerZMax { get; set; }
+
     /// <summary>
     /// 0 = dielectric (Phong with white specular), 1 = metallic (tinted specular + Fresnel rim).
     /// Intermediate values blend between the two.
@@ -40,6 +55,9 @@ public sealed class MeshRenderer : IDisposable
     /// unit 1 by SceneRenderer) for environment reflections and diffuse IBL.
     /// </summary>
     public bool HasEnvMap { get; set; }
+
+    /// <summary>Number of layer boundaries uploaded to <c>uLayerBoundTex</c> (unit 3). 0 = none.</summary>
+    public int LayerBoundaryCount { get; set; }
 
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
@@ -78,13 +96,36 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uShininess;
         uniform float     uMetallic;       // 0=dielectric, 1=metallic
         uniform float     uLightIntensity; // scales directional light (diffuse + specular)
-        uniform int       uShadingMode;    // 0=shaded, 1=normals
+        uniform int       uShadingMode;    // 0=shaded, 1=normals, 2=layer preview
+        uniform float     uLayerHeight;    // layer height in mm (layer preview, legacy)
+        uniform float     uLayerZOffset;   // world Z of first layer (layer preview, legacy)
+        uniform float     uLayerZMin;      // world Z of first layer boundary
+        uniform float     uLayerZMax;      // world Z of last layer boundary
+        uniform sampler1D uLayerColorTex;  // precomputed layer-height heatmap (unit 2)
+        uniform sampler1D uLayerBoundTex;  // exact boundary world-Z values   (unit 3)
+        uniform int       uLayerBoundCount;// number of boundaries (layers + 1); 0 = none
         uniform sampler2D uEnvTex;         // equirectangular HDR backdrop (unit 1)
         uniform int       uHasEnv;         // 1 when uEnvTex is valid
 
         out vec4 fragColor;
 
         const float PI = 3.14159265;
+
+        // Binary-search the boundary texture for the world-Z distance to the nearest
+        // layer boundary. Returns a large sentinel when no boundary data is loaded.
+        // 12 iterations handles up to 4096 boundaries without a loop-bound uniform.
+        float distToNearestBound(float z) {
+            if (uLayerBoundCount < 2) return 1.0e6;
+            int lo = 0, hi = uLayerBoundCount;
+            for (int i = 0; i < 12; i++) {
+                int mid = (lo + hi) >> 1;
+                if (texelFetch(uLayerBoundTex, mid, 0).r <= z) lo = mid + 1;
+                else                                            hi = mid;
+            }
+            float bBelow = texelFetch(uLayerBoundTex, max(lo - 1, 0),                    0).r;
+            float bAbove = texelFetch(uLayerBoundTex, min(lo,     uLayerBoundCount - 1), 0).r;
+            return min(z - bBelow, bAbove - z);
+        }
 
         vec3 sampleEnv(vec3 dir, float lod) {
             float u = atan(dir.y, dir.x) / (2.0 * PI) + 0.5;
@@ -114,6 +155,38 @@ public sealed class MeshRenderer : IDisposable
 
             if (uShadingMode == 1) {
                 fragColor = vec4(N * 0.5 + 0.5, 1.0);
+                return;
+            }
+
+            if (uShadingMode == 2) {
+                // Variable layer-height preview: sample precomputed heatmap for layer colour.
+                // Green = thin layers, yellow = medium, red = thick.
+                // Seam lines are computed in screen space so they are always a consistent
+                // width regardless of surface incline. Falls back to grey before first slice.
+                float range = uLayerZMax - uLayerZMin;
+                vec3  col;
+                if (range > 0.001) {
+                    float t = clamp((vWorldPos.z - uLayerZMin) / range, 0.0, 1.0);
+                    col     = texture(uLayerColorTex, t).rgb;
+
+                    // Screen-space seam lines using exact boundary positions.
+                    // distToNearestBound() binary-searches the uploaded boundary texture
+                    // for the world-Z distance to the nearest layer boundary.
+                    // Seam width = max(1.5 screen pixels, 1e-4 mm guard) so lines are
+                    // always the same apparent width regardless of surface incline.
+                    float distB = distToNearestBound(vWorldPos.z);
+                    float dz    = fwidth(vWorldPos.z);
+                    float seamW = max(dz * 1.5, 1e-4);
+                    float seam  = 1.0 - smoothstep(0.0, seamW, distB);
+                    col = mix(col, vec3(0.04), seam * 0.92);
+                } else {
+                    col = vec3(0.45);
+                }
+                float NdotL = max(dot(N, normalize(uLightDir)), 0.0);
+                vec3 Vp     = normalize(uViewPos - vWorldPos);
+                vec3 Rp     = reflect(-normalize(uLightDir), N);
+                float spec  = pow(max(dot(Rp, Vp), 0.0), 16.0) * 0.05;
+                fragColor   = vec4(col * (0.30 + 0.70 * NdotL) + vec3(spec), 1.0);
                 return;
             }
 
@@ -214,7 +287,15 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uShininess",        Shininess);
         _shader.SetFloat("uMetallic",         Metallic);
         _shader.SetFloat("uLightIntensity",   lightIntensity);
-        _shader.SetInt("uShadingMode",        NormalsMode ? 1 : 0);
+        int shadingMode = LayerPreviewMode ? 2 : NormalsMode ? 1 : 0;
+        _shader.SetInt("uShadingMode",        shadingMode);
+        _shader.SetFloat("uLayerHeight",      LayerHeight);
+        _shader.SetFloat("uLayerZOffset",     LayerZOffset);
+        _shader.SetFloat("uLayerZMin",        LayerZMin);
+        _shader.SetFloat("uLayerZMax",        LayerZMax);
+        _shader.SetInt("uLayerColorTex",      2);
+        _shader.SetInt("uLayerBoundTex",      3);
+        _shader.SetInt("uLayerBoundCount",    LayerBoundaryCount);
         _shader.SetInt("uEnvTex",             1);
         _shader.SetInt("uHasEnv",             HasEnvMap ? 1 : 0);
 

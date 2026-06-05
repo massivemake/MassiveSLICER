@@ -2,42 +2,126 @@
   "name": "LFAM 2",
   "robot": {
     "modelPath": "assets/cells/LFAM2/LFAM2Robot.glb",
-    "worldPosition": { "x": 0, "y": 0, "z": 1000 },
-    "defaultHomePosition": "Home",
-    "homePositions": [
-      { "name": "Home",    "angles": [ 0, -90,  90, 0, 15, 0 ] },
-      { "name": "Service", "angles": [ 0, -90, 110, 0, 35, 0 ] }
-    ],
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 1000
+    },
     "joints": [
-      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg":  -60, "maxDeg":   60 },
-      { "axis": "X", "krlSign": -1, "krlOffset":  90, "minDeg": -120, "maxDeg":   70 },
-      { "axis": "X", "krlSign": -1, "krlOffset": -90, "minDeg": -120, "maxDeg":  168 },
-      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg": -350, "maxDeg":  350 },
-      { "axis": "X", "krlSign": -1, "krlOffset":   0, "minDeg": -125, "maxDeg":  125 },
-      { "axis": "Y", "krlSign": -1, "krlOffset":   0, "minDeg": -350, "maxDeg":  350 }
-    ]
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -60,
+        "maxDeg": 60,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 90,
+        "krlSign": -1,
+        "minDeg": -120,
+        "maxDeg": 70,
+        "axis": "X"
+      },
+      {
+        "krlOffset": -90,
+        "krlSign": -1,
+        "minDeg": -120,
+        "maxDeg": 168,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -125,
+        "maxDeg": 125,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      }
+    ],
+    "homePosition": [
+      0,
+      -90,
+      90,
+      0,
+      15,
+      0
+    ],
+    "homePositions": [
+      {
+        "name": "Home",
+        "angles": [
+          0,
+          -90,
+          90,
+          0,
+          15,
+          0
+        ]
+      },
+      {
+        "name": "Service",
+        "angles": [
+          0,
+          -90,
+          110,
+          0,
+          35,
+          0
+        ]
+      }
+    ],
+    "defaultHomePosition": "Home",
+    "flangeDisplayRoll": 0,
+    "defaultToolheadA": 0,
+    "defaultToolheadB": 0,
+    "defaultToolheadC": 0
   },
   "bed": {
     "modelPath": "assets/cells/LFAM2/lfam2_bed.glb",
-    "origin": { "x": 1433.829, "y": -1377.359, "z": 130 },
+    "origin": {
+      "x": 1433.829,
+      "y": -1377.359,
+      "z": 130
+    },
     "width": 3000,
     "depth": 3000,
-    "baseData": { "x": 1433.829, "y": -1377.359, "z": -870 }
+    "baseData": {
+      "x": 1433.829,
+      "y": -1377.359,
+      "z": -870
+    }
   },
   "boosterFrame": {
     "modelPath": "assets/cells/LFAM2/booster_frame.glb",
-    "worldPosition": { "x": 0, "y": 0, "z": 0 }
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    }
   },
   "tools": [
     {
       "name": "HV Extruder",
       "modelPath": "assets/cells/LFAM2/ToolHeads/hv_extruder.glb",
-      "tcpX":  677.94,
-      "tcpY": -163.20,
-      "tcpZ":  314.32,
-      "tcpA":  0,
-      "tcpB":  0,
-      "tcpC":  0,
+      "tcpX": 677.94,
+      "tcpY": -163.2,
+      "tcpZ": 314.32,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
       "toolFrameRoll": -90
     }
   ],

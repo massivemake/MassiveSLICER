@@ -11,6 +11,9 @@ public sealed class ToolpathLayer
     /// <summary>Representative Z height of this layer in mm.</summary>
     public float Z { get; }
 
+    /// <summary>Thickness of this layer in mm (Z of this layer minus Z of the previous layer).</summary>
+    public float Height { get; set; }
+
     /// <summary>
     /// Unit normal of the slicing plane in scene/world space.
     /// Points away from the part surface (upward for horizontal planar slicing).

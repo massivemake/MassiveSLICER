@@ -480,6 +480,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPlaybackToggled?.Invoke(false);
         }
         ActiveScrubToolpath = toolpath;
+        ExportKrlCommand?.RaiseCanExecuteChanged();
 
         _toolpathScrubMax   = max;
         OnPropertyChanged(nameof(ToolpathScrubMax));
@@ -774,6 +775,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
 
+    /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
+    internal Action<SceneNode>? OnNodeHidden { get; set; }
+
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
 
@@ -789,13 +793,20 @@ public sealed class ViewportViewModel : ViewModelBase
     public ConcurrentQueue<SceneNode> PendingRemoveNodes { get; } = new();
 
     /// <summary>
+    /// Layer boundary data queued after each slice so the GL thread can upload the
+    /// layer-preview heatmap texture. zBounds has numLayers+1 entries (sorted);
+    /// heights has numLayers entries, one thickness per layer.
+    /// </summary>
+    public ConcurrentQueue<(float[] zBounds, float[] heights)> PendingLayerPreview { get; } = new();
+
+    /// <summary>
     /// Enqueues <paramref name="node"/> for GPU upload and registers it in the outliner.
     /// Must be called on the UI thread.
     /// </summary>
     public void AddUserNode(SceneNode node)
     {
         PendingNodes.Enqueue(node);
-        OutlinerItems.Add(new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode));
+        OutlinerItems.Add(new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node)));
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
     }
@@ -813,7 +824,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (parentItem is null) OutlinerItems.Remove(child);
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
-        });
+        }, () => OnNodeHidden?.Invoke(toolpathNode));
 
         if (parentItem is not null)
             parentItem.AddChild(item);

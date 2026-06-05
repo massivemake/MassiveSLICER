@@ -58,6 +58,21 @@ public sealed class SliceSettings
     /// </summary>
     public float LayerChangeMinTravelMm { get; init; } = 2.0f;
 
+    // -- Adaptive layer height ----------------------------------------------------
+
+    /// <summary>When true, layer spacing is computed per-Z from mesh surface normals.</summary>
+    public bool  AdaptiveLayerHeight { get; init; } = false;
+
+    /// <summary>
+    /// Controls the trade-off between surface quality and print speed.
+    /// 0 = finest detail (layers approach MinLayerHeight on gentle slopes);
+    /// 1 = fastest (layers approach LayerHeight on all but the gentlest slopes).
+    /// </summary>
+    public float AdaptiveQuality     { get; init; } = 0.5f;
+
+    /// <summary>Minimum layer height used by adaptive slicing (mm). Must be ≤ LayerHeight.</summary>
+    public float MinLayerHeight      { get; init; } = 1.0f;
+
     // -- Wave effect --------------------------------------------------------------
 
     /// <summary>Which wave post-processing effect to apply after slicing. None = disabled.</summary>

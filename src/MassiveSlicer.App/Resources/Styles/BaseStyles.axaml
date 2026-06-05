@@ -57,6 +57,7 @@
     </Style>
 
 
+
     <!-- Tab button -->
     <Style Selector="Button.TabButton">
         <Setter Property="Foreground"  Value="{DynamicResource TextSecondary}"/>
@@ -66,6 +67,11 @@
     </Style>
     <Style Selector="Button.TabButton:pointerover">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+    </Style>
+    <Style Selector="Button.TabButton.active">
+        <Setter Property="Foreground"       Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="BorderBrush"      Value="{DynamicResource Accent}"/>
+        <Setter Property="BorderThickness"  Value="0,0,0,2"/>
     </Style>
 
     <!-- Primary action button -->

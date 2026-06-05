@@ -46,6 +46,54 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _firstLayerHeight, Math.Clamp(value, 0.5, 100.0));
     }
 
+    private bool _showLayerPreview;
+
+    /// <summary>When true, the source mesh is rendered with layer-height stripe shading.</summary>
+    public bool ShowLayerPreview
+    {
+        get => _showLayerPreview;
+        set => SetField(ref _showLayerPreview, value);
+    }
+
+    // -- Adaptive layer height ------------------------------------------------
+
+    private bool _adaptiveLayerHeight;
+
+    /// <summary>When true, the planar slicer adapts layer spacing to local surface slope.</summary>
+    public bool AdaptiveLayerHeight
+    {
+        get => _adaptiveLayerHeight;
+        set
+        {
+            if (SetField(ref _adaptiveLayerHeight, value))
+                OnPropertyChanged(nameof(ShowAdaptiveControls));
+        }
+    }
+
+    /// <summary>Visible when adaptive is checked and method is Planar.</summary>
+    public bool ShowAdaptiveControls => _adaptiveLayerHeight && _method == SliceMethod.Planar;
+
+    /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
+    public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
+
+    private double _adaptiveQuality = 0.5;
+
+    /// <summary>0 = finest detail (thin layers on slopes), 1 = fastest (thick layers where possible).</summary>
+    public double AdaptiveQuality
+    {
+        get => _adaptiveQuality;
+        set => SetField(ref _adaptiveQuality, Math.Clamp(value, 0.0, 1.0));
+    }
+
+    private double _minLayerHeight = 1.0;
+
+    /// <summary>Minimum layer height used by adaptive slicing (mm).</summary>
+    public double MinLayerHeight
+    {
+        get => _minLayerHeight;
+        set => SetField(ref _minLayerHeight, Math.Clamp(value, 0.1, 100.0));
+    }
+
     // -- Slicing method -------------------------------------------------------
 
     private SliceMethod _method = SliceMethod.Planar;
@@ -61,6 +109,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
+                OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
+                OnPropertyChanged(nameof(ShowAdaptiveControls));
             }
         }
     }

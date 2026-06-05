@@ -141,6 +141,10 @@ public enum AppTheme
     Midnight,
     /// <summary>Old-growth dark greens with emerald accent.</summary>
     Forest,
+    /// <summary>Light neutral grey with vivid blue accent.</summary>
+    Chalk,
+    /// <summary>Warm cream and parchment tones with terracotta accent.</summary>
+    Warm,
 }
 
 // ShaderMode enum lives in MassiveSlicer.Viewport.ShaderMode (Viewport project).

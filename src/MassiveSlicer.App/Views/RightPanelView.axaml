@@ -19,9 +19,9 @@
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1">
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="ADDITIVE"    Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
-                    <Button Content="SUBTRACTIVE" Classes="TabButton" Command="{Binding ShowSubtractiveCommand}"/>
-                    <Button Content="TOOLPATH"    Classes="TabButton" Command="{Binding ShowToolpathCommand}"/>
+                    <Button Content="ADDITIVE"    Classes="TabButton" Classes.active="{Binding IsAdditiveTab}"    Command="{Binding ShowAdditiveCommand}"/>
+                    <Button Content="SUBTRACTIVE" Classes="TabButton" Classes.active="{Binding IsSubtractiveTab}" Command="{Binding ShowSubtractiveCommand}"/>
+                    <Button Content="TOOLPATH"    Classes="TabButton" Classes.active="{Binding IsToolpathTab}"    Command="{Binding ShowToolpathCommand}"/>
                 </StackPanel>
             </Border>
 
@@ -90,8 +90,49 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="80"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                   ToolTip.Tip="In adaptive mode this becomes the maximum layer height"/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerHeight}"/>
+                    </Grid>
+
+                    <CheckBox Margin="8,2,8,2"
+                              Content="Layer preview"
+                              FontSize="11"
+                              IsChecked="{Binding Additive.ShowLayerPreview, Mode=TwoWay}"
+                              ToolTip.Tip="Shade the source mesh with colour bands matching the layer height"/>
+
+                    <!-- Adaptive layer height toggle — Planar method only -->
+                    <CheckBox Margin="8,2,8,2"
+                              Content="Adaptive layer height"
+                              FontSize="11"
+                              IsChecked="{Binding Additive.AdaptiveLayerHeight}"
+                              IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
+                              ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces"/>
+
+                    <!-- Adaptive sub-controls -->
+                    <Grid Margin="8,2,8,2" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="80"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight}"/>
+                    </Grid>
+
+                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
+                                   VerticalAlignment="Center" Margin="8,0,4,0"/>
+                        <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                   Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
+                                   VerticalAlignment="Center"
+                                   ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
+                        <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
+                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
                     </Grid>
 
                     <Grid Margin="8,4,8,4">

@@ -7,7 +7,8 @@
     <Grid>
 
         <!-- Data Visualization panel — bottom-left, above gizmo toolbar -->
-        <Border HorizontalAlignment="Left"
+        <Border IsVisible="{Binding IsToolpathSelected}"
+                HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
                 Margin="8,8,8,54"
                 Background="{DynamicResource Bg2}"
