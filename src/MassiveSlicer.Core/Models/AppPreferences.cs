@@ -138,6 +138,6 @@ public sealed class AppPreferences
     public double ToolheadC { get; set; } = 0.0;
 
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
-    public double ApoCvel { get; set; } = 50.0;
+    public double ApoCvel { get; set; } = 100.0;
 
 }

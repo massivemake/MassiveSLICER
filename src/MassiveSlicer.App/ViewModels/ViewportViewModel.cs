@@ -735,7 +735,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Produced by the slice task; consumed by the render loop.
     /// Each entry is a freshly-created SceneNode -- never re-uses an existing node.
     /// </summary>
-    public ConcurrentQueue<(Toolpath Toolpath, SceneNode Node, float BeadWidth, float LayerHeight, System.Numerics.Vector3 MaterialColor)> PendingToolpath { get; } = new();
+    public ConcurrentQueue<(Toolpath Toolpath, Toolpath RawToolpath, SceneNode Node, float BeadWidth, float LayerHeight, System.Numerics.Vector3 MaterialColor)> PendingToolpath { get; } = new();
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>

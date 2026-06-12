@@ -73,6 +73,8 @@ public partial class ViewportView : UserControl
 
     // Toolpath-to-node map -- populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _toolpathByNode       = new();
+    // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
+    private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
     // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
     private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
@@ -82,6 +84,8 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentQueue<(SceneNode node, bool[] reachable)>          _pendingReachability      = new();
     // Pending singularity results from background validation -- consumed on the GL thread.
     private readonly ConcurrentQueue<(SceneNode node, bool[] singularity)>        _pendingSingularityPoints = new();
+    // Pending orientation-rate colormap updates triggered by live smoothing changes -- consumed on the GL thread.
+    private readonly ConcurrentQueue<(SceneNode node, float[] rates)>             _pendingOrientationUpdate = new();
 
     // The toolpath node whose scrubber is active. Set/cleared on the UI thread in
     // UpdateFocusOverlay; read on the UI thread in ScrubIk -- no cross-thread access.
@@ -360,6 +364,11 @@ public partial class ViewportView : UserControl
                         ValidateToolpathAsync(nd, tp);
                     }
                 }
+
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.SmoothRotation)
+                                    or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
+                                    or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm))
+                    ReapplyOrientationSmoothing(additive);
             };
 
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
@@ -416,6 +425,7 @@ public partial class ViewportView : UserControl
             while (vm.PendingRemoveNodes.TryDequeue(out var removing))
             {
                 _toolpathByNode.TryRemove(removing, out _);
+                _rawToolpathByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
                 _scrubCacheByNode.TryRemove(removing, out _);
                 _ikSolutionsByNode.TryRemove(removing, out _);
@@ -490,10 +500,14 @@ public partial class ViewportView : UserControl
                 RebuildIkSolver(vm);
             }
 
+            while (_pendingOrientationUpdate.TryDequeue(out var upd))
+                _renderer.UpdateToolpathBeadOrientation(upd.node, upd.rates);
+
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
-                _toolpathByNode[entry.Node]   = entry.Toolpath;
-                _scrubCacheByNode[entry.Node] = BuildScrubCache(entry.Toolpath);
+                _toolpathByNode[entry.Node]    = entry.Toolpath;
+                _rawToolpathByNode[entry.Node] = entry.RawToolpath;
+                _scrubCacheByNode[entry.Node]  = BuildScrubCache(entry.Toolpath);
                 _renderer.AddToolpath(entry.Toolpath, entry.Node,
                     entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
                 var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
@@ -1233,8 +1247,13 @@ public partial class ViewportView : UserControl
                 else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
                 else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
                 tp = WaveEffect.Apply(tp, settings);
-                return OrientationSmoother.Apply(tp, settings);
+                return tp;
             });
+
+            // Apply orientation smoothing on the UI thread so the raw toolpath can be cached
+            // for live re-smoothing when the user adjusts smoothing settings.
+            var rawToolpath      = toolpath;
+            var smoothedToolpath = OrientationSmoother.Apply(rawToolpath, settings);
 
             var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
             var toolpathName = method switch
@@ -1249,7 +1268,7 @@ public partial class ViewportView : UserControl
                 && asp.SelectedPresetIndex < asp.MaterialPresets.Count
                 ? asp.MaterialPresets[asp.SelectedPresetIndex] : null;
             vm.PendingToolpath.Enqueue((
-                toolpath, toolpathNode,
+                smoothedToolpath, rawToolpath, toolpathNode,
                 (float)(vm.AdditiveSettings?.BeadWidth   ?? 6.0),
                 (float)(vm.AdditiveSettings?.LayerHeight  ?? 3.0),
                 MapMaterialColor(selectedPreset?.Color)));
@@ -1257,7 +1276,7 @@ public partial class ViewportView : UserControl
             // Compute and display stats overlay.
             if (vm.AdditiveSettings is { } as2)
             {
-                var (t, w, c) = ComputeToolpathStats(toolpath, as2);
+                var (t, w, c) = ComputeToolpathStats(smoothedToolpath, as2);
                 vm.StatsTime        = t;
                 vm.StatsWeight      = w;
                 vm.StatsCost        = c;
@@ -2096,6 +2115,30 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
             });
         });
+    }
+
+    /// <summary>
+    /// Re-applies OrientationSmoother to every cached raw toolpath using the current settings,
+    /// updates _toolpathByNode and _scrubCacheByNode for IK scrubbing, and enqueues colormap
+    /// updates for the GL thread. Called whenever a smoothing setting changes.
+    /// </summary>
+    private void ReapplyOrientationSmoothing(AdditiveSettingsViewModel s)
+    {
+        if (_rawToolpathByNode.IsEmpty) return;
+        var smoothSettings = new SliceSettings
+        {
+            SmoothRotation                = s.SmoothRotation,
+            SmoothRotationRadius          = s.SmoothRotationRadius,
+            SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
+        };
+        foreach (var (node, raw) in _rawToolpathByNode)
+        {
+            var smoothed = OrientationSmoother.Apply(raw, smoothSettings);
+            _toolpathByNode[node]   = smoothed;
+            _scrubCacheByNode[node] = BuildScrubCache(smoothed);
+            _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
+        }
+        GlCanvas.RequestNextFrameRendering();
     }
 
     /// <summary>

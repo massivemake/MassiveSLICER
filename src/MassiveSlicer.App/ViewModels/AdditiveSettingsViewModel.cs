@@ -200,7 +200,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _travelSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
-    private double _apoCvel = 50.0;
+    private double _apoCvel = 100.0;
 
     /// <summary>
     /// KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction the robot
