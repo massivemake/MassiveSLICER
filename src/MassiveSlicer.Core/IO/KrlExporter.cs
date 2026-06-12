@@ -45,7 +45,7 @@ public sealed record KrlExportSettings
     /// 0 = disabled (raw per-move normals used directly).
     /// </summary>
     /// <summary>KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction at path corners.</summary>
-    public int ApoCvel { get; init; } = 50;
+    public int ApoCvel { get; init; } = 100;
     public float OrientationLookAheadMm { get; init; } = 0f;
     /// <summary>
     /// Standard deviation (mm) of the Gaussian kernel used to smooth normals before ABC
@@ -227,8 +227,9 @@ public static class KrlExporter
         sb.AppendLine("PDAT_ACT = {VEL 6,ACC 100,APO_DIST 50}");
         sb.AppendLine($"FDAT_ACT = {{TOOL_NO {s.ToolDataIndex},BASE_NO {s.BaseDataIndex},IPO_FRAME #BASE}}");
         sb.AppendLine("BAS (#PTP_PARAMS,6)");
-        sb.AppendLine("$ADVANCE=3");
+        sb.AppendLine("$ADVANCE=5");
         sb.AppendLine($"$APO.CVEL={s.ApoCvel}");
+        sb.AppendLine("$ACC.CP = 5.0");
         sb.AppendLine($"$VEL.CP={s.PrintSpeedMps.ToString("F6", Inv)}");
         sb.AppendLine(";ENDFOLD (PRESETS)");
         sb.AppendLine();
