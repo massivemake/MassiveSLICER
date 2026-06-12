@@ -140,6 +140,4 @@ public sealed class AppPreferences
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
     public double ApoCvel { get; set; } = 50.0;
 
-    /// <summary>XY threshold (mm) above which a layer transition emits a travel move.</summary>
-    public double LayerChangeMinTravelMm { get; set; } = 2.0;
 }

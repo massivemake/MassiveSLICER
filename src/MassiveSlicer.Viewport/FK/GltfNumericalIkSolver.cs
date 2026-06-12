@@ -337,6 +337,57 @@ public sealed class GltfNumericalIkSolver
         return TargetRotFromPathFrame(normal, tangent, (or0, or1, or2));
     }
 
+    /// <summary>
+    /// Builds the IK target rotation matching KrlExporter.KukaAbc:
+    ///   1. Base perpendicular frame from normal (Rodrigues of (0,0,-1)→-normal).
+    ///   2. Local KUKA ZYX offset (offA=A=Rz, offB=B=Ry, offC=C=Rx) applied in that frame.
+    ///   3. Mapped to scene-space IK rows via toolFrameRoll.
+    /// Zero offset → nozzle perpendicular to surface. Non-zero → physically tilts/rolls.
+    /// </summary>
+    public (Vector3 r0, Vector3 r1, Vector3 r2) TargetRotFromGlobalOrientation(
+        Vector3 normal, float offADeg, float offBDeg, float offCDeg)
+    {
+        normal = normal.Normalized();
+
+        // Step 1: base perpendicular frame via Rodrigues (0,0,-1) → xBase = -normal
+        var xDef  = new Vector3(0f, 0f, -1f);
+        var xBase = -normal;
+        float cosT = Math.Clamp(Vector3.Dot(xDef, xBase), -1f, 1f);
+        Vector3 xB, yB, zB;
+        if (MathF.Abs(cosT - 1f) < 1e-6f)
+        {
+            xB = xDef; yB = new Vector3(0f, 1f, 0f); zB = new Vector3(1f, 0f, 0f);
+        }
+        else if (MathF.Abs(cosT + 1f) < 1e-6f)
+        {
+            xB = -xDef; yB = new Vector3(0f, 1f, 0f); zB = new Vector3(-1f, 0f, 0f);
+        }
+        else
+        {
+            var   axis = Vector3.Cross(xDef, xBase).Normalized();
+            float sinT = MathF.Sqrt(1f - cosT * cosT);
+            xB = xBase;
+            yB = Rod(new Vector3(0f, 1f, 0f), axis, sinT, cosT);
+            zB = Rod(new Vector3(1f, 0f, 0f), axis, sinT, cosT);
+        }
+
+        // Step 2: local KUKA ZYX offset in the base frame
+        float ca = MathF.Cos(offADeg * MathF.PI / 180f), sa = MathF.Sin(offADeg * MathF.PI / 180f);
+        float cb = MathF.Cos(offBDeg * MathF.PI / 180f), sb = MathF.Sin(offBDeg * MathF.PI / 180f);
+        float cc = MathF.Cos(offCDeg * MathF.PI / 180f), sc = MathF.Sin(offCDeg * MathF.PI / 180f);
+
+        var xF = xB * (ca * cb)                + yB * (sa * cb)                + zB * (-sb);
+        var yF = xB * (ca * sb * sc - sa * cc)  + yB * (sa * sb * sc + ca * cc)  + zB * (cb * sc);
+        var zF = xB * (ca * sb * cc + sa * sc)  + yB * (sa * sb * cc - ca * sc)  + zB * (cb * cc);
+
+        // Step 3: map to scene-space IK rows via toolFrameRoll
+        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
+        return (cr * xF + sr * yF, zF, sr * xF - cr * yF);
+    }
+
+    private static Vector3 Rod(Vector3 v, Vector3 axis, float sinT, float cosT)
+        => v * cosT + Vector3.Cross(axis, v) * sinT + axis * Vector3.Dot(axis, v) * (1f - cosT);
+
     // -- IK --------------------------------------------------------------------
 
     /// <summary>

@@ -46,14 +46,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _firstLayerHeight, Math.Clamp(value, 0.5, 100.0));
     }
 
-    private bool _showLayerPreview;
-
-    /// <summary>When true, the source mesh is rendered with layer-height stripe shading.</summary>
-    public bool ShowLayerPreview
-    {
-        get => _showLayerPreview;
-        set => SetField(ref _showLayerPreview, value);
-    }
+    /// <summary>Mirrors AdaptiveLayerHeight — layer-stripe preview is active whenever adaptive mode is on.</summary>
+    public bool ShowLayerPreview => _adaptiveLayerHeight;
 
     // -- Adaptive layer height ------------------------------------------------
 
@@ -66,7 +60,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _adaptiveLayerHeight, value))
+            {
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
+                OnPropertyChanged(nameof(ShowLayerPreview));
+            }
         }
     }
 
@@ -146,6 +143,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _disableContourOffset, value);
     }
 
+    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag"];
+
+    private string _seamMode = "Normal";
+
+    public string SeamMode
+    {
+        get => _seamMode;
+        set => SetField(ref _seamMode, value);
+    }
+
     private double _passAngle;
 
     /// <summary>Rotation of each pass relative to the previous, in degrees (Planar/Angled).</summary>
@@ -191,19 +198,6 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _travelSpeed;
         set => SetField(ref _travelSpeed, Math.Clamp(value, 1.0, 2000.0));
-    }
-
-    private double _layerChangeMinTravelMm = 2.0;
-
-    /// <summary>
-    /// XY distance threshold (mm) above which a layer transition becomes a travel move
-    /// (stop extrusion, move at travel speed). Below this the robot stitches through
-    /// the seam with extrusion on.
-    /// </summary>
-    public double LayerChangeMinTravelMm
-    {
-        get => _layerChangeMinTravelMm;
-        set => SetField(ref _layerChangeMinTravelMm, Math.Clamp(value, 0.0, 1000.0));
     }
 
     private double _apoCvel = 50.0;
@@ -299,6 +293,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowWavelengthInput));
                 OnPropertyChanged(nameof(ShowCyclesInput));
+                OnPropertyChanged(nameof(ShowSingleWavelength));
+                OnPropertyChanged(nameof(ShowGradientWavelength));
             }
         }
     }
@@ -343,6 +339,162 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _waveStagger;
         set => SetField(ref _waveStagger, Math.Clamp(value, 0.0, 1.0));
+    }
+
+    // -- Wave gradient ----------------------------------------------------------
+
+    private bool _waveGradient;
+
+    public bool WaveGradient
+    {
+        get => _waveGradient;
+        set
+        {
+            if (SetField(ref _waveGradient, value))
+            {
+                OnPropertyChanged(nameof(ShowWaveGradientControls));
+                OnPropertyChanged(nameof(ShowSingleAmplitude));
+                OnPropertyChanged(nameof(ShowSingleWavelength));
+                OnPropertyChanged(nameof(ShowGradientWavelength));
+            }
+        }
+    }
+
+    public bool ShowWaveGradientControls => WaveGradient;
+    public bool ShowSingleAmplitude      => !WaveGradient;
+    public bool ShowSingleWavelength     => ShowWavelengthInput && !WaveGradient;
+    public bool ShowGradientWavelength   => ShowWavelengthInput && WaveGradient;
+
+    private double _waveAmplitudeBottom = 0.0;
+    public double WaveAmplitudeBottom
+    {
+        get => _waveAmplitudeBottom;
+        set => SetField(ref _waveAmplitudeBottom, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _waveAmplitudeTop = 3.0;
+    public double WaveAmplitudeTop
+    {
+        get => _waveAmplitudeTop;
+        set => SetField(ref _waveAmplitudeTop, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _waveWavelengthBottom = 20.0;
+    public double WaveWavelengthBottom
+    {
+        get => _waveWavelengthBottom;
+        set => SetField(ref _waveWavelengthBottom, Math.Clamp(value, 1.0, 1000.0));
+    }
+
+    private double _waveWavelengthTop = 20.0;
+    public double WaveWavelengthTop
+    {
+        get => _waveWavelengthTop;
+        set => SetField(ref _waveWavelengthTop, Math.Clamp(value, 1.0, 1000.0));
+    }
+
+    private double _waveGradientCenter = 0.5;
+    public double WaveGradientCenter
+    {
+        get => _waveGradientCenter;
+        set => SetField(ref _waveGradientCenter, Math.Clamp(value, 0.001, 0.999));
+    }
+
+    public string[] WaveGradientCurveOptions { get; } = ["Linear", "Smooth", "Ease In", "Ease Out"];
+
+    private string _waveGradientCurve = "Linear";
+    public string WaveGradientCurve
+    {
+        get => _waveGradientCurve;
+        set => SetField(ref _waveGradientCurve, value);
+    }
+
+    // -- Overhang orientation -------------------------------------------------
+
+    private bool _overhangOrientation;
+
+    /// <summary>When true, the planar slicer tilts the toolhead to follow mesh surface normals.</summary>
+    public bool OverhangOrientation
+    {
+        get => _overhangOrientation;
+        set
+        {
+            if (SetField(ref _overhangOrientation, value))
+                OnPropertyChanged(nameof(ShowOverhangTilt));
+        }
+    }
+
+    public bool ShowOverhangTilt => _overhangOrientation;
+
+    private double _maxOverhangTiltDeg = 45.0;
+
+    /// <summary>Maximum tool tilt from vertical in degrees (0 – 89).</summary>
+    public double MaxOverhangTiltDeg
+    {
+        get => _maxOverhangTiltDeg;
+        set => SetField(ref _maxOverhangTiltDeg, Math.Clamp(value, 0.0, 89.0));
+    }
+
+    // -- Orientation smoothing ------------------------------------------------
+
+    private bool _smoothRotation;
+
+    public bool SmoothRotation
+    {
+        get => _smoothRotation;
+        set
+        {
+            if (SetField(ref _smoothRotation, value))
+                OnPropertyChanged(nameof(ShowSmoothRotationRadius));
+        }
+    }
+
+    public bool ShowSmoothRotationRadius => _smoothRotation;
+
+    private int _smoothRotationRadius = 5;
+
+    /// <summary>Half-width of the smoothing window in moves (1 – 50).</summary>
+    public int SmoothRotationRadius
+    {
+        get => _smoothRotationRadius;
+        set => SetField(ref _smoothRotationRadius, Math.Clamp(value, 1, 50));
+    }
+
+    private double _smoothRotationMaxRateDegPerMm = 0.0;
+
+    /// <summary>
+    /// Maximum orientation change in degrees per mm of travel.
+    /// Clamps the rate of toolhead rotation to prevent KUKA axis overspeed at sharp turns.
+    /// 0 = disabled.
+    /// </summary>
+    public double SmoothRotationMaxRateDegPerMm
+    {
+        get => _smoothRotationMaxRateDegPerMm;
+        set => SetField(ref _smoothRotationMaxRateDegPerMm, Math.Clamp(value, 0.0, 90.0));
+    }
+
+    private double _orientationLookAheadMm = 0.0;
+
+    /// <summary>
+    /// Forward look-ahead distance (mm) for the KRL exporter's Gaussian normal-smoothing kernel.
+    /// At 60 mm/s print speed, 60 mm = 1 second of pre-rotation. 0 = disabled.
+    /// </summary>
+    public double OrientationLookAheadMm
+    {
+        get => _orientationLookAheadMm;
+        set => SetField(ref _orientationLookAheadMm, Math.Clamp(value, 0.0, 500.0));
+    }
+
+    private double _orientationSigmaMm = 30.0;
+
+    /// <summary>
+    /// Gaussian sigma (mm) for the KRL exporter's normal-smoothing kernel.
+    /// Controls the width of the orientation transition ramp. Typically half of OrientationLookAheadMm.
+    /// </summary>
+    public double OrientationSigmaMm
+    {
+        get => _orientationSigmaMm;
+        set => SetField(ref _orientationSigmaMm, Math.Clamp(value, 1.0, 200.0));
     }
 
     // -- Toolhead approach orientation -----------------------------------------

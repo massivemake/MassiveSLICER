@@ -43,290 +43,380 @@
                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               Background="{DynamicResource Bg2}">
-                <StackPanel Margin="0,4">
+                <StackPanel Margin="0,4,0,8">
 
-                    <TextBlock Text="MATERIAL" Classes="SectionHeader"/>
-                    <Grid Margin="8,0,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <ComboBox Grid.Column="0"
-                                  HorizontalAlignment="Stretch"
-                                  Margin="0,0,4,0"
-                                  PlaceholderText="No preset selected"
-                                  ItemsSource="{Binding Additive.MaterialPresets}"
-                                  SelectedIndex="{Binding Additive.SelectedPresetIndex, Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Name}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <Button Grid.Column="1"
-                                Classes="ToolbarButton"
-                                Padding="8,2"
-                                Margin="0,0,2,0"
-                                Click="OnEditMaterialClicked"
-                                IsEnabled="{Binding Additive.HasSelectedPreset}"
-                                ToolTip.Tip="Edit selected material preset">
-                            <ia:Icon Value="mdi-pencil" FontSize="14"/>
-                        </Button>
-                        <Button Grid.Column="2"
-                                Classes="ToolbarButton"
-                                Padding="8,2"
-                                Click="OnAddMaterialClicked"
-                                ToolTip.Tip="Add new material preset">
-                            <ia:Icon Value="mdi-plus" FontSize="16"/>
-                        </Button>
-                    </Grid>
+                    <!-- MATERIAL -->
+                    <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="True">
+                        <StackPanel Margin="0,0,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Grid.Column="0"
+                                          HorizontalAlignment="Stretch"
+                                          Margin="0,0,4,0"
+                                          PlaceholderText="No preset selected"
+                                          ItemsSource="{Binding Additive.MaterialPresets}"
+                                          SelectedIndex="{Binding Additive.SelectedPresetIndex, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Name}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1"
+                                        Classes="ToolbarButton"
+                                        Padding="8,2"
+                                        Margin="0,0,2,0"
+                                        Click="OnEditMaterialClicked"
+                                        IsEnabled="{Binding Additive.HasSelectedPreset}"
+                                        ToolTip.Tip="Edit selected material preset">
+                                    <ia:Icon Value="mdi-pencil" FontSize="14"/>
+                                </Button>
+                                <Button Grid.Column="2"
+                                        Classes="ToolbarButton"
+                                        Padding="8,2"
+                                        Click="OnAddMaterialClicked"
+                                        ToolTip.Tip="Add new material preset">
+                                    <ia:Icon Value="mdi-plus" FontSize="16"/>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
 
-                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                    <TextBlock Text="GEOMETRY" Classes="SectionHeader"/>
+                    <!-- GEOMETRY -->
+                    <Expander Classes="SectionExpander" Header="GEOMETRY" IsExpanded="True">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="In adaptive mode this becomes the maximum layer height"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerHeight}"/>
+                            </Grid>
 
-                    <Grid Margin="8,0,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                   ToolTip.Tip="In adaptive mode this becomes the maximum layer height"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerHeight}"/>
-                    </Grid>
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Bead width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BeadWidth}"/>
+                            </Grid>
 
-                    <CheckBox Margin="8,2,8,2"
-                              Content="Layer preview"
-                              FontSize="11"
-                              IsChecked="{Binding Additive.ShowLayerPreview, Mode=TwoWay}"
-                              ToolTip.Tip="Shade the source mesh with colour bands matching the layer height"/>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowTiltAngle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="52"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="56"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Y tilt (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <Slider    Grid.Column="1" Minimum="-89" Maximum="89"
+                                           Value="{Binding Additive.TiltAngle, Mode=TwoWay}"
+                                           VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                           Text="{Binding Additive.TiltAngle, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                           TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                            </Grid>
 
-                    <!-- Adaptive layer height toggle — Planar method only -->
-                    <CheckBox Margin="8,2,8,2"
-                              Content="Adaptive layer height"
-                              FontSize="11"
-                              IsChecked="{Binding Additive.AdaptiveLayerHeight}"
-                              IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
-                              ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces"/>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowTiltAngle}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="52"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="56"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="X tilt (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <Slider    Grid.Column="1" Minimum="-89" Maximum="89"
+                                           Value="{Binding Additive.TiltAngleX, Mode=TwoWay}"
+                                           VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                           Text="{Binding Additive.TiltAngleX, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                           TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
 
-                    <!-- Adaptive sub-controls -->
-                    <Grid Margin="8,2,8,2" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight}"/>
-                    </Grid>
+                    <!-- SEAM -->
+                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="True"
+                              IsVisible="{Binding Additive.ShowContourOffsetOption}">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
+                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <ComboBox  Grid.Column="1"
+                                           ItemsSource="{Binding Additive.SeamModeOptions}"
+                                           SelectedItem="{Binding Additive.SeamMode, Mode=TwoWay}"
+                                           Width="90" FontSize="11"/>
+                            </Grid>
 
-                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
-                                   VerticalAlignment="Center" Margin="8,0,4,0"/>
-                        <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
-                                   Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
-                                   VerticalAlignment="Center"
-                                   ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
-                        <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
-                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
-                    </Grid>
+                            <CheckBox Content="Overhang orientation"
+                                      IsChecked="{Binding Additive.OverhangOrientation, Mode=TwoWay}"
+                                      Margin="8,2,8,2"/>
 
-                    <Grid Margin="8,4,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Bead width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BeadWidth}"/>
-                    </Grid>
+                            <Grid ColumnDefinitions="*,Auto"
+                                  Margin="8,2,8,4"
+                                  IsVisible="{Binding Additive.ShowOverhangTilt}">
+                                <TextBlock Grid.Column="0" Text="Max tilt (°)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                                <NumericUpDown Grid.Column="1"
+                                              Value="{Binding Additive.MaxOverhangTiltDeg, Mode=TwoWay}"
+                                              Minimum="0" Maximum="89" Increment="5"
+                                              FormatString="F0" Width="80" FontSize="11"/>
+                            </Grid>
 
-                    <Grid Margin="8,4,8,2" IsVisible="{Binding Additive.ShowTiltAngle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="52"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="56"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Y tilt (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                        <Slider    Grid.Column="1" Minimum="-89" Maximum="89"
-                                   Value="{Binding Additive.TiltAngle, Mode=TwoWay}"
-                                   VerticalAlignment="Center"/>
-                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                   Text="{Binding Additive.TiltAngle, Mode=TwoWay, StringFormat={}{0:F1}}"
-                                   TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                    </Grid>
+                            <CheckBox Content="Disable contour offset"
+                                      IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
+                                      Margin="8,4,8,2"
+                                      ToolTip.Tip="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+                        </StackPanel>
+                    </Expander>
 
-                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowTiltAngle}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="52"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="56"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="X tilt (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                        <Slider    Grid.Column="1" Minimum="-89" Maximum="89"
-                                   Value="{Binding Additive.TiltAngleX, Mode=TwoWay}"
-                                   VerticalAlignment="Center"/>
-                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                   Text="{Binding Additive.TiltAngleX, Mode=TwoWay, StringFormat={}{0:F1}}"
-                                   TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                    </Grid>
+                    <!-- MOTION -->
+                    <Expander Classes="SectionExpander" Header="MOTION" IsExpanded="True">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Print speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.PrintSpeed}"/>
+                            </Grid>
 
-                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                    <TextBlock Text="MOTION" Classes="SectionHeader"/>
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Travel speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
 
-                    <Grid Margin="8,0,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Print speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.PrintSpeed}"/>
-                    </Grid>
+                    <!-- KRC4 -->
+                    <Expander Classes="SectionExpander" Header="KRC4" IsExpanded="False">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
+                            </Grid>
 
-                    <Grid Margin="8,4,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Travel speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
-                    </Grid>
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
 
-                    <Grid Margin="8,4,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Layer change threshold (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                   ToolTip.Tip="XY distance above which a layer transition stops extrusion and travels. Below this the robot stitches through the seam with extrusion on. Set to 0 to always travel."/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LayerChangeMinTravelMm}"/>
-                    </Grid>
+                    <!-- EFFECTS -->
+                    <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
+                        <StackPanel Margin="0,2,0,6">
 
-                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                    <TextBlock Text="KUKA KRC4" Classes="SectionHeader"/>
+                            <!-- Adaptive layer height -->
+                            <CheckBox Margin="8,2,8,4"
+                                      Content="Adaptive layer height"
+                                      FontSize="11"
+                                      IsChecked="{Binding Additive.AdaptiveLayerHeight}"
+                                      IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
+                                      ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
 
-                    <Grid Margin="8,0,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
-                    </Grid>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight}"/>
+                            </Grid>
 
-                    <Grid Margin="8,4,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="80"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
-                    </Grid>
+                            <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
+                                           VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                           Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
+                                           VerticalAlignment="Center"
+                                           ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
+                                <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
+                                           VerticalAlignment="Center" Margin="4,0,8,0"/>
+                            </Grid>
 
-                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                    <TextBlock Text="EFFECTS" Classes="SectionHeader"/>
+                            <!-- Wave -->
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="120"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Wave" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                           ItemsSource="{Binding Additive.WaveEffectOptions}"
+                                           SelectedItem="{Binding Additive.WaveEffect, Mode=TwoWay}"/>
+                            </Grid>
 
-                    <Grid Margin="8,0,8,4">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="120"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Wave" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
-                                   ItemsSource="{Binding Additive.WaveEffectOptions}"
-                                   SelectedItem="{Binding Additive.WaveEffect, Mode=TwoWay}"/>
-                    </Grid>
+                            <StackPanel IsVisible="{Binding Additive.ShowWaveControls}">
+                                <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowSingleAmplitude}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Peak displacement — how far the path swings left/right of the original line."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitude}"/>
+                                </Grid>
 
-                    <StackPanel IsVisible="{Binding Additive.ShowWaveControls}" Margin="0,2,0,4">
-                        <Grid Margin="8,4,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Peak displacement — how far the path swings left/right of the original line."/>
-                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitude}"/>
-                        </Grid>
-                        <Grid Margin="8,0,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="100"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Frequency" VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Wavelength: wave density set by mm per cycle. Cycles: fixed number of waves per layer — adapts to perimeter so vases and tapered forms stay visually consistent."/>
-                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
-                                       ItemsSource="{Binding Additive.WaveFrequencyModeOptions}"
-                                       SelectedItem="{Binding Additive.WaveFrequencyMode, Mode=TwoWay}"/>
-                        </Grid>
-                        <Grid Margin="8,0,8,4" IsVisible="{Binding Additive.ShowWavelengthInput}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Length of one complete wave cycle along the toolpath."/>
-                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelength}"/>
-                        </Grid>
-                        <Grid Margin="8,0,8,4" IsVisible="{Binding Additive.ShowCyclesInput}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Cycles per layer" VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Number of complete wave cycles per contour. The wave scales with the perimeter so every layer has exactly this many waves."/>
-                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveCycles}"/>
-                        </Grid>
-                        <Grid Margin="8,0,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="52"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="56"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Shape" Classes="LabelMuted" VerticalAlignment="Center"
-                                       ToolTip.Tip="1.0 = full waveform. Lower values clip peaks toward a square/trapezoidal wave."/>
-                            <Slider    Grid.Column="1" Minimum="0.01" Maximum="1.0"
-                                       Value="{Binding Additive.WaveShape, Mode=TwoWay}"
-                                       VerticalAlignment="Center"/>
-                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                       Text="{Binding Additive.WaveShape, Mode=TwoWay, StringFormat={}{0:F2}}"
-                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                        </Grid>
-                        <Grid Margin="8,0,8,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="52"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="56"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Stagger" Classes="LabelMuted" VerticalAlignment="Center"
-                                       ToolTip.Tip="Phase offset per layer as a fraction of one cycle. 0 = all layers identical, 0.5 = consecutive layers alternate peak↔valley."/>
-                            <Slider    Grid.Column="1" Minimum="0.0" Maximum="1.0"
-                                       Value="{Binding Additive.WaveStagger, Mode=TwoWay}"
-                                       VerticalAlignment="Center"/>
-                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                       Text="{Binding Additive.WaveStagger, Mode=TwoWay, StringFormat={}{0:F2}}"
-                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                        </Grid>
-                    </StackPanel>
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="100"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Frequency" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Wavelength: wave density set by mm per cycle. Cycles: fixed number of waves per layer — adapts to perimeter so vases and tapered forms stay visually consistent."/>
+                                    <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                               ItemsSource="{Binding Additive.WaveFrequencyModeOptions}"
+                                               SelectedItem="{Binding Additive.WaveFrequencyMode, Mode=TwoWay}"/>
+                                </Grid>
 
-                    <StackPanel IsVisible="{Binding Additive.ShowContourOffsetOption}" Margin="0,0,0,0">
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,8,8,4"/>
-                        <CheckBox Content="Disable contour offset"
-                                  IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
-                                  Margin="8,4,8,2"/>
-                        <TextBlock TextWrapping="Wrap"
-                                   Classes="LabelMuted"
-                                   FontSize="10"
-                                   Margin="28,0,8,8"
-                                   Text="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
-                    </StackPanel>
+                                <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowSingleWavelength}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Length of one complete wave cycle along the toolpath."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelength}"/>
+                                </Grid>
+
+                                <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowCyclesInput}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Cycles per layer" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Number of complete wave cycles per contour. The wave scales with the perimeter so every layer has exactly this many waves."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveCycles}"/>
+                                </Grid>
+
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="52"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="56"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Shape" Classes="LabelMuted" VerticalAlignment="Center"
+                                               ToolTip.Tip="1.0 = full waveform. Lower values clip peaks toward a square/trapezoidal wave."/>
+                                    <Slider    Grid.Column="1" Minimum="0.01" Maximum="1.0"
+                                               Value="{Binding Additive.WaveShape, Mode=TwoWay}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                               Text="{Binding Additive.WaveShape, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                               TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="52"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="56"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Stagger" Classes="LabelMuted" VerticalAlignment="Center"
+                                               ToolTip.Tip="Phase offset per layer as a fraction of one cycle. 0 = all layers identical, 0.5 = consecutive layers alternate peak↔valley."/>
+                                    <Slider    Grid.Column="1" Minimum="0.0" Maximum="1.0"
+                                               Value="{Binding Additive.WaveStagger, Mode=TwoWay}"
+                                               VerticalAlignment="Center"/>
+                                    <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                               Text="{Binding Additive.WaveStagger, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                               TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+
+                                <CheckBox Content="Gradient"
+                                          IsChecked="{Binding Additive.WaveGradient, Mode=TwoWay}"
+                                          Margin="8,4,8,4"
+                                          ToolTip.Tip="Interpolate amplitude and wavelength linearly from bottom to top of the toolpath."/>
+
+                                <StackPanel IsVisible="{Binding Additive.ShowWaveGradientControls}">
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="72"/>
+                                            <ColumnDefinition Width="14"/>
+                                            <ColumnDefinition Width="72"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Amplitude (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Peak displacement at the bottom and top of the toolpath."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitudeBottom, Mode=TwoWay}"
+                                                   ToolTip.Tip="Bottom (zMin)"/>
+                                        <TextBlock Grid.Column="2" Text="→" HorizontalAlignment="Center" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="3" Classes="PanelTextBox" Text="{Binding Additive.WaveAmplitudeTop, Mode=TwoWay}"
+                                                   ToolTip.Tip="Top (zMax)"/>
+                                    </Grid>
+
+                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowGradientWavelength}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="72"/>
+                                            <ColumnDefinition Width="14"/>
+                                            <ColumnDefinition Width="72"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wavelength (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Wave cycle length at the bottom and top of the toolpath."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelengthBottom, Mode=TwoWay}"
+                                                   ToolTip.Tip="Bottom (zMin)"/>
+                                        <TextBlock Grid.Column="2" Text="→" HorizontalAlignment="Center" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="3" Classes="PanelTextBox" Text="{Binding Additive.WaveWavelengthTop, Mode=TwoWay}"
+                                                   ToolTip.Tip="Top (zMax)"/>
+                                    </Grid>
+
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="52"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="56"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Center" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   ToolTip.Tip="Shifts the gradient midpoint along the height axis. 0.5 = linear. Lower values compress the gradient toward the bottom; higher values toward the top."/>
+                                        <Slider    Grid.Column="1" Minimum="0.001" Maximum="0.999"
+                                                   Value="{Binding Additive.WaveGradientCenter, Mode=TwoWay}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.WaveGradientCenter, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                                   TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                    </Grid>
+
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="100"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Curve" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Easing applied to the gradient. Linear = uniform rate. Smooth = slow at both ends. Ease In = slow start. Ease Out = slow finish."/>
+                                        <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                                   ItemsSource="{Binding Additive.WaveGradientCurveOptions}"
+                                                   SelectedItem="{Binding Additive.WaveGradientCurve, Mode=TwoWay}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </Expander>
 
                     <Button Content="Generate Slice"
                             Classes="PrimaryButton"
                             HorizontalAlignment="Stretch"
-                            Margin="8,0,8,4"
+                            Margin="8,8,8,4"
                             Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
                 </StackPanel>
                 </ScrollViewer>
@@ -385,33 +475,18 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
-                        <TextBlock Text="TOOLHEAD ORIENTATION" Classes="SectionHeader"
-                                   ToolTip.Tip="Local ABC rotation applied on top of the plane-normal-derived approach direction. A=B=C=0 → no change from automatic orientation."/>
+                        <TextBlock Text="TOOLHEAD GLOBAL ORIENTATION" Classes="SectionHeader"
+                                   ToolTip.Tip="Global-axis rotations: R_global = Rz(Z) × Ry(Y) × Rx(X). Default 0,90,0 = nozzle vertical."/>
 
-                        <!-- A -->
+                        <!-- Y (global Y-axis rotation — Ry(90°) makes nozzle point down) -->
                         <Grid Margin="8,0,8,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="28"/>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="56"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="A (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                            <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
-                                       Value="{Binding Additive.ToolheadA, Mode=TwoWay}"
-                                       VerticalAlignment="Center"/>
-                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                       Text="{Binding Additive.ToolheadA, Mode=TwoWay, StringFormat={}{0:F1}}"
-                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                        </Grid>
-
-                        <!-- B -->
-                        <Grid Margin="8,4,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="28"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="56"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="B (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="0" Text="Y (°)" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Rotation around the global Y-axis. 90° tilts the nozzle to point straight down."/>
                             <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
                                        Value="{Binding Additive.ToolheadB, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
@@ -420,19 +495,37 @@
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                         </Grid>
 
-                        <!-- C -->
+                        <!-- X (global X-axis rotation — tilts nozzle side-to-side) -->
+                        <Grid Margin="8,4,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="X (°)" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Rotation around the global X-axis. Tilts the nozzle side-to-side."/>
+                            <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
+                                       Value="{Binding Additive.ToolheadC, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding Additive.ToolheadC, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <!-- Z (global Z-axis rotation — spins tool around vertical axis) -->
                         <Grid Margin="8,4,8,8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="28"/>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="56"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="C (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="0" Text="Z (°)" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Rotation around the global Z-axis. Spins the tool frame around the vertical axis (heading/yaw)."/>
                             <Slider    Grid.Column="1" Minimum="-180" Maximum="180"
-                                       Value="{Binding Additive.ToolheadC, Mode=TwoWay}"
+                                       Value="{Binding Additive.ToolheadA, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
-                                       Text="{Binding Additive.ToolheadC, Mode=TwoWay, StringFormat={}{0:F1}}"
+                                       Text="{Binding Additive.ToolheadA, Mode=TwoWay, StringFormat={}{0:F1}}"
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                         </Grid>
 
@@ -461,6 +554,70 @@
                             <TextBlock Grid.Column="0" Text="$APO.CVEL (%)" VerticalAlignment="Center" Classes="LabelMuted"
                                        ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <TextBlock Text="ORIENTATION SMOOTHING" Classes="SectionHeader"
+                                   ToolTip.Tip="Averages toolhead ABC angles across neighbouring moves to prevent sharp reorientation jumps that can over-accelerate the robot. Positions are unchanged."/>
+
+                        <CheckBox Content="Smooth rotation"
+                                  IsChecked="{Binding Additive.SmoothRotation, Mode=TwoWay}"
+                                  Margin="12,2,8,2"/>
+                        <Grid Margin="8,2,8,2" IsVisible="{Binding Additive.ShowSmoothRotationRadius}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Radius (moves)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Number of moves averaged on each side. Higher = smoother but deviates further from mesh normals."/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Additive.SmoothRotationRadius, Mode=TwoWay}"
+                                           Minimum="1" Maximum="50" Increment="1"
+                                           FormatString="F0" FontSize="11"/>
+                        </Grid>
+
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Max rate (°/mm)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Maximum orientation change in degrees per mm of travel. Clamps sharp turns to prevent KUKA axis overspeed. 0 = disabled."/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Additive.SmoothRotationMaxRateDegPerMm, Mode=TwoWay}"
+                                           Minimum="0" Maximum="90" Increment="0.5"
+                                           FormatString="F1" FontSize="11"/>
+                        </Grid>
+
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="KRL look-ahead (mm)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Forward look-ahead distance for the KRL exporter's Gaussian normal smoother. At 60 mm/s this is approx. 1 second of pre-rotation per 60 mm. 0 = disabled."/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Additive.OrientationLookAheadMm, Mode=TwoWay}"
+                                           Minimum="0" Maximum="500" Increment="10"
+                                           FormatString="F0" FontSize="11"/>
+                        </Grid>
+
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="KRL sigma (mm)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Gaussian kernel width for KRL normal smoothing. Controls the spread of the orientation transition ramp. Typically half of the look-ahead value."/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Additive.OrientationSigmaMm, Mode=TwoWay}"
+                                           Minimum="1" Maximum="200" Increment="5"
+                                           FormatString="F0" FontSize="11"/>
                         </Grid>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>

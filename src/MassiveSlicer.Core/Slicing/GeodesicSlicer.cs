@@ -543,7 +543,12 @@ public static class GeodesicSlicer
             }
 
             if (contour.Count > 2)
-                layer.Moves.Add(new ToolpathMove(prevPos, startPos, MoveKind.Extrude) { Normal = prevNormal });
+            {
+                float gapSq = (prevPos - startPos).LengthSquared();
+                if (gapSq <= 1.0f)
+                    layer.Moves.Add(new ToolpathMove(prevPos, startPos, MoveKind.Extrude) { Normal = prevNormal });
+                // else: open contour — gap exceeds chaining threshold, skip forced closure
+            }
 
             lastPos    = contour[^1].pos;
             lastNormal = contour[^1].normal;

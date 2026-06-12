@@ -81,9 +81,20 @@
           35,
           0
         ]
+      },
+      {
+        "name": "Default Home",
+        "angles": [
+          -0.22,
+          -79.08,
+          115.26,
+          179.69,
+          22.58,
+          -179.83
+        ]
       }
     ],
-    "defaultHomePosition": "Home",
+    "defaultHomePosition": "Default Home",
     "flangeDisplayRoll": 0,
     "defaultToolheadA": 0,
     "defaultToolheadB": 0,

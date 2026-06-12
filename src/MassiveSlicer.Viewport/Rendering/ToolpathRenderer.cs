@@ -1,4 +1,5 @@
-﻿using MassiveSlicer.Core.Models;
+﻿using System;
+using MassiveSlicer.Core.Models;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using NVec3 = System.Numerics.Vector3;
@@ -24,6 +25,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _pointCount;
     private int  _beadVao, _beadVbo, _beadCount;
     private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
+    private int  _orientationVao, _orientationVbo, _orientationCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
     private int[] _singularityVertexCumulative = [];
     private bool _disposed;
@@ -528,20 +530,55 @@ public sealed class ToolpathRenderer : IDisposable
     /// by its overhang value (0 = fully supported, 1 = fully unsupported).
     /// Must be called on the GL thread.
     /// </summary>
-    public void UpdateBeadOverhang(float[] overhangPerFlatMove)
+    public void UpdateBeadOverhang(float[] scoresPerFlatMove)
     {
         if (_beadOverhangVao != 0) { GL.DeleteVertexArray(_beadOverhangVao); GL.DeleteBuffer(_beadOverhangVbo); }
         _beadOverhangVao = _beadOverhangVbo = _beadOverhangCount = 0;
-
-        var data = BuildBeadOverhangData(overhangPerFlatMove);
-        if (data.Length > 0)
-        {
-            (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data);
-            _beadOverhangCount = data.Length / 6;
-        }
+        var data = BuildBeadColoredData(scoresPerFlatMove, t => new NVec3(1f, 1f - t, 1f - t));
+        if (data.Length > 0) { (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data); _beadOverhangCount = data.Length / 6; }
     }
 
-    private float[] BuildBeadOverhangData(float[] overhangPerFlatMove)
+    // Stops normalised to [0,1] where 1.0 = 3 °/mm (matches maxDegPerMm in the compute pass).
+    // deg/mm:  0.0     0.25    0.5     0.75    1.0     1.5     2.0     3.0+
+    private static readonly (float t, float r, float g, float b)[] _orientationStops =
+    [
+        (0.000f, 0.00f, 0.00f, 0.50f),  // Dark Blue   — Excellent
+        (0.083f, 0.00f, 1.00f, 1.00f),  // Cyan        — Very safe
+        (0.167f, 0.00f, 0.80f, 0.00f),  // Green       — Safe
+        (0.250f, 1.00f, 1.00f, 0.00f),  // Yellow      — Approaching limits
+        (0.333f, 1.00f, 0.50f, 0.00f),  // Orange      — Warning
+        (0.500f, 1.00f, 0.00f, 0.00f),  // Red         — Significant slowdown
+        (0.667f, 1.00f, 0.00f, 1.00f),  // Magenta     — Severe
+        (1.000f, 0.50f, 0.00f, 0.80f),  // Purple      — Extreme
+    ];
+
+    private static NVec3 OrientationColor(float t)
+    {
+        var s = _orientationStops;
+        if (t <= s[0].t) return new NVec3(s[0].r, s[0].g, s[0].b);
+        for (int i = 1; i < s.Length; i++)
+        {
+            if (t <= s[i].t)
+            {
+                float f = (t - s[i - 1].t) / (s[i].t - s[i - 1].t);
+                return new NVec3(
+                    s[i - 1].r + f * (s[i].r - s[i - 1].r),
+                    s[i - 1].g + f * (s[i].g - s[i - 1].g),
+                    s[i - 1].b + f * (s[i].b - s[i - 1].b));
+            }
+        }
+        return new NVec3(s[^1].r, s[^1].g, s[^1].b);
+    }
+
+    public void UpdateBeadOrientation(float[] scoresPerFlatMove)
+    {
+        if (_orientationVao != 0) { GL.DeleteVertexArray(_orientationVao); GL.DeleteBuffer(_orientationVbo); }
+        _orientationVao = _orientationVbo = _orientationCount = 0;
+        var data = BuildBeadColoredData(scoresPerFlatMove, OrientationColor);
+        if (data.Length > 0) { (_orientationVao, _orientationVbo) = BuildVao(data); _orientationCount = data.Length / 6; }
+    }
+
+    private float[] BuildBeadColoredData(float[] scoresPerFlatMove, Func<float, NVec3> colorFromScore)
     {
         float hw = _beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
@@ -615,15 +652,15 @@ public sealed class ToolpathRenderer : IDisposable
             for (int i = 1; i < n; i++) csR[i] = NVec3.Normalize(rights[i - 1] + rights[i]);
             csR[n] = rights[n - 1];
 
-            NVec3 OverhangColor(int fi)
+            NVec3 ColorAt(int fi)
             {
-                float t = fi >= 0 && fi < overhangPerFlatMove.Length ? overhangPerFlatMove[fi] : 0f;
-                return new NVec3(1f, 1f - t, 1f - t); // white to red
+                float t = fi >= 0 && fi < scoresPerFlatMove.Length ? scoresPerFlatMove[fi] : 0f;
+                return colorFromScore(t);
             }
 
             // Back cap.
             {
-                var c = OverhangColor(contour[0].flatIdx);
+                var c = ColorAt(contour[0].flatIdx);
                 var (lb, rb, lt, rt) = Corners(contour[0].move.From, csR[0], hw, hh, up);
                 Quad(rb, lb, lt, rt, c);
             }
@@ -631,7 +668,7 @@ public sealed class ToolpathRenderer : IDisposable
             // Four side quads per segment.
             for (int i = 0; i < n; i++)
             {
-                var c = OverhangColor(contour[i].flatIdx);
+                var c = ColorAt(contour[i].flatIdx);
                 var (lbA, rbA, ltA, rtA) = Corners(contour[i].move.From, csR[i],     hw, hh, up);
                 var (lbB, rbB, ltB, rtB) = Corners(contour[i].move.To,   csR[i + 1], hw, hh, up);
                 Quad(ltA, rtA, rtB, ltB, c); // top
@@ -642,7 +679,7 @@ public sealed class ToolpathRenderer : IDisposable
 
             // Front cap.
             {
-                var c = OverhangColor(contour[n - 1].flatIdx);
+                var c = ColorAt(contour[n - 1].flatIdx);
                 var (lb, rb, lt, rt) = Corners(contour[n - 1].move.To, csR[n], hw, hh, up);
                 Quad(lb, lt, rt, rb, c);
             }
@@ -662,7 +699,8 @@ public sealed class ToolpathRenderer : IDisposable
 
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
-                     bool showBead = false, bool showBeadOverhang = false, int scrubIndex = int.MaxValue)
+                     bool showBead = false, bool showBeadOverhang = false,
+                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue)
     {
         if (_disposed) return;
 
@@ -721,7 +759,17 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
-        if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
+        if (showOrientationPreview && _orientationVao != 0 && beadCount > 0)
+        {
+            _shader.Use();
+            _shader.SetMatrix4("uMVP", ref mvp);
+            _shader.SetFloat("uOverride", 0f);
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_orientationVao);
+            GL.DrawArrays(PrimitiveType.Triangles, 0, Math.Min(_orientationCount, beadCount));
+            GL.Enable(EnableCap.CullFace);
+        }
+        else if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
         {
             _shader.Use();
             _shader.SetMatrix4("uMVP", ref mvp);
@@ -798,6 +846,7 @@ public sealed class ToolpathRenderer : IDisposable
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
+        if (_orientationVao   != 0) { GL.DeleteVertexArray(_orientationVao);   GL.DeleteBuffer(_orientationVbo);   }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();

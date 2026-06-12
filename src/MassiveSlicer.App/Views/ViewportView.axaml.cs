@@ -170,9 +170,10 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.LightIntensity)      or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
-                    nameof(ViewportViewModel.ShowSeam)            or
-                    nameof(ViewportViewModel.ShowBead)            or
-                    nameof(ViewportViewModel.ShowBeadOverhang))
+                    nameof(ViewportViewModel.ShowSeam)               or
+                    nameof(ViewportViewModel.ShowBead)               or
+                    nameof(ViewportViewModel.ShowBeadOverhang)       or
+                    nameof(ViewportViewModel.ShowOrientationPreview))
                     GlCanvas.RequestNextFrameRendering();
                 else if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
                     Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
@@ -378,7 +379,8 @@ public partial class ViewportView : UserControl
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
             _renderer.ShowBead          = vm.ShowBead;
-            _renderer.ShowBeadOverhang  = vm.ShowBeadOverhang;
+            _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
+            _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
             _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
                 ? vm.ToolpathScrubIndex
                 : int.MaxValue;
@@ -387,7 +389,7 @@ public partial class ViewportView : UserControl
                 new TkVector3(vm.ToolpathTravelColor.X,     vm.ToolpathTravelColor.Y,     vm.ToolpathTravelColor.Z),
                 new TkVector3(vm.ToolpathSeamColor.X,       vm.ToolpathSeamColor.Y,       vm.ToolpathSeamColor.Z),
                 new TkVector3(vm.ToolpathUnselectedColor.X, vm.ToolpathUnselectedColor.Y, vm.ToolpathUnselectedColor.Z));
-            _renderer.GizmoEnabled   = vm.GizmoEnabled;
+            _renderer.GizmoEnabled   = vm.ActiveGizmoModeInternal != GizmoMode.None;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode         = vm.ActiveShaderMode;
             _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
@@ -496,6 +498,8 @@ public partial class ViewportView : UserControl
                     entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
                 var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
                 _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
+                var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
+                _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
                 // Capture the centroid that AddToolpath stamped onto the node's LocalTransform.
                 // ScrubIk uses this to convert stored Toolpath positions (original world space)
                 // back to local space before applying the node's current WorldTransform.
@@ -1044,21 +1048,21 @@ public partial class ViewportView : UserControl
         {
             case Key.F:      FocusSelected();                          e.Handled = true; break;
             case Key.G:
-                if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Translate);
-                else StartKbTransform(GizmoMode.Translate);
+                SetGizmoMode(GizmoMode.None);
+                StartKbTransform(GizmoMode.Translate);
                 e.Handled = true; break;
             case Key.R:
                 if (!IsToolNodeSelected())
                 {
-                    if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Rotate);
-                    else StartKbTransform(GizmoMode.Rotate);
+                    SetGizmoMode(GizmoMode.None);
+                    StartKbTransform(GizmoMode.Rotate);
                 }
                 e.Handled = true; break;
             case Key.S:
                 if (!IsToolNodeSelected())
                 {
-                    if (_renderer.GizmoEnabled) SetGizmoMode(GizmoMode.Scale);
-                    else StartKbTransform(GizmoMode.Scale);
+                    SetGizmoMode(GizmoMode.None);
+                    StartKbTransform(GizmoMode.Scale);
                 }
                 e.Handled = true; break;
             case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
@@ -1165,7 +1169,7 @@ public partial class ViewportView : UserControl
                     TiltAngle        = (float)s.TiltAngle,
                     TiltAngleX       = (float)s.TiltAngleX,
                     DisableContourOffset   = s.DisableContourOffset,
-                    LayerChangeMinTravelMm = (float)s.LayerChangeMinTravelMm,
+                    ZigZagSeam             = s.SeamMode == "Zig-zag",
                     WaveEffect    = s.WaveEffect switch
                     {
                         "Sine"     => WaveEffectType.Sine,
@@ -1175,12 +1179,30 @@ public partial class ViewportView : UserControl
                     },
                     WaveAmplitude  = (float)s.WaveAmplitude,
                     WaveWavelength = (float)s.WaveWavelength,
+                    WaveGradient         = s.WaveGradient,
+                    WaveAmplitudeBottom  = (float)s.WaveAmplitudeBottom,
+                    WaveAmplitudeTop     = (float)s.WaveAmplitudeTop,
+                    WaveWavelengthBottom = (float)s.WaveWavelengthBottom,
+                    WaveWavelengthTop    = (float)s.WaveWavelengthTop,
+                    WaveGradientCenter   = (float)s.WaveGradientCenter,
+                    WaveGradientCurve    = s.WaveGradientCurve switch
+                    {
+                        "Smooth"   => WaveGradientCurveType.Smooth,
+                        "Ease In"  => WaveGradientCurveType.EaseIn,
+                        "Ease Out" => WaveGradientCurveType.EaseOut,
+                        _          => WaveGradientCurveType.Linear,
+                    },
                     WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
                     WaveShape      = (float)s.WaveShape,
                     WaveStagger    = (float)s.WaveStagger,
                     AdaptiveLayerHeight = s.AdaptiveLayerHeight,
                     AdaptiveQuality     = (float)s.AdaptiveQuality,
                     MinLayerHeight      = (float)s.MinLayerHeight,
+                    OverhangOrientation = s.OverhangOrientation,
+                    MaxOverhangTiltDeg  = (float)s.MaxOverhangTiltDeg,
+                    SmoothRotation                = s.SmoothRotation,
+                    SmoothRotationRadius          = s.SmoothRotationRadius,
+                    SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
                 }
                 : new SliceSettings();
 
@@ -1210,7 +1232,8 @@ public partial class ViewportView : UserControl
                 if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
                 else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
                 else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
-                return WaveEffect.Apply(tp, settings);
+                tp = WaveEffect.Apply(tp, settings);
+                return OrientationSmoother.Apply(tp, settings);
             });
 
             var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
@@ -1510,7 +1533,6 @@ public partial class ViewportView : UserControl
 
     private void StartKbTransform(GizmoMode op)
     {
-        SetGizmoMode(op);
         if (_renderer.SelectedNode is not { } node) return;
 
         _kbTransformActive       = true;
@@ -1856,11 +1878,11 @@ public partial class ViewportView : UserControl
         // Tool orientation: approach along -normal, forward fixed to world +X.
         // Fixing the forward eliminates azimuthal spin when tilt axis changes.
         var targetRot = vm.AdditiveSettings is { } addSettings
-            ? solver.TargetRotFromPathFrameWithOffset(worldNormal, TkVector3.UnitX,
+            ? solver.TargetRotFromGlobalOrientation(worldNormal,
                 (float)addSettings.ToolheadA,
                 (float)addSettings.ToolheadB,
                 (float)addSettings.ToolheadC)
-            : solver.TargetRotFromPathFrame(worldNormal, TkVector3.UnitX);
+            : solver.TargetRotFromGlobalOrientation(worldNormal, 0f, 0f, 0f);
 
         // Seed from current joint angles (snapshot on UI thread, safe to read).
         var seed = new float[]
@@ -1944,17 +1966,30 @@ public partial class ViewportView : UserControl
             var targets    = new TkVector3[total];
             var normals    = new TkVector3[total];
             int mi         = 0;
+            var lastNormN  = NVec3.UnitZ; // last valid extrude normal; held through transitions
             foreach (var layer in toolpath.Layers)
             {
                 foreach (var move in layer.Moves)
                 {
-                    var (pos, planeNormal) = cache[Math.Min(mi + 1, cache.Length - 1)];
+                    var (pos, _) = cache[Math.Min(mi + 1, cache.Length - 1)];
                     float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
                     targets[mi] = new TkVector3(
                         lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
                         lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
                         lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43) - robroot;
-                    float nx = planeNormal.X, ny = planeNormal.Y, nz = planeNormal.Z;
+
+                    // Travel and layer-stitch moves carry no orientation — hold the last
+                    // extrude normal to prevent a sudden IK jump at layer transitions.
+                    // Per-move normal (overhang orientation) takes priority; falls back to UnitZ.
+                    NVec3 effNorm;
+                    if (move.Kind == MoveKind.Travel || move.IsLayerStitch)
+                        effNorm = lastNormN;
+                    else
+                    {
+                        effNorm    = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
+                        lastNormN  = effNorm;
+                    }
+                    float nx = effNorm.X, ny = effNorm.Y, nz = effNorm.Z;
                     normals[mi] = TkVector3.Normalize(new TkVector3(
                         nx * wt.M11 + ny * wt.M21 + nz * wt.M31,
                         nx * wt.M12 + ny * wt.M22 + nz * wt.M32,
@@ -1968,9 +2003,7 @@ public partial class ViewportView : UserControl
             var targetRots = new (TkVector3 r0, TkVector3 r1, TkVector3 r2)[total];
             for (int i = 0; i < total; i++)
             {
-                targetRots[i] = hasOff
-                    ? solver.TargetRotFromPathFrameWithOffset(normals[i], TkVector3.UnitX, offA, offB, offC)
-                    : solver.TargetRotFromPathFrame(normals[i], TkVector3.UnitX);
+                targetRots[i] = solver.TargetRotFromGlobalOrientation(normals[i], offA, offB, offC);
             }
 
             if (cts.IsCancellationRequested) return;
@@ -2121,6 +2154,59 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
+    /// Returns a per-flat-move score in [0,1] representing how fast the toolhead orientation
+    /// is changing relative to a reference max rate of 5°/mm. A score of 1 (red) means
+    /// ≥5°/mm change — the KUKA will slow down to interpolate the orientation.
+    /// Moves without per-move normals (planar layers) always score 0.
+    /// </summary>
+    private static float[] ComputeOrientationRatePerFlatMove(Toolpath tp)
+    {
+        // 3°/mm = top of scale (purple). Gradient: dark blue → cyan → green → yellow
+        // → orange → red → magenta → purple, matching the 8-stop legend in the UI.
+        const float maxDegPerMm = 3f;
+
+        int total = tp.Layers.Sum(l => l.Moves.Count);
+        var result = new float[total];
+        if (total == 0) return result;
+
+        NVec3 prevNormal = NVec3.Zero;
+        bool  hasPrev    = false;
+        int   fi         = 0;
+
+        foreach (var layer in tp.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude && !move.IsLayerStitch &&
+                    move.Normal.LengthSquared() > 1e-6f)
+                {
+                    var   normal = NVec3.Normalize(move.Normal);
+                    // Use the segment length — that's the distance over which the
+                    // orientation changes, giving deg/mm. The previous code used
+                    // Distance(move.From, prevTo) which is the gap between consecutive
+                    // moves (≈ 0 for adjacent segments) so the guard always failed.
+                    float dist   = (move.To - move.From).Length();
+                    if (hasPrev && dist > 1e-3f)
+                    {
+                        float cosA     = Math.Clamp(NVec3.Dot(normal, prevNormal), -1f, 1f);
+                        float degPerMm = MathF.Acos(cosA) * (180f / MathF.PI) / dist;
+                        result[fi]     = Math.Clamp(degPerMm / maxDegPerMm, 0f, 1f);
+                    }
+                    prevNormal = normal;
+                    hasPrev    = true;
+                }
+                else
+                {
+                    hasPrev = false;
+                }
+                fi++;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Builds a flat cache of (pos, normal) entries for O(1) scrub index lookup.
     /// Entry 0 = first move's From; entries 1..N = each move's To in order.
     /// </summary>
@@ -2130,14 +2216,24 @@ public partial class ViewportView : UserControl
         foreach (var layer in tp.Layers) total += layer.Moves.Count;
         if (total == 0) return [];
 
-        var arr   = new (NVec3 pos, NVec3 normal)[total + 1];
-        int i     = 0;
-        bool first = true;
+        var arr      = new (NVec3 pos, NVec3 normal)[total + 1];
+        int i        = 0;
+        bool first   = true;
+        NVec3 lastN  = NVec3.UnitZ;
         foreach (var layer in tp.Layers)
         {
             foreach (var move in layer.Moves)
             {
-                NVec3 n = move.Normal;
+                // Travel and layer-stitch moves carry no orientation — hold last extrude normal.
+                // Per-move normal (overhang orientation) overrides UnitZ fallback.
+                NVec3 n;
+                if (move.Kind == MoveKind.Travel || move.IsLayerStitch)
+                    n = lastN;
+                else
+                {
+                    n     = move.Normal.LengthSquared() > 1e-6f ? move.Normal : NVec3.UnitZ;
+                    lastN = n;
+                }
                 if (first) { arr[i++] = (move.From, n); first = false; }
                 arr[i++] = (move.To, n);
             }
@@ -2456,7 +2552,8 @@ public partial class ViewportView : UserControl
                     (float)robot.TcpA, (float)robot.TcpB, (float)robot.TcpC);
         }
 
-        switch (_renderer.GizmoMode)
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        switch (dragOp)
         {
             case GizmoMode.Translate:
             case GizmoMode.Scale:
@@ -2504,7 +2601,8 @@ public partial class ViewportView : UserControl
         float t      = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
         var hitWorld = ray.At(t);
 
-        switch (_renderer.GizmoMode)
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        switch (dragOp)
         {
             case GizmoMode.Translate: ProcessTranslateDrag(node, hitWorld); break;
             case GizmoMode.Scale:     ProcessScaleDrag(node, hitWorld);     break;
@@ -2690,7 +2788,10 @@ public partial class ViewportView : UserControl
             BeadWidthMm         = (float)settings.BeadWidth,
             LayerHeightMm       = (float)settings.LayerHeight,
             FlowRate            = (float)(selectedPreset?.FlowRate ?? 1.0),
-            HomePosition        = settings.SelectedHomeAngles,
+            HomePosition              = settings.SelectedHomeAngles,
+            ApoCvel                   = (int)settings.ApoCvel,
+            OrientationLookAheadMm    = (float)settings.OrientationLookAheadMm,
+            OrientationSigmaMm        = (float)settings.OrientationSigmaMm,
             NodeWorldTransform = sysWt,
             NodeOrigin         = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
             RobrootWorldPos    = new System.Numerics.Vector3(
