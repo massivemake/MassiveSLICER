@@ -23,19 +23,45 @@ public static class WaveEffect
     {
         if (settings.WaveEffect == WaveEffectType.None) return toolpath;
 
-        float amplitude   = settings.WaveAmplitude;
-        float wavelength  = MathF.Max(settings.WaveWavelength, 1f);
-        int   fixedCycles = Math.Max(0, settings.WaveCycles);
-        float shape       = Math.Clamp(settings.WaveShape, 0.01f, 1f);
-        float stagger     = settings.WaveStagger;
-        float spacing     = Math.Clamp(wavelength / 16f, 0.5f, 2f);
-        var   waveType    = settings.WaveEffect;
+        float baseAmplitude  = settings.WaveAmplitude;
+        float baseWavelength = MathF.Max(settings.WaveWavelength, 1f);
+        int   fixedCycles    = Math.Max(0, settings.WaveCycles);
+        float shape          = Math.Clamp(settings.WaveShape, 0.01f, 1f);
+        float stagger        = settings.WaveStagger;
+        var   waveType       = settings.WaveEffect;
+
+        // Gradient setup: derive zMin/zMax from the first/last layer.
+        bool  gradient = settings.WaveGradient && toolpath.Layers.Count > 1;
+        float zMin = 0f, zRange = 0f;
+        if (gradient)
+        {
+            zMin   = toolpath.Layers[0].Z - toolpath.Layers[0].Height;
+            float zMax = toolpath.Layers[^1].Z;
+            zRange = zMax - zMin;
+            if (zRange < 1e-4f) gradient = false;
+        }
 
         var result = new Toolpath();
         foreach (var layer in toolpath.Layers)
         {
+            float amplitude, wavelength;
+            if (gradient)
+            {
+                float t = Math.Clamp((layer.Z - zMin) / zRange, 0f, 1f);
+                t = GradientCenter(t, settings.WaveGradientCenter);
+                t = GradientCurve(t, settings.WaveGradientCurve);
+                amplitude  = settings.WaveAmplitudeBottom + (settings.WaveAmplitudeTop   - settings.WaveAmplitudeBottom)   * t;
+                wavelength = MathF.Max(settings.WaveWavelengthBottom + (settings.WaveWavelengthTop - settings.WaveWavelengthBottom) * t, 1f);
+            }
+            else
+            {
+                amplitude  = baseAmplitude;
+                wavelength = baseWavelength;
+            }
+
+            float spacing = Math.Clamp(wavelength / 16f, 0.5f, 2f);
+
             var newLayer = new ToolpathLayer(layer.Index, layer.Z) { PlaneNormal = layer.PlaneNormal };
-            // Phase offset for this layer: stagger fraction × full cycle, accumulated per layer.
             float phaseOffset = layer.Index * stagger * TwoPi;
 
             int i = 0;
@@ -50,7 +76,6 @@ public static class WaveEffect
                     continue;
                 }
 
-                // Collect one contour run (consecutive extrude moves until the next break).
                 int contourStart = i;
                 while (i < layer.Moves.Count &&
                        layer.Moves[i].Kind != MoveKind.Travel &&
@@ -66,6 +91,25 @@ public static class WaveEffect
 
         return result;
     }
+
+    // -- Gradient helpers ---------------------------------------------------------
+
+    // Piecewise-linear centre-shift: maps t=center → 0.5, preserving endpoints at 0 and 1.
+    private static float GradientCenter(float t, float center)
+    {
+        center = Math.Clamp(center, 0.001f, 0.999f);
+        return t <= center
+            ? 0.5f * (t / center)
+            : 0.5f + 0.5f * ((t - center) / (1f - center));
+    }
+
+    private static float GradientCurve(float t, WaveGradientCurveType curve) => curve switch
+    {
+        WaveGradientCurveType.Smooth  => t * t * (3f - 2f * t),
+        WaveGradientCurveType.EaseIn  => t * t,
+        WaveGradientCurveType.EaseOut => 1f - (1f - t) * (1f - t),
+        _                             => t,
+    };
 
     // -- Contour processing -------------------------------------------------------
 

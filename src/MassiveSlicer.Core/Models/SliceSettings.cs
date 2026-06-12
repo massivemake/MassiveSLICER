@@ -50,14 +50,6 @@ public sealed class SliceSettings
     /// </summary>
     public bool DisableContourOffset { get; init; } = false;
 
-    /// <summary>
-    /// Minimum XY displacement (mm) between the end of one layer and the start of the next
-    /// that triggers a full layer-change travel (stop extrusion, move at travel speed, restart).
-    /// Below this threshold the transition is a short extrude stitch — the robot keeps printing
-    /// through the seam without stopping. Set to 0 to always travel between layers.
-    /// </summary>
-    public float LayerChangeMinTravelMm { get; init; } = 2.0f;
-
     // -- Adaptive layer height ----------------------------------------------------
 
     /// <summary>When true, layer spacing is computed per-Z from mesh surface normals.</summary>
@@ -106,4 +98,82 @@ public sealed class SliceSettings
     /// Values wrap modulo 1 so 1.0 is identical to 0.0.
     /// </summary>
     public float WaveStagger { get; init; } = 0f;
+
+    /// <summary>
+    /// When true, open contours (panels, single-wall prints) alternate print direction each layer.
+    /// Even layers print start→end; odd layers print end→start, eliminating the long return travel.
+    /// Has no effect on closed contours.
+    /// </summary>
+    public bool ZigZagSeam { get; init; } = false;
+
+    // -- Wave gradient ------------------------------------------------------------
+
+    /// <summary>When true, amplitude and wavelength are linearly interpolated per layer between
+    /// the Bottom and Top values rather than being held constant.</summary>
+    public bool WaveGradient { get; init; } = false;
+
+    /// <summary>Wave amplitude at the bottom (zMin) of the toolpath, in mm.</summary>
+    public float WaveAmplitudeBottom { get; init; } = 0f;
+
+    /// <summary>Wave amplitude at the top (zMax) of the toolpath, in mm.</summary>
+    public float WaveAmplitudeTop { get; init; } = 3f;
+
+    /// <summary>Wave wavelength at the bottom of the toolpath, in mm.</summary>
+    public float WaveWavelengthBottom { get; init; } = 20f;
+
+    /// <summary>Wave wavelength at the top of the toolpath, in mm.</summary>
+    public float WaveWavelengthTop { get; init; } = 20f;
+
+    /// <summary>
+    /// Shifts the midpoint of the gradient along the height axis.
+    /// 0.5 = linear (midpoint at 50 % height). Values closer to 0 compress the gradient
+    /// toward the bottom; values closer to 1 compress it toward the top. Range (0, 1).
+    /// </summary>
+    public float WaveGradientCenter { get; init; } = 0.5f;
+
+    /// <summary>Easing curve applied after the centre-shift bias.</summary>
+    public WaveGradientCurveType WaveGradientCurve { get; init; } = WaveGradientCurveType.Linear;
+
+    // -- Overhang orientation -----------------------------------------------------
+
+    /// <summary>
+    /// When true, the planar slicer assigns per-move surface normals derived from the
+    /// intersected mesh faces. The KRL exporter uses these to tilt the toolhead toward the
+    /// surface, improving overhang adhesion. The wave effect passes normals through unchanged —
+    /// orientation is driven by mesh geometry, not wave-displaced positions.
+    /// </summary>
+    public bool  OverhangOrientation { get; init; } = false;
+
+    /// <summary>
+    /// Maximum allowed tilt from vertical in degrees. Clamps the per-move normal so that
+    /// the tool angle never exceeds this deviation from straight-down. Prevents the robot
+    /// from reaching singularity positions on near-horizontal or inverted surfaces.
+    /// Range [0, 89]. Defaults to 45°.
+    /// </summary>
+    public float MaxOverhangTiltDeg  { get; init; } = 45f;
+
+    // -- Orientation smoothing ----------------------------------------------------
+
+    /// <summary>
+    /// When true, per-move toolhead normals are smoothed with a box-filter pass after
+    /// slicing. Prevents sharp ABC reorientation jumps from over-accelerating the robot.
+    /// Only affects orientation (Normal field); XYZ positions are unchanged.
+    /// </summary>
+    public bool SmoothRotation       { get; init; } = false;
+
+    /// <summary>
+    /// Half-width of the orientation smoothing window in moves.
+    /// Each move's normal is averaged with ±SmoothRotationRadius neighbours.
+    /// Higher values produce smoother orientation curves at the cost of deviating
+    /// further from the mesh surface. Range [1, 50]. Defaults to 5.
+    /// </summary>
+    public int  SmoothRotationRadius { get; init; } = 5;
+
+    /// <summary>
+    /// Maximum allowed orientation change in degrees per mm of travel.
+    /// A bidirectional slew-rate pass clamps consecutive normal changes so the robot
+    /// never needs to rotate faster than this rate, preventing KUKA axis overspeed
+    /// at sharp turns. 0 = disabled (no rate limit).
+    /// </summary>
+    public float SmoothRotationMaxRateDegPerMm { get; init; } = 0f;
 }

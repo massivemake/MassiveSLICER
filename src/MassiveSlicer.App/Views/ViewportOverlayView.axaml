@@ -1,35 +1,39 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:ctrl="clr-namespace:MassiveSlicer.Controls"
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
              x:CompileBindings="False">
 
     <Grid>
 
-        <!-- Data Visualization panel — bottom-left, above gizmo toolbar -->
+        <!-- Data Visualization panel — bottom-left, above timeline -->
         <Border IsVisible="{Binding IsToolpathSelected}"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
-                Margin="8,8,8,54"
+                Margin="8,8,8,78"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
-                Padding="8,6">
-            <StackPanel>
-                <TextBlock Text="DATA VISUALIZATION"
-                           Classes="LabelMuted"
-                           FontSize="9"
-                           Margin="0,0,0,4"/>
-                <CheckBox Content="Bead Overhang"
-                          IsChecked="{Binding ShowBeadOverhang}"
-                          FontSize="11"/>
-            </StackPanel>
+                CornerRadius="4">
+            <Expander Classes="SectionExpander"
+                      Header="DATA VISUALIZATION"
+                      IsExpanded="False">
+                <StackPanel Margin="8,6,8,8" Spacing="6">
+                    <CheckBox Content="Bead Overhang"
+                              IsChecked="{Binding ShowBeadOverhang}"
+                              FontSize="11"/>
+                    <CheckBox Content="Orientation Rate"
+                              IsChecked="{Binding ShowOrientationPreview}"
+                              FontSize="11"
+                              ToolTip.Tip="Colour by orientation change rate. Dark blue = 0°/mm (smooth) → cyan → green → yellow → orange → red → magenta → purple = 3°/mm+ (extreme slowdown)."/>
+                </StackPanel>
+            </Expander>
         </Border>
 
-        <!-- Selection toolbar — bottom-left -->
-        <Border HorizontalAlignment="Left"
-                VerticalAlignment="Bottom"
+        <!-- Transform toolbar — top-center -->
+        <Border HorizontalAlignment="Center"
+                VerticalAlignment="Top"
                 Margin="8"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
@@ -37,26 +41,20 @@
                 CornerRadius="4"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <Button Classes="ToolbarButton" ToolTip.Tip="Move (G)"   Padding="6,4" Margin="0,0,2,0"
+                <Button Classes="ToolbarButton" ToolTip.Tip="Move"   Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsMoveActive}"
                         Command="{Binding GizmoMoveCommand}">
                     <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
                 </Button>
-                <Button Classes="ToolbarButton" ToolTip.Tip="Rotate (R)" Padding="6,4" Margin="0,0,2,0"
+                <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsRotateActive}"
                         Command="{Binding GizmoRotateCommand}">
                     <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
                 </Button>
-                <Button Classes="ToolbarButton" ToolTip.Tip="Scale (S)"  Padding="6,4" Margin="0,0,2,0"
+                <Button Classes="ToolbarButton" ToolTip.Tip="Scale"  Padding="6,4" Margin="0,0,2,0"
                         Classes.active="{Binding IsScaleActive}"
                         Command="{Binding GizmoScaleCommand}">
                     <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
-                </Button>
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,4,0,4"/>
-                <Button Classes="ToolbarButton" ToolTip.Tip="Toggle gizmo handles (active = gizmo; inactive = G/R/S mouse transform)" Padding="6,4" Margin="2,0,0,0"
-                        Classes.active="{Binding GizmoEnabled}"
-                        Command="{Binding GizmoToggleCommand}">
-                    <ia:Icon Value="mdi-axis-arrow" FontSize="14"/>
                 </Button>
             </StackPanel>
         </Border>
@@ -96,146 +94,6 @@
             </StackPanel>
         </Border>
 
-        <!-- Toolpath scrubber + playback — right-center. -->
-        <StackPanel IsVisible="{Binding IsToolpathSelected}"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    Orientation="Vertical"
-                    Spacing="6"
-                    Margin="8">
-
-        <Grid>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="6"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Floating label — tracks thumb via RenderTransform.Y.
-                 The move number is an editable TextBox; typing a new value and
-                 pressing Enter or clicking away jumps the slider to that position. -->
-            <Border Grid.Column="0"
-                    VerticalAlignment="Top"
-                    Background="{DynamicResource Bg2}"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="6,3">
-                <Border.RenderTransform>
-                    <TranslateTransform Y="{Binding ToolpathScrubThumbOffsetY}"/>
-                </Border.RenderTransform>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBox Text="{Binding ToolpathScrubText}"
-                             Classes="ScrubInput"
-                             ToolTip.Tip="Type a move number and press Enter"/>
-                    <TextBlock Text="{Binding ToolpathScrubMaxLabel}"
-                               Classes="Readout"
-                               FontSize="10"
-                               VerticalAlignment="Center"/>
-                </StackPanel>
-            </Border>
-
-            <!-- Vertical slider box — auto-sized so Avalonia centres the track naturally -->
-            <Border Grid.Column="2"
-                    Background="{DynamicResource Bg2}"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="1"
-                    CornerRadius="4"
-                    Padding="4">
-                <Grid>
-                    <!-- Unfilled rail -->
-                    <Rectangle Width="4"
-                               Fill="{DynamicResource Border2}"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Stretch"
-                               Margin="4"/>
-                    <!-- Accent fill — grows from the bottom as value increases -->
-                    <Rectangle Width="4"
-                               Fill="{DynamicResource Accent}"
-                               HorizontalAlignment="Center"
-                               VerticalAlignment="Bottom"
-                               Height="{Binding ToolpathScrubFillHeight}"
-                               Margin="4"/>
-                    <!-- Slider on top — RepeatButtons transparent, thumb remains visible -->
-                    <Slider Classes="ScrubSlider"
-                            Orientation="Vertical"
-                            Height="480"
-                            Minimum="0"
-                            Maximum="{Binding ToolpathScrubMax}"
-                            Value="{Binding ToolpathScrubIndex}"
-                            IsSnapToTickEnabled="True"
-                            TickFrequency="1"/>
-                    <!-- Unreachable move markers — red horizontal dashes -->
-                    <ItemsControl ItemsSource="{Binding ScrubUnreachableMarkers}"
-                                  Height="480" IsHitTestVisible="False">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemContainerTheme>
-                            <ControlTheme TargetType="ContentPresenter">
-                                <Setter Property="Canvas.Top" Value="{Binding}"/>
-                                <Setter Property="Canvas.Left" Value="0"/>
-                            </ControlTheme>
-                        </ItemsControl.ItemContainerTheme>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Rectangle Width="10" Height="2" Fill="#CC3030" IsHitTestVisible="False"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <!-- Singularity markers — purple horizontal dashes -->
-                    <ItemsControl ItemsSource="{Binding ScrubSingularityMarkers}"
-                                  Height="480" IsHitTestVisible="False">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><Canvas/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemContainerTheme>
-                            <ControlTheme TargetType="ContentPresenter">
-                                <Setter Property="Canvas.Top" Value="{Binding}"/>
-                                <Setter Property="Canvas.Left" Value="0"/>
-                            </ControlTheme>
-                        </ItemsControl.ItemContainerTheme>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Rectangle Width="10" Height="2" Fill="#9955DD" IsHitTestVisible="False"/>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </Grid>
-            </Border>
-
-        </Grid>
-
-        <!-- Analysing indicator — visible while IK validation is running -->
-        <TextBlock IsVisible="{Binding IsValidating}"
-                   Text="Analysing…"
-                   Foreground="{DynamicResource TextSecondary}"
-                   FontSize="10"
-                   HorizontalAlignment="Right"
-                   Margin="0,0,0,4"/>
-
-        <!-- Play / pause + playback speed -->
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Stretch" Spacing="4">
-            <Button HorizontalAlignment="Stretch"
-                    HorizontalContentAlignment="Center"
-                    Classes="ToolbarButton"
-                    IsEnabled="{Binding !IsValidating}"
-                    Command="{Binding TogglePlaybackCommand}"
-                    ToolTip.Tip="Play / pause simulation (Space)">
-                <Panel>
-                    <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
-                    <ia:Icon Value="mdi-pause" FontSize="16" IsVisible="{Binding IsPlaying}"/>
-                </Panel>
-            </Button>
-            <ComboBox ItemsSource="{Binding PlaybackSpeedOptions}"
-                      SelectedItem="{Binding PlaybackSpeedOption, Mode=TwoWay}"
-                      FontSize="11"
-                      Width="64"
-                      ToolTip.Tip="Playback speed"/>
-        </StackPanel>
-
-        </StackPanel>
-
         <!-- Toolpath stats — top-right -->
         <Border IsVisible="{Binding HasToolpathStats}"
                 HorizontalAlignment="Right"
@@ -267,18 +125,200 @@
             </Grid>
         </Border>
 
-        <!-- Coordinate readout — bottom-right -->
-        <Border HorizontalAlignment="Right"
+        <!-- Horizontal timeline — bottom, visible when toolpath selected -->
+        <Border IsVisible="{Binding IsToolpathSelected}"
+                HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Margin="8"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
                 CornerRadius="4"
-                Padding="8,4">
-            <TextBlock Text="X: 0.0   Y: 0.0   Z: 0.0"
-                       Classes="Readout"
-                       FontSize="11"/>
+                Padding="6,4">
+            <StackPanel Spacing="4">
+
+                <!-- Scrubber row: play controls | track | counter -->
+                <Grid ColumnDefinitions="Auto,*,Auto">
+
+                    <!-- Play / pause + speed -->
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4"
+                                VerticalAlignment="Center" Margin="0,0,8,0">
+                        <Button Classes="ToolbarButton"
+                                IsEnabled="{Binding !IsValidating}"
+                                Command="{Binding TogglePlaybackCommand}"
+                                ToolTip.Tip="Play / pause simulation (Space)"
+                                Padding="6,4">
+                            <Panel>
+                                <ia:Icon Value="mdi-play"  FontSize="16" IsVisible="{Binding !IsPlaying}"/>
+                                <ia:Icon Value="mdi-pause" FontSize="16" IsVisible="{Binding IsPlaying}"/>
+                            </Panel>
+                        </Button>
+                        <ComboBox ItemsSource="{Binding PlaybackSpeedOptions}"
+                                  SelectedItem="{Binding PlaybackSpeedOption, Mode=TwoWay}"
+                                  FontSize="11"
+                                  Width="64"
+                                  VerticalAlignment="Center"
+                                  ToolTip.Tip="Playback speed"/>
+                    </StackPanel>
+
+                    <!-- Horizontal scrubber track -->
+                    <Grid Grid.Column="1" x:Name="ScrubTrackGrid" VerticalAlignment="Center">
+                        <Slider Classes="ScrubSlider"
+                                Orientation="Horizontal"
+                                Minimum="0"
+                                Maximum="{Binding ToolpathScrubMax}"
+                                Value="{Binding ToolpathScrubIndex}"
+                                IsSnapToTickEnabled="True"
+                                TickFrequency="1"/>
+                        <!-- Unreachable move markers — red ticks, single draw call -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubUnreachableMarkers}"
+                                             MarkerBrush="#CC3030"
+                                             Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
+                        <!-- Singularity markers — purple ticks, single draw call -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubSingularityMarkers}"
+                                             MarkerBrush="#9955DD"
+                                             Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
+                    </Grid>
+
+                    <!-- Move counter + analysing indicator -->
+                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="2">
+                        <TextBlock IsVisible="{Binding IsValidating}"
+                                   Text="Analysing…"
+                                   Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="9"
+                                   HorizontalAlignment="Right"/>
+                        <StackPanel Orientation="Horizontal" Spacing="2">
+                            <TextBox Text="{Binding ToolpathScrubText}"
+                                     Classes="ScrubInput"
+                                     ToolTip.Tip="Type a move number and press Enter"/>
+                            <TextBlock Text="{Binding ToolpathScrubMaxLabel}"
+                                       Classes="Readout"
+                                       FontSize="10"
+                                       VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                </Grid>
+
+                <!-- Keyframe track — placeholder; wired up when keyframe functionality is added -->
+                <Grid Height="22">
+                    <Border Background="{DynamicResource Border1}"
+                            CornerRadius="2"
+                            Margin="0,2"
+                            Opacity="0.4"/>
+                    <TextBlock Text="KEYFRAMES"
+                               Classes="LabelMuted"
+                               FontSize="9"
+                               VerticalAlignment="Center"
+                               HorizontalAlignment="Left"
+                               Margin="8,0,0,0"/>
+                    <Button Classes="ToolbarButton"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Padding="4,2"
+                            Margin="4,0"
+                            ToolTip.Tip="Add orientation keyframe at current move">
+                        <ia:Icon Value="mdi-plus" FontSize="11"/>
+                    </Button>
+                </Grid>
+
+            </StackPanel>
+        </Border>
+
+        <!-- Bead overhang legend — bottom-right, visible when bead overhang active -->
+        <Border IsVisible="{Binding ShowBeadOverhang}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,78"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Opacity="0.88"
+                Padding="8,6">
+            <StackPanel>
+                <TextBlock Text="BEAD OVERHANG"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,5"/>
+                <Grid ColumnDefinitions="14,6,Auto,10,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto">
+                    <!-- 0% — White -->
+                    <Rectangle Grid.Row="0" Grid.Column="0" Width="12" Height="12" Fill="#FFFFFF" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="2" Text="0%"   FontSize="10" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="4" Text="Fully supported"   Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <!-- 25% -->
+                    <Rectangle Grid.Row="1" Grid.Column="0" Width="12" Height="12" Fill="#FFBFBF" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="2" Text="25%"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="4" Text="Mostly supported"  Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- 50% -->
+                    <Rectangle Grid.Row="2" Grid.Column="0" Width="12" Height="12" Fill="#FF8080" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="2" Text="50%"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="4" Text="Partial overhang"  Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- 75% -->
+                    <Rectangle Grid.Row="3" Grid.Column="0" Width="12" Height="12" Fill="#FF4040" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="3" Grid.Column="2" Text="75%"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="3" Grid.Column="4" Text="Significant overhang" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- 100% — Red -->
+                    <Rectangle Grid.Row="4" Grid.Column="0" Width="12" Height="12" Fill="#FF0000" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="4" Grid.Column="2" Text="100%" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="4" Grid.Column="4" Text="Unsupported"        Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Orientation rate legend — right-center, visible when orientation preview active -->
+        <Border IsVisible="{Binding ShowOrientationPreview}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,78"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Opacity="0.88"
+                Padding="8,6">
+            <StackPanel>
+                <TextBlock Text="ORIENTATION RATE"
+                           Classes="LabelMuted"
+                           FontSize="9"
+                           Margin="0,0,0,5"/>
+                <Grid ColumnDefinitions="14,6,Auto,10,Auto" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto">
+                    <!-- Row 0: Dark Blue -->
+                    <Rectangle Grid.Row="0" Grid.Column="0" Width="12" Height="12" Fill="#000080" RadiusX="2" RadiusY="2" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="2" Text="0.0 °/mm"  FontSize="10" VerticalAlignment="Center"/>
+                    <TextBlock  Grid.Row="0" Grid.Column="4" Text="Excellent"          Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                    <!-- Row 1: Cyan -->
+                    <Rectangle Grid.Row="1" Grid.Column="0" Width="12" Height="12" Fill="#00FFFF" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="2" Text="0.25 °/mm" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="1" Grid.Column="4" Text="Very safe"          Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 2: Green -->
+                    <Rectangle Grid.Row="2" Grid.Column="0" Width="12" Height="12" Fill="#00CC00" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="2" Text="0.5 °/mm"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="2" Grid.Column="4" Text="Safe"               Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 3: Yellow -->
+                    <Rectangle Grid.Row="3" Grid.Column="0" Width="12" Height="12" Fill="#FFFF00" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="3" Grid.Column="2" Text="0.75 °/mm" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="3" Grid.Column="4" Text="Approaching limits" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 4: Orange -->
+                    <Rectangle Grid.Row="4" Grid.Column="0" Width="12" Height="12" Fill="#FF8000" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="4" Grid.Column="2" Text="1.0 °/mm"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="4" Grid.Column="4" Text="Warning"            Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 5: Red -->
+                    <Rectangle Grid.Row="5" Grid.Column="0" Width="12" Height="12" Fill="#FF0000" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="5" Grid.Column="2" Text="1.5 °/mm"  FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="5" Grid.Column="4" Text="Significant slowdown" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 6: Magenta -->
+                    <Rectangle Grid.Row="6" Grid.Column="0" Width="12" Height="12" Fill="#FF00FF" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="6" Grid.Column="2" Text="2.0+ °/mm" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="6" Grid.Column="4" Text="Severe"             Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <!-- Row 7: Purple -->
+                    <Rectangle Grid.Row="7" Grid.Column="0" Width="12" Height="12" Fill="#8000CC" RadiusX="2" RadiusY="2" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="7" Grid.Column="2" Text="3.0+ °/mm" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                    <TextBlock  Grid.Row="7" Grid.Column="4" Text="Extreme"            Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                </Grid>
+            </StackPanel>
         </Border>
 
     </Grid>

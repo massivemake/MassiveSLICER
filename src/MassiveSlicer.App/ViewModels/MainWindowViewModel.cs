@@ -184,7 +184,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
         add.ApoCvel                = p.ApoCvel;
-        add.LayerChangeMinTravelMm = p.LayerChangeMinTravelMm;
     }
 
     /// <summary>
@@ -237,7 +236,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
         p.ApoCvel                = add.ApoCvel;
-        p.LayerChangeMinTravelMm = add.LayerChangeMinTravelMm;
 
         PreferencesLoader.Save(p);
     }

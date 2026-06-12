@@ -197,7 +197,8 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowTravelMoves    { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
-    public bool ShowBeadOverhang   { get; set; } = false;
+    public bool ShowBeadOverhang        { get; set; } = false;
+    public bool ShowOrientationPreview  { get; set; } = false;
 
     /// <summary>
     /// Scrubber move index applied to the selected toolpath renderer.
@@ -284,6 +285,12 @@ public sealed class SceneRenderer : IDisposable
     {
         if (_toolpaths.TryGetValue(node, out var entry))
             entry.Renderer.UpdateBeadOverhang(overhangPerFlatMove);
+    }
+
+    public void UpdateToolpathBeadOrientation(SceneNode node, float[] orientationRatePerFlatMove)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateBeadOrientation(orientationRatePerFlatMove);
     }
 
     /// <summary>
@@ -570,6 +577,7 @@ public sealed class SceneRenderer : IDisposable
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
+                showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue);
         }
 

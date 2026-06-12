@@ -75,7 +75,22 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool ShowBeadOverhang
     {
         get => _showBeadOverhang;
-        set => SetField(ref _showBeadOverhang, value);
+        set
+        {
+            if (!SetField(ref _showBeadOverhang, value)) return;
+            if (value && _showOrientationPreview) { _showOrientationPreview = false; OnPropertyChanged(nameof(ShowOrientationPreview)); }
+        }
+    }
+
+    private bool _showOrientationPreview = false;
+    public bool ShowOrientationPreview
+    {
+        get => _showOrientationPreview;
+        set
+        {
+            if (!SetField(ref _showOrientationPreview, value)) return;
+            if (value && _showBeadOverhang) { _showBeadOverhang = false; OnPropertyChanged(nameof(ShowBeadOverhang)); }
+        }
     }
 
     private bool _showExtrusionMoves = true;
@@ -308,26 +323,6 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand GizmoRotateCommand { get; }
     public RelayCommand GizmoScaleCommand  { get; }
 
-    // -- Gizmo visibility toggle -----------------------------------------------
-
-    private bool _gizmoEnabled = true;
-
-    /// <summary>
-    /// When true the transform gizmo handles are shown and G/R/S switches mode.
-    /// When false the gizmo is hidden and G/R/S starts a keyboard+mouse transform.
-    /// </summary>
-    public bool GizmoEnabled
-    {
-        get => _gizmoEnabled;
-        set
-        {
-            if (SetField(ref _gizmoEnabled, value))
-                NotifyRenderNeeded();
-        }
-    }
-
-    public RelayCommand GizmoToggleCommand { get; }
-
     // -- Selection / focus overlay ---------------------------------------------
 
     private bool _hasSelection;
@@ -545,6 +540,23 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // -- Scrubber markers (unreachable = red, singularity = purple) ---------------
 
+    private const double ScrubThumbWidth = 12.0;
+
+    private double _scrubTrackPixelWidth = 400.0;
+    public double ScrubTrackPixelWidth
+    {
+        get => _scrubTrackPixelWidth;
+        set
+        {
+            if (Math.Abs(_scrubTrackPixelWidth - value) < 0.5) return;
+            _scrubTrackPixelWidth = value;
+            RecomputeScrubMarkers();
+        }
+    }
+
+    private bool[] _scrubReachable = [];
+    private bool[] _scrubSingular  = [];
+
     private IReadOnlyList<double> _scrubUnreachableMarkers = [];
     public IReadOnlyList<double> ScrubUnreachableMarkers
     {
@@ -559,25 +571,28 @@ public sealed class ViewportViewModel : ViewModelBase
         private set => SetField(ref _scrubSingularityMarkers, value);
     }
 
-    /// <summary>
-    /// Recomputes scrubber highlight markers from per-move reachability and singularity arrays.
-    /// Y positions are in slider-height coordinates (0 = slider top, 480 = slider bottom).
-    /// Must be called on the UI thread.
-    /// </summary>
     internal void SetScrubMarkers(bool[] reachable, bool[] singular)
     {
-        int max = _toolpathScrubMax;
+        _scrubReachable = reachable;
+        _scrubSingular  = singular;
+        RecomputeScrubMarkers();
+    }
+
+    private void RecomputeScrubMarkers()
+    {
+        int    max = _toolpathScrubMax;
+        double w   = _scrubTrackPixelWidth;
         var unr = new List<double>();
         var sin = new List<double>();
-        for (int i = 0; i < reachable.Length; i++)
+        for (int i = 0; i < _scrubReachable.Length; i++)
         {
-            double y = max > 0 ? 10 + (1.0 - (double)i / max) * 460 : 0;
-            if (!reachable[i]) unr.Add(y);
+            double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+            if (!_scrubReachable[i]) unr.Add(x);
         }
-        for (int i = 0; i < singular.Length; i++)
+        for (int i = 0; i < _scrubSingular.Length; i++)
         {
-            double y = max > 0 ? 10 + (1.0 - (double)i / max) * 460 : 0;
-            if (singular[i]) sin.Add(y);
+            double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+            if (_scrubSingular[i]) sin.Add(x);
         }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
@@ -663,7 +678,6 @@ public sealed class ViewportViewModel : ViewModelBase
         GizmoMoveCommand   = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Translate ? GizmoMode.None : GizmoMode.Translate);
         GizmoRotateCommand = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Rotate    ? GizmoMode.None : GizmoMode.Rotate);
         GizmoScaleCommand  = new RelayCommand(() => ActiveGizmoModeInternal = _activeGizmoMode == GizmoMode.Scale     ? GizmoMode.None : GizmoMode.Scale);
-        GizmoToggleCommand = new RelayCommand(() => GizmoEnabled = !GizmoEnabled);
         SliceCommand = new RelayCommand(
             execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasMeshSelected);

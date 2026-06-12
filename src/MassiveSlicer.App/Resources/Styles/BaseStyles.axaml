@@ -55,6 +55,13 @@
     <Style Selector="Button.ToolbarButton.active">
         <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
     </Style>
+    <!-- The global :focus:not(:focus-visible) style sets ContentPresenter.Background=Transparent at
+         StyleTrigger priority, which beats the TemplateBinding (TemplatedParent priority). This
+         override restores AccentMuted for active toolbar buttons that also have mouse-click focus,
+         using higher specificity to win over the global suppressor. -->
+    <Style Selector="Button.ToolbarButton.active:focus:not(:focus-visible) /template/ ContentPresenter">
+        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+    </Style>
 
 
 
@@ -261,24 +268,115 @@
         <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
     </Style>
 
-    <!-- ── Scrubber slider ───────────────────────────────────────────────────── -->
-    <!-- Strip the Slider's own background/border so the custom fill Rectangle
-         beneath it is not covered by the theme's opaque track surface. -->
-    <Style Selector="Slider.ScrubSlider">
-        <Setter Property="Background"       Value="Transparent"/>
-        <Setter Property="BorderThickness"  Value="0"/>
+    <!-- ── Collapsible section expander ─────────────────────────────────────── -->
+    <Style Selector="Expander.SectionExpander">
+        <Setter Property="HorizontalAlignment"        Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Padding"                    Value="0"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <StackPanel>
+                    <ToggleButton Name="PART_toggle"
+                                  IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                                  HorizontalAlignment="Stretch"
+                                  HorizontalContentAlignment="Stretch"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  Padding="8,8,8,6"
+                                  Cursor="Hand">
+                        <Grid ColumnDefinitions="*,14">
+                            <TextBlock Grid.Column="0"
+                                       Text="{TemplateBinding Header}"
+                                       Foreground="{DynamicResource TextSecondary}"
+                                       FontSize="11"
+                                       FontWeight="SemiBold"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Name="Chevron"
+                                       Grid.Column="1"
+                                       Text="›"
+                                       Foreground="{DynamicResource TextMuted}"
+                                       FontSize="14"
+                                       VerticalAlignment="Center"
+                                       HorizontalAlignment="Center"
+                                       RenderTransformOrigin="50%,50%"/>
+                        </Grid>
+                    </ToggleButton>
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,0,8,0"/>
+                    <ContentPresenter Name="PART_ContentPresenter"
+                                      Content="{TemplateBinding Content}"
+                                      ContentTemplate="{TemplateBinding ContentTemplate}"
+                                      HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                      IsVisible="{TemplateBinding IsExpanded}"/>
+                </StackPanel>
+            </ControlTemplate>
+        </Setter>
     </Style>
-    <!-- Make the template root border transparent too (picks up TemplateBinding Background). -->
-    <Style Selector="Slider.ScrubSlider /template/ Border">
+    <!-- Chevron: right (0°) when collapsed, down (90°) when expanded -->
+    <Style Selector="Expander.SectionExpander /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>
+    </Style>
+    <Style Selector="Expander.SectionExpander[IsExpanded=False] /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="0"/></Setter>
+    </Style>
+    <!-- Suppress ToggleButton default hover/checked/pressed backgrounds -->
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle /template/ Border">
         <Setter Property="Background"      Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
     </Style>
-    <!-- Keep repeat-buttons invisible so clicks register but fill shows through. -->
-    <Style Selector="Slider.ScrubSlider /template/ RepeatButton">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pointerover /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:checked /template/ Border">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pressed /template/ Border">
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- ── Scrubber slider ───────────────────────────────────────────────────── -->
+    <Style Selector="Slider.ScrubSlider">
+        <Setter Property="MinHeight" Value="12"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Background="Transparent"/>
+                <Track Name="PART_Track"
+                       Minimum="{TemplateBinding Minimum}"
+                       Maximum="{TemplateBinding Maximum}"
+                       Value="{TemplateBinding Value, Mode=TwoWay}"
+                       IsDirectionReversed="{TemplateBinding IsDirectionReversed}"
+                       Orientation="Horizontal">
+                    <Track.DecreaseButton>
+                        <RepeatButton Focusable="False">
+                            <RepeatButton.Template>
+                                <ControlTemplate>
+                                    <Border Height="6" VerticalAlignment="Center"
+                                            Background="{DynamicResource Accent}"
+                                            CornerRadius="2,0,0,2"/>
+                                </ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.DecreaseButton>
+                    <Track.Thumb>
+                        <Thumb Width="12" Height="12" Focusable="False">
+                            <Thumb.Template>
+                                <ControlTemplate>
+                                    <Ellipse Width="12" Height="12"
+                                             Fill="{DynamicResource Accent}"/>
+                                </ControlTemplate>
+                            </Thumb.Template>
+                        </Thumb>
+                    </Track.Thumb>
+                    <Track.IncreaseButton>
+                        <RepeatButton Focusable="False">
+                            <RepeatButton.Template>
+                                <ControlTemplate>
+                                    <Border Height="6" VerticalAlignment="Center"
+                                            Background="{DynamicResource Border2}"
+                                            CornerRadius="0,2,2,0"/>
+                                </ControlTemplate>
+                            </RepeatButton.Template>
+                        </RepeatButton>
+                    </Track.IncreaseButton>
+                </Track>
             </ControlTemplate>
         </Setter>
     </Style>
