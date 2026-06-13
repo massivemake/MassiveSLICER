@@ -40,22 +40,57 @@
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="4">
-            <StackPanel Orientation="Horizontal">
-                <Button Classes="ToolbarButton" ToolTip.Tip="Move"   Padding="6,4" Margin="0,0,2,0"
-                        Classes.active="{Binding IsMoveActive}"
-                        Command="{Binding GizmoMoveCommand}">
-                    <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="6,4" Margin="0,0,2,0"
-                        Classes.active="{Binding IsRotateActive}"
-                        Command="{Binding GizmoRotateCommand}">
-                    <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton" ToolTip.Tip="Scale"  Padding="6,4" Margin="0,0,2,0"
-                        Classes.active="{Binding IsScaleActive}"
-                        Command="{Binding GizmoScaleCommand}">
-                    <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
-                </Button>
+            <StackPanel Orientation="Vertical" Spacing="4">
+                <!-- Gizmo mode buttons -->
+                <StackPanel Orientation="Horizontal">
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Move"   Padding="6,4" Margin="0,0,2,0"
+                            Classes.active="{Binding IsMoveActive}"
+                            Command="{Binding GizmoMoveCommand}">
+                        <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
+                    </Button>
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="6,4" Margin="0,0,2,0"
+                            Classes.active="{Binding IsRotateActive}"
+                            Command="{Binding GizmoRotateCommand}">
+                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
+                    </Button>
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale"  Padding="6,4" Margin="0,0,2,0"
+                            Classes.active="{Binding IsScaleActive}"
+                            Command="{Binding GizmoScaleCommand}">
+                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
+                    </Button>
+                </StackPanel>
+                <!-- XYZ position inputs — visible when Move is active -->
+                <StackPanel Orientation="Horizontal" Spacing="4"
+                            IsVisible="{Binding IsMoveActive}">
+                    <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                </StackPanel>
+                <!-- ABC rotation inputs — visible when Rotate is active -->
+                <StackPanel Orientation="Horizontal" Spacing="4"
+                            IsVisible="{Binding IsRotateActive}">
+                    <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                    <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
+                    <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="80" FontSize="11"
+                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                  Padding="4,2" VerticalContentAlignment="Center"/>
+                </StackPanel>
             </StackPanel>
         </Border>
 

@@ -74,3 +74,6 @@ assets/development_assets/*
 
 # Reference repos — local only, not pushed to GitHub
 reference/
+
+# Zivid scan captures — large binary point clouds, local only
+scans/

@@ -48,4 +48,10 @@ public sealed class ConsoleViewModel : ViewModelBase
         InputText = string.Empty;
         // TODO: route to command interpreter
     }
+
+    /// <summary>
+    /// Appends an application log entry to the console history.
+    /// Must be called on the UI thread.
+    /// </summary>
+    public void Log(string message) => History.Add(message);
 }

@@ -20,6 +20,7 @@
                     BorderThickness="0,0,0,1">
                 <StackPanel Orientation="Horizontal">
                     <Button Content="ADDITIVE"    Classes="TabButton" Classes.active="{Binding IsAdditiveTab}"    Command="{Binding ShowAdditiveCommand}"/>
+                    <Button Content="SCAN"        Classes="TabButton" Classes.active="{Binding IsScanTab}"        Command="{Binding ShowScanCommand}" IsVisible="{Binding HasScanTab}"/>
                     <Button Content="SUBTRACTIVE" Classes="TabButton" Classes.active="{Binding IsSubtractiveTab}" Command="{Binding ShowSubtractiveCommand}"/>
                     <Button Content="TOOLPATH"    Classes="TabButton" Classes.active="{Binding IsToolpathTab}"    Command="{Binding ShowToolpathCommand}"/>
                 </StackPanel>
@@ -421,6 +422,50 @@
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
+
+            <!-- SCAN tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Background="{DynamicResource Bg2}"
+                          IsVisible="{Binding IsScanTab}">
+                <StackPanel Margin="0,8">
+
+                    <!-- CAMERA -->
+                    <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="True">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="120"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Address of the Zivid camera on the cell network"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
+                            </Grid>
+
+                            <Button Content="Test Scan"
+                                    Classes="PrimaryButton"
+                                    HorizontalAlignment="Stretch"
+                                    Margin="8,8,8,2"
+                                    Command="{Binding Scan.TestScanCommand}"
+                                    ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
+                            <TextBlock Text="{Binding Scan.ScanStatus}"
+                                       Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- OUTPUT -->
+                    <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
+                        <StackPanel Margin="0,2,0,6">
+                            <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
+                                       ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
+                            <TextBox Classes="PanelTextBox" Margin="8,0,8,4" Text="{Binding Scan.OutputDirectory}"/>
+                        </StackPanel>
+                    </Expander>
+
+                </StackPanel>
+            </ScrollViewer>
 
             <!-- SUBTRACTIVE tab -->
             <ScrollViewer Grid.Row="1"

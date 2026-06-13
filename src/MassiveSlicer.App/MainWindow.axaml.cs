@@ -57,6 +57,13 @@ public partial class MainWindow : Window
 
         vm.LeftPanel.SetCells(cells);
 
+        // Default to LFAM 3 cell if present.
+        var lfam3Idx = cells.FindIndex(c =>
+            c.name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) ||
+            c.name.Contains("LFAM3",  StringComparison.OrdinalIgnoreCase));
+        if (lfam3Idx > 0)
+            vm.LeftPanel.SelectedCellIndex = lfam3Idx;
+
         // -- Model loading -----------------------------------------------------
         vm.Toolbar.ModelLoadRequested += async (_, _) =>
         {
@@ -172,7 +179,20 @@ public partial class MainWindow : Window
             catch { /* non-critical */ }
         }
 
-        var firstTool  = cell.EffectiveTools.Count > 0 ? cell.EffectiveTools[0] : null;
+        // Pick the tool that matches the default active tab so the viewport shows
+        // the right end-effector immediately without waiting for OnCellSwapCompleted.
+        bool cellHasScan = cell.ScanToolName is not null;
+        var defaultTabToolName = vm.RightPanel.ActiveTab switch
+        {
+            RightPanelTab.Scan when cellHasScan => cell.ScanToolName,
+            RightPanelTab.Additive              => "HV Extruder",
+            _                                   => cellHasScan ? cell.ScanToolName : "HV Extruder",
+        };
+        var firstTool = (defaultTabToolName is not null
+                            ? cell.EffectiveTools.FirstOrDefault(t => t.Name == defaultTabToolName)
+                            : null)
+                     ?? (cell.EffectiveTools.Count > 0 ? cell.EffectiveTools[0] : null);
+
         SceneNode? toolHolder = null;
         if (firstTool is not null && File.Exists(firstTool.ModelPath))
         {

@@ -7,6 +7,7 @@ using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
+using OpenTK.Mathematics;
 using ToolSwapRequest = (MassiveSlicer.Core.Models.ToolCellConfig Config, MassiveSlicer.Viewport.Scene.SceneNode Node);
 using Toolpath = MassiveSlicer.Core.Models.Toolpath;
 
@@ -208,6 +209,12 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 
+    /// <summary>
+    /// Live TOOL_DATA / BASE_DATA snapshot read from the KRC4 $config.dat on sync.
+    /// When set, the viewport uses these TCP values instead of the cell JSON values.
+    /// </summary>
+    public MassiveSlicer.Core.IO.KrcDatSnapshot? LiveDat { get; set; }
+
     // -- Render request --------------------------------------------------------
 
     /// <summary>
@@ -322,6 +329,33 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand GizmoMoveCommand   { get; }
     public RelayCommand GizmoRotateCommand { get; }
     public RelayCommand GizmoScaleCommand  { get; }
+
+    // -- Selection transform readout / input -----------------------------------
+
+    private bool   _suppressTransformCb;
+    private double _selX, _selY, _selZ, _selA, _selB, _selC;
+
+    public double SelectionX { get => _selX; set { if (SetField(ref _selX, value)) FireSelTranslated(); } }
+    public double SelectionY { get => _selY; set { if (SetField(ref _selY, value)) FireSelTranslated(); } }
+    public double SelectionZ { get => _selZ; set { if (SetField(ref _selZ, value)) FireSelTranslated(); } }
+    public double SelectionA { get => _selA; set { if (SetField(ref _selA, value)) FireSelRotated(); } }
+    public double SelectionB { get => _selB; set { if (SetField(ref _selB, value)) FireSelRotated(); } }
+    public double SelectionC { get => _selC; set { if (SetField(ref _selC, value)) FireSelRotated(); } }
+
+    internal Action<double, double, double>? OnSelectionTranslated { get; set; }
+    internal Action<double, double, double>? OnSelectionRotated    { get; set; }
+
+    private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
+    private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
+
+    /// <summary>Syncs the displayed transform values without triggering apply callbacks.</summary>
+    internal void SyncSelectionDisplay(double x, double y, double z, double a, double b, double c)
+    {
+        _suppressTransformCb = true;
+        SelectionX = x; SelectionY = y; SelectionZ = z;
+        SelectionA = a; SelectionB = b; SelectionC = c;
+        _suppressTransformCb = false;
+    }
 
     // -- Selection / focus overlay ---------------------------------------------
 
@@ -791,6 +825,21 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
     internal Action<SceneNode>? OnNodeHidden { get; set; }
+
+    /// <summary>
+    /// Returns the world-space pose of a KUKA tool frame (TCP XYZ + ABC orientation)
+    /// evaluated at the robot's current joint state, or <c>null</c> when no robot is
+    /// loaded. Registered by the viewport code-behind; used to register scans
+    /// captured by the flange-mounted Zivid camera into the scene.
+    /// </summary>
+    internal Func<ToolCellConfig, Matrix4?>? GetToolWorldPose { get; set; }
+
+    /// <summary>
+    /// Invoked on the UI thread once a cell swap has fully completed and the tool
+    /// library, bridge config, and IK data are up to date. Used to fire one-time
+    /// startup actions (tool selection, auto-sync).
+    /// </summary>
+    internal Action? OnCellSwapCompleted { get; set; }
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }

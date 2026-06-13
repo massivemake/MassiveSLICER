@@ -64,6 +64,8 @@ public enum RightPanelTab
 {
     /// <summary>Additive (wire-arc / extrusion) slicing parameters.</summary>
     Additive,
+    /// <summary>Zivid 3D scanner capture settings.</summary>
+    Scan,
     /// <summary>Subtractive (milling) slicing and post-processor settings.</summary>
     Subtractive,
     /// <summary>View, UV, robot, and object settings -- opened via the gear icon.</summary>

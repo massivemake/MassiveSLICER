@@ -119,8 +119,10 @@ public partial class ViewportView : UserControl
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
 
     // Robot cell state
-    private Vector3 _robrootWorldPos;
-    private Vector3 _tcpOffsetLocal;
+    private Vector3  _robrootWorldPos;
+    private Vector3  _tcpOffsetLocal;
+    private Vector3  _tcpOrientationABC;  // TcpA/B/C in degrees, applied on top of the flange frame
+    private Vector3? _sensorOriginLocal; // null when the current tool has no sensor origin
     private float   _toolFrameRoll;
     private float   _flangeDisplayRoll;
 
@@ -310,7 +312,49 @@ public partial class ViewportView : UserControl
             };
             robot.OnToolSelected              = OnToolSwapRequested;
             robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
+            robot.OnTcpOffsetEdited = (x, y, z, a, b, c) =>
+            {
+                _tcpOffsetLocal    = new Vector3((float)x, (float)y, (float)z);
+                _tcpOrientationABC = new Vector3((float)a, (float)b, (float)c);
+                if (DataContext is ViewportViewModel vm2 && vm2.Robot is not null)
+                {
+                    RebuildIkSolver(vm2);
+                    SyncTcpReadout(vm2);
+                    vm2.NotifyRenderNeeded();
+                    if (vm2.ActiveCellPath is { } path)
+                        MassiveSlicer.Core.IO.CellLoader.SaveToolTcp(
+                            path, vm2.Robot.KrlToolIndex,
+                            (float)x, (float)y, (float)z, (float)a, (float)b, (float)c);
+                }
+            };
         }
+
+        vm.OnSelectionTranslated = (x, y, z) =>
+        {
+            if (_renderer.SelectedNode is not { } node) return;
+            var lt = node.LocalTransform;
+            lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
+            node.LocalTransform = lt;
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+        };
+        vm.OnSelectionRotated = (a, b, c) =>
+        {
+            if (_renderer.SelectedNode is not { } node) return;
+            var lt   = node.LocalTransform;
+            float sX = lt.Row0.Xyz.Length;
+            float sY = lt.Row1.Xyz.Length;
+            float sZ = lt.Row2.Xyz.Length;
+            var rt = MassiveSlicer.Core.Kinematics.KukaIkSolver.AbcToMatrix((float)a, (float)b, (float)c);
+            lt.Row0 = new Vector4(rt.M11 * sX, rt.M12 * sX, rt.M13 * sX, 0f);
+            lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
+            lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
+            node.LocalTransform = lt;
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+        };
+
+        vm.GetToolWorldPose = ComputeToolWorldPose;
 
         if (vm.AdditiveSettings is { } additive)
         {
@@ -488,7 +532,24 @@ public partial class ViewportView : UserControl
 
                 _toolCorrectionMatrix    = swap.Node.LocalTransform;
                 var t = swap.Config;
-                _tcpOffsetLocal  = new Vector3(t.TcpX, t.TcpY, t.TcpZ);
+
+                // Prefer live TCP values from $config.dat when available; fall back to cell JSON.
+                var liveEntry = vm.LiveDat?.Tools.FirstOrDefault(e => e.Index == t.KrlIndex);
+                if (liveEntry is not null)
+                {
+                    _tcpOffsetLocal    = new Vector3(liveEntry.X, liveEntry.Y, liveEntry.Z);
+                    _tcpOrientationABC = new Vector3(liveEntry.A, liveEntry.B, liveEntry.C);
+                }
+                else
+                {
+                    _tcpOffsetLocal    = new Vector3(t.TcpX, t.TcpY, t.TcpZ);
+                    _tcpOrientationABC = new Vector3(t.TcpA, t.TcpB, t.TcpC);
+                }
+
+                _sensorOriginLocal = t.HasSensorOrigin
+                    ? new Vector3(t.SensorOriginX!.Value, t.SensorOriginY!.Value, t.SensorOriginZ!.Value)
+                    : (Vector3?)null;
+
                 _toolFrameRoll   = t.ToolFrameRoll * MathF.PI / 180f;
                 RebuildFrameMatrices();
                 swap.Node.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
@@ -498,6 +559,28 @@ public partial class ViewportView : UserControl
                 _currentToolNode = swap.Node;
 
                 RebuildIkSolver(vm);
+
+                // Immediately refresh the TCP gizmo and readout so the viewport
+                // shows the new TCP without waiting for the next joint-angle event.
+                if (vm.Robot is not null)
+                {
+                    SyncTcpReadout(vm);
+
+                    // Debug: log TCP offset so we can verify 100mm from flange in correct direction
+                    if (_fkController?.FlangeNode is { } dbgFlange)
+                    {
+                        var fw2  = dbgFlange.WorldTransform;
+                        var pos2 = fw2.Row3.Xyz;
+                        float sc2 = fw2.Row0.Xyz.Length;
+                        var gRot2 = new Matrix3(fw2.Row0.Xyz / sc2, fw2.Row1.Xyz / sc2, fw2.Row2.Xyz / sc2);
+                        var kRot2 = _gltfToKukaLocal * gRot2;
+                        var tcpPt = pos2 + _tcpOffsetLocal.X * kRot2.Row0
+                                        + _tcpOffsetLocal.Y * kRot2.Row1
+                                        + _tcpOffsetLocal.Z * kRot2.Row2;
+                        var tcpDelta = tcpPt - pos2;
+                        System.Console.WriteLine($"[tcp] Tool={t.Name}  Flange=({pos2.X:F1},{pos2.Y:F1},{pos2.Z:F1})  TCP=({tcpPt.X:F1},{tcpPt.Y:F1},{tcpPt.Z:F1})  Δ=({tcpDelta.X:F1},{tcpDelta.Y:F1},{tcpDelta.Z:F1}) len={tcpDelta.Length:F1}mm  KukaZ=({kRot2.Row2.X:F3},{kRot2.Row2.Y:F3},{kRot2.Row2.Z:F3})");
+                    }
+                }
             }
 
             while (_pendingOrientationUpdate.TryDequeue(out var upd))
@@ -577,21 +660,47 @@ public partial class ViewportView : UserControl
                 + _tcpOffsetLocal.Y * kukaY
                 + _tcpOffsetLocal.Z * kukaZ;
 
-        _renderer.TcpFrameMatrix = new Matrix4(
+        // Apply TcpA/B/C to get tool-frame axes in world space.
+        // AbcToMatrix returns R^T (row-major), so toolWorldRot = abcMat * kukaRot.
+        var abcMat  = KukaIkSolver.AbcToMatrix(_tcpOrientationABC.X, _tcpOrientationABC.Y, _tcpOrientationABC.Z);
+        var kukaN   = new System.Numerics.Matrix4x4(
             kukaX.X, kukaX.Y, kukaX.Z, 0,
             kukaY.X, kukaY.Y, kukaY.Z, 0,
             kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
-            tcp.X,   tcp.Y,   tcp.Z,   1f);
+            0, 0, 0, 1);
+        var toolN   = abcMat * kukaN;
+        var tcpAxisX = new Vector3(toolN.M11, toolN.M12, toolN.M13);
+        var tcpAxisY = new Vector3(toolN.M21, toolN.M22, toolN.M23);
+        var tcpAxisZ = new Vector3(toolN.M31, toolN.M32, toolN.M33);
 
-        float cfdr  = MathF.Cos(_flangeDisplayRoll), sfdr = MathF.Sin(_flangeDisplayRoll);
-        var flangeX = cfdr * kukaX - sfdr * kukaY;
-        var flangeY = sfdr * kukaX + cfdr * kukaY;
+        _renderer.TcpFrameMatrix = new Matrix4(
+            tcpAxisX.X, tcpAxisX.Y, tcpAxisX.Z, 0,
+            tcpAxisY.X, tcpAxisY.Y, tcpAxisY.Z, 0,
+            tcpAxisZ.X, tcpAxisZ.Y, tcpAxisZ.Z, 0,
+            tcp.X,      tcp.Y,      tcp.Z,       1f);
 
         _renderer.FlangeFrameMatrix = new Matrix4(
-            flangeX.X, flangeX.Y, flangeX.Z, 0,
-            flangeY.X, flangeY.Y, flangeY.Z, 0,
-            kukaZ.X,   kukaZ.Y,   kukaZ.Z,   0,
-            pos.X,     pos.Y,     pos.Z,      1f);
+            kukaX.X, kukaX.Y, kukaX.Z, 0,
+            kukaY.X, kukaY.Y, kukaY.Z, 0,
+            kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
+            pos.X,   pos.Y,   pos.Z,   1f);
+
+        if (_sensorOriginLocal is { } so)
+        {
+            var sensorPt = pos
+                + so.X * kukaX
+                + so.Y * kukaY
+                + so.Z * kukaZ;
+            _renderer.SensorOriginFrameMatrix = new Matrix4(
+                kukaX.X, kukaX.Y, kukaX.Z, 0,
+                kukaY.X, kukaY.Y, kukaY.Z, 0,
+                kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
+                sensorPt.X, sensorPt.Y, sensorPt.Z, 1f);
+        }
+        else
+        {
+            _renderer.SensorOriginFrameMatrix = null;
+        }
 
         vm.Robot!.FlangeX = Math.Round(pos.X - _robrootWorldPos.X, 1);
         vm.Robot.FlangeY  = Math.Round(pos.Y - _robrootWorldPos.Y, 1);
@@ -601,12 +710,7 @@ public partial class ViewportView : UserControl
         vm.Robot.TcpY = Math.Round(tcp.Y, 1);
         vm.Robot.TcpZ = Math.Round(tcp.Z, 1);
 
-        var rot = new System.Numerics.Matrix4x4(
-            kukaX.X, kukaX.Y, kukaX.Z, 0,
-            kukaY.X, kukaY.Y, kukaY.Z, 0,
-            kukaZ.X, kukaZ.Y, kukaZ.Z, 0,
-            0, 0, 0, 1);
-        var (a, b, c) = KukaIkSolver.MatrixToAbc(rot);
+        var (a, b, c) = KukaIkSolver.MatrixToAbc(toolN);
         vm.Robot.TcpA = Math.Round(a, 2);
         vm.Robot.TcpB = Math.Round(b, 2);
         vm.Robot.TcpC = Math.Round(c, 2);
@@ -614,9 +718,56 @@ public partial class ViewportView : UserControl
 
     // -- Tool helpers ----------------------------------------------------------
 
+    /// <summary>
+    /// World-space pose of a KUKA tool frame (TCP offset + ABC orientation applied
+    /// to the current flange pose). Same flange-frame math as <see cref="SyncTcpReadout"/>,
+    /// extended with the tool's calibrated orientation so a flange-mounted camera
+    /// frame can be placed in the scene.
+    /// </summary>
+    private Matrix4? ComputeToolWorldPose(ToolCellConfig tool)
+    {
+        if (_fkController?.FlangeNode is not { } flange) return null;
+
+        var fw  = flange.WorldTransform;
+        var pos = fw.Row3.Xyz;
+        float sc = fw.Row0.Xyz.Length;
+
+        var gltfRot = new Matrix3(fw.Row0.Xyz / sc, fw.Row1.Xyz / sc, fw.Row2.Xyz / sc);
+        var kukaRot = _gltfToKukaLocal * gltfRot;
+        var fx = kukaRot.Row0;
+        var fy = kukaRot.Row1;
+        var fz = kukaRot.Row2;
+
+        // Flange-frame vector → world.
+        Vector3 ToWorld(float x, float y, float z) => x * fx + y * fy + z * fz;
+
+        // Sensor origin is the optical centre; use it for scan registration when available.
+        // Falls back to TCP (focal point) for tools without a sensor origin.
+        float ox = tool.HasSensorOrigin ? tool.SensorOriginX!.Value : tool.TcpX;
+        float oy = tool.HasSensorOrigin ? tool.SensorOriginY!.Value : tool.TcpY;
+        float oz = tool.HasSensorOrigin ? tool.SensorOriginZ!.Value : tool.TcpZ;
+        float oA = tool.HasSensorOrigin ? (tool.SensorOriginA ?? tool.TcpA) : tool.TcpA;
+        float oB = tool.HasSensorOrigin ? (tool.SensorOriginB ?? tool.TcpB) : tool.TcpB;
+        float oC = tool.HasSensorOrigin ? (tool.SensorOriginC ?? tool.TcpC) : tool.TcpC;
+
+        var rt = KukaIkSolver.AbcToMatrix(oA, oB, oC);
+        var tx = ToWorld(rt.M11, rt.M12, rt.M13);
+        var ty = ToWorld(rt.M21, rt.M22, rt.M23);
+        var tz = ToWorld(rt.M31, rt.M32, rt.M33);
+        var origin = pos + ToWorld(ox, oy, oz);
+
+        return new Matrix4(
+            tx.X,     tx.Y,     tx.Z,     0f,
+            ty.X,     ty.Y,     ty.Z,     0f,
+            tz.X,     tz.Y,     tz.Z,     0f,
+            origin.X, origin.Y, origin.Z, 1f);
+    }
+
     private void RebuildFrameMatrices()
     {
-        float cr = MathF.Cos(_toolFrameRoll), sr = MathF.Sin(_toolFrameRoll);
+        // Total roll = per-tool mounting offset + per-cell flange reference mark offset.
+        float totalRoll = _toolFrameRoll + _flangeDisplayRoll;
+        float cr = MathF.Cos(totalRoll), sr = MathF.Sin(totalRoll);
         _gltfToKukaLocal = new Matrix3(
             new Vector3( cr, 0f,  sr),
             new Vector3( sr, 0f, -cr),
@@ -627,8 +778,9 @@ public partial class ViewportView : UserControl
     private void RebuildIkSolver(ViewportViewModel vm)
     {
         if (_fkController is null) return;
-        float cr = MathF.Cos(_toolFrameRoll);
-        float sr = MathF.Sin(_toolFrameRoll);
+        float totalRoll = _toolFrameRoll + _flangeDisplayRoll;
+        float cr = MathF.Cos(totalRoll);
+        float sr = MathF.Sin(totalRoll);
         float tx = _tcpOffsetLocal.X, ty = _tcpOffsetLocal.Y, tz = _tcpOffsetLocal.Z;
         var tcpLocal = Matrix4.CreateTranslation(
             (tx * cr + ty * sr) / 1000f,
@@ -641,7 +793,7 @@ public partial class ViewportView : UserControl
             _robrootWorldPos,
             tcpLocal,
             vm.ActiveCell?.Robot.Joints ?? [],
-            _toolFrameRoll);
+            totalRoll);
         if (vm.Robot is not null)
             vm.Robot.IkSolver = _ikSolver;
     }
@@ -715,7 +867,20 @@ public partial class ViewportView : UserControl
         if (swap.ToolHolder is not null && swap.FirstTool is { } firstTool
             && _fkController?.FlangeNode is { } flange)
         {
-            _tcpOffsetLocal       = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
+            var liveFt = vm.LiveDat?.Tools.FirstOrDefault(e => e.Index == firstTool.KrlIndex);
+            if (liveFt is not null)
+            {
+                _tcpOffsetLocal    = new Vector3(liveFt.X, liveFt.Y, liveFt.Z);
+                _tcpOrientationABC = new Vector3(liveFt.A, liveFt.B, liveFt.C);
+            }
+            else
+            {
+                _tcpOffsetLocal    = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
+                _tcpOrientationABC = new Vector3(firstTool.TcpA, firstTool.TcpB, firstTool.TcpC);
+            }
+            _sensorOriginLocal = firstTool.HasSensorOrigin
+                ? new Vector3(firstTool.SensorOriginX!.Value, firstTool.SensorOriginY!.Value, firstTool.SensorOriginZ!.Value)
+                : (Vector3?)null;
             _toolFrameRoll        = firstTool.ToolFrameRoll * MathF.PI / 180f;
             _toolCorrectionMatrix = swap.ToolHolder.LocalTransform;
             RebuildFrameMatrices();
@@ -748,6 +913,11 @@ public partial class ViewportView : UserControl
                     new System.Numerics.Vector3(tool.TcpX, tool.TcpY, tool.TcpZ),
                     new System.Numerics.Vector3(rp.X, rp.Y, rp.Z));
             }
+
+            var bd = swap.Config.Bed.BaseData;
+            vm.Robot.SetBaseFrameData(bd.X, bd.Y, bd.Z);
+
+            vm.OnCellSwapCompleted?.Invoke();
         });
     }
 
@@ -771,6 +941,7 @@ public partial class ViewportView : UserControl
                 var node = LoadToolNode(config);
                 if (node is null) return;
                 vm.PendingToolSwap.Enqueue((config, node));
+                vm.NotifyRenderNeeded();
             }
             catch { /* silently skip on load failure */ }
         });
@@ -989,6 +1160,7 @@ public partial class ViewportView : UserControl
                 _renderer.ActiveDragAxis = GizmoAxis.None;
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
+                if (DataContext is ViewportViewModel vmGz) SyncSelectionTransformDisplay(vmGz);
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
@@ -1642,6 +1814,7 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        if (DataContext is ViewportViewModel vmCb) SyncSelectionTransformDisplay(vmCb);
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
     }
@@ -1794,6 +1967,24 @@ public partial class ViewportView : UserControl
         node.LocalTransform = lt;
     }
 
+    private void SyncSelectionTransformDisplay(ViewportViewModel vm)
+    {
+        if (_renderer.SelectedNode is not { } node) return;
+        var w  = node.WorldTransform;
+        var pos = w.Row3.Xyz;
+        float sc = w.Row0.Xyz.Length;
+        if (sc < 1e-6f) return;
+        var nm = new System.Numerics.Matrix4x4(
+            w.Row0.X / sc, w.Row0.Y / sc, w.Row0.Z / sc, 0,
+            w.Row1.X / sc, w.Row1.Y / sc, w.Row1.Z / sc, 0,
+            w.Row2.X / sc, w.Row2.Y / sc, w.Row2.Z / sc, 0,
+            0, 0, 0, 1);
+        var (a, b, c) = MassiveSlicer.Core.Kinematics.KukaIkSolver.MatrixToAbc(nm);
+        vm.SyncSelectionDisplay(
+            Math.Round(pos.X, 2), Math.Round(pos.Y, 2), Math.Round(pos.Z, 2),
+            Math.Round(a, 2), Math.Round(b, 2), Math.Round(c, 2));
+    }
+
     private void UpdateFocusOverlay()
     {
         if (DataContext is not ViewportViewModel vm) return;
@@ -1833,6 +2024,8 @@ public partial class ViewportView : UserControl
             vm.SetScrubMarkers([], []);
             _validationCts?.Cancel();
         }
+
+        SyncSelectionTransformDisplay(vm);
     }
 
     // -- Scrub IK --------------------------------------------------------------

@@ -76,4 +76,25 @@ public static class CellLoader
         }
         catch { /* non-fatal */ }
     }
+
+    /// <summary>
+    /// Overwrites the TCP values for the tool matching <paramref name="krlIndex"/> in the
+    /// cell JSON at <paramref name="cellPath"/>, preserving all other cell settings.
+    /// </summary>
+    public static void SaveToolTcp(string cellPath, int krlIndex,
+        float x, float y, float z, float a, float b, float c)
+    {
+        try
+        {
+            var cell         = Load(cellPath);
+            var updatedTools = cell.Tools
+                .Select(t => t.KrlIndex == krlIndex
+                    ? t with { TcpX = x, TcpY = y, TcpZ = z, TcpA = a, TcpB = b, TcpC = c }
+                    : t)
+                .ToList();
+            var updated = cell with { Tools = updatedTools };
+            File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));
+        }
+        catch { /* non-fatal */ }
+    }
 }

@@ -5,6 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
     <!-- COM interop is required for the Windows WGL P/Invoke GL host. Not needed on
          macOS/Linux, but harmless to leave unconditional for a Windows-only project. -->
     <BuiltInComInteropSupport Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BuiltInComInteropSupport>
@@ -29,6 +30,10 @@
   <ItemGroup>
     <ProjectReference Include="..\MassiveSlicer.Core\MassiveSlicer.Core.csproj" />
     <ProjectReference Include="..\MassiveSlicer.Viewport\MassiveSlicer.Viewport.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AvaloniaResource Include="Assets\icon.ico"/>
   </ItemGroup>
 
   <ItemGroup>
