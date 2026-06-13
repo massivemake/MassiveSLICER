@@ -101,12 +101,6 @@ public sealed class RobotPanelViewModel : ViewModelBase
             _sync.Disconnect();
     }
 
-    /// <summary>
-    /// Called after a successful sync connect with fresh TOOL_DATA / BASE_DATA
-    /// read from the robot controller's $config.dat.
-    /// </summary>
-    internal Action<KrcDatSnapshot>? OnDatRead { get; set; }
-
     private async void ToggleConnect()
     {
         if (_sync.IsConnected)
@@ -120,17 +114,6 @@ public sealed class RobotPanelViewModel : ViewModelBase
         {
             await _sync.ConnectAsync(_bridgeIp, _bridgePort);
             _sync.StartStreaming(100);
-
-            // Read fresh TOOL_DATA / BASE_DATA from $config.dat on the KRC4 share.
-            try
-            {
-                var snapshot = await KrcDatReader.ReadAsync(_bridgeIp);
-                OnDatRead?.Invoke(snapshot);
-            }
-            catch (Exception ex)
-            {
-                System.Console.WriteLine($"[dat] Could not read $config.dat: {ex.Message}");
-            }
         }
         catch
         {

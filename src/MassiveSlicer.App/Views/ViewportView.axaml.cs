@@ -533,18 +533,8 @@ public partial class ViewportView : UserControl
                 _toolCorrectionMatrix    = swap.Node.LocalTransform;
                 var t = swap.Config;
 
-                // Prefer live TCP values from $config.dat when available; fall back to cell JSON.
-                var liveEntry = vm.LiveDat?.Tools.FirstOrDefault(e => e.Index == t.KrlIndex);
-                if (liveEntry is not null)
-                {
-                    _tcpOffsetLocal    = new Vector3(liveEntry.X, liveEntry.Y, liveEntry.Z);
-                    _tcpOrientationABC = new Vector3(liveEntry.A, liveEntry.B, liveEntry.C);
-                }
-                else
-                {
-                    _tcpOffsetLocal    = new Vector3(t.TcpX, t.TcpY, t.TcpZ);
-                    _tcpOrientationABC = new Vector3(t.TcpA, t.TcpB, t.TcpC);
-                }
+                _tcpOffsetLocal    = new Vector3(t.TcpX, t.TcpY, t.TcpZ);
+                _tcpOrientationABC = new Vector3(t.TcpA, t.TcpB, t.TcpC);
 
                 _sensorOriginLocal = t.HasSensorOrigin
                     ? new Vector3(t.SensorOriginX!.Value, t.SensorOriginY!.Value, t.SensorOriginZ!.Value)
@@ -867,17 +857,8 @@ public partial class ViewportView : UserControl
         if (swap.ToolHolder is not null && swap.FirstTool is { } firstTool
             && _fkController?.FlangeNode is { } flange)
         {
-            var liveFt = vm.LiveDat?.Tools.FirstOrDefault(e => e.Index == firstTool.KrlIndex);
-            if (liveFt is not null)
-            {
-                _tcpOffsetLocal    = new Vector3(liveFt.X, liveFt.Y, liveFt.Z);
-                _tcpOrientationABC = new Vector3(liveFt.A, liveFt.B, liveFt.C);
-            }
-            else
-            {
-                _tcpOffsetLocal    = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
-                _tcpOrientationABC = new Vector3(firstTool.TcpA, firstTool.TcpB, firstTool.TcpC);
-            }
+            _tcpOffsetLocal    = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
+            _tcpOrientationABC = new Vector3(firstTool.TcpA, firstTool.TcpB, firstTool.TcpC);
             _sensorOriginLocal = firstTool.HasSensorOrigin
                 ? new Vector3(firstTool.SensorOriginX!.Value, firstTool.SensorOriginY!.Value, firstTool.SensorOriginZ!.Value)
                 : (Vector3?)null;
