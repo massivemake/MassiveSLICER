@@ -18,6 +18,7 @@ public sealed class SceneRenderer : IDisposable
     private AxisRenderer?        _axes;
     private AxisRenderer?        _tcpAxes;
     private AxisRenderer?        _flangeAxes;
+    private AxisRenderer?        _sensorAxes;
     private BedBoundaryRenderer? _bedBoundary;
     private GizmoRenderer?       _gizmo;
     private BackdropRenderer?    _backdrop;
@@ -316,6 +317,12 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public Matrix4? FlangeFrameMatrix { get; set; }
 
+    /// <summary>
+    /// When set, draws a second (orange/lime/cyan) axis gizmo for the sensor optical origin
+    /// (e.g. camera optical centre, distinct from the TCP focal point).
+    /// </summary>
+    public Matrix4? SensorOriginFrameMatrix { get; set; }
+
     // -- Public methods --------------------------------------------------------
 
     /// <summary>
@@ -465,6 +472,8 @@ public sealed class SceneRenderer : IDisposable
         _axes             = new AxisRenderer();
         _tcpAxes          = new AxisRenderer();
         _flangeAxes       = new AxisRenderer();
+        // Sensor origin gizmo: orange X / lime Y / sky-blue Z, 150mm to distinguish from TCP.
+        _sensorAxes       = new AxisRenderer(0.95f, 0.50f, 0.15f, 0.30f, 0.90f, 0.45f, 0.15f, 0.65f, 0.95f, 150f);
         _gizmo            = new GizmoRenderer();
         _maskShader       = new Shader(MaskVertSrc, MaskFragSrc);
         _compositeShader  = new Shader(CompositeVertSrc, CompositeFragSrc);
@@ -653,7 +662,7 @@ public sealed class SceneRenderer : IDisposable
         // -- Overlay pass ------------------------------------------------------
         // Nodes flagged Overlay=true and the TCP frame axes are drawn after the
         // composite with depth cleared so they always appear on top.
-        bool hasOverlay = TcpFrameMatrix is not null || FlangeFrameMatrix is not null;
+        bool hasOverlay = TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null;
         foreach (var child in SceneRoot.Children)
             if (child.Overlay) { hasOverlay = true; break; }
 
@@ -666,10 +675,12 @@ public sealed class SceneRenderer : IDisposable
                 if (!child.Overlay) continue;
                 child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
             }
-            if (TcpFrameMatrix    is { } tcpModel    && _tcpAxes    is not null)
+            if (TcpFrameMatrix          is { } tcpModel    && _tcpAxes    is not null)
                 _tcpAxes.Draw(tcpModel * mvp);
-            if (FlangeFrameMatrix is { } flangeModel && _flangeAxes is not null)
+            if (FlangeFrameMatrix       is { } flangeModel && _flangeAxes is not null)
                 _flangeAxes.Draw(flangeModel * mvp);
+            if (SensorOriginFrameMatrix is { } sensorModel && _sensorAxes is not null)
+                _sensorAxes.Draw(sensorModel * mvp);
             GL.Enable(EnableCap.CullFace);
         }
 
@@ -823,6 +834,7 @@ public sealed class SceneRenderer : IDisposable
         _axes?.Dispose();
         _tcpAxes?.Dispose();
         _flangeAxes?.Dispose();
+        _sensorAxes?.Dispose();
         _bedBoundary?.Dispose();
         _gizmo?.Dispose();
         _backdrop?.Dispose();

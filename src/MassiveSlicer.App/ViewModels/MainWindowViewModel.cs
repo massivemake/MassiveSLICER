@@ -1,8 +1,13 @@
 using Avalonia;
+using Avalonia.Threading;
+using MassiveSlicer.App;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
+using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.ViewModels.Base;
+using OpenTK.Mathematics;
 
 namespace MassiveSlicer.ViewModels;
 
@@ -36,6 +41,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>ViewModel backing the Preferences window.</summary>
     public PreferencesViewModel Preferences { get; }
+
+    private bool _startupSyncDone;
 
     /// <summary>Initialises the ViewModel and wires child ViewModels.</summary>
     public MainWindowViewModel()
@@ -102,6 +109,14 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         RightPanel.Settings.View.PropertyChanged += (_, _) => PersistSettings();
         RightPanel.Additive.PropertyChanged      += (_, _) => PersistSettings();
+        RightPanel.Scan.PropertyChanged          += (_, e) =>
+        {
+            // Skip transient capture-progress properties.
+            if (e.PropertyName is nameof(ScanSettingsViewModel.IsScanning)
+                                or nameof(ScanSettingsViewModel.ScanStatus))
+                return;
+            PersistSettings();
+        };
 
         // Wire toolbar commands to cross-panel actions.
         Toolbar.FrameAllRequested  += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
@@ -109,11 +124,173 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Wire the robot connect button to the robot panel and mirror status to toolbar.
         var robot = RightPanel.Settings.Robot;
         Toolbar.SyncRobotRequested += (_, _) => robot.ConnectCommand.Execute(null);
+
+        RightPanel.Scan.OnTestScanRequested = RunTestScan;
+
+        // Swap the displayed end-effector to match the active workflow tab:
+        // the Scan tab shows the scanner, Additive shows the extruder.
+        RightPanel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(RightPanelViewModel.ActiveTab)) return;
+            var toolName = RightPanel.ActiveTab switch
+            {
+                RightPanelTab.Scan     => Viewport.ActiveCell?.ScanToolName,
+                RightPanelTab.Additive => "HV Extruder",
+                _                      => null,
+            };
+            if (toolName is null) return;
+            int idx = robot.ToolNames.IndexOf(toolName);
+            if (idx >= 0) robot.SelectedToolIndex = idx;
+        };
         robot.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(RobotPanelViewModel.ConnectionStatus))
                 Toolbar.RobotStatus = robot.ConnectionStatus;
         };
+
+        // Propagate KRL frame dropdown selection → scan settings indices.
+        robot.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(RobotPanelViewModel.KrlToolIndex))
+                RightPanel.Scan.ToolDataIndex = robot.KrlToolIndex;
+            if (e.PropertyName == nameof(RobotPanelViewModel.KrlBaseIndex))
+                RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
+        };
+
+        // When sync connects, apply live TCP values from $config.dat and re-swap
+        // the active tool so the viewport TCP gizmo reflects the real robot data.
+        robot.OnDatRead = snapshot =>
+        {
+            Viewport.LiveDat = snapshot;
+
+            // Log what we read.
+            Console.Log($"[dat] Read {snapshot.Tools.Count} TOOL_DATA entries from $config.dat");
+            foreach (var t in snapshot.Tools)
+                Console.Log($"[dat]  TOOL[{t.Index}]  X={t.X:F2}  Y={t.Y:F2}  Z={t.Z:F2}  A={t.A:F2}  B={t.B:F2}  C={t.C:F2}");
+
+            // Re-trigger the selected tool so PendingToolSwap picks up the live TCP values.
+            var current = robot.SelectedToolIndex;
+            robot.SelectedToolIndex = -1;
+            robot.SelectedToolIndex = current;
+        };
+
+        // After each cell swap: populate KRL dropdowns, select tool for active tab,
+        // and on first load trigger auto-sync with the robot controller.
+        Viewport.OnCellSwapCompleted = () =>
+        {
+            var cell = Viewport.ActiveCell;
+            if (cell is not null)
+                robot.SetKrlFrameOptions(
+                    cell.EffectiveTools,
+                    cell.KrlBases,
+                    RightPanel.Scan.ToolDataIndex,
+                    RightPanel.Scan.BaseDataIndex);
+
+            // Show/hide the Scan tab based on whether this cell has a scanner.
+            RightPanel.HasScanTab = cell?.ScanToolName is not null;
+
+            var toolName = RightPanel.ActiveTab switch
+            {
+                RightPanelTab.Scan     => cell?.ScanToolName,
+                RightPanelTab.Additive => "HV Extruder",
+                _                      => null,
+            };
+            if (toolName is not null)
+            {
+                int idx = robot.ToolNames.IndexOf(toolName);
+                if (idx >= 0) robot.SelectedToolIndex = idx;
+            }
+
+            if (!_startupSyncDone)
+            {
+                _startupSyncDone = true;
+                robot.ConnectCommand.Execute(null);
+            }
+        };
+    }
+
+    /// <summary>
+    /// Captures a frame from the Zivid camera on a worker thread, meshes the
+    /// organized point cloud, and adds the result to the viewport and outliner.
+    /// The scan is placed on the bed centre; camera-to-robot registration comes
+    /// later with hand-eye calibration.
+    /// </summary>
+    private async void RunTestScan()
+    {
+        var scan = RightPanel.Scan;
+        if (scan.IsScanning) return;
+
+        scan.IsScanning = true;
+        scan.ScanStatus = "Starting capture...";
+        try
+        {
+            // Snapshot the camera pose at capture time using the currently selected tool.
+            var robot = RightPanel.Settings.Robot;
+            var tools = Viewport.ActiveCell?.EffectiveTools;
+            ToolCellConfig? scannerTool = null;
+            if (tools is not null && (uint)robot.SelectedToolIndex < (uint)tools.Count)
+                scannerTool = tools[robot.SelectedToolIndex];
+
+            Matrix4? cameraPose = scannerTool is not null
+                ? Viewport.GetToolWorldPose?.Invoke(scannerTool)
+                : null;
+
+            if (cameraPose is { } dbgPose)
+            {
+                Console.Log($"[scan] Tool: {scannerTool?.Name ?? "?"}  TCP: ({scannerTool?.TcpX:F1}, {scannerTool?.TcpY:F1}, {scannerTool?.TcpZ:F1})");
+                Console.Log($"[scan] Camera origin  : ({dbgPose.Row3.X:F1}, {dbgPose.Row3.Y:F1}, {dbgPose.Row3.Z:F1}) mm");
+                Console.Log($"[scan] Camera Z-axis  : ({dbgPose.Row2.X:F3}, {dbgPose.Row2.Y:F3}, {dbgPose.Row2.Z:F3})");
+            }
+            else
+                Console.Log($"[scan] No camera pose — tool={scannerTool?.Name ?? "none"}, flange available={Viewport.GetToolWorldPose is not null}");
+
+            var outDir = scan.OutputDirectory;
+            var result = await Task.Run(() => ZividScanService.Capture(
+                outDir,
+                msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
+
+            scan.ScanStatus = $"Meshing {result.ValidPointCount:N0} points...";
+            var name = $"Scan {DateTime.Now:HH-mm-ss}";
+            var node = await Task.Run(() => PointCloudMesher.Build(
+                result.PointsXYZ, result.Width, result.Height, name));
+
+            if (node is null)
+            {
+                scan.ScanStatus = "Scan contained no meshable points.";
+                return;
+            }
+
+            node.CullFaces = false;
+            if (cameraPose is { } pose)
+            {
+                // Registered: camera frame → world via robot pose at capture time.
+                node.LocalTransform = pose;
+                Console.Log("[scan] Registered via robot pose (scanner TOOL frame).");
+            }
+            else
+            {
+                // No robot loaded — flip the camera frame upright and centre on the bed.
+                node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+                Console.Log("[scan] No robot pose available — placed scan on bed centre unregistered.");
+            }
+
+            Viewport.AddUserNode(node);
+            var saved = result.SavedZdfPath is { } p ? $", saved {System.IO.Path.GetFileName(p)}" : "";
+            scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
+            Console.Log($"[scan] {scan.ScanStatus}");
+        }
+        catch (Exception ex)
+        {
+            scan.ScanStatus = $"Scan failed: {ex.Message}";
+            Console.Log($"[scan] ERROR: {ex.GetType().Name}: {ex.Message}");
+            for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+                Console.Log($"[scan]   inner: {inner.GetType().Name}: {inner.Message}");
+        }
+        finally
+        {
+            scan.IsScanning = false;
+        }
     }
 
     /// <summary>
@@ -184,6 +361,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
         add.ApoCvel                = p.ApoCvel;
+
+        // Scan settings
+        var scan = RightPanel.Scan;
+        scan.CameraIp        = p.ScanCameraIp;
+        scan.OutputDirectory = p.ScanOutputDirectory;
+        scan.ToolDataIndex   = p.ScanToolDataIndex;
+        scan.BaseDataIndex   = p.ScanBaseDataIndex;
     }
 
     /// <summary>
@@ -236,6 +420,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
         p.ApoCvel                = add.ApoCvel;
+
+        // Scan settings
+        var scan = RightPanel.Scan;
+        p.ScanCameraIp        = scan.CameraIp;
+        p.ScanOutputDirectory = scan.OutputDirectory;
+        p.ScanToolDataIndex   = scan.ToolDataIndex;
+        p.ScanBaseDataIndex   = scan.BaseDataIndex;
 
         PreferencesLoader.Save(p);
     }

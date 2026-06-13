@@ -14,7 +14,7 @@ public sealed class AxisRenderer : IDisposable
     private int  _vao, _vbo;
     private bool _disposed;
 
-    private const float Length = 200f; // mm
+    private const float DefaultLength = 200f; // mm
 
     private static readonly string VertSrc = """
         #version 330 core
@@ -39,9 +39,14 @@ public sealed class AxisRenderer : IDisposable
 
     /// <summary>
     /// Allocates GPU resources. Must be called on the OpenGL thread after the
-    /// context is current.
+    /// context is current. Custom colors and length are optional — defaults give
+    /// the standard red/green/blue 200mm axes.
     /// </summary>
-    public AxisRenderer()
+    public AxisRenderer(
+        float xR = 0.90f, float xG = 0.22f, float xB = 0.22f,
+        float yR = 0.22f, float yG = 0.80f, float yB = 0.30f,
+        float zR = 0.25f, float zG = 0.45f, float zB = 0.95f,
+        float length = DefaultLength)
     {
         _shader = new Shader(VertSrc, FragSrc);
 
@@ -49,15 +54,15 @@ public sealed class AxisRenderer : IDisposable
         // Layout per vertex: x, y, z, r, g, b
         float[] verts =
         [
-            // X axis -- red
-            0f,      0f, 0f,   0.90f, 0.22f, 0.22f,
-            Length,  0f, 0f,   0.90f, 0.22f, 0.22f,
-            // Y axis -- green
-            0f,      0f, 0f,   0.22f, 0.80f, 0.30f,
-            0f, Length,  0f,   0.22f, 0.80f, 0.30f,
-            // Z axis -- blue
-            0f, 0f,      0f,   0.25f, 0.45f, 0.95f,
-            0f, 0f, Length,    0.25f, 0.45f, 0.95f,
+            // X axis
+            0f,     0f, 0f,   xR, xG, xB,
+            length, 0f, 0f,   xR, xG, xB,
+            // Y axis
+            0f,     0f,     0f,   yR, yG, yB,
+            0f, length,     0f,   yR, yG, yB,
+            // Z axis
+            0f, 0f,     0f,   zR, zG, zB,
+            0f, 0f, length,   zR, zG, zB,
         ];
 
         _vao = GL.GenVertexArray();

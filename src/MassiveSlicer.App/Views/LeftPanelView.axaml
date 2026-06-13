@@ -625,6 +625,99 @@
                                        Text="{Binding DataContext.RightPanel.Settings.Robot.TcpC, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1}°}"/>
                         </Grid>
 
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <!-- BASE frame (from cell config) -->
+                        <TextBlock Text="BASE FRAME (ROBROOT)" Classes="SectionHeader"/>
+                        <Grid Margin="8,4,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseX, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseY, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BaseZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <!-- KRL frame dropdowns -->
+                        <TextBlock Text="ROBOT FRAMES" Classes="SectionHeader"/>
+                        <TextBlock Text="TOOL" Classes="LabelMuted" Margin="8,4,8,2"/>
+                        <ComboBox Margin="8,0,8,6" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlToolOptions,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlToolSelectedIndex,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                  Mode=TwoWay}"/>
+                        <TextBlock Text="BASE" Classes="LabelMuted" Margin="8,4,8,2"/>
+                        <ComboBox Margin="8,0,8,8" HorizontalAlignment="Stretch"
+                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseSelectedIndex,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                  Mode=TwoWay}"/>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="TCP OFFSET" Classes="SectionHeader"/>
+
+                        <!-- Position X Y Z -->
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <NumericUpDown Grid.Column="1" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpX,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            <TextBlock Grid.Column="2" Text="Y" Classes="LabelMuted" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            <NumericUpDown Grid.Column="3" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpY,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            <TextBlock Grid.Column="4" Text="Z" Classes="LabelMuted" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            <NumericUpDown Grid.Column="5" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpZ,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+
+                        <!-- Rotation A B C -->
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="20"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
+                            <NumericUpDown Grid.Column="1" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpA,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            <TextBlock Grid.Column="2" Text="B" Classes="LabelMuted" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            <NumericUpDown Grid.Column="3" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpB,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            <TextBlock Grid.Column="4" Text="C" Classes="LabelMuted" VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            <NumericUpDown Grid.Column="5" FontSize="11" FormatString="F2" Increment="0.1"
+                                           Value="{Binding DataContext.RightPanel.Settings.Robot.EditTcpC,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+
                     </StackPanel>
                 </ScrollViewer>
 

@@ -140,4 +140,18 @@ public sealed class AppPreferences
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
     public double ApoCvel { get; set; } = 100.0;
 
+    // ── Scan (Zivid) ──────────────────────────────────────────────────────
+
+    /// <summary>IP address of the Zivid camera on the cell network.</summary>
+    public string ScanCameraIp { get; set; } = "192.168.0.150";
+
+    /// <summary>Directory where captured scans (.zdf / .ply) are written.</summary>
+    public string ScanOutputDirectory { get; set; } = "scans";
+
+    /// <summary>KUKA TOOL_DATA index holding the calibrated scanner TCP (1–16).</summary>
+    public int ScanToolDataIndex { get; set; } = 6;
+
+    /// <summary>KUKA BASE_DATA index used while scanning (1–32).</summary>
+    public int ScanBaseDataIndex { get; set; } = 1;
+
 }

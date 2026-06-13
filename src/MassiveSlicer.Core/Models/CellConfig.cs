@@ -25,6 +25,9 @@ public sealed record CellConfig
     /// <summary>Named list of available tool configurations.</summary>
     public IReadOnlyList<ToolCellConfig> Tools { get; init; } = [];
 
+    /// <summary>Named KUKA BASE_DATA entries available on this cell (for dropdowns and KRL export).</summary>
+    public IReadOnlyList<KrlBaseEntry> KrlBases { get; init; } = [];
+
     /// <summary>
     /// Returns <see cref="Tools"/> when non-empty, otherwise falls back to the legacy
     /// single <see cref="Tool"/> entry, so old cell files work without changes.
@@ -32,6 +35,12 @@ public sealed record CellConfig
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<ToolCellConfig> EffectiveTools
         => Tools.Count > 0 ? Tools : (Tool is not null ? [Tool] : []);
+
+    /// <summary>
+    /// Name of the tool to activate when switching to the Scan workflow tab.
+    /// <see langword="null"/> means this cell has no scanner — the Scan tab is hidden.
+    /// </summary>
+    public string? ScanToolName { get; init; }
 
     /// <summary>C3Bridge host IP for live robot connection.</summary>
     public string BridgeIp { get; init; } = "192.168.0.1";
@@ -166,4 +175,26 @@ public sealed record ToolCellConfig
     /// </summary>
     public float ToolFrameRoll { get; init; } = 0f;
 
+    /// <summary>KUKA TOOL_DATA[] index for this tool (1–16). 0 means unmapped.</summary>
+    public int KrlIndex { get; init; } = 0;
+
+    // -- Sensor origin (optional, e.g. camera optical centre) -----------------
+    // When set, a second axis gizmo is drawn in the viewport and scan
+    // registration uses this position instead of the main TCP focal point.
+    public float? SensorOriginX { get; init; }
+    public float? SensorOriginY { get; init; }
+    public float? SensorOriginZ { get; init; }
+    public float? SensorOriginA { get; init; }
+    public float? SensorOriginB { get; init; }
+    public float? SensorOriginC { get; init; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool HasSensorOrigin => SensorOriginX.HasValue;
+}
+
+/// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>
+public sealed record KrlBaseEntry
+{
+    public required string Name  { get; init; }
+    public required int    Index { get; init; }
 }

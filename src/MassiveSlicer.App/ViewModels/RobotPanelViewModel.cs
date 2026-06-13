@@ -4,6 +4,7 @@ using System.Windows.Input;
 using Avalonia.Threading;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.C3Bridge;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.FK;
@@ -100,6 +101,12 @@ public sealed class RobotPanelViewModel : ViewModelBase
             _sync.Disconnect();
     }
 
+    /// <summary>
+    /// Called after a successful sync connect with fresh TOOL_DATA / BASE_DATA
+    /// read from the robot controller's $config.dat.
+    /// </summary>
+    internal Action<KrcDatSnapshot>? OnDatRead { get; set; }
+
     private async void ToggleConnect()
     {
         if (_sync.IsConnected)
@@ -113,6 +120,17 @@ public sealed class RobotPanelViewModel : ViewModelBase
         {
             await _sync.ConnectAsync(_bridgeIp, _bridgePort);
             _sync.StartStreaming(100);
+
+            // Read fresh TOOL_DATA / BASE_DATA from $config.dat on the KRC4 share.
+            try
+            {
+                var snapshot = await KrcDatReader.ReadAsync(_bridgeIp);
+                OnDatRead?.Invoke(snapshot);
+            }
+            catch (Exception ex)
+            {
+                System.Console.WriteLine($"[dat] Could not read $config.dat: {ex.Message}");
+            }
         }
         catch
         {
@@ -213,7 +231,25 @@ public sealed class RobotPanelViewModel : ViewModelBase
         {
             if (!SetField(ref _selectedToolIndex, value)) return;
             if ((uint)value < (uint)_toolLibrary.Count)
+            {
+                // Keep ROBOT FRAMES TOOL dropdown and KrlToolIndex in sync.
+                // Set the backing field directly (not the property) to avoid re-entering
+                // KrlToolSelectedIndex.set, which only calls back when i != _selectedToolIndex anyway.
+                int krl  = _toolLibrary[value].KrlIndex;
+                int slot = _krlToolIndices.IndexOf(krl);
+                if (slot >= 0 && slot != _krlToolSelectedIndex)
+                {
+                    _krlToolSelectedIndex = slot;
+                    OnPropertyChanged(nameof(KrlToolSelectedIndex));
+                }
+                if (KrlToolIndex != krl)
+                {
+                    KrlToolIndex = krl;
+                    OnPropertyChanged(nameof(KrlToolIndex));
+                }
                 OnToolSelected?.Invoke(_toolLibrary[value]);
+                LoadToolTcpEdit(_toolLibrary[value]);
+            }
         }
     }
 
@@ -232,6 +268,134 @@ public sealed class RobotPanelViewModel : ViewModelBase
             ToolNames.Add(string.IsNullOrEmpty(t.Name) ? t.ModelPath : t.Name);
         _selectedToolIndex = 0;
         OnPropertyChanged(nameof(SelectedToolIndex));
+        if (tools.Count > 0)
+            LoadToolTcpEdit(tools[0]);
+    }
+
+    // -- TCP offset editing -------------------------------------------------------
+
+    private double _editTcpX, _editTcpY, _editTcpZ, _editTcpA, _editTcpB, _editTcpC;
+    private bool _suppressTcpCallback;
+
+    public double EditTcpX { get => _editTcpX; set { if (SetField(ref _editTcpX, value)) FireTcpEdited(); } }
+    public double EditTcpY { get => _editTcpY; set { if (SetField(ref _editTcpY, value)) FireTcpEdited(); } }
+    public double EditTcpZ { get => _editTcpZ; set { if (SetField(ref _editTcpZ, value)) FireTcpEdited(); } }
+    public double EditTcpA { get => _editTcpA; set { if (SetField(ref _editTcpA, value)) FireTcpEdited(); } }
+    public double EditTcpB { get => _editTcpB; set { if (SetField(ref _editTcpB, value)) FireTcpEdited(); } }
+    public double EditTcpC { get => _editTcpC; set { if (SetField(ref _editTcpC, value)) FireTcpEdited(); } }
+
+    internal Action<double, double, double, double, double, double>? OnTcpOffsetEdited { get; set; }
+
+    private void FireTcpEdited()
+    {
+        if (!_suppressTcpCallback)
+            OnTcpOffsetEdited?.Invoke(_editTcpX, _editTcpY, _editTcpZ, _editTcpA, _editTcpB, _editTcpC);
+    }
+
+    private void LoadToolTcpEdit(ToolCellConfig t)
+    {
+        _suppressTcpCallback = true;
+        EditTcpX = t.TcpX;
+        EditTcpY = t.TcpY;
+        EditTcpZ = t.TcpZ;
+        EditTcpA = t.TcpA;
+        EditTcpB = t.TcpB;
+        EditTcpC = t.TcpC;
+        _suppressTcpCallback = false;
+    }
+
+    // -- KRL frame dropdowns ---------------------------------------------------
+
+    private readonly List<int> _krlToolIndices = [];
+    private readonly List<int> _krlBaseIndices = [];
+
+    public ObservableCollection<string> KrlToolOptions { get; } = [];
+    public ObservableCollection<string> KrlBaseOptions { get; } = [];
+
+    private int _krlToolSelectedIndex = -1;
+    private int _krlBaseSelectedIndex = -1;
+
+    public int KrlToolSelectedIndex
+    {
+        get => _krlToolSelectedIndex;
+        set
+        {
+            if (!SetField(ref _krlToolSelectedIndex, value)) return;
+            if ((uint)value < (uint)_krlToolIndices.Count)
+            {
+                KrlToolIndex = _krlToolIndices[value];
+                OnPropertyChanged(nameof(KrlToolIndex));
+
+                // Sync the viewport tool so the TCP gizmo updates to match the selected KRL tool.
+                for (int i = 0; i < _toolLibrary.Count; i++)
+                {
+                    if (_toolLibrary[i].KrlIndex == KrlToolIndex && i != _selectedToolIndex)
+                    {
+                        SelectedToolIndex = i;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    public int KrlBaseSelectedIndex
+    {
+        get => _krlBaseSelectedIndex;
+        set
+        {
+            if (!SetField(ref _krlBaseSelectedIndex, value)) return;
+            if ((uint)value < (uint)_krlBaseIndices.Count)
+            {
+                KrlBaseIndex = _krlBaseIndices[value];
+                OnPropertyChanged(nameof(KrlBaseIndex));
+            }
+        }
+    }
+
+    public int KrlToolIndex { get; private set; }
+    public int KrlBaseIndex { get; private set; }
+
+    /// <summary>Populates the KRL Tool and Base dropdowns from cell data.</summary>
+    public void SetKrlFrameOptions(
+        IReadOnlyList<ToolCellConfig> tools,
+        IReadOnlyList<KrlBaseEntry>   bases,
+        int                           currentToolIndex,
+        int                           currentBaseIndex)
+    {
+        _krlToolIndices.Clear();
+        KrlToolOptions.Clear();
+        foreach (var t in tools.Where(t => t.KrlIndex > 0).OrderBy(t => t.KrlIndex))
+        {
+            _krlToolIndices.Add(t.KrlIndex);
+            KrlToolOptions.Add($"{t.KrlIndex}: {t.Name}");
+        }
+
+        _krlBaseIndices.Clear();
+        KrlBaseOptions.Clear();
+        foreach (var b in bases.OrderBy(b => b.Index))
+        {
+            _krlBaseIndices.Add(b.Index);
+            KrlBaseOptions.Add($"{b.Index}: {b.Name}");
+        }
+
+        var ti = _krlToolIndices.IndexOf(currentToolIndex);
+        _krlToolSelectedIndex = ti >= 0 ? ti : 0;
+        OnPropertyChanged(nameof(KrlToolSelectedIndex));
+        if (_krlToolIndices.Count > 0)
+        {
+            KrlToolIndex = _krlToolIndices[Math.Max(0, _krlToolSelectedIndex)];
+            OnPropertyChanged(nameof(KrlToolIndex));
+        }
+
+        var bi = _krlBaseIndices.IndexOf(currentBaseIndex);
+        _krlBaseSelectedIndex = bi >= 0 ? bi : 0;
+        OnPropertyChanged(nameof(KrlBaseSelectedIndex));
+        if (_krlBaseIndices.Count > 0)
+        {
+            KrlBaseIndex = _krlBaseIndices[Math.Max(0, _krlBaseSelectedIndex)];
+            OnPropertyChanged(nameof(KrlBaseIndex));
+        }
     }
 
     // -- IK --------------------------------------------------------------------
@@ -256,6 +420,25 @@ public sealed class RobotPanelViewModel : ViewModelBase
         _bedCenterRobot = bedCenterRobot;
         _tcpOffsetLocal = tcpOffset;
         _robotWorldPos  = robotWorldPos;
+    }
+
+    // -- BASE frame readout (from cell config) ---------------------------------
+
+    private double _baseX, _baseY, _baseZ;
+
+    /// <summary>BASE frame origin X in ROBROOT frame (mm), sourced from cell config.</summary>
+    public double BaseX { get => _baseX; private set => SetField(ref _baseX, value); }
+    /// <summary>BASE frame origin Y in ROBROOT frame (mm), sourced from cell config.</summary>
+    public double BaseY { get => _baseY; private set => SetField(ref _baseY, value); }
+    /// <summary>BASE frame origin Z in ROBROOT frame (mm), sourced from cell config.</summary>
+    public double BaseZ { get => _baseZ; private set => SetField(ref _baseZ, value); }
+
+    /// <summary>Updates the BASE frame origin display from the loaded cell's bed.baseData.</summary>
+    public void SetBaseFrameData(float x, float y, float z)
+    {
+        BaseX = Math.Round(x, 2);
+        BaseY = Math.Round(y, 2);
+        BaseZ = Math.Round(z, 2);
     }
 
     public ICommand GoToBedCenterCommand { get; }
