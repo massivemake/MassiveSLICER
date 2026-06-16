@@ -332,12 +332,18 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>World-space Z coordinate of the build plate surface.</summary>
     public float BedZ { get; private set; }
 
-    public void SetBedBoundary(Vector3 origin, float width, float depth)
+    public void SetBedBoundary(Vector3 origin, float width, float depth, Vector3 datum, float diameter = 0f)
     {
         BedZ         = origin.Z;
         _bedBoundary?.Dispose();
-        _bedBoundary = new BedBoundaryRenderer(origin, width, depth);
+        _bedBoundary = new BedBoundaryRenderer(origin, width, depth, datum, diameter);
     }
+
+    /// <summary>
+    /// Model matrix applied to the print-bed boundary/grid overlay so it can rotate
+    /// with the rotary bed (E1). Identity = static. Set by the viewport per E1 change.
+    /// </summary>
+    public Matrix4 BedBoundaryModel { get; set; } = Matrix4.Identity;
 
     /// <summary>
     /// Updates (or clears) the angled-slice plane preview quad.
@@ -546,7 +552,7 @@ public sealed class SceneRenderer : IDisposable
 
         if (ShowGrid)    _grid?.Draw(mvp);
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid) _bedBoundary?.Draw(mvp);
+        if (ShowBedGrid) _bedBoundary?.Draw(BedBoundaryModel * mvp);
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
         // Unit 0 is left for other samplers; unit 1 stays bound for all mesh draws.

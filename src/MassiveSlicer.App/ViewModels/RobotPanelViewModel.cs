@@ -27,6 +27,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _minA4 = -360, _maxA4 = 360;
     private double _minA5 = -360, _maxA5 = 360;
     private double _minA6 = -360, _maxA6 = 360;
+    private double _minE1 = -360, _maxE1 = 360;
 
     public double MinA1 { get => _minA1; set => SetField(ref _minA1, value); }
     public double MaxA1 { get => _maxA1; set => SetField(ref _maxA1, value); }
@@ -40,6 +41,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double MaxA5 { get => _maxA5; set => SetField(ref _maxA5, value); }
     public double MinA6 { get => _minA6; set => SetField(ref _minA6, value); }
     public double MaxA6 { get => _maxA6; set => SetField(ref _maxA6, value); }
+    public double MinE1 { get => _minE1; set => SetField(ref _minE1, value); }
+    public double MaxE1 { get => _maxE1; set => SetField(ref _maxE1, value); }
 
     // -- Joint angles (KRL degrees) -------------------------------------------
 
@@ -49,6 +52,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private double _a4 =   0;
     private double _a5 =  15;
     private double _a6 =   0;
+    private double _e1 =   0;
 
     public double A1 { get => _a1; set => SetField(ref _a1, Math.Clamp(value, _minA1, _maxA1)); }
     public double A2 { get => _a2; set => SetField(ref _a2, Math.Clamp(value, _minA2, _maxA2)); }
@@ -56,6 +60,82 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public double A4 { get => _a4; set => SetField(ref _a4, Math.Clamp(value, _minA4, _maxA4)); }
     public double A5 { get => _a5; set => SetField(ref _a5, Math.Clamp(value, _minA5, _maxA5)); }
     public double A6 { get => _a6; set => SetField(ref _a6, Math.Clamp(value, _minA6, _maxA6)); }
+    /// <summary>External axis 1 — rotary bed (KRL degrees).</summary>
+    public double E1 { get => _e1; set => SetField(ref _e1, Math.Clamp(value, _minE1, _maxE1)); }
+
+    /// <summary>Rotary-bed (E1) axis calibration: scan the board across E1 rotations to find the bed centre.</summary>
+    public RotaryBedCalibrationViewModel BedCalibration { get; } = new();
+
+    // -- Rotary bed manual adjust ---------------------------------------------
+
+    private bool   _isRotaryBed;
+    private double _bedCenterX, _bedCenterY, _bedCenterZ, _bedDiameter;
+    private double _bedRotationSign = -1;
+    private bool   _suppressBedCallback;
+
+    /// <summary>True when the active cell's bed is a circular rotary turntable (shows the ROTARY BED panel).</summary>
+    public bool IsRotaryBed { get => _isRotaryBed; private set => SetField(ref _isRotaryBed, value); }
+
+    /// <summary>Rotary-bed centre X in world/ROBROOT mm (rotation axis + grid datum). Editable.</summary>
+    public double BedCenterX { get => _bedCenterX; set { if (SetField(ref _bedCenterX, value)) FireBedEdited(); } }
+    /// <summary>Rotary-bed centre Y in world/ROBROOT mm. Editable.</summary>
+    public double BedCenterY { get => _bedCenterY; set { if (SetField(ref _bedCenterY, value)) FireBedEdited(); } }
+    /// <summary>Rotary-bed surface height Z in world/ROBROOT mm. Editable.</summary>
+    public double BedCenterZ { get => _bedCenterZ; set { if (SetField(ref _bedCenterZ, value)) FireBedEdited(); } }
+    /// <summary>Rotary-bed diameter in mm (circular grid). Editable.</summary>
+    public double BedDiameter { get => _bedDiameter; set { if (SetField(ref _bedDiameter, value)) FireBedEdited(); } }
+
+    /// <summary>E1→scene rotation sign (+1 CCW / −1 CW about world +Z). Set by rotation calibration.</summary>
+    public double BedRotationSign
+    {
+        get => _bedRotationSign;
+        set { if (SetField(ref _bedRotationSign, value)) { OnPropertyChanged(nameof(IsE1Reversed)); FireBedEdited(); } }
+    }
+
+    /// <summary>Checkbox-friendly view of <see cref="BedRotationSign"/> (true = −1, CW).</summary>
+    public bool IsE1Reversed
+    {
+        get => _bedRotationSign < 0;
+        set => BedRotationSign = value ? -1 : 1;
+    }
+
+    /// <summary>Invoked when any rotary-bed field is edited. Args: centre x, y, z (mm), diameter (mm), rotation sign.</summary>
+    internal Action<double, double, double, double, double>? OnBedEdited { get; set; }
+
+    private void FireBedEdited()
+    {
+        if (!_suppressBedCallback)
+            OnBedEdited?.Invoke(_bedCenterX, _bedCenterY, _bedCenterZ, _bedDiameter, _bedRotationSign);
+    }
+
+    /// <summary>Loads the rotary-bed fields from the active cell (no callback fired).</summary>
+    public void ConfigureBed(double x, double y, double z, double diameter, double rotationSign, bool isRotary)
+    {
+        _suppressBedCallback = true;
+        BedCenterX      = Math.Round(x, 2);
+        BedCenterY      = Math.Round(y, 2);
+        BedCenterZ      = Math.Round(z, 2);
+        BedDiameter     = Math.Round(diameter, 2);
+        BedRotationSign = rotationSign;
+        IsRotaryBed     = isRotary;
+        _suppressBedCallback = false;
+    }
+
+    /// <summary>
+    /// Applies a rotary-bed calibration result (centre + rotation sign) as a single edit:
+    /// updates the fields and fires <see cref="OnBedEdited"/> once for a live + persisted update.
+    /// Diameter is left untouched (it isn't measured by the circle fit).
+    /// </summary>
+    public void ApplyBedCalibration(double x, double y, double z, double rotationSign)
+    {
+        _suppressBedCallback = true;
+        BedCenterX      = Math.Round(x, 2);
+        BedCenterY      = Math.Round(y, 2);
+        BedCenterZ      = Math.Round(z, 2);
+        BedRotationSign = rotationSign;
+        _suppressBedCallback = false;
+        FireBedEdited();
+    }
 
     // -- C3Bridge connection ---------------------------------------------------
 
@@ -88,6 +168,66 @@ public sealed class RobotPanelViewModel : ViewModelBase
     {
         _bridgeIp   = ip;
         _bridgePort = port;
+    }
+
+    // -- Bed-calibration handshake (auto E1 sweep) ----------------------------
+    // The C3Bridge client allows one request in flight, so the auto-cal orchestration
+    // pauses streaming, then drives these directly.
+
+    /// <summary>Pauses the live polling loop (keeps the TCP connection open).</summary>
+    public void PauseStreaming() => _sync.StopStreaming();
+
+    /// <summary>Resumes the live polling loop if connected.</summary>
+    public void ResumeStreaming() { if (_sync.IsConnected) _sync.StartStreaming(100); }
+
+    /// <summary>Reads a KRL <c>$FLAG[idx]</c> (streaming must be paused).</summary>
+    public Task<bool> ReadFlagAsync(int idx, CancellationToken ct = default) => _sync.ReadFlagAsync(idx, ct);
+
+    /// <summary>Sets a KRL <c>$FLAG[idx]</c> (streaming must be paused).</summary>
+    public Task SetFlagAsync(int idx, bool value, CancellationToken ct = default) => _sync.SetFlagAsync(idx, value, ct);
+
+    /// <summary>Reads $AXIS_ACT [A1..A6, E1] (streaming must be paused).</summary>
+    public Task<double[]> ReadAxesAsync(CancellationToken ct = default) => _sync.ReadAxesAsync(ct);
+
+    /// <summary>Sets a global KRL BOOL by name (e.g. a CELL() trigger; streaming must be paused).</summary>
+    public Task SetBoolAsync(string name, bool value, CancellationToken ct = default) => _sync.SetBoolAsync(name, value, ct);
+
+    /// <summary>Selects + starts a KRL program by name via C3 program-control (streaming must be paused).</summary>
+    public Task<C3BridgeClient.ProgramResult> RunProgramAsync(string programName, CancellationToken ct = default) => _sync.RunProgramAsync(programName, ct);
+
+    /// <summary>Selects a KRL program by name via C3 program-control (streaming must be paused).</summary>
+    public Task<C3BridgeClient.ProgramResult> SelectProgramAsync(string programName, CancellationToken ct = default) => _sync.SelectProgramAsync(programName, ct);
+
+    /// <summary>Interpreter control via C3 (e.g. Start=2 after Select). Streaming must be paused.</summary>
+    public Task<C3BridgeClient.ProgramResult> ProgramControlAsync(byte command, ushort interpreter = 1, CancellationToken ct = default)
+        => _sync.ProgramControlAsync(command, interpreter, ct);
+
+    /// <summary>
+    /// Copies the bundled bed-calibration KRL to the controller's program folder over SMB.
+    /// Returns the destination path. Throws on copy failure (share unreachable / permissions).
+    /// </summary>
+    public string DeployBedScanProgram()
+    {
+        const string fileName = "BED_SCAN_CAL.src";
+        var src = ResolveBundledKrlPath(fileName)
+            ?? throw new System.IO.FileNotFoundException(
+                $"Bundled KRL not found ({fileName}). Rebuild the app or copy it to assets/krl/.");
+        var folder = $@"\\{_bridgeIp}\krc\ROBOTER\KRC\R1\Program";
+        var dest = System.IO.Path.Combine(folder, fileName);
+        System.IO.File.Copy(src, dest, overwrite: true);
+        return dest;
+    }
+
+    /// <summary>Locates a file under <c>assets/krl/</c> from the publish dir or repo working tree.</summary>
+    internal static string? ResolveBundledKrlPath(string fileName)
+    {
+        var candidates = new[]
+        {
+            System.IO.Path.Combine(AppContext.BaseDirectory, "assets", "krl", fileName),
+            System.IO.Path.Combine("assets", "krl", fileName),
+            System.IO.Path.GetFullPath(System.IO.Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "assets", "krl", fileName)),
+        };
+        return candidates.FirstOrDefault(System.IO.File.Exists);
     }
 
     /// <summary>
@@ -489,6 +629,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
             A4 = Math.Round(axes[3], 2);
             A5 = Math.Round(axes[4], 2);
             A6 = Math.Round(axes[5], 2);
+            if (axes.Length > 6) E1 = Math.Round(axes[6], 2);
         });
 
         _sync.TcpUpdated += (_, pos) => Dispatcher.UIThread.Post(() =>

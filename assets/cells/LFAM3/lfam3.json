@@ -92,22 +92,23 @@
   "bed": {
     "modelPath": "assets/cells/LFAM3/LFAM3Bed.stl",
     "origin": {
-      "x": 2133.45,
-      "y": -55.28,
-      "z": 910.7
+      "x": 2032.71,
+      "y": 56.09,
+      "z": 891.83
     },
     "width": 1800,
     "depth": 1800,
     "gridOrigin": {
-      "x": 1233.45,
-      "y": -955.28,
-      "z": 910.7
+      "x": 1132.71,
+      "y": -843.91003,
+      "z": 891.83
     },
     "baseData": {
-      "x": 2133.45,
-      "y": -55.28,
-      "z": -89.3
-    }
+      "x": 2032.71,
+      "y": 56.09,
+      "z": -108.16998
+    },
+    "diameter": 1828.8
   },
   "boosterFrame": {
     "modelPath": "assets/cells/LFAM3/booster_frame.glb",
@@ -151,23 +152,23 @@
     {
       "name": "ZividScanner",
       "modelPath": "assets/cells/LFAM3/Toolheads/Scanner.stl",
-      "tcpX": -59,
-      "tcpY": -100,
-      "tcpZ": 262.26,
+      "tcpX": -62,
+      "tcpY": -103,
+      "tcpZ": 259.94,
       "tcpA": 0,
-      "tcpB": 0,
-      "tcpC": 0,
+      "tcpB": 2.47,
+      "tcpC": -1.38,
       "toolFrameRoll": 0,
       "krlIndex": 5
     },
     {
       "name": "Spindle Empty",
       "modelPath": "assets/cells/LFAM3/Toolheads/Spindle.stl",
-      "tcpX": -54.53,
-      "tcpY": 205.13,
-      "tcpZ": 182.45,
-      "tcpA": 105,
-      "tcpB": -90,
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": 0,
       "krlIndex": 2
@@ -209,5 +210,13 @@
   ],
   "scanToolName": "ZividScanner",
   "bridgeIp": "192.168.0.153",
-  "bridgePort": 7000
+  "bridgePort": 7000,
+  "view": {
+    "azimuth": -43.800022,
+    "elevation": 16.000006,
+    "radius": 3419.4116,
+    "targetX": 1749.5077,
+    "targetY": 45.24054,
+    "targetZ": 1631.6459
+  }
 }

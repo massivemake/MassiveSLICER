@@ -1,0 +1,48 @@
+&ACCESS RVP
+&REL 1
+&PARAM EDITMASK = *
+&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
+DEF BED_SCAN_CAL ( )
+; v4 — E1-only sweep. No $ACC_AXIS / $ACC_EXTAX assignments (those caused
+; "ACC value invalid"). E1 acc comes from PDEFAULT via BAS(#PTP_DAT).
+; Line 23 should read: $VEL_EXTAX[1] = 20
+
+DECL INT    i
+DECL E6AXIS apos
+
+;FOLD INI
+  ;FOLD BASISTECH INI
+    GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+    INTERRUPT ON 3
+    BAS (#INITMOV,0 )
+  ;ENDFOLD (BASISTECH INI)
+;ENDFOLD (INI)
+
+$IPO_MODE = #BASE
+$ADVANCE = 3
+
+BAS (#BASE,1)
+$BASE = EK(MACHINE_DEF[2].ROOT,MACHINE_DEF[2].MECH_TYPE,BASE_DATA[1]:{X 0, Y 0, Z 0, A 0, B 0, C 0})
+
+$VEL_EXTAX[1] = 20
+PDAT_ACT = PDEFAULT
+BAS (#PTP_DAT )
+BAS (#VEL_PTP,20 )
+
+$FLAG[1] = FALSE
+$FLAG[2] = FALSE
+
+apos = $AXIS_ACT
+
+FOR i = 0 TO 9
+  apos.E1 = -180.0 + i * 40.0
+  PTP apos
+  WAIT SEC 0.5
+  $FLAG[1] = TRUE
+  WAIT FOR ($FLAG[1] == FALSE)
+ENDFOR
+
+$FLAG[2] = TRUE
+apos.E1 = 0.0
+PTP apos
+END

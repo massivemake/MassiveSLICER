@@ -1,7 +1,9 @@
 using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
+using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
@@ -120,12 +122,60 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Wire toolbar commands to cross-panel actions.
         Toolbar.FrameAllRequested  += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
+        Viewport.OnSaveViewRequested = SaveCurrentView;
 
         // Wire the robot connect button to the robot panel and mirror status to toolbar.
         var robot = RightPanel.Settings.Robot;
         Toolbar.SyncRobotRequested += (_, _) => robot.ConnectCommand.Execute(null);
 
         RightPanel.Scan.OnTestScanRequested = RunTestScan;
+
+        // Wire hand-eye calibration: provide the live flange pose and apply result to TCP fields.
+        // CRITICAL: calibration must use the SAME flange frame the viewport applies scans in
+        // (rendered glTF flange × glTF→KUKA correction), NOT KukaIkSolver.ForwardKinematics.
+        // The analytic FK flange and the rendered flange are different frames; feeding the
+        // analytic one makes calibration learn the camera in a frame registration never uses,
+        // so scans land rotated/translated wrong despite tiny calibration residuals.
+        var calib = RightPanel.Scan.Calibration;
+        calib.GetFlangeInBase = () =>
+            Viewport.GetFlangeInBaseForCalibration?.Invoke() ?? System.Numerics.Matrix4x4.Identity;
+        calib.OnApplyCalibration = (x, y, z, a, b, c) =>
+        {
+            var r = RightPanel.Settings.Robot;
+            r.EditTcpX = x;
+            r.EditTcpY = y;
+            r.EditTcpZ = z;
+            r.EditTcpA = a;
+            r.EditTcpB = b;
+            r.EditTcpC = c;
+        };
+
+        // Wire rotary-bed (E1) calibration: capture the board centroid in world via the
+        // (fixed) scanner camera pose, read live E1, and persist the fitted centre to the cell.
+        var bedCal = robot.BedCalibration;
+        bedCal.GetCameraToWorld = () =>
+        {
+            var tools = Viewport.ActiveCell?.EffectiveTools;
+            ToolCellConfig? scannerTool = null;
+            if (tools is not null && (uint)robot.SelectedToolIndex < (uint)tools.Count)
+                scannerTool = tools[robot.SelectedToolIndex];
+            if (scannerTool is null) return null;
+            if (Viewport.GetToolWorldPose?.Invoke(scannerTool) is not { } p) return null;
+            // OpenTK Matrix4 (row-vector: rows = camera axes in world, Row3 = origin) → System.Numerics.
+            return new System.Numerics.Matrix4x4(
+                p.M11, p.M12, p.M13, p.M14,
+                p.M21, p.M22, p.M23, p.M24,
+                p.M31, p.M32, p.M33, p.M34,
+                p.M41, p.M42, p.M43, p.M44);
+        };
+        bedCal.GetCurrentE1 = () => robot.E1;
+        bedCal.OnApplyCenter = (x, y, z, sign) =>
+        {
+            // Route through the live bed-edit path: updates the scene immediately AND persists.
+            robot.ApplyBedCalibration(x, y, z, sign);
+            Console.Log($"[bedcal] Applied bed centre ({x:F1}, {y:F1}, {z:F1}), rotation {(sign < 0 ? "CW" : "CCW")}.");
+        };
+        bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
 
         // Swap the displayed end-effector to match the active workflow tab:
         // the Scan tab shows the scanner, Additive shows the extruder.
@@ -245,8 +295,19 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log($"[scan] No camera pose — tool={scannerTool?.Name ?? "none"}, flange available={Viewport.GetToolWorldPose is not null}");
 
             var outDir = scan.OutputDirectory;
+            var meta = new ScanMetadata
+            {
+                A1 = (float)robot.A1, A2 = (float)robot.A2, A3 = (float)robot.A3,
+                A4 = (float)robot.A4, A5 = (float)robot.A5, A6 = (float)robot.A6,
+                E1 = (float)robot.E1,
+                TcpX = (float)robot.EditTcpX, TcpY = (float)robot.EditTcpY, TcpZ = (float)robot.EditTcpZ,
+                TcpA = (float)robot.EditTcpA, TcpB = (float)robot.EditTcpB, TcpC = (float)robot.EditTcpC,
+                CameraWorldX = cameraPose?.Row3.X ?? 0f,
+                CameraWorldY = cameraPose?.Row3.Y ?? 0f,
+                CameraWorldZ = cameraPose?.Row3.Z ?? 0f,
+            };
             var result = await Task.Run(() => ZividScanService.Capture(
-                outDir,
+                outDir, meta,
                 msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
 
             scan.ScanStatus = $"Meshing {result.ValidPointCount:N0} points...";
@@ -276,7 +337,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             }
 
             Viewport.AddUserNode(node);
-            var saved = result.SavedZdfPath is { } p ? $", saved {System.IO.Path.GetFileName(p)}" : "";
+            var saved = result.SavedZdfPath is { } p
+                ? $", saved {System.IO.Path.GetFileName(p)}{(result.SavedMetadataPath is not null ? " + .json" : "")}"
+                : "";
             scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
@@ -291,6 +354,171 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             scan.IsScanning = false;
         }
+    }
+
+    /// <summary>Maps a C3 Bridge protocol error code to its name (ulsu-tech C3BI enum).</summary>
+    private static string C3ErrorName(int code) => code switch
+    {
+        0  => "General (E_FAIL)",
+        1  => "Success",
+        2  => "Access denied",
+        3  => "Invalid argument",
+        4  => "Memory",
+        5  => "Pointer",
+        6  => "Unexpected",
+        7  => "Not implemented",
+        8  => "No interface",
+        9  => "Protocol (bad message)",
+        10 => "Answer too long",
+        _  => $"code {code}",
+    };
+
+    private async Task RunAutoBedCalibration()
+    {
+        var robot  = RightPanel.Settings.Robot;
+        var bedCal = robot.BedCalibration;
+
+        if (!robot.IsConnected)
+        {
+            bedCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
+            return;
+        }
+
+        try
+        {
+            var dest = robot.DeployBedScanProgram();
+            Console.Log($"[bedcal] Deployed KRL → {dest}");
+            var folder = System.IO.Path.GetDirectoryName(dest);
+            if (folder is not null)
+            {
+                try
+                {
+                    foreach (var alt in System.IO.Directory.EnumerateFiles(folder, "*bed*scan*cal*.src"))
+                    {
+                        if (!string.Equals(alt, dest, StringComparison.OrdinalIgnoreCase))
+                            Console.Log($"[bedcal] Also on controller: {System.IO.Path.GetFileName(alt)} — C3 path uses DEF BED_SCAN_CAL, not the filename.");
+                    }
+                }
+                catch { /* optional */ }
+            }
+        }
+        catch (Exception ex)
+        {
+            // Non-fatal: the program may already be on the controller.
+            Console.Log($"[bedcal] KRL deploy skipped: {ex.Message}");
+        }
+
+        bedCal.ClearSamples();
+        bedCal.SetStatus("Starting BED_SCAN_CAL on the robot (AUTO mode, drives on)…");
+
+        // C3 path must match the KRL DEF name (BED_SCAN_CAL). On LFAM3 the working form is
+        // /R1/BED_SCAN_CAL (not /R1/Program/…). Filename on the share can differ.
+        string[] programPaths =
+        [
+            "/R1/BED_SCAN_CAL",
+            "BED_SCAN_CAL",
+            "/R1/Program/BED_SCAN_CAL",
+            "/R1/PROGRAM/BED_SCAN_CAL",
+        ];
+        const int target = 10;
+        int captured = 0;
+        robot.PauseStreaming();
+        try
+        {
+            await robot.SetFlagAsync(1, false);
+            await robot.SetFlagAsync(2, false);
+
+            // Remote start via C3 Bridge message #10 (select + run). Requires the C3 Bridge
+            // Interface Server on the KRC — stock KUKAVARPROXY alone returns ErrorNotImplemented (7).
+            C3BridgeClient.ProgramResult sel = default, run = default, start = default;
+            string? startedPath = null;
+            foreach (var programName in programPaths)
+            {
+                sel = await robot.SelectProgramAsync(programName);
+                Console.Log($"[bedcal] Select {programName}: {C3ErrorName(sel.ErrorCode)} (success={sel.Success}).");
+                if (!sel.Success) continue;
+
+                run = await robot.RunProgramAsync(programName);
+                Console.Log($"[bedcal] Run {programName}: {C3ErrorName(run.ErrorCode)} (success={run.Success}).");
+                if (run.Success) { startedPath = programName; break; }
+
+                // Some C3 builds accept Select but need a separate interpreter Start (cmd 2).
+                start = await robot.ProgramControlAsync(2);
+                Console.Log($"[bedcal] Start after select {programName}: {C3ErrorName(start.ErrorCode)} (success={start.Success}).");
+                if (start.Success) { startedPath = programName; break; }
+            }
+
+            if (startedPath is null)
+            {
+                var last = start.ErrorCode != 0 ? start : run.ErrorCode != 0 ? run : sel;
+                var hint = last.ErrorCode == 7
+                    ? "ErrorNotImplemented — port 7000 is KUKAVARPROXY only; install/start the C3 Bridge Interface Server on the KRC."
+                    : last.ErrorCode == 0
+                        ? "ErrorGeneral — program won't compile, wrong path, or robot not in AUTO with drives on. On the pendant open BED_SCAN_CAL (DEF name), compile, then retry."
+                        : "Check console for select/run/start codes.";
+                bedCal.SetStatus($"Could not start BED_SCAN_CAL — select={C3ErrorName(sel.ErrorCode)}, run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}. {hint}");
+                return;
+            }
+            Console.Log($"[bedcal] Started {startedPath} via C3 program-run.");
+
+            for (int n = 0; n < target; n++)
+            {
+                // Wait for the robot to reach a stop ($FLAG[1]) or finish ($FLAG[2]); ~120 s/stop.
+                bool atStop = false, done = false;
+                for (int poll = 0; poll < 600; poll++)
+                {
+                    if (await robot.ReadFlagAsync(2)) { done = true; break; }
+                    if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
+                    await Task.Delay(200);
+                }
+                if (done) break;
+                if (!atStop)
+                {
+                    bedCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target}).");
+                    break;
+                }
+
+                var axes = await robot.ReadAxesAsync();
+                robot.E1 = Math.Round(axes[6], 2);
+                await bedCal.AddSampleAsync();          // scans + records (E1, world point)
+                captured++;
+                bedCal.SetStatus($"Captured {captured}/{target} (E1 {axes[6]:F0}°)…");
+
+                await robot.SetFlagAsync(1, false);     // release the robot to the next stop
+            }
+        }
+        catch (Exception ex)
+        {
+            bedCal.SetStatus($"Auto-cal error: {ex.Message}");
+            Console.Log($"[bedcal] ERROR: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            robot.ResumeStreaming();
+        }
+
+        if (captured >= 3)
+            bedCal.Compute();
+    }
+
+    /// <summary>
+    /// Saves the current camera view into the active cell JSON (shared via the file, so every
+    /// user opens to it) and refreshes the in-memory cell. Logs the result to the console.
+    /// </summary>
+    private void SaveCurrentView()
+    {
+        var view = Viewport.GetCameraState?.Invoke();
+        var path = Viewport.ActiveCellPath;
+        if (view is null || path is null)
+        {
+            Console.Log("[view] No active cell — load a cell before saving a view.");
+            return;
+        }
+        CellLoader.SaveCameraView(path, view);
+        Viewport.ActiveCell = CellLoader.Load(path);   // refresh in-memory model
+        Console.Log($"[view] Saved view to {System.IO.Path.GetFileName(path)} " +
+                    $"(azimuth {view.Azimuth:F0}°, elevation {view.Elevation:F0}°, radius {view.Radius:F0} mm). " +
+                    "Restored on next load for all users.");
     }
 
     /// <summary>
