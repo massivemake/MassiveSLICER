@@ -45,6 +45,23 @@ public sealed record CellConfig
     /// <summary>C3Bridge host IP for live robot connection.</summary>
     public string BridgeIp { get; init; } = "192.168.0.1";
     public int BridgePort { get; init; } = 7000;
+
+    /// <summary>
+    /// Saved default camera view for this cell, applied on load. Null = auto-frame the bed.
+    /// Shared via the cell JSON so every user opens to the same saved angle.
+    /// </summary>
+    public CameraView? View { get; init; }
+}
+
+/// <summary>A saved orbit-camera pose (spherical, Z-up). Persisted per cell.</summary>
+public sealed record CameraView
+{
+    public float Azimuth   { get; init; }
+    public float Elevation { get; init; }
+    public float Radius    { get; init; }
+    public float TargetX   { get; init; }
+    public float TargetY   { get; init; }
+    public float TargetZ   { get; init; }
 }
 
 /// <summary>Contents of the per-cell <c>home_positions.json</c> sidecar file.</summary>
@@ -133,6 +150,20 @@ public sealed record BedCellConfig
     /// NOT a world position -- add ROBROOT world position to get world coords.
     /// </summary>
     public required Float3 BaseData { get; init; }
+
+    /// <summary>
+    /// When set, the bed is a circular rotary turntable of this diameter (mm) centred on
+    /// <see cref="Origin"/>: the print-area overlay renders as a polar grid (circle + rings +
+    /// spokes) instead of a rectangle. Null = rectangular bed.
+    /// </summary>
+    public float? Diameter { get; init; }
+
+    /// <summary>
+    /// Sign applied to E1 when rotating scene geometry about <see cref="Origin"/>:
+    /// +1 = CCW about world +Z, −1 = CW. Set by rotary-bed rotation calibration.
+    /// Null defaults to −1 (the original hard-coded direction).
+    /// </summary>
+    public float? RotationSign { get; init; }
 }
 
 public sealed record BoosterFrameCellConfig

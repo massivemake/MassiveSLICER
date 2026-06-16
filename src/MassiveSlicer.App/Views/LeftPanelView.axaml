@@ -521,7 +521,7 @@
                         </Grid>
 
                         <!-- A6 -->
-                        <Grid Margin="8,2,8,8">
+                        <Grid Margin="8,2,8,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="28"/>
                                 <ColumnDefinition Width="*"/>
@@ -539,12 +539,169 @@
                                        KeyDown="JointAngle_KeyDown"/>
                         </Grid>
 
+                        <!-- E1 — rotary bed (external axis) -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,2,8,4"
+                                ToolTip.Tip="External axis 1: rotary print bed"/>
+                        <Grid Margin="8,2,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="28"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="E1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Rotary bed (external axis 1), KRL degrees"/>
+                            <Slider    Grid.Column="1"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Value="{Binding DataContext.RightPanel.Settings.Robot.E1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       VerticalAlignment="Center"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.E1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"
+                                       TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                       KeyDown="JointAngle_KeyDown"/>
+                        </Grid>
+
                         <Button Content="GO TO BED CENTER"
                                 Command="{Binding DataContext.RightPanel.Settings.Robot.GoToBedCenterCommand,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 Classes="PrimaryButton"
                                 HorizontalAlignment="Stretch"
                                 Margin="8,4,8,8"/>
+
+                        <!-- Rotary bed manual adjust (rotary cells only) -->
+                        <StackPanel IsVisible="{Binding DataContext.RightPanel.Settings.Robot.IsRotaryBed,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                            <TextBlock Text="ROTARY BED" Classes="SectionHeader"/>
+                            <TextBlock Text="Centre / height of the turntable axis (world mm) and grid diameter. Edits apply live and save to the cell."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                       FontSize="11" Margin="8,2,8,6"/>
+
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Centre X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.BedCenterX,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Centre Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.BedCenterY,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Height Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.BedCenterZ,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Diameter" Classes="LabelMuted" VerticalAlignment="Center"
+                                           ToolTip.Tip="Rotary grid diameter (mm). 1828.8 = 6 ft."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.BedDiameter,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="E1 angle" Classes="LabelMuted" VerticalAlignment="Center"
+                                           ToolTip.Tip="Current rotary bed rotation (KRL degrees)."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.E1,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay, StringFormat={}{0:F2}}"/>
+                            </Grid>
+                            <CheckBox Margin="8,2,8,4"
+                                      Content="Reverse E1 rotation (CW)"
+                                      ToolTip.Tip="Direction E1 spins scene geometry about the centre. Set automatically by rotation calibration."
+                                      IsChecked="{Binding DataContext.RightPanel.Settings.Robot.IsE1Reversed,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </StackPanel>
+
+                        <!-- Rotary bed (E1) axis calibration -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="ROTARY BED CALIBRATION" Classes="SectionHeader"/>
+                        <TextBlock Text="Tape the calibration board off-centre on the bed. Rotate E1 and capture across the widest range you can (keep the arm still)."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="11" Margin="8,2,8,6"/>
+
+                        <Button Content="AUTO-CALIBRATE (E1 SWEEP)"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.AutoCalibrateCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,0,8,4"
+                                ToolTip.Tip="Starts BED_SCAN_CAL on the controller via the C3 Bridge (no pendant Start). The robot sweeps E1 -180..180 in 10 stops; the app captures a scan at each, then fits the result."/>
+                        <TextBlock Text="Auto: robot synced + in AUTO mode with drives on. The app starts the program and scans automatically. Or collect samples manually below."
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="11" Margin="8,0,8,6"/>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,*">
+                            <Button Grid.Column="0" Content="ADD SAMPLE"
+                                    Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.AddSampleCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="0,0,4,0"/>
+                            <Button Grid.Column="1" Content="CLEAR"
+                                    Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ClearCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    HorizontalAlignment="Stretch" Margin="4,0,0,0"/>
+                        </Grid>
+
+                        <TextBlock Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.SampleCountLabel,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                   Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="8,0,8,4"/>
+
+                        <Button Content="COMPUTE BED CENTRE"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ComputeCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,0,8,6"/>
+
+                        <Grid Margin="8,0,8,2"
+                              IsVisible="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.HasResult,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              ColumnDefinitions="90,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto">
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="Centre X" Classes="LabelMuted"/>
+                            <TextBlock Grid.Row="0" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.CenterX,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Centre Y" Classes="LabelMuted"/>
+                            <TextBlock Grid.Row="1" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.CenterY,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Height Z" Classes="LabelMuted"/>
+                            <TextBlock Grid.Row="2" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.CenterZ,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F1} mm}"/>
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="Radius" Classes="LabelMuted"/>
+                            <TextBlock Grid.Row="3" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.Radius,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F0} mm}"/>
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="Residual" Classes="LabelMuted"
+                                       ToolTip.Tip="RMS radial fit error. Under ~1–2 mm is good; large values mean a slipped board or the arm moved."/>
+                            <TextBlock Grid.Row="4" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.Residual,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
+                            <TextBlock Grid.Row="5" Grid.Column="0" Text="Z-spread" Classes="LabelMuted"
+                                       ToolTip.Tip="Max−min sample height. Small = near-vertical axis on a flat bed; large = axis tilt."/>
+                            <TextBlock Grid.Row="5" Grid.Column="1" Classes="LabelMuted"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ZSpread,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
+                        </Grid>
+
+                        <TextBlock Margin="8,0,8,2" TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{DynamicResource TextSecondary}"
+                                   IsVisible="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.HasResult,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                   Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.RotationLabel,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+
+                        <Button Content="APPLY TO CELL"
+                                Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ApplyCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,4,8,4"
+                                IsVisible="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.HasResult,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+
+                        <TextBlock Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.Status,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="11" Margin="8,2,8,8"/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>

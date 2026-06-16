@@ -29,11 +29,14 @@ public static class KrlVarParser
         return result;
     }
 
-    /// <summary>Returns joint angles [A1..A6] in KRL degrees from a $AXIS_ACT response.</summary>
+    /// <summary>
+    /// Returns joint angles [A1..A6, E1] in KRL degrees from a $AXIS_ACT response.
+    /// Index 6 is E1 (external axis 1 — rotary bed). Defaults to 0 if absent.
+    /// </summary>
     public static double[] ParseAxisAct(string response)
     {
-        var v = Parse(response, ["A1", "A2", "A3", "A4", "A5", "A6"]);
-        return [v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"]];
+        var v = Parse(response, ["A1", "A2", "A3", "A4", "A5", "A6", "E1"]);
+        return [v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"], v["E1"]];
     }
 
     /// <summary>Returns (X, Y, Z, A, B, C) in mm / degrees from a $POS_ACT response.</summary>

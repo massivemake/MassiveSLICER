@@ -634,6 +634,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public RelayCommand FocusCommand                { get; }
     public RelayCommand DropToPlateCommand          { get; }
+    public RelayCommand SaveViewCommand             { get; }
     public RelayCommand TogglePlaybackCommand       { get; }
 
     private bool _isPlaying;
@@ -690,6 +691,10 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnDropToPlateRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
+    /// <summary>Callback (wired by MainWindowViewModel) to save the current camera view to the active cell.</summary>
+    internal Action? OnSaveViewRequested    { get; set; }
+    /// <summary>Returns the current orbit-camera pose; set by the viewport code-behind.</summary>
+    internal Func<CameraView?>? GetCameraState { get; set; }
 
     public ViewportViewModel()
     {
@@ -701,6 +706,7 @@ public sealed class ViewportViewModel : ViewModelBase
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
         TogglePlaybackCommand = new RelayCommand(() =>
         {
             bool starting = !IsPlaying;
@@ -833,6 +839,15 @@ public sealed class ViewportViewModel : ViewModelBase
     /// captured by the flange-mounted Zivid camera into the scene.
     /// </summary>
     internal Func<ToolCellConfig, Matrix4?>? GetToolWorldPose { get; set; }
+
+    /// <summary>
+    /// Returns the current flange-to-world pose in the SAME convention used by
+    /// <see cref="GetToolWorldPose"/> (rendered flange node × glTF→KUKA correction),
+    /// as a row-vector <see cref="System.Numerics.Matrix4x4"/>, or <c>null</c> when no
+    /// robot is loaded. Hand-eye calibration MUST use this — not the analytic FK — so
+    /// the learned camera transform is expressed in the frame registration applies it in.
+    /// </summary>
+    internal Func<System.Numerics.Matrix4x4?>? GetFlangeInBaseForCalibration { get; set; }
 
     /// <summary>
     /// Invoked on the UI thread once a cell swap has fully completed and the tool

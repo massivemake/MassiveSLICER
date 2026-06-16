@@ -70,6 +70,47 @@ public sealed class RobotSyncService : IDisposable
         TcpUpdated?.Invoke(this, KrlVarParser.ParsePosAct(posStr));
     }
 
+    // -- Direct variable access (for the bed-calibration handshake) ------------
+    // Call StopStreaming() first: the client allows only one request in flight, so
+    // these must not run concurrently with the polling loop.
+
+    /// <summary>Reads a KRL <c>$FLAG[idx]</c> boolean.</summary>
+    public async Task<bool> ReadFlagAsync(int idx, CancellationToken ct = default)
+    {
+        var s = await _client.ReadAsync($"$FLAG[{idx}]", 2000, ct);
+        return s.Trim().Equals("TRUE", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Sets a KRL <c>$FLAG[idx]</c> boolean.</summary>
+    public Task SetFlagAsync(int idx, bool value, CancellationToken ct = default)
+        => _client.WriteAsync($"$FLAG[{idx}]", value ? "TRUE" : "FALSE", 2000, ct);
+
+    /// <summary>Reads <c>$AXIS_ACT</c> and returns the joint array [A1..A6, E1] in KRL degrees.</summary>
+    public async Task<double[]> ReadAxesAsync(CancellationToken ct = default)
+    {
+        var s = await _client.ReadAsync("$AXIS_ACT", 2000, ct);
+        return KrlVarParser.ParseAxisAct(s);
+    }
+
+    /// <summary>Sets a global KRL BOOL by name, e.g. a CELL() trigger flag (streaming must be paused).</summary>
+    public Task SetBoolAsync(string name, bool value, CancellationToken ct = default)
+        => _client.WriteAsync(name, value ? "TRUE" : "FALSE", 2000, ct);
+
+    /// <summary>
+    /// Selects and starts a KRL program by name via the C3 Bridge program-control command
+    /// (no dispatcher needed). Streaming must be paused. e.g. "/R1/Program/BED_SCAN_CAL".
+    /// </summary>
+    public Task<C3BridgeClient.ProgramResult> RunProgramAsync(string programName, CancellationToken ct = default)
+        => _client.RunProgramAsync(programName, force: true, 4000, ct);
+
+    /// <summary>Selects a KRL program by name (force) without starting it. Streaming must be paused.</summary>
+    public Task<C3BridgeClient.ProgramResult> SelectProgramAsync(string programName, CancellationToken ct = default)
+        => _client.SelectProgramAsync(programName, force: true, 4000, ct);
+
+    /// <summary>Interpreter control: Reset (1) / Start (2) / Stop (3) / Cancel (4). Streaming must be paused.</summary>
+    public Task<C3BridgeClient.ProgramResult> ProgramControlAsync(byte command, ushort interpreter = 1, CancellationToken ct = default)
+        => _client.ProgramControlAsync(command, interpreter, 4000, ct);
+
     // -- Continuous streaming --------------------------------------------------
 
     /// <summary>

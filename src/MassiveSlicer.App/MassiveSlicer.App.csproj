@@ -36,6 +36,11 @@
     <AvaloniaResource Include="Assets\icon.ico"/>
   </ItemGroup>
 
+  <!-- Bed-calibration KRL deployed to the KRC over SMB during AUTO-CALIBRATE. -->
+  <ItemGroup>
+    <None Include="..\..\assets\krl\*.src" Link="assets\krl\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.4" />
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.0.4" />

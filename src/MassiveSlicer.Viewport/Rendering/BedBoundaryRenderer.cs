@@ -48,11 +48,24 @@ public sealed class BedBoundaryRenderer : IDisposable
     /// <param name="origin">Back-left corner of the bed in world-space mm.</param>
     /// <param name="width">Bed extent along +X in mm.</param>
     /// <param name="depth">Bed extent along +Y in mm.</param>
-    public BedBoundaryRenderer(Vector3 origin, float width, float depth)
+    /// <param name="datum">The 0,0,0 reference the internal grid lines align to (a line passes
+    /// through it). For a centre-origin rotary bed this is the bed centre, so a cross sits at the
+    /// rotation axis; for a corner-origin bed it equals <paramref name="origin"/>.</param>
+    /// <param name="diameter">When &gt; 0, render a circular rotary bed of this diameter centred on
+    /// <paramref name="datum"/> (polar grid) instead of a rectangle.</param>
+    public BedBoundaryRenderer(Vector3 origin, float width, float depth, Vector3 datum, float diameter = 0f)
     {
         _shader = new Shader(VertSrc, FragSrc);
-        BuildBorder(origin, width, depth);
-        BuildGrid(origin, width, depth);
+        if (diameter > 0f)
+        {
+            BuildCircleBorder(datum, diameter * 0.5f);
+            BuildPolarGrid(datum, diameter * 0.5f);
+        }
+        else
+        {
+            BuildBorder(origin, width, depth);
+            BuildGrid(origin, width, depth, datum);
+        }
     }
 
     /// <summary>Draws the bed boundary using the supplied combined MVP matrix.</summary>
@@ -101,19 +114,78 @@ public sealed class BedBoundaryRenderer : IDisposable
         (_borderVao, _borderVbo) = Upload(verts);
     }
 
-    private void BuildGrid(Vector3 o, float w, float d)
+    private void BuildGrid(Vector3 o, float w, float d, Vector3 datum)
     {
         float x0 = o.X, y0 = o.Y, x1 = o.X + w, y1 = o.Y + d, z = o.Z;
         var verts = new List<float>();
 
-        for (float y = y0 + GridSpacing; y < y1; y += GridSpacing)
+        // Lines are anchored to the datum (datum.X / datum.Y), stepping both directions,
+        // so one line passes exactly through the datum (the bed centre for a rotary bed).
+        foreach (float y in Ticks(y0, y1, datum.Y))
             verts.AddRange([x0, y, z, x1, y, z]);
 
-        for (float x = x0 + GridSpacing; x < x1; x += GridSpacing)
+        foreach (float x in Ticks(x0, x1, datum.X))
             verts.AddRange([x, y0, z, x, y1, z]);
 
         _gridCount = verts.Count / 3;
         (_gridVao, _gridVbo) = Upload([.. verts]);
+    }
+
+    // -- Circular / rotary bed -------------------------------------------------
+
+    private void BuildCircleBorder(Vector3 c, float radius)
+    {
+        var verts = new List<float>();
+        _borderCount = AppendCircle(verts, c, radius, 120);
+        (_borderVao, _borderVbo) = Upload([.. verts]);
+    }
+
+    private void BuildPolarGrid(Vector3 c, float radius)
+    {
+        var verts = new List<float>();
+
+        // Concentric rings every GridSpacing inside the border.
+        for (float r = GridSpacing; r < radius; r += GridSpacing)
+            AppendCircle(verts, c, r, 96);
+
+        // Radial spokes every 30°, centre → rim.
+        for (int deg = 0; deg < 360; deg += 30)
+        {
+            float a = deg * MathF.PI / 180f;
+            verts.AddRange([c.X, c.Y, c.Z,
+                            c.X + radius * MathF.Cos(a), c.Y + radius * MathF.Sin(a), c.Z]);
+        }
+
+        _gridCount = verts.Count / 3;
+        (_gridVao, _gridVbo) = Upload([.. verts]);
+    }
+
+    /// <summary>Appends a circle (as consecutive line segments) and returns the vertex count added.</summary>
+    private static int AppendCircle(List<float> verts, Vector3 c, float radius, int segments)
+    {
+        int start = verts.Count / 3;
+        for (int i = 0; i < segments; i++)
+        {
+            float a0 = (i       / (float)segments) * MathF.Tau;
+            float a1 = ((i + 1) / (float)segments) * MathF.Tau;
+            verts.AddRange([
+                c.X + radius * MathF.Cos(a0), c.Y + radius * MathF.Sin(a0), c.Z,
+                c.X + radius * MathF.Cos(a1), c.Y + radius * MathF.Sin(a1), c.Z,
+            ]);
+        }
+        return verts.Count / 3 - start;
+    }
+
+    /// <summary>Grid-line positions at <paramref name="anchor"/> + k·spacing strictly inside (lo, hi).</summary>
+    private static IEnumerable<float> Ticks(float lo, float hi, float anchor)
+    {
+        int kStart = (int)MathF.Ceiling((lo - anchor) / GridSpacing);
+        for (int k = kStart; ; k++)
+        {
+            float p = anchor + k * GridSpacing;
+            if (p >= hi) yield break;
+            if (p > lo)  yield return p;
+        }
     }
 
     private static (int vao, int vbo) Upload(float[] verts)

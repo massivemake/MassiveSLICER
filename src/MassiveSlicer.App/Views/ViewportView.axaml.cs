@@ -118,6 +118,15 @@ public partial class ViewportView : UserControl
     // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
 
+    // Rotary bed (E1): the bed mesh wrapper node + its centre, so E1 can spin it about the vertical axis.
+    private SceneNode? _bedNode;
+    private Vector3    _bedOriginLocal;
+    private float      _bedWidth, _bedDepth, _bedDiameter;
+    private float      _bedRotationSign = -1f;   // E1→scene sign; set by config / rotation calibration
+    private double     _lastSyncE1 = double.NaN;
+    // Set on the UI thread by a manual bed edit; consumed on the GL thread (SetBedBoundary creates GL resources).
+    private (float X, float Y, float Z, float Diameter, float Sign)? _pendingBedRebuild;
+
     // Robot cell state
     private Vector3  _robrootWorldPos;
     private Vector3  _tcpOffsetLocal;
@@ -199,6 +208,19 @@ public partial class ViewportView : UserControl
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnFrameAllRequested = FrameAll;
+            vm.GetCameraState = () =>
+            {
+                var c = _renderer.Camera;
+                return new MassiveSlicer.Core.Models.CameraView
+                {
+                    Azimuth   = c.Azimuth,
+                    Elevation = c.Elevation,
+                    Radius    = c.Radius,
+                    TargetX   = c.Target.X,
+                    TargetY   = c.Target.Y,
+                    TargetZ   = c.Target.Z,
+                };
+            };
             vm.OnPlaybackSpeedChanging = () =>
             {
                 // Freeze the current simulated position so changing speed doesn't jump the toolhead.
@@ -307,11 +329,25 @@ public partial class ViewportView : UserControl
             {
                 if (pe.PropertyName is nameof(RobotPanelViewModel.A1) or nameof(RobotPanelViewModel.A2) or
                     nameof(RobotPanelViewModel.A3) or nameof(RobotPanelViewModel.A4) or
-                    nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6))
+                    nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6) or
+                    nameof(RobotPanelViewModel.E1))
                     GlCanvas.RequestNextFrameRendering();
             };
             robot.OnToolSelected              = OnToolSwapRequested;
             robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
+            robot.OnBedEdited = (x, y, z, dia, sign) =>
+            {
+                // GL resource rebuild must run on the render thread — queue it.
+                _pendingBedRebuild = ((float)x, (float)y, (float)z, (float)dia, (float)sign);
+                if (DataContext is ViewportViewModel vm2)
+                {
+                    vm2.NotifyRenderNeeded();
+                    if (vm2.ActiveCellPath is { } path)
+                        MassiveSlicer.Core.IO.CellLoader.SaveBedCenter(
+                            path, (float)x, (float)y, (float)z,
+                            dia > 0 ? (float)dia : (float?)null, (float)sign);
+                }
+            };
             robot.OnTcpOffsetEdited = (x, y, z, a, b, c) =>
             {
                 _tcpOffsetLocal    = new Vector3((float)x, (float)y, (float)z);
@@ -355,6 +391,7 @@ public partial class ViewportView : UserControl
         };
 
         vm.GetToolWorldPose = ComputeToolWorldPose;
+        vm.GetFlangeInBaseForCalibration = GetFlangeInBaseForCalibration;
 
         if (vm.AdditiveSettings is { } additive)
         {
@@ -634,6 +671,34 @@ public partial class ViewportView : UserControl
                     SyncTcpReadout(vm);
                 }
             }
+
+            // Apply a queued manual bed edit (GL resource rebuild — safe here on the GL thread).
+            if (_pendingBedRebuild is { } pend)
+            {
+                _pendingBedRebuild = null;
+                RebuildBed(pend.X, pend.Y, pend.Z, pend.Diameter, pend.Sign);
+            }
+
+            // Rotate the rotary bed (mesh + print-grid overlay) about the vertical axis
+            // through its centre to match E1. Sign comes from rotation calibration.
+            if (vm.Robot is { } e1Robot && e1Robot.E1 != _lastSyncE1)
+            {
+                _lastSyncE1 = e1Robot.E1;
+                float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
+                var c = _bedOriginLocal;
+
+                if (_bedNode is not null)
+                    _bedNode.LocalTransform =
+                        Matrix4.CreateRotationZ(e1Rad) *
+                        Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+
+                // Boundary geometry is in absolute world coords, so rotate about the centre:
+                // translate centre→origin, rotate, translate back.
+                _renderer.BedBoundaryModel =
+                    Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
+                    Matrix4.CreateRotationZ(e1Rad) *
+                    Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+            }
         }
 
         _renderer.Render(w, h);
@@ -742,13 +807,16 @@ public partial class ViewportView : UserControl
         Vector3 ToWorld(float x, float y, float z) => x * fx + y * fy + z * fz;
 
         // Sensor origin is the optical centre; use it for scan registration when available.
-        // Falls back to TCP (focal point) for tools without a sensor origin.
-        float ox = tool.HasSensorOrigin ? tool.SensorOriginX!.Value : tool.TcpX;
-        float oy = tool.HasSensorOrigin ? tool.SensorOriginY!.Value : tool.TcpY;
-        float oz = tool.HasSensorOrigin ? tool.SensorOriginZ!.Value : tool.TcpZ;
-        float oA = tool.HasSensorOrigin ? (tool.SensorOriginA ?? tool.TcpA) : tool.TcpA;
-        float oB = tool.HasSensorOrigin ? (tool.SensorOriginB ?? tool.TcpB) : tool.TcpB;
-        float oC = tool.HasSensorOrigin ? (tool.SensorOriginC ?? tool.TcpC) : tool.TcpC;
+        // Falls back to live TCP offset (_tcpOffsetLocal) so edits in the TCP OFFSET panel
+        // take effect immediately without a cell reload.
+        float ox = tool.HasSensorOrigin ? tool.SensorOriginX!.Value : _tcpOffsetLocal.X;
+        float oy = tool.HasSensorOrigin ? tool.SensorOriginY!.Value : _tcpOffsetLocal.Y;
+        float oz = tool.HasSensorOrigin ? tool.SensorOriginZ!.Value : _tcpOffsetLocal.Z;
+        // Always use the live A/B/C from the TCP OFFSET panel — _tcpOrientationABC is updated
+        // by OnTcpOffsetEdited and all tool-load paths, so it always reflects the current edit.
+        float oA = _tcpOrientationABC.X;
+        float oB = _tcpOrientationABC.Y;
+        float oC = _tcpOrientationABC.Z;
 
         var rt = KukaIkSolver.AbcToMatrix(oA, oB, oC);
         var tx = ToWorld(rt.M11, rt.M12, rt.M13);
@@ -761,6 +829,51 @@ public partial class ViewportView : UserControl
             ty.X,     ty.Y,     ty.Z,     0f,
             tz.X,     tz.Y,     tz.Z,     0f,
             origin.X, origin.Y, origin.Z, 1f);
+    }
+
+    /// <summary>
+    /// Current flange-to-world pose as a row-vector <see cref="System.Numerics.Matrix4x4"/>,
+    /// using the EXACT same flange frame as <see cref="ComputeToolWorldPose"/>
+    /// (rendered glTF flange × <c>_gltfToKukaLocal</c>). Hand-eye calibration feeds this
+    /// so its result is expressed in the frame registration later applies it in — the
+    /// analytic <c>KukaIkSolver.ForwardKinematics</c> flange does NOT match this frame.
+    /// Rows 0–2 are the flange X/Y/Z axes in world; row 3 is the flange origin (mm).
+    /// </summary>
+    private System.Numerics.Matrix4x4? GetFlangeInBaseForCalibration()
+    {
+        if (_fkController?.FlangeNode is not { } flange) return null;
+
+        var fw  = flange.WorldTransform;
+        var pos = fw.Row3.Xyz;
+        float sc = fw.Row0.Xyz.Length;
+
+        var gltfRot = new Matrix3(fw.Row0.Xyz / sc, fw.Row1.Xyz / sc, fw.Row2.Xyz / sc);
+        var kukaRot = _gltfToKukaLocal * gltfRot;
+        var fx = kukaRot.Row0;
+        var fy = kukaRot.Row1;
+        var fz = kukaRot.Row2;
+
+        return new System.Numerics.Matrix4x4(
+            fx.X,  fx.Y,  fx.Z,  0f,
+            fy.X,  fy.Y,  fy.Z,  0f,
+            fz.X,  fz.Y,  fz.Z,  0f,
+            pos.X, pos.Y, pos.Z, 1f);
+    }
+
+    /// <summary>
+    /// Re-applies a manually-edited rotary-bed centre/diameter to the live scene: moves the
+    /// rotation pivot + grid datum, rebuilds the boundary (circular when diameter &gt; 0), and
+    /// forces the next frame to re-apply the E1 rotation about the new centre.
+    /// </summary>
+    private void RebuildBed(float x, float y, float z, float diameter, float rotationSign)
+    {
+        _bedOriginLocal  = new Vector3(x, y, z);
+        _bedDiameter     = diameter;
+        _bedRotationSign = rotationSign;
+        // Centre-derived corner keeps a rectangular grid centred; ignored for circular beds.
+        var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
+        _renderer.SetBedBoundary(corner, _bedWidth, _bedDepth, new Vector3(x, y, z), diameter);
+        _lastSyncE1 = double.NaN;   // re-apply E1 rotation (mesh + boundary) about the new pivot next frame
     }
 
     private void RebuildFrameMatrices()
@@ -829,11 +942,25 @@ public partial class ViewportView : UserControl
             var posData = CellLoader.LoadPositionData(swapCellPath);
             additive.UpdateFromCell(swapCellForPost, posData.Default, posData.Positions);
             if (vm.Robot is not null)
+            {
                 vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
+                var bed = swapCellForPost.Bed;
+                vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
+                                      bed.Diameter ?? 0f, bed.RotationSign ?? -1f, bed.Diameter is > 0f);
+            }
         });
         var b          = swap.Config.Bed;
         var gridCorner = b.GridOrigin ?? b.Origin;
-        _renderer.SetBedBoundary(new Vector3(gridCorner.X, gridCorner.Y, gridCorner.Z), b.Width, b.Depth);
+        _bedWidth        = b.Width;
+        _bedDepth        = b.Depth;
+        _bedDiameter     = b.Diameter ?? 0f;
+        _bedRotationSign = b.RotationSign ?? -1f;
+        // Anchor the grid's 0,0,0 to bed.Origin — the bed centre / calibrated rotary axis /
+        // rotation pivot — so a grid line crosses the centre at the bed's top surface.
+        // A non-null Diameter renders a circular rotary grid instead of a rectangle.
+        _renderer.SetBedBoundary(
+            new Vector3(gridCorner.X, gridCorner.Y, gridCorner.Z), b.Width, b.Depth,
+            new Vector3(b.Origin.X, b.Origin.Y, gridCorner.Z), _bedDiameter);
 
         // Focus on the centre of the print area and set radius to the bed diagonal
         // so the whole bed is comfortably in view at startup.
@@ -842,6 +969,15 @@ public partial class ViewportView : UserControl
             gridCorner.Y + b.Depth * 0.5f,
             gridCorner.Z);
         _renderer.Camera.Radius = MathF.Sqrt(b.Width * b.Width + b.Depth * b.Depth);
+
+        // A saved per-cell view (shared via the cell JSON) overrides the default framing.
+        if (swap.Config.View is { } sv)
+        {
+            _renderer.Camera.Azimuth   = sv.Azimuth;
+            _renderer.Camera.Elevation = sv.Elevation;
+            _renderer.Camera.Radius    = sv.Radius;
+            _renderer.Camera.Target    = new Vector3(sv.TargetX, sv.TargetY, sv.TargetZ);
+        }
 
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
@@ -853,6 +989,11 @@ public partial class ViewportView : UserControl
             _renderer.SceneRoot.AddChild(node);
             UploadPendingMeshes(node);
         }
+
+        // Retain the bed wrapper so E1 can rotate it about the vertical axis through its centre.
+        _bedNode        = swap.BedNode;
+        _bedOriginLocal = new Vector3(b.Origin.X, b.Origin.Y, b.Origin.Z);
+        _lastSyncE1     = double.NaN;   // force the bed transform to refresh on the next frame
 
         if (swap.RobotBaseNode is not null)
             _fkController = RobotFkController.TryBuild(swap.RobotBaseNode, swap.Config.Robot.Joints);

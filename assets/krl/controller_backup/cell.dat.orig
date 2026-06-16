@@ -1,0 +1,4 @@
+DEFDAT  CELL  PUBLIC
+    DECL BOOL bRunScanPick    = FALSE
+    DECL BOOL bRunScanDeposit = FALSE
+ENDDAT

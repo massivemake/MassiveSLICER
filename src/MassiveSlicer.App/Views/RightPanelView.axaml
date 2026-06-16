@@ -424,48 +424,215 @@
             </Grid>
 
             <!-- SCAN tab -->
-            <ScrollViewer Grid.Row="1"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          Background="{DynamicResource Bg2}"
-                          IsVisible="{Binding IsScanTab}">
-                <StackPanel Margin="0,8">
+            <Grid Grid.Row="1" IsVisible="{Binding IsScanTab}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
 
-                    <!-- CAMERA -->
-                    <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="True">
-                        <StackPanel Margin="0,2,0,6">
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="120"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Address of the Zivid camera on the cell network"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
-                            </Grid>
+                <!-- SCAN sub-tab bar -->
+                <Border Grid.Row="0"
+                        Background="{DynamicResource Bg3}"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="CAPTURE"  Classes="TabButton" Classes.active="{Binding Scan.IsCaptureSubTab}"     Command="{Binding Scan.ShowCaptureCommand}"/>
+                        <Button Content="SETTINGS" Classes="TabButton" Classes.active="{Binding Scan.IsCalibrationSubTab}" Command="{Binding Scan.ShowCalibrationCommand}"/>
+                    </StackPanel>
+                </Border>
 
-                            <Button Content="Test Scan"
-                                    Classes="PrimaryButton"
-                                    HorizontalAlignment="Stretch"
-                                    Margin="8,8,8,2"
-                                    Command="{Binding Scan.TestScanCommand}"
-                                    ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
-                            <TextBlock Text="{Binding Scan.ScanStatus}"
-                                       Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
-                        </StackPanel>
-                    </Expander>
+                <!-- CAPTURE sub-tab -->
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Background="{DynamicResource Bg2}"
+                              IsVisible="{Binding Scan.IsCaptureSubTab}">
+                    <StackPanel Margin="0,8">
 
-                    <!-- OUTPUT -->
-                    <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
-                        <StackPanel Margin="0,2,0,6">
-                            <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
-                                       ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
-                            <TextBox Classes="PanelTextBox" Margin="8,0,8,4" Text="{Binding Scan.OutputDirectory}"/>
-                        </StackPanel>
-                    </Expander>
+                        <!-- CAMERA -->
+                        <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="True">
+                            <StackPanel Margin="0,2,0,6">
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="120"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Address of the Zivid camera on the cell network"/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
+                                </Grid>
 
-                </StackPanel>
-            </ScrollViewer>
+                                <Button Content="Test Scan"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="8,8,8,2"
+                                        Command="{Binding Scan.TestScanCommand}"
+                                        ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
+                                <TextBlock Text="{Binding Scan.ScanStatus}"
+                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- OUTPUT -->
+                        <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
+                            <StackPanel Margin="0,2,0,6">
+                                <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
+                                           ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
+                                <TextBox Classes="PanelTextBox" Margin="8,0,8,4" Text="{Binding Scan.OutputDirectory}"/>
+                            </StackPanel>
+                        </Expander>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- SETTINGS sub-tab (hand-eye calibration) -->
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Background="{DynamicResource Bg2}"
+                              IsVisible="{Binding Scan.IsCalibrationSubTab}">
+                    <StackPanel Margin="0,8">
+
+                        <Expander Classes="SectionExpander" Header="HAND-EYE CALIBRATION" IsExpanded="True">
+                            <StackPanel Margin="0,2,0,6">
+
+                                <TextBlock Classes="LabelMuted" Margin="8,4,8,8" TextWrapping="Wrap"
+                                           Text="Place the calibration board on the print bed. Move the robot to several distinct positions and add a pose at each. Aim for ≥ 10 poses with varied orientations."/>
+
+                                <!-- Pose count -->
+                                <TextBlock Text="{Binding Scan.Calibration.PoseCountLabel}"
+                                           Classes="LabelMuted" Margin="8,4,8,2" FontWeight="SemiBold"/>
+
+                                <!-- Add Pose / Clear All -->
+                                <Grid Margin="8,4,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="Add Pose"
+                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                            Command="{Binding Scan.Calibration.AddPoseCommand}"
+                                            ToolTip.Tip="Capture the calibration board at the current robot pose"/>
+                                    <Button Grid.Column="2" Content="Clear All"
+                                            Classes="ToolbarButton"
+                                            Command="{Binding Scan.Calibration.ClearPosesCommand}"
+                                            ToolTip.Tip="Remove all collected poses and reset"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Scan.Calibration.CaptureStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                                <!-- Run Calibration -->
+                                <Button Content="Run Calibration"
+                                        Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                        Margin="8,4,8,2"
+                                        Command="{Binding Scan.Calibration.CalibrateCommand}"
+                                        ToolTip.Tip="Compute hand-eye calibration from collected poses (requires ≥ 3)"/>
+                                <TextBlock Text="{Binding Scan.Calibration.CalibrateStatus}"
+                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
+
+                                <!-- Result section (shown once a valid result exists) -->
+                                <StackPanel IsVisible="{Binding Scan.Calibration.HasResult}">
+                                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                                    <TextBlock Text="RESULT" Classes="SectionHeader"/>
+
+                                    <!-- Residuals -->
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Rot residual" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResidualRot, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Trans residual" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResidualTrans, StringFormat={}{0:F3} mm}"/>
+                                    </Grid>
+
+                                    <!-- TCP XYZ -->
+                                    <TextBlock Text="CAMERA TCP OFFSET" Classes="SectionHeader"/>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultX, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultY, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultZ, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+
+                                    <!-- TCP ABC -->
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultA, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="B" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultB, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="C" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultC, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+
+                                    <!-- Apply to TCP -->
+                                    <Button Content="Apply to TCP"
+                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                            Margin="8,4,8,8"
+                                            Command="{Binding Scan.Calibration.ApplyToTcpCommand}"
+                                            ToolTip.Tip="Write this result into the TCP OFFSET fields for the active tool"/>
+                                </StackPanel>
+
+                            </StackPanel>
+                        </Expander>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+            </Grid>
 
             <!-- SUBTRACTIVE tab -->
             <ScrollViewer Grid.Row="1"

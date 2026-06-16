@@ -7,6 +7,25 @@
 
     <Grid>
 
+        <!-- Save View — bottom-left. Persists the current camera angle to the cell (shared). -->
+        <Button HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Padding="8,5"
+                Classes="ToolbarButton"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                IsVisible="{Binding !IsToolpathSelected}"
+                Command="{Binding SaveViewCommand}"
+                ToolTip.Tip="Save the current camera angle as this cell's default view. Persists to the cell file, so it's restored next time you (or anyone) opens the app.">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <ia:Icon Value="mdi-camera-marker-outline" FontSize="14"/>
+                <TextBlock Text="Save View" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Button>
+
         <!-- Data Visualization panel — bottom-left, above timeline -->
         <Border IsVisible="{Binding IsToolpathSelected}"
                 HorizontalAlignment="Left"
