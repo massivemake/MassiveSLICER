@@ -414,6 +414,48 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- FILL PATTERN -->
+                    <Expander Classes="SectionExpander" Header="FILL PATTERN" IsExpanded="False">
+                        <StackPanel Margin="0,2,0,6">
+
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="120"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Pattern" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Replaces shell contours with a continuous infill pattern. None = emit shells as normal."/>
+                                <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch"
+                                           ItemsSource="{Binding Additive.InfillPatternOptions}"
+                                           SelectedItem="{Binding Additive.InfillPattern, Mode=TwoWay}"/>
+                            </Grid>
+
+                            <StackPanel IsVisible="{Binding Additive.ShowInfillControls}">
+
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Centre-to-centre distance between infill lines in mm. Leave 0 to use the bead width."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
+                                </Grid>
+
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="80"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Base angle of infill lines in degrees. 0 = parallel to X axis. Grid rotates +90° every layer; Triangle rotates +60° every layer."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
+                                </Grid>
+
+                            </StackPanel>
+                        </StackPanel>
+                    </Expander>
+
                     <Button Content="Generate Slice"
                             Classes="PrimaryButton"
                             HorizontalAlignment="Stretch"

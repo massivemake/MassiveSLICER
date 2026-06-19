@@ -163,11 +163,11 @@
     {
       "name": "Spindle Empty",
       "modelPath": "assets/cells/LFAM3/Toolheads/Spindle.stl",
-      "tcpX": -54.53,
-      "tcpY": 205.13,
-      "tcpZ": 182.45,
-      "tcpA": 105,
-      "tcpB": -90,
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": 0,
       "krlIndex": 2
@@ -209,5 +209,10 @@
   ],
   "scanToolName": "ZividScanner",
   "bridgeIp": "192.168.0.153",
-  "bridgePort": 7000
+  "bridgePort": 7000,
+  "bedScan": {
+    "scanPose": [0, -90, 90, 0, 15, 0],
+    "rotaryAxisIndex": 1,
+    "scanSteps": 8
+  }
 }
