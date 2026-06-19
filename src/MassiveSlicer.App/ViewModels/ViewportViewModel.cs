@@ -209,12 +209,6 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 
-    /// <summary>
-    /// Live TOOL_DATA / BASE_DATA snapshot read from the KRC4 $config.dat on sync.
-    /// When set, the viewport uses these TCP values instead of the cell JSON values.
-    /// </summary>
-    public MassiveSlicer.Core.IO.KrcDatSnapshot? LiveDat { get; set; }
-
     // -- Render request --------------------------------------------------------
 
     /// <summary>

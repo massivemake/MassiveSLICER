@@ -218,5 +218,10 @@
     "targetX": 1749.5077,
     "targetY": 45.24054,
     "targetZ": 1631.6459
+  },
+  "bedScan": {
+    "scanPose": [0, -90, 90, 0, 15, 0],
+    "rotaryAxisIndex": 1,
+    "scanSteps": 8
   }
 }

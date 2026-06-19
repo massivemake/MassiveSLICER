@@ -207,23 +207,6 @@ public sealed class MainWindowViewModel : ViewModelBase
                 RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
         };
 
-        // When sync connects, apply live TCP values from $config.dat and re-swap
-        // the active tool so the viewport TCP gizmo reflects the real robot data.
-        robot.OnDatRead = snapshot =>
-        {
-            Viewport.LiveDat = snapshot;
-
-            // Log what we read.
-            Console.Log($"[dat] Read {snapshot.Tools.Count} TOOL_DATA entries from $config.dat");
-            foreach (var t in snapshot.Tools)
-                Console.Log($"[dat]  TOOL[{t.Index}]  X={t.X:F2}  Y={t.Y:F2}  Z={t.Z:F2}  A={t.A:F2}  B={t.B:F2}  C={t.C:F2}");
-
-            // Re-trigger the selected tool so PendingToolSwap picks up the live TCP values.
-            var current = robot.SelectedToolIndex;
-            robot.SelectedToolIndex = -1;
-            robot.SelectedToolIndex = current;
-        };
-
         // After each cell swap: populate KRL dropdowns, select tool for active tab,
         // and on first load trigger auto-sync with the robot controller.
         Viewport.OnCellSwapCompleted = () =>
