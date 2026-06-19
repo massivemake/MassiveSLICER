@@ -36,6 +36,13 @@ public static class KrlVarParser
         return [v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"]];
     }
 
+    /// <summary>Returns joint angles [A1..A6] and the E1 external-axis value from a $AXIS_ACT response.</summary>
+    public static (double[] Joints, double E1) ParseAxisActWithE1(string response)
+    {
+        var v = Parse(response, ["A1", "A2", "A3", "A4", "A5", "A6", "E1"]);
+        return ([v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"]], v["E1"]);
+    }
+
     /// <summary>Returns (X, Y, Z, A, B, C) in mm / degrees from a $POS_ACT response.</summary>
     public static (double X, double Y, double Z, double A, double B, double C) ParsePosAct(string response)
     {

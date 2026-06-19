@@ -409,6 +409,43 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _waveGradientCurve, value);
     }
 
+    // -- Infill pattern -------------------------------------------------------
+
+    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid"];
+
+    private string _infillPattern = "None";
+
+    /// <summary>Selected infill pattern. "None" = emit shells as normal.</summary>
+    public string InfillPattern
+    {
+        get => _infillPattern;
+        set
+        {
+            if (SetField(ref _infillPattern, value))
+                OnPropertyChanged(nameof(ShowInfillControls));
+        }
+    }
+
+    public bool ShowInfillControls => InfillPattern != "None";
+
+    private double _infillSpacingMm = 0.0;
+
+    /// <summary>Centre-to-centre infill line spacing in mm. 0 = use bead width.</summary>
+    public double InfillSpacingMm
+    {
+        get => _infillSpacingMm;
+        set => SetField(ref _infillSpacingMm, Math.Clamp(value, 0.0, 500.0));
+    }
+
+    private double _infillAngleDeg = 0.0;
+
+    /// <summary>Base angle of infill lines in degrees (0 = parallel to X axis).</summary>
+    public double InfillAngleDeg
+    {
+        get => _infillAngleDeg;
+        set => SetField(ref _infillAngleDeg, value % 360.0);
+    }
+
     // -- Overhang orientation -------------------------------------------------
 
     private bool _overhangOrientation;

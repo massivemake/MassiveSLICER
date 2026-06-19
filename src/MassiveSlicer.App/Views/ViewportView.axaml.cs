@@ -1370,6 +1370,16 @@ public partial class ViewportView : UserControl
                     SmoothRotation                = s.SmoothRotation,
                     SmoothRotationRadius          = s.SmoothRotationRadius,
                     SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
+                    InfillPattern = s.InfillPattern switch
+                    {
+                        "Rectilinear"     => InfillPattern.Rectilinear,
+                        "Grid"            => InfillPattern.Grid,
+                        "Triangle"        => InfillPattern.Triangle,
+                        "Ghost Mesh Grid" => InfillPattern.GhostMeshGrid,
+                        _                 => InfillPattern.None,
+                    },
+                    InfillSpacingMm = (float)s.InfillSpacingMm,
+                    InfillAngleDeg  = (float)s.InfillAngleDeg,
                 }
                 : new SliceSettings();
 

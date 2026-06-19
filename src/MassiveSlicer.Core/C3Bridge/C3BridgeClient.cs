@@ -114,7 +114,7 @@ public sealed class C3BridgeClient : IDisposable
         lock (_lock)
         {
             if (_pending is not null)
-                throw new InvalidOperationException("C3Bridge: a read is already in progress");
+                throw new InvalidOperationException("C3Bridge: an operation is already in progress");
             _pending = tcs;
         }
 
@@ -129,6 +129,62 @@ public sealed class C3BridgeClient : IDisposable
 
         await _stream.WriteAsync(msg, ct);
         return await tcs.Task;
+    }
+
+    // -- Write -----------------------------------------------------------------
+
+    /// <summary>
+    /// Writes a KRL variable, e.g. <c>BED_SCAN_CMD</c>.
+    /// Waits for the KRC4 acknowledgement frame before returning.
+    /// </summary>
+    public async Task WriteAsync(
+        string varName,
+        string value,
+        int timeoutMs = 2000,
+        CancellationToken ct = default)
+    {
+        if (!IsConnected || _stream is null)
+            throw new InvalidOperationException("C3Bridge: not connected");
+
+        var nameBytes  = Encoding.ASCII.GetBytes(varName);
+        var valueBytes = Encoding.ASCII.GetBytes(value);
+        int payloadLen = 1 + 2 + nameBytes.Length + 2 + valueBytes.Length;
+        int msgId      = Interlocked.Increment(ref _msgId) & 0xFFFF;
+
+        var msg = new byte[4 + payloadLen];
+        msg[0] = (byte)(msgId >> 8);
+        msg[1] = (byte)(msgId & 0xFF);
+        msg[2] = (byte)(payloadLen >> 8);
+        msg[3] = (byte)(payloadLen & 0xFF);
+        msg[4] = 1;                                    // write flag
+        msg[5] = (byte)(nameBytes.Length >> 8);
+        msg[6] = (byte)(nameBytes.Length & 0xFF);
+        nameBytes.CopyTo(msg, 7);
+        int vOffset = 7 + nameBytes.Length;
+        msg[vOffset]     = (byte)(valueBytes.Length >> 8);
+        msg[vOffset + 1] = (byte)(valueBytes.Length & 0xFF);
+        valueBytes.CopyTo(msg, vOffset + 2);
+
+        var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        lock (_lock)
+        {
+            if (_pending is not null)
+                throw new InvalidOperationException("C3Bridge: an operation is already in progress");
+            _pending = tcs;
+        }
+
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeoutMs);
+
+        await using var _ = timeoutCts.Token.Register(() =>
+        {
+            lock (_lock) { if (_pending == tcs) _pending = null; }
+            tcs.TrySetException(new TimeoutException($"C3Bridge: timeout writing \"{varName}\""));
+        });
+
+        await _stream.WriteAsync(msg, ct);
+        await tcs.Task; // wait for ACK frame
     }
 
     // -- Read loop -------------------------------------------------------------

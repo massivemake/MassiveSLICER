@@ -63,10 +63,11 @@ public static class PlanarSlicer
 
         for (int zi = 0; zi < zPositions.Length; zi++)
         {
-            float z      = zPositions[zi];
-            float prevZ  = zi == 0 ? zMin : zPositions[zi - 1];
-            var layer    = new ToolpathLayer(idx++, z) { Height = z - prevZ };
-            prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer);
+            float z           = zPositions[zi];
+            float prevZ       = zi == 0 ? zMin : zPositions[zi - 1];
+            bool  isLastLayer = zi == zPositions.Length - 1;
+            var layer         = new ToolpathLayer(idx++, z) { Height = z - prevZ };
+            prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer);
 
             if (layer.Moves.Count > 0)
             {
@@ -121,7 +122,8 @@ public static class PlanarSlicer
         Vector2 seamOrigin,
         Vector2 seamDir,
         List<ContourTrack> prevTracks,
-        ToolpathLayer layer)
+        ToolpathLayer layer,
+        bool isLastLayer = false)
     {
         // ── Stage 1: raw intersection segments ───────────────────────────────
         var normalLookup = settings.OverhangOrientation
@@ -216,6 +218,27 @@ public static class PlanarSlicer
             }
         }
         if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        // ── Infill mode: replace shell contours with a continuous fill pattern ──
+        if (settings.InfillPattern != InfillPattern.None)
+        {
+            float baseAngle = settings.InfillAngleDeg;
+            float angle = settings.InfillPattern switch
+            {
+                InfillPattern.Grid          => baseAngle + (layer.Index % 2) * 90f,
+                InfillPattern.GhostMeshGrid => baseAngle + (layer.Index % 2) * 90f,
+                InfillPattern.Triangle      => baseAngle + (layer.Index % 3) * 60f,
+                _                           => baseAngle,
+            };
+            float spacing = settings.InfillSpacingMm > 0f
+                ? settings.InfillSpacingMm
+                : settings.BeadWidth;
+            if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                InfillGenerator.EmitGhostMesh(insetContours, z, layer, spacing, angle, isLastLayer);
+            else
+                InfillGenerator.Emit(insetContours, z, layer, spacing, angle);
+            return new List<ContourTrack>();
+        }
 
         var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir);
 

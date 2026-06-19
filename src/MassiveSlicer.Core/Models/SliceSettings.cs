@@ -134,6 +134,27 @@ public sealed class SliceSettings
     /// <summary>Easing curve applied after the centre-shift bias.</summary>
     public WaveGradientCurveType WaveGradientCurve { get; init; } = WaveGradientCurveType.Linear;
 
+    // -- Infill -------------------------------------------------------------------
+
+    /// <summary>
+    /// When non-None, the slicer fills the slice polygon with a continuous infill
+    /// pattern instead of emitting contour shells.
+    /// </summary>
+    public InfillPattern InfillPattern { get; init; } = InfillPattern.None;
+
+    /// <summary>
+    /// Centre-to-centre spacing between infill lines in mm.
+    /// 0 = use BeadWidth as spacing.
+    /// </summary>
+    public float InfillSpacingMm { get; init; } = 0f;
+
+    /// <summary>
+    /// Base angle of the infill lines in degrees (0 = along X axis).
+    /// For Grid and Triangle patterns this is the angle of the first layer;
+    /// subsequent layers are rotated by the pattern's step angle.
+    /// </summary>
+    public float InfillAngleDeg { get; init; } = 0f;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>
