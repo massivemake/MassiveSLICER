@@ -79,7 +79,7 @@ public sealed class BedScanSequencer
             });
 
             var capture = await Task.Run(
-                () => ZividScanService.Capture(_saveDirectory,
+                () => ZividScanService.Capture(_saveDirectory, null,
                     msg => progress?.Report(new BedScanProgress
                     {
                         Step       = step,
