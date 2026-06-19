@@ -4,6 +4,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <PlatformTarget Condition="$([MSBuild]::IsOSPlatform('Windows'))">x64</PlatformTarget>
   </PropertyGroup>
 
   <ItemGroup>
@@ -11,6 +12,15 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="Scanning\ZividScanService.Windows.cs" />
+    <Compile Remove="Scanning\ZividScanService.NonWindows.cs" />
+    <Compile Include="Scanning\ZividScanService.Windows.cs"
+             Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+    <Compile Include="Scanning\ZividScanService.NonWindows.cs"
+             Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+  </ItemGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
     <!-- Zivid SDK .NET wrapper (installed with Zivid SDK 2.16). Native DLLs are
          resolved at runtime from the SDK bin directory via SetDllDirectory. -->
     <Reference Include="ZividCoreNET">

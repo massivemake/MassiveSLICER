@@ -125,6 +125,11 @@ public static class ZividScanService
             {
                 return CaptureOnce(saveDirectory, metadata, progress);
             }
+            catch (InvalidOperationException)
+            {
+                // Camera busy / not found — retrying won't help, propagate immediately.
+                throw;
+            }
             catch
             {
                 // Stale connection (camera rebooted, network drop) — reconnect and retry once.
@@ -146,7 +151,16 @@ public static class ZividScanService
         if (_camera is null)
         {
             progress?.Invoke("Connecting to camera...");
-            _camera = _app.ConnectCamera();
+            try
+            {
+                _camera = _app.ConnectCamera();
+            }
+            catch (Exception ex) when (ex.Message.Contains("busy", StringComparison.OrdinalIgnoreCase)
+                                    || ex.Message.Contains("No cameras found with status Available", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "Camera is in use by another application (e.g. Zivid Studio). Close it and try again.", ex);
+            }
         }
 
         var settings = new Zivid.NET.Settings();
@@ -208,6 +222,20 @@ public static class ZividScanService
             SavedMetadataPath   = metadataPath,
             Metadata            = metadata,
         };
+    }
+
+    /// <summary>
+    /// Disconnects and releases the camera and SDK application instance.
+    /// Call on app shutdown to ensure the camera is not left in a busy state.
+    /// </summary>
+    public static void Disconnect()
+    {
+        lock (Sync)
+        {
+            ResetConnection();
+            try { _app?.Dispose(); } catch { }
+            _app = null;
+        }
     }
 
     private static void ResetConnection()

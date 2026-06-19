@@ -111,7 +111,7 @@ public sealed class C3BridgeClient : IDisposable
         lock (_lock)
         {
             if (_pending is not null)
-                throw new InvalidOperationException("C3Bridge: a request is already in progress");
+                throw new InvalidOperationException("C3Bridge: an operation is already in progress");
             _pending = tcs;
         }
 
@@ -143,7 +143,7 @@ public sealed class C3BridgeClient : IDisposable
         return ParseVarValue(resp);
     }
 
-    /// <summary>Writes a KRL variable, e.g. <c>$FLAG[1]</c> = <c>"TRUE"</c>. Returns the echoed value.</summary>
+    /// <summary>Writes a KRL variable, e.g. <c>BED_SCAN_CMD</c>. Returns the echoed value.</summary>
     public async Task<string> WriteAsync(string varName, string value, int timeoutMs = 2000, CancellationToken ct = default)
     {
         var name = Encoding.ASCII.GetBytes(varName);
@@ -194,7 +194,7 @@ public sealed class C3BridgeClient : IDisposable
         return ParseProgramResult(resp);
     }
 
-    /// <summary>Runs (selects + starts) a KRL program by name (e.g. "/R1/Program/BED_SCAN_CAL").</summary>
+    /// <summary>Runs (selects + starts) a KRL program by name (e.g. "/R1/BED_SCAN_CAL").</summary>
     public Task<ProgramResult> RunProgramAsync(string programName, bool force = true, int timeoutMs = 4000, CancellationToken ct = default)
         => ProgramSelectRunAsync(6, programName, force, timeoutMs, ct);
 

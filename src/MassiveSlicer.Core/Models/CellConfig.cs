@@ -51,6 +51,12 @@ public sealed record CellConfig
     /// Shared via the cell JSON so every user opens to the same saved angle.
     /// </summary>
     public CameraView? View { get; init; }
+
+    /// <summary>
+    /// Rotary-bed auto-scan configuration.
+    /// <see langword="null"/> means this cell has no rotary bed — the auto-scan UI is hidden.
+    /// </summary>
+    public BedScanConfig? BedScan { get; init; }
 }
 
 /// <summary>A saved orbit-camera pose (spherical, Z-up). Persisted per cell.</summary>
@@ -228,4 +234,31 @@ public sealed record KrlBaseEntry
 {
     public required string Name  { get; init; }
     public required int    Index { get; init; }
+}
+
+/// <summary>
+/// Configuration for the LFAM3 rotary-bed auto-scan feature.
+/// The robot parks at <see cref="ScanPose"/>, then BedScan.src steps the rotary
+/// table through <see cref="ScanSteps"/> equally-spaced positions while Zivid
+/// fires one capture per step.
+/// </summary>
+public sealed record BedScanConfig
+{
+    /// <summary>
+    /// Robot joint pose (A1–A6, KRL degrees) for the overhead scan position.
+    /// Calibrate on the pendant, then update lfam3.json.
+    /// </summary>
+    public float[] ScanPose { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
+
+    /// <summary>
+    /// Which external axis drives the rotary table (1 = E1).
+    /// Used by the PC scan-registration de-rotation: p_bed = R_z(-θ) × (M_cam × p_cam − bedOrigin).
+    /// </summary>
+    public int RotaryAxisIndex { get; init; } = 1;
+
+    /// <summary>
+    /// Number of rotation steps. Step angle = 360 / ScanSteps.
+    /// Default 8 gives 45° per step.
+    /// </summary>
+    public int ScanSteps { get; init; } = 8;
 }
