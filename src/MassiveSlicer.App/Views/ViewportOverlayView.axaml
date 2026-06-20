@@ -7,6 +7,90 @@
 
     <Grid>
 
+        <!-- Live sync HUD — press N to slide in/out (Blender-style). -->
+        <StackPanel HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Margin="0,8,0,8"
+                    Spacing="6"
+                    ZIndex="20">
+            <StackPanel.RenderTransform>
+                <TranslateTransform X="{Binding SyncHudTranslateX}"/>
+            </StackPanel.RenderTransform>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="ROBOT LIVE" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <TextBlock Text="{Binding MountedToolName, StringFormat=Tool: {0}}"
+                               FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock IsVisible="{Binding !IsRobotSynced}"
+                               Text="Not synced — press Sync Robot"
+                               FontSize="11" Opacity="0.55"/>
+                    <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto"
+                          IsVisible="{Binding IsRobotSynced}">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="A1" Classes="LabelMuted" FontSize="10" Margin="0,0,6,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Robot.A1, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="A2" Classes="LabelMuted" FontSize="10" Margin="8,0,6,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding Robot.A2, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="A3" Classes="LabelMuted" FontSize="10" Margin="0,0,6,2"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Robot.A3, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="E1" Classes="LabelMuted" FontSize="10" Margin="8,0,6,2"/>
+                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding Robot.E1, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="TCP" Classes="LabelMuted" FontSize="10" Margin="0,0,6,0"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3"
+                                   Text="{Binding Robot.TcpX, StringFormat=X {0:F0}}"
+                                   FontSize="11"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="EXTRUDER" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <TextBlock IsVisible="{Binding !IsRobotSynced}"
+                               Text="Targets shown when slicing"
+                               FontSize="11" Opacity="0.55"/>
+                    <StackPanel IsVisible="{Binding IsRobotSynced}" Spacing="2">
+                        <TextBlock Text="{Binding AdditiveSettings.Temperature1, StringFormat=Zone 1 target {0:F0} °C}"
+                                   FontSize="11"/>
+                        <TextBlock Text="{Binding AdditiveSettings.Temperature2, StringFormat=Zone 2 target {0:F0} °C}"
+                                   FontSize="11"/>
+                        <TextBlock Text="{Binding AdditiveSettings.SelectedPreset.Name, StringFormat=Material: {0}}"
+                                   FontSize="11" Opacity="0.75"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Center"
+                Margin="0"
+                Width="22"
+                Padding="4,10"
+                Background="#990B1220"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="0,1,1,1"
+                CornerRadius="0,4,4,0"
+                ZIndex="21"
+                ToolTip.Tip="Toggle live sync HUD (N)">
+            <TextBlock Text="N"
+                       HorizontalAlignment="Center"
+                       FontSize="11"
+                       FontWeight="Bold"
+                       Opacity="0.7"/>
+        </Border>
+
         <!-- Save View — bottom-left. Persists the current camera angle to the cell (shared). -->
         <Button HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
@@ -145,6 +229,21 @@
                         Command="{Binding DropToPlateCommand}"
                         IsVisible="{Binding !IsToolpathSelected}"
                         ToolTip.Tip="Translate the object down so its lowest point sits on the build plate"/>
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"
+                        IsVisible="{Binding !IsToolpathSelected}"/>
+                <Button Content="Ungroup"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Command="{Binding UngroupCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Split a grouped import into separate top-level objects (e.g. OBJ with multiple parts)"/>
+                <Button Content="Explode"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding ExplodeCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Split disconnected mesh shells into separate objects. Use when Ungroup is not enough (e.g. multi-body STL)"/>
             </StackPanel>
         </Border>
 

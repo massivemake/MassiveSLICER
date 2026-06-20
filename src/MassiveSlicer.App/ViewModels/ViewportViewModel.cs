@@ -2,6 +2,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
+using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport;
@@ -209,6 +210,36 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 
+    // -- Live sync HUD (N key, Blender-style slide-in) -------------------------
+
+    private bool _isSyncHudOpen;
+
+    /// <summary>Whether the left-side live sync overlay is slid in (toggle with N).</summary>
+    public bool IsSyncHudOpen
+    {
+        get => _isSyncHudOpen;
+        set
+        {
+            if (!SetField(ref _isSyncHudOpen, value)) return;
+            OnPropertyChanged(nameof(SyncHudTranslateX));
+        }
+    }
+
+    /// <summary>Horizontal slide offset for the sync HUD panel (px).</summary>
+    public double SyncHudTranslateX => IsSyncHudOpen ? 0 : -290;
+
+    /// <summary>True when robot sync is active — HUD panels show live data.</summary>
+    public bool IsRobotSynced => Robot?.IsConnected == true;
+
+    /// <summary>Currently mounted tool on the flange (multi-tool cells).</summary>
+    public string MountedToolName { get; set; } = "—";
+
+    /// <summary>Toggles the N-key sync HUD panel.</summary>
+    public void ToggleSyncHud() => IsSyncHudOpen = !IsSyncHudOpen;
+
+    /// <summary>Refreshes sync-HUD bindings when robot connection state changes.</summary>
+    public void NotifyRobotSyncChanged() => OnPropertyChanged(nameof(IsRobotSynced));
+
     // -- Render request --------------------------------------------------------
 
     /// <summary>
@@ -339,6 +370,9 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action<double, double, double>? OnSelectionTranslated { get; set; }
     internal Action<double, double, double>? OnSelectionRotated    { get; set; }
 
+    /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
+    internal UndoRedoService? UndoRedo { get; set; }
+
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
 
@@ -375,6 +409,32 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _canUngroup;
+
+    /// <summary>True when the selection can be ungrouped (has child objects).</summary>
+    public bool CanUngroup
+    {
+        get => _canUngroup;
+        set
+        {
+            if (SetField(ref _canUngroup, value))
+                UngroupCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _canExplode;
+
+    /// <summary>True when the selection contains disconnected mesh shells to split apart.</summary>
+    public bool CanExplode
+    {
+        get => _canExplode;
+        set
+        {
+            if (SetField(ref _canExplode, value))
+                ExplodeCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
     private bool _isToolpathSelected;
 
     /// <summary>True when the active toolpath node is the current selection.</summary>
@@ -386,6 +446,8 @@ public sealed class ViewportViewModel : ViewModelBase
             if (SetField(ref _isToolpathSelected, value))
             {
                 ExportKrlCommand?.RaiseCanExecuteChanged();
+                SendToRobotCommand?.RaiseCanExecuteChanged();
+                UpdateSliceCommand?.RaiseCanExecuteChanged();
                 TogglePlaybackCommand?.RaiseCanExecuteChanged();
             }
         }
@@ -504,6 +566,7 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         ActiveScrubToolpath = toolpath;
         ExportKrlCommand?.RaiseCanExecuteChanged();
+        UpdateSliceCommand?.RaiseCanExecuteChanged();
 
         _toolpathScrubMax   = max;
         OnPropertyChanged(nameof(ToolpathScrubMax));
@@ -628,6 +691,8 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public RelayCommand FocusCommand                { get; }
     public RelayCommand DropToPlateCommand          { get; }
+    public RelayCommand UngroupCommand              { get; }
+    public RelayCommand ExplodeCommand              { get; }
     public RelayCommand SaveViewCommand             { get; }
     public RelayCommand TogglePlaybackCommand       { get; }
 
@@ -683,12 +748,19 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnFocusRequested      { get; set; }
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to ungroup the selection.</summary>
+    internal Action? OnUngroupRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to explode disconnected mesh shells.</summary>
+    internal Action? OnExplodeRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
     /// <summary>Callback (wired by MainWindowViewModel) to save the current camera view to the active cell.</summary>
     internal Action? OnSaveViewRequested    { get; set; }
     /// <summary>Returns the current orbit-camera pose; set by the viewport code-behind.</summary>
     internal Func<CameraView?>? GetCameraState { get; set; }
+
+    /// <summary>Applies a saved camera pose; set by the viewport code-behind.</summary>
+    internal Action<CameraView>? ApplyCameraState { get; set; }
 
     public ViewportViewModel()
     {
@@ -700,6 +772,8 @@ public sealed class ViewportViewModel : ViewModelBase
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
+        ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
         SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
         TogglePlaybackCommand = new RelayCommand(() =>
         {
@@ -716,9 +790,17 @@ public sealed class ViewportViewModel : ViewModelBase
             execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasMeshSelected);
 
+        UpdateSliceCommand = new RelayCommand(
+            execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
+            canExecute: () => !IsSlicing && IsToolpathSelected && (CanUpdateSlice?.Invoke() ?? false));
+
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
             canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
+
+        SendToRobotCommand = new RelayCommand(
+            execute:    () => _ = OnSendToRobotRequested?.Invoke(),
+            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null && ActiveCell is not null);
 
         var options = new List<BackdropOption> { new("None", null) };
         if (Directory.Exists("assets/Images"))
@@ -759,8 +841,11 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _isSlicing;
         set
         {
-            if (SetField(ref _isSlicing, value))
+        if (SetField(ref _isSlicing, value))
+            {
                 SliceCommand?.RaiseCanExecuteChanged();
+                UpdateSliceCommand?.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -769,7 +854,16 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Produced by the slice task; consumed by the render loop.
     /// Each entry is a freshly-created SceneNode -- never re-uses an existing node.
     /// </summary>
-    public ConcurrentQueue<(Toolpath Toolpath, Toolpath RawToolpath, SceneNode Node, float BeadWidth, float LayerHeight, System.Numerics.Vector3 MaterialColor)> PendingToolpath { get; } = new();
+    public ConcurrentQueue<PendingToolpathEntry> PendingToolpath { get; } = new();
+
+    /// <summary>
+    /// Toolpath geometry replacements for an existing outliner node (Update Slice).
+    /// Consumed on the GL thread; does not create a new outliner entry.
+    /// </summary>
+    public ConcurrentQueue<PendingToolpathEntry> PendingToolpathReplace { get; } = new();
+
+    /// <summary>Returns live toolpath data for a scene node (wired by the viewport).</summary>
+    internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
@@ -820,8 +914,15 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal Func<Task>? OnSliceRequested { get; set; }
 
+    /// <summary>Re-slices the source mesh at its current transform and replaces the selected toolpath.</summary>
+    internal Func<Task>? OnUpdateSliceRequested { get; set; }
+
+    /// <summary>Set by the viewport to gate <see cref="UpdateSliceCommand"/> when a parent mesh exists.</summary>
+    internal Func<bool>? CanUpdateSlice { get; set; }
+
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
+    internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
     internal Action<SceneNode>? OnNodeHidden { get; set; }
@@ -853,8 +954,14 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
 
+    /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
+    public RelayCommand UpdateSliceCommand { get; }
+
     /// <summary>Opens a save dialog and exports the selected toolpath as a KUKA KRL .src file.</summary>
     public RelayCommand ExportKrlCommand { get; }
+
+    /// <summary>Exports KRL to the active cell's robot D: share via a pre-targeted save dialog.</summary>
+    public RelayCommand SendToRobotCommand { get; }
 
     // -- Outliner / user scene objects -----------------------------------------
 
@@ -878,9 +985,44 @@ public sealed class ViewportViewModel : ViewModelBase
     public void AddUserNode(SceneNode node)
     {
         PendingNodes.Enqueue(node);
-        OutlinerItems.Add(new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node)));
+        RegisterOutlinerItem(node);
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Registers an already-uploaded scene node in the outliner and queues it for
+    /// attachment to the scene root on the GL thread.
+    /// </summary>
+    internal void AttachUserNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
+    {
+        PendingNodes.Enqueue(node);
+        var item = RegisterOutlinerItem(node);
+        if (adoptToolpathsFrom is not null)
+        {
+            foreach (var child in adoptToolpathsFrom.Children.ToList())
+            {
+                adoptToolpathsFrom.RemoveChild(child);
+                item.AddChild(child);
+            }
+        }
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    private OutlinerItemViewModel RegisterOutlinerItem(SceneNode node)
+    {
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node));
+        OutlinerItems.Add(item);
+        return item;
+    }
+
+    /// <summary>Returns the outliner item whose root node matches <paramref name="node"/>.</summary>
+    internal OutlinerItemViewModel? FindOutlinerItem(SceneNode node)
+    {
+        foreach (var item in OutlinerItems)
+            if (item.Node == node) return item;
+        return null;
     }
 
     /// <summary>
@@ -941,4 +1083,12 @@ public sealed class ViewportViewModel : ViewModelBase
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
     }
+
+    /// <summary>Removes all user outliner entries and queues their nodes for GL disposal.</summary>
+    public void ClearUserScene()
+    {
+        foreach (var item in OutlinerItems.ToList())
+            RemoveUserNode(item);
+    }
+
 }

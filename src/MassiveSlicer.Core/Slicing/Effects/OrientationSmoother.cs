@@ -34,7 +34,7 @@ public static class OrientationSmoother
             while (i < layer.Moves.Count)
             {
                 var move = layer.Moves[i];
-                if (move.Kind == MoveKind.Travel || move.IsLayerStitch)
+                if (move.Kind == MoveKind.Travel || move.IsLayerStitch || move.IsWipe || move.IsZHop)
                 {
                     newLayer.Moves.Add(move);
                     i++;

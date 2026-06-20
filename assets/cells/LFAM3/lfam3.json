@@ -2,86 +2,19 @@
   "name": "LFAM 3",
   "robot": {
     "modelPath": "assets/cells/LFAM3/LFAM3Robot.glb",
-    "worldPosition": {
-      "x": 0,
-      "y": 0,
-      "z": 1000
-    },
+    "worldPosition": { "x": 0, "y": 0, "z": 1000 },
     "joints": [
-      {
-        "krlOffset": 0,
-        "krlSign": -1,
-        "minDeg": -60,
-        "maxDeg": 60,
-        "axis": "Y"
-      },
-      {
-        "krlOffset": 90,
-        "krlSign": -1,
-        "minDeg": -120,
-        "maxDeg": 70,
-        "axis": "X"
-      },
-      {
-        "krlOffset": -90,
-        "krlSign": -1,
-        "minDeg": -120,
-        "maxDeg": 168,
-        "axis": "X"
-      },
-      {
-        "krlOffset": 0,
-        "krlSign": -1,
-        "minDeg": -350,
-        "maxDeg": 350,
-        "axis": "Y"
-      },
-      {
-        "krlOffset": 0,
-        "krlSign": -1,
-        "minDeg": -125,
-        "maxDeg": 125,
-        "axis": "X"
-      },
-      {
-        "krlOffset": 0,
-        "krlSign": -1,
-        "minDeg": -350,
-        "maxDeg": 350,
-        "axis": "Y"
-      }
+      { "krlOffset": 0, "krlSign": -1, "minDeg": -60, "maxDeg": 60, "axis": "Y" },
+      { "krlOffset": 90, "krlSign": -1, "minDeg": -120, "maxDeg": 70, "axis": "X" },
+      { "krlOffset": -90, "krlSign": -1, "minDeg": -120, "maxDeg": 168, "axis": "X" },
+      { "krlOffset": 0, "krlSign": -1, "minDeg": -350, "maxDeg": 350, "axis": "Y" },
+      { "krlOffset": 0, "krlSign": -1, "minDeg": -125, "maxDeg": 125, "axis": "X" },
+      { "krlOffset": 0, "krlSign": -1, "minDeg": -350, "maxDeg": 350, "axis": "Y" }
     ],
-    "homePosition": [
-      0,
-      -90,
-      90,
-      0,
-      15,
-      0
-    ],
+    "homePosition": [0, -90, 90, 0, 15, 0],
     "homePositions": [
-      {
-        "name": "Home",
-        "angles": [
-          0,
-          -90,
-          90,
-          0,
-          15,
-          0
-        ]
-      },
-      {
-        "name": "Service",
-        "angles": [
-          0,
-          -90,
-          110,
-          0,
-          35,
-          0
-        ]
-      }
+      { "name": "Home", "angles": [0, -90, 90, 0, 15, 0] },
+      { "name": "Service", "angles": [0, -90, 110, 0, 35, 0] }
     ],
     "defaultHomePosition": "Home",
     "flangeDisplayRoll": -15,
@@ -90,38 +23,27 @@
     "defaultToolheadC": 0
   },
   "bed": {
-    "modelPath": "assets/cells/LFAM3/LFAM3Bed.stl",
-    "origin": {
-      "x": 2032.71,
-      "y": 56.09,
-      "z": 891.83
-    },
+    "modelPath": "assets/cells/LFAM3/LFAM3Bed.glb",
+    "origin": { "x": 2032.71, "y": 56.09, "z": 891.83 },
     "width": 1800,
     "depth": 1800,
-    "gridOrigin": {
-      "x": 1132.71,
-      "y": -843.91003,
-      "z": 891.83
-    },
-    "baseData": {
-      "x": 2032.71,
-      "y": 56.09,
-      "z": -108.16998
-    },
-    "diameter": 1828.8
+    "gridOrigin": { "x": 1132.71, "y": -843.91, "z": 891.83 },
+    "baseData": { "x": 2032.71, "y": 56.09, "z": -108.17 },
+    "diameter": 1828.8,
+    "hidden": true
   },
   "boosterFrame": {
     "modelPath": "assets/cells/LFAM3/booster_frame.glb",
-    "worldPosition": {
-      "x": 0,
-      "y": 0,
-      "z": 0
-    }
+    "worldPosition": { "x": 0, "y": 0, "z": 0 }
+  },
+  "flangeAttachment": {
+    "name": "Affecto Coupler",
+    "modelPath": "assets/cells/LFAM3/ToolHeads/affecto_staubli.glb"
   },
   "tools": [
     {
       "name": "HV Extruder",
-      "modelPath": "assets/cells/LFAM3/ToolHeads/hv_extruder.glb",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/extruder_staubli.glb",
       "tcpX": 694.76,
       "tcpY": 17.74,
       "tcpZ": 312.44,
@@ -129,11 +51,20 @@
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
-      "krlIndex": 1
+      "krlIndex": 2,
+      "default": true,
+      "dock": {
+        "x": 236.368942,
+        "y": -2633.39014,
+        "z": -545.527954,
+        "a": 28.0635185,
+        "b": 88.7256393,
+        "c": 117.370354
+      }
     },
     {
       "name": "Scanner",
-      "modelPath": "assets/cells/LFAM3/Toolheads/Scanner.stl",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/scanner.glb",
       "tcpX": -100,
       "tcpY": 100,
       "tcpZ": 661.74,
@@ -147,11 +78,39 @@
       "sensorOriginZ": 262.23,
       "sensorOriginA": 105.21,
       "sensorOriginB": 177.55,
-      "sensorOriginC": 178.63
+      "sensorOriginC": 178.63,
+      "dock": {
+        "x": 1340.33008,
+        "y": -2028.61169,
+        "z": -100.894379,
+        "a": -75.5514,
+        "b": -0.50739944,
+        "c": -179.707123
+      }
+    },
+    {
+      "name": "Spindle",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/spindle.glb",
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 3,
+      "dock": {
+        "x": -768.609375,
+        "y": -2027.87463,
+        "z": -219.420242,
+        "a": -52.2494507,
+        "b": 89.6684723,
+        "c": -53.102066
+      }
     },
     {
       "name": "ZividScanner",
-      "modelPath": "assets/cells/LFAM3/Toolheads/Scanner.stl",
+      "modelPath": "assets/cells/LFAM3/ToolHeads/scanner.glb",
       "tcpX": -62,
       "tcpY": -103,
       "tcpZ": 259.94,
@@ -160,53 +119,44 @@
       "tcpC": -1.38,
       "toolFrameRoll": 0,
       "krlIndex": 5
-    },
-    {
-      "name": "Spindle Empty",
-      "modelPath": "assets/cells/LFAM3/Toolheads/Spindle.stl",
-      "tcpX": 694.76,
-      "tcpY": 17.74,
-      "tcpZ": 312.44,
-      "tcpA": 15,
-      "tcpB": 0,
-      "tcpC": 0,
-      "toolFrameRoll": 0,
-      "krlIndex": 2
-    },
-    {
-      "name": "Spindle Probe",
-      "modelPath": "assets/cells/LFAM3/Toolheads/Spindle.stl",
-      "tcpX": -100.23,
-      "tcpY": 374.66,
-      "tcpZ": 181.76,
-      "tcpA": 105,
-      "tcpB": -90,
-      "tcpC": 0,
-      "toolFrameRoll": 0,
-      "krlIndex": 3
     }
   ],
-  "krlBases": [
+  "stands": [
     {
-      "name": "ROBROOT",
-      "index": 1
+      "id": "extruder",
+      "name": "Extruder Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_extruder.glb",
+      "position": [0.236, 0, 2.633],
+      "rotation": [0, 0, 0]
     },
     {
-      "name": "Base Rotary",
-      "index": 2
+      "id": "scanner",
+      "name": "Scanner Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_scanner.glb",
+      "position": [1.34, 0, 2.029],
+      "rotation": [0, 0, 0]
     },
     {
-      "name": "KP1-MB2000 HW-2",
-      "index": 3
-    },
-    {
-      "name": "Base 4",
-      "index": 4
-    },
-    {
-      "name": "Base 5",
-      "index": 5
+      "id": "spindle",
+      "name": "Spindle Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_spindle.glb",
+      "position": [-0.769, 0, 2.028],
+      "rotation": [0, 0, 0]
     }
+  ],
+  "rotaryBed": {
+    "bottomPath": "assets/cells/LFAM3/rotary_bed_bottom.glb",
+    "topPath": "assets/cells/LFAM3/rotary_bed_top.glb",
+    "basePos": [2133.49, -53.28, -89.3],
+    "baseAbc": [-0.88, -0.13, 0.17],
+    "e1Sign": 1
+  },
+  "krlBases": [
+    { "name": "ROBROOT", "index": 1 },
+    { "name": "Base Rotary", "index": 2 },
+    { "name": "KP1-MB2000 HW-2", "index": 3 },
+    { "name": "Base 4", "index": 4 },
+    { "name": "Base 5", "index": 5 }
   ],
   "scanToolName": "ZividScanner",
   "bridgeIp": "192.168.0.153",

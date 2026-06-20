@@ -1,4 +1,5 @@
 ﻿using System.Windows.Input;
+using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
 using MassiveSlicer.ViewModels.Base;
 
@@ -71,6 +72,15 @@ public sealed class ToolbarViewModel : ViewModelBase
     /// <summary>Opens a file-picker dialog to load a 3D model.</summary>
     public ICommand OpenModelCommand { get; }
 
+    /// <summary>Opens a saved <c>.mass</c> workspace file.</summary>
+    public ICommand OpenWorkspaceCommand { get; }
+
+    /// <summary>Saves to the current workspace file, or prompts for a path if none is open.</summary>
+    public ICommand SaveWorkspaceCommand { get; }
+
+    /// <summary>Prompts for a new path and saves the workspace there.</summary>
+    public ICommand SaveWorkspaceAsCommand { get; }
+
     /// <summary>Opens a file-picker dialog to import a KRL .src program.</summary>
     public ICommand ImportKrlCommand { get; }
 
@@ -101,13 +111,24 @@ public sealed class ToolbarViewModel : ViewModelBase
     /// <summary>Toggles visibility of the command console.</summary>
     public ICommand ToggleConsoleCommand { get; }
 
+    /// <summary>Undoes the last transform or settings change.</summary>
+    public ICommand UndoCommand { get; }
+
+    /// <summary>Redoes the last undone change.</summary>
+    public ICommand RedoCommand { get; }
+
     /// <summary>Initiates a live sync from the connected KRC4 controller.</summary>
     public ICommand SyncRobotCommand { get; }
+
+    private UndoRedoService? _undoRedo;
 
     /// <summary>Initialises all commands.</summary>
     public ToolbarViewModel()
     {
         OpenModelCommand        = new RelayCommand(OpenModel);
+        OpenWorkspaceCommand    = new RelayCommand(OpenWorkspace);
+        SaveWorkspaceCommand    = new RelayCommand(SaveWorkspace);
+        SaveWorkspaceAsCommand  = new RelayCommand(SaveWorkspaceAs);
         ImportKrlCommand        = new RelayCommand(ImportKrl);
 OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         SetPrepareModeCommand   = new RelayCommand(() => ActiveMode = AppMode.Prepare);
@@ -118,13 +139,40 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         IsometricViewCommand    = new RelayCommand(IsometricView);
         ToggleRightPanelCommand = new RelayCommand(() => IsRightPanelVisible = !IsRightPanelVisible);
         ToggleConsoleCommand    = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
+        UndoCommand             = new RelayCommand(Undo, () => _undoRedo?.CanUndo ?? false);
+        RedoCommand             = new RelayCommand(Redo, () => _undoRedo?.CanRedo ?? false);
         SyncRobotCommand        = new RelayCommand(SyncRobot);
     }
+
+    /// <summary>Wires the shared undo/redo stack and refreshes command availability.</summary>
+    public void AttachUndoRedo(UndoRedoService undoRedo)
+    {
+        _undoRedo = undoRedo;
+        undoRedo.StateChanged += () =>
+        {
+            OnPropertyChanged(nameof(CanUndo));
+            OnPropertyChanged(nameof(CanRedo));
+            ((RelayCommand)UndoCommand).RaiseCanExecuteChanged();
+            ((RelayCommand)RedoCommand).RaiseCanExecuteChanged();
+        };
+    }
+
+    public bool CanUndo => _undoRedo?.CanUndo ?? false;
+    public bool CanRedo => _undoRedo?.CanRedo ?? false;
 
     // -- Events ---------------------------------------------------------------
 
     /// <summary>Raised when the user triggers the Open Model command.</summary>
     public event EventHandler? ModelLoadRequested;
+
+    /// <summary>Raised when the user triggers Open Workspace.</summary>
+    public event EventHandler? OpenWorkspaceRequested;
+
+    /// <summary>Raised when the user triggers Save (current file).</summary>
+    public event EventHandler? SaveWorkspaceRequested;
+
+    /// <summary>Raised when the user triggers Save As.</summary>
+    public event EventHandler? SaveWorkspaceAsRequested;
 
     /// <summary>Raised when the user triggers the Preferences command.</summary>
     public event EventHandler? PreferencesRequested;
@@ -135,10 +183,18 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     /// <summary>Raised when the user clicks Frame All to fit all scene objects in view.</summary>
     public event EventHandler? FrameAllRequested;
 
+    /// <summary>Raised when the user triggers Import KRL.</summary>
+    public event EventHandler? ImportKrlRequested;
+
     // ── Private handlers (wired up to real logic incrementally) ──────────────
 
     private void OpenModel() => ModelLoadRequested?.Invoke(this, EventArgs.Empty);
-    private void ImportKrl()       { /* TODO: open file dialog -> parse KRL    */ }
+    private void OpenWorkspace() => OpenWorkspaceRequested?.Invoke(this, EventArgs.Empty);
+    private void SaveWorkspace()   => SaveWorkspaceRequested?.Invoke(this, EventArgs.Empty);
+    private void SaveWorkspaceAs() => SaveWorkspaceAsRequested?.Invoke(this, EventArgs.Empty);
+    private void ImportKrl() => ImportKrlRequested?.Invoke(this, EventArgs.Empty);
+    private void Undo()      => _undoRedo?.Undo();
+    private void Redo()      => _undoRedo?.Redo();
     private void OpenPreferences() => PreferencesRequested?.Invoke(this, EventArgs.Empty);
     private void FrameAll()        => FrameAllRequested?.Invoke(this, EventArgs.Empty);
     private void TopView()         { /* TODO: notify viewport camera preset    */ }

@@ -14,11 +14,18 @@ public sealed class BedBoundaryRenderer : IDisposable
 
     private int _borderVao, _borderVbo, _borderCount;
     private int _gridVao,   _gridVbo,   _gridCount;
+    private int _originVao, _originVbo, _originCount;
+    private readonly Shader _originShader;
 
     private bool _disposed;
 
+    private const float OriginAxisLengthMm = 300f;
+    private const float OriginDotRadiusMm = 18f;
+    private const float OriginArrowHeadMm = 36f;
+    private const float OriginLiftZMm = 2f;
+
     private static readonly Vector4 BorderColour = new(0.00f, 0.90f, 0.90f, 1f); // cyan
-    private static readonly Vector4 GridColour   = new(0.00f, 0.60f, 0.60f, 1f); // dimmer cyan
+    private static readonly Vector4 GridColour   = new(0.05f, 0.35f, 0.08f, 1f); // dark green
 
     private const float GridSpacing  = 500f;
     private const float BorderWidth  = 3.0f;
@@ -53,9 +60,34 @@ public sealed class BedBoundaryRenderer : IDisposable
     /// rotation axis; for a corner-origin bed it equals <paramref name="origin"/>.</param>
     /// <param name="diameter">When &gt; 0, render a circular rotary bed of this diameter centred on
     /// <paramref name="datum"/> (polar grid) instead of a rectangle.</param>
-    public BedBoundaryRenderer(Vector3 origin, float width, float depth, Vector3 datum, float diameter = 0f)
+    private static readonly string OriginVertSrc = """
+        #version 330 core
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aColor;
+        uniform mat4 uMVP;
+        out vec3 vColor;
+        void main() {
+            gl_Position = vec4(aPos, 1.0) * uMVP;
+            vColor = aColor;
+        }
+        """;
+
+    private static readonly string OriginFragSrc = """
+        #version 330 core
+        in vec3 vColor;
+        out vec4 fragColor;
+        void main() {
+            fragColor = vec4(vColor, 1.0);
+        }
+        """;
+
+    /// <param name="baseOrigin">Locked BASE 0,0,0 marker in world-space mm (not affected by E1).</param>
+    /// <param name="gridOrigin">Back-left corner of the print-area grid in world-space mm.</param>
+    public BedBoundaryRenderer(Vector3 baseOrigin, Vector3 gridOrigin, float width, float depth, Vector3 datum, float diameter = 0f)
     {
         _shader = new Shader(VertSrc, FragSrc);
+        _originShader = new Shader(OriginVertSrc, OriginFragSrc);
+        BuildOriginMarker(baseOrigin);
         if (diameter > 0f)
         {
             BuildCircleBorder(datum, diameter * 0.5f);
@@ -63,16 +95,19 @@ public sealed class BedBoundaryRenderer : IDisposable
         }
         else
         {
-            BuildBorder(origin, width, depth);
-            BuildGrid(origin, width, depth, datum);
+            BuildBorder(gridOrigin, width, depth);
+            BuildGrid(gridOrigin, width, depth, datum);
         }
     }
 
-    /// <summary>Draws the bed boundary using the supplied combined MVP matrix.</summary>
-    public void Draw(Matrix4 mvp)
+    /// <summary>
+    /// Draws the bed boundary. Grid/border use <paramref name="gridMvp"/> (includes E1 rotation);
+    /// the BASE origin marker uses <paramref name="originMvp"/> so it stays world-locked.
+    /// </summary>
+    public void Draw(Matrix4 gridMvp, Matrix4 originMvp)
     {
         _shader.Use();
-        _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetMatrix4("uMVP", ref gridMvp);
 
         GL.LineWidth(GridWidth);
         _shader.SetVector4("uColor", GridColour);
@@ -84,6 +119,12 @@ public sealed class BedBoundaryRenderer : IDisposable
         GL.BindVertexArray(_borderVao);
         GL.DrawArrays(PrimitiveType.Lines, 0, _borderCount);
 
+        GL.LineWidth(4.0f);
+        _originShader.Use();
+        _originShader.SetMatrix4("uMVP", ref originMvp);
+        GL.BindVertexArray(_originVao);
+        GL.DrawArrays(PrimitiveType.Lines, 0, _originCount);
+
         GL.LineWidth(1.0f);
         GL.BindVertexArray(0);
     }
@@ -94,10 +135,79 @@ public sealed class BedBoundaryRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
         _shader.Dispose();
+        _originShader.Dispose();
         GL.DeleteVertexArray(_borderVao);
         GL.DeleteBuffer(_borderVbo);
         GL.DeleteVertexArray(_gridVao);
         GL.DeleteBuffer(_gridVbo);
+        GL.DeleteVertexArray(_originVao);
+        GL.DeleteBuffer(_originVbo);
+    }
+
+    /// <summary>
+    /// Back-left grid origin: blue dot plus +X (red) and +Y (green) arrows.
+    /// </summary>
+    private void BuildOriginMarker(Vector3 corner)
+    {
+        float z = corner.Z + OriginLiftZMm;
+        float x0 = corner.X;
+        float y0 = corner.Y;
+        var verts = new List<float>();
+
+        // Blue dot — small circle at the corner.
+        const float br = 0.20f, bg = 0.55f, bb = 1.00f;
+        const int dotSegs = 12;
+        for (int i = 0; i < dotSegs; i++)
+        {
+            float a0 = (i       / (float)dotSegs) * MathF.Tau;
+            float a1 = ((i + 1) / (float)dotSegs) * MathF.Tau;
+            AddOriginVertex(verts, x0 + OriginDotRadiusMm * MathF.Cos(a0), y0 + OriginDotRadiusMm * MathF.Sin(a0), z, br, bg, bb);
+            AddOriginVertex(verts, x0 + OriginDotRadiusMm * MathF.Cos(a1), y0 + OriginDotRadiusMm * MathF.Sin(a1), z, br, bg, bb);
+        }
+
+        // +X arrow (red).
+        const float xr = 0.95f, xg = 0.25f, xb = 0.25f;
+        float xTip = x0 + OriginAxisLengthMm;
+        AddOriginSegment(verts, x0, y0, z, xTip, y0, z, xr, xg, xb);
+        AddOriginSegment(verts, xTip, y0, z, xTip - OriginArrowHeadMm, y0 + OriginArrowHeadMm * 0.45f, z, xr, xg, xb);
+        AddOriginSegment(verts, xTip, y0, z, xTip - OriginArrowHeadMm, y0 - OriginArrowHeadMm * 0.45f, z, xr, xg, xb);
+
+        // +Y arrow (green).
+        const float yr = 0.25f, yg = 0.90f, yb = 0.35f;
+        float yTip = y0 + OriginAxisLengthMm;
+        AddOriginSegment(verts, x0, y0, z, x0, yTip, z, yr, yg, yb);
+        AddOriginSegment(verts, x0, yTip, z, x0 - OriginArrowHeadMm * 0.45f, yTip - OriginArrowHeadMm, z, yr, yg, yb);
+        AddOriginSegment(verts, x0, yTip, z, x0 + OriginArrowHeadMm * 0.45f, yTip - OriginArrowHeadMm, z, yr, yg, yb);
+
+        _originCount = verts.Count / 6;
+        (_originVao, _originVbo) = UploadOrigin([.. verts]);
+    }
+
+    private static void AddOriginVertex(List<float> verts, float x, float y, float z, float r, float g, float b)
+        => verts.AddRange([x, y, z, r, g, b]);
+
+    private static void AddOriginSegment(List<float> verts,
+        float x0, float y0, float z0, float x1, float y1, float z1,
+        float r, float g, float b)
+    {
+        AddOriginVertex(verts, x0, y0, z0, r, g, b);
+        AddOriginVertex(verts, x1, y1, z1, r, g, b);
+    }
+
+    private static (int vao, int vbo) UploadOrigin(float[] verts)
+    {
+        int vao = GL.GenVertexArray();
+        int vbo = GL.GenBuffer();
+        GL.BindVertexArray(vao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
+        int stride = 6 * sizeof(float);
+        GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
+        GL.EnableVertexAttribArray(0);
+        GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
+        GL.EnableVertexAttribArray(1);
+        GL.BindVertexArray(0);
+        return (vao, vbo);
     }
 
     private void BuildBorder(Vector3 o, float w, float d)

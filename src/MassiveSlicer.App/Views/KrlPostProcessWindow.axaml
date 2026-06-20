@@ -1,0 +1,179 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ia="https://github.com/projektanker/icons.avalonia"
+        x:Class="MassiveSlicer.App.Views.KrlPostProcessWindow"
+        x:CompileBindings="False"
+        Title="KRL Post-Processing"
+        Width="720" Height="520"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        CanResize="True"
+        MinWidth="560" MinHeight="400"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg0}">
+
+    <Window.Styles>
+        <Style Selector="Button.NavBtn">
+            <Setter Property="Background"                 Value="Transparent"/>
+            <Setter Property="BorderThickness"            Value="2,0,0,0"/>
+            <Setter Property="BorderBrush"                Value="Transparent"/>
+            <Setter Property="Foreground"                 Value="{DynamicResource TextSecondary}"/>
+            <Setter Property="FontSize"                   Value="12"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Padding"                    Value="14,9"/>
+        </Style>
+        <Style Selector="Button.NavBtn:pointerover">
+            <Setter Property="Background" Value="{DynamicResource Bg4}"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+        <Style Selector="Button.NavBtn.Active">
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+            <Setter Property="Foreground"  Value="{DynamicResource Accent}"/>
+            <Setter Property="Background"  Value="{DynamicResource Bg3}"/>
+        </Style>
+    </Window.Styles>
+
+    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="44"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" x:Name="TitleBar"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1"
+                    Cursor="SizeAll">
+                <Grid Margin="14,0">
+                    <TextBlock Text="KRL Post-Processing"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Button HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Classes="ToolbarButton"
+                            Padding="6,2"
+                            Click="OnClose">
+                        <ia:Icon Value="mdi-close" FontSize="14"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="1">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="148"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        Background="{DynamicResource Bg1}"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="0,0,1,0">
+                    <StackPanel Margin="0,8">
+                        <Button Content="Rules"
+                                Classes="NavBtn"
+                                Classes.active="{Binding IsRulesTab}"
+                                Command="{Binding ShowRulesTabCommand}"/>
+                        <Button Content="Header"
+                                Classes="NavBtn"
+                                Classes.active="{Binding IsHeaderTab}"
+                                Command="{Binding ShowHeaderTabCommand}"/>
+                        <Button Content="Footer"
+                                Classes="NavBtn"
+                                Classes.active="{Binding IsFooterTab}"
+                                Command="{Binding ShowFooterTabCommand}"/>
+                    </StackPanel>
+                </Border>
+
+                <ScrollViewer Grid.Column="1"
+                              VerticalScrollBarVisibility="Auto"
+                              Background="{DynamicResource Bg2}">
+                    <StackPanel Margin="16,14,16,14" Spacing="10">
+
+                        <!-- Rules -->
+                        <StackPanel IsVisible="{Binding IsRulesTab}" Spacing="10">
+                            <TextBlock Text="EXPORT RULES"
+                                       Classes="SectionHeader"/>
+                            <CheckBox Content="Set $ANOUT[4] = 0 on travel moves"
+                                      IsChecked="{Binding TravelSetAnout4Zero, Mode=TwoWay}"
+                                      FontSize="12"
+                                      ToolTip.Tip="Writes a direct $ANOUT[4] = 0 before each travel LIN so the extruder is off while crossing the print. Recommended when travel moves span the build area."/>
+                            <TextBlock Text="When enabled, travel and retreat moves turn the extruder off immediately instead of using a TRIGGER WHEN DISTANCE=0 pulse at the end of the previous move."
+                                       Classes="LabelMuted"
+                                       FontSize="11"
+                                       TextWrapping="Wrap"/>
+                        </StackPanel>
+
+                        <!-- Header -->
+                        <StackPanel IsVisible="{Binding IsHeaderTab}" Spacing="8">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="SRC HEADER"
+                                           Classes="SectionHeader"
+                                           VerticalAlignment="Center"/>
+                                <Button Grid.Column="1"
+                                        Content="Reset to default"
+                                        Classes="ToolbarButton"
+                                        Padding="8,4"
+                                        FontSize="11"
+                                        Command="{Binding ResetHeaderCommand}"/>
+                            </Grid>
+                            <TextBlock Text="Placeholders: {{PROGRAM_NAME}}, {{TOOL_NO}}, {{BASE_NO}}, {{TEMP1_V}}, {{TEMP2_V}}, {{TEMP3_V}}, {{TEMP1_C}}, {{TEMP2_C}}, {{TEMP3_C}}, {{PRINT_SPEED}}, {{APO_CVEL}}, {{HOME_PTP}}"
+                                       Classes="LabelMuted"
+                                       FontSize="10"
+                                       TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding HeaderText, Mode=TwoWay}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinHeight="320"
+                                     FontFamily="Consolas,Courier New,monospace"
+                                     FontSize="11"
+                                     Classes="PanelTextBox"/>
+                        </StackPanel>
+
+                        <!-- Footer -->
+                        <StackPanel IsVisible="{Binding IsFooterTab}" Spacing="8">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="SRC FOOTER"
+                                           Classes="SectionHeader"
+                                           VerticalAlignment="Center"/>
+                                <Button Grid.Column="1"
+                                        Content="Reset to default"
+                                        Classes="ToolbarButton"
+                                        Padding="8,4"
+                                        FontSize="11"
+                                        Command="{Binding ResetFooterCommand}"/>
+                            </Grid>
+                            <TextBlock Text="Appended after the final retreat move. Typically shuts down outputs and ends the DEF."
+                                       Classes="LabelMuted"
+                                       FontSize="10"
+                                       TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding FooterText, Mode=TwoWay}"
+                                     AcceptsReturn="True"
+                                     TextWrapping="Wrap"
+                                     MinHeight="200"
+                                     FontFamily="Consolas,Courier New,monospace"
+                                     FontSize="11"
+                                     Classes="PanelTextBox"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,1,0,0"
+                    Padding="12,0">
+                <Button Content="Done"
+                        Classes="PrimaryButton"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Padding="16,6"
+                        Click="OnClose"/>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

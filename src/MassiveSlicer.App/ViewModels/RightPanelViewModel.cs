@@ -10,7 +10,7 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class RightPanelViewModel : ViewModelBase
 {
-    private RightPanelTab _activeTab = RightPanelTab.Scan;
+    private RightPanelTab _activeTab = RightPanelTab.Additive;
     private bool _hasScanTab = true;
 
     /// <summary>

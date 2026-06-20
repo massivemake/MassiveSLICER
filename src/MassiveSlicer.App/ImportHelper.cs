@@ -23,23 +23,43 @@ internal static class ImportHelper
     /// </summary>
     internal static SceneNode? LoadAndPlace(string filePath, CellConfig? activeCell)
     {
-        SceneNode node;
+        var node = LoadFile(filePath);
+        if (node is null) return null;
+
+        PlaceOnBed(node, activeCell);
+        return node;
+    }
+
+    /// <summary>
+    /// Loads a model file and applies <paramref name="localTransform"/> without bed placement.
+    /// Used when restoring a saved workspace.
+    /// </summary>
+    internal static SceneNode? LoadAtTransform(string filePath, Matrix4 localTransform)
+    {
+        var node = LoadFile(filePath);
+        if (node is null) return null;
+
+        node.LocalTransform = localTransform;
+        return node;
+    }
+
+    private static SceneNode? LoadFile(string filePath)
+    {
         try
         {
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
-            node = ext switch
+            var node = ext switch
             {
                 ".stl" => StlLoader.Load(filePath),
                 ".obj" => ObjLoader.Load(filePath),
                 ".3mf" => ThreeMfLoader.Load(filePath),
                 _      => GltfLoader.Load(filePath),
             };
-            node.CullFaces = false;
+            node.CullFaces     = false;
+            node.SourceFilePath = Path.GetFullPath(filePath);
+            return node;
         }
         catch { return null; }
-
-        PlaceOnBed(node, activeCell);
-        return node;
     }
 
     /// <summary>
@@ -108,7 +128,7 @@ internal static class ImportHelper
     private static Vector3 GetBedCenter(CellConfig? cell)
     {
         if (cell?.Bed is not { } bed) return Vector3.Zero;
-        var corner = bed.GridOrigin ?? bed.Origin;
+        var corner = bed.VisualGridCorner(cell.Robot.WorldPosition);
         return new Vector3(
             corner.X + bed.Width  / 2f,
             corner.Y + bed.Depth  / 2f,

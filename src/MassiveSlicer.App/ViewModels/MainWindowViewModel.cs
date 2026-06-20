@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
+using MassiveSlicer.App.Undo;
 using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
@@ -44,12 +46,27 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>ViewModel backing the Preferences window.</summary>
     public PreferencesViewModel Preferences { get; }
 
-    private bool _startupSyncDone;
+    /// <summary>Global undo/redo stack for transforms and settings.</summary>
+    public UndoRedoService UndoRedo { get; } = new();
+
+    private (WorkspaceDocument Doc, string Path)? _pendingWorkspaceRestore;
+    private bool _applyingUndoRedo;
+    private string _lastCommittedPrefsJson = "";
+    private CancellationTokenSource? _settingsUndoDebounce;
+
+    private static readonly JsonSerializerOptions PrefsJsonOptions = new() { WriteIndented = false };
 
     /// <summary>Initialises the ViewModel and wires child ViewModels.</summary>
     public MainWindowViewModel()
     {
-        Preferences = new PreferencesViewModel(AppPreferences, SyncViewportFromPrefs);
+        Preferences = new PreferencesViewModel(AppPreferences, () =>
+        {
+            SyncViewportFromPrefs();
+            OnSettingsChanged();
+        });
+
+        Toolbar.AttachUndoRedo(UndoRedo);
+        Viewport.UndoRedo = UndoRedo;
 
         // Give the viewport direct access to the robot panel so the render loop
         // can read joint angles for FK without a cross-tree binding.
@@ -61,6 +78,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Load persisted material presets and restore the last selection.
         foreach (var preset in MaterialPresetsLoader.Load())
             RightPanel.Additive.MaterialPresets.Add(preset);
+
+        RightPanel.Additive.KrlPostProcess.LoadFrom(KrlPostProcessLoader.Load());
 
         if (AppPreferences.SelectedMaterialPresetName is { } savedPreset)
         {
@@ -77,6 +96,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             AppPreferences.SelectedMaterialPresetName = idx >= 0 && idx < RightPanel.Additive.MaterialPresets.Count
                 ? RightPanel.Additive.MaterialPresets[idx].Name
                 : null;
+            ScheduleSettingsUndo();
             PreferencesLoader.Save(AppPreferences);
         };
 
@@ -86,6 +106,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Restore all persisted settings before subscribing so saves don't fire
         // during initialisation.
         SyncViewportFromPrefs();
+        PersistSettings();
+        _lastCommittedPrefsJson = CapturePrefsJson();
 
         // ── Auto-save on any relevant change ─────────────────────────────────
 
@@ -106,23 +128,28 @@ public sealed class MainWindowViewModel : ViewModelBase
                                 or nameof(ViewportViewModel.ToolpathScrubText))
                 return;
 
-            PersistSettings();
+            OnSettingsChanged();
         };
 
-        RightPanel.Settings.View.PropertyChanged += (_, _) => PersistSettings();
-        RightPanel.Additive.PropertyChanged      += (_, _) => PersistSettings();
+        RightPanel.Settings.View.PropertyChanged += (_, _) => OnSettingsChanged();
+        RightPanel.Additive.PropertyChanged      += (_, e) =>
+        {
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.SelectedPresetIndex))
+                return;
+            OnSettingsChanged();
+        };
         RightPanel.Scan.PropertyChanged          += (_, e) =>
         {
             // Skip transient capture-progress properties.
             if (e.PropertyName is nameof(ScanSettingsViewModel.IsScanning)
                                 or nameof(ScanSettingsViewModel.ScanStatus))
                 return;
-            PersistSettings();
+            OnSettingsChanged();
         };
 
         // Wire toolbar commands to cross-panel actions.
-        Toolbar.FrameAllRequested  += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
-        Viewport.OnSaveViewRequested = SaveCurrentView;
+        Toolbar.FrameAllRequested       += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
+        Viewport.OnSaveViewRequested    = SaveCurrentView;
 
         // Wire the robot connect button to the robot panel and mirror status to toolbar.
         var robot = RightPanel.Settings.Robot;
@@ -188,27 +215,37 @@ public sealed class MainWindowViewModel : ViewModelBase
                 RightPanelTab.Additive => "HV Extruder",
                 _                      => null,
             };
-            if (toolName is null) return;
-            int idx = robot.ToolNames.IndexOf(toolName);
-            if (idx >= 0) robot.SelectedToolIndex = idx;
+            if (toolName is not null)
+            {
+                int idx = robot.ToolNames.IndexOf(toolName);
+                if (idx >= 0) robot.SelectedToolIndex = idx;
+            }
+            SyncKrlFrameIndicesToActiveTab();
         };
         robot.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(RobotPanelViewModel.ConnectionStatus))
+            {
                 Toolbar.RobotStatus = robot.ConnectionStatus;
+                Viewport.NotifyRobotSyncChanged();
+            }
         };
 
-        // Propagate KRL frame dropdown selection → scan settings indices.
+        // Propagate KRL frame dropdown / selected tool → export settings for the active tab.
         robot.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(RobotPanelViewModel.KrlToolIndex))
-                RightPanel.Scan.ToolDataIndex = robot.KrlToolIndex;
+                SyncKrlFrameIndicesToActiveTab();
             if (e.PropertyName == nameof(RobotPanelViewModel.KrlBaseIndex))
-                RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
+            {
+                if (RightPanel.ActiveTab == RightPanelTab.Additive)
+                    RightPanel.Additive.BaseDataIndex = robot.KrlBaseIndex;
+                else if (RightPanel.ActiveTab == RightPanelTab.Scan)
+                    RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
+            }
         };
 
-        // After each cell swap: populate KRL dropdowns, select tool for active tab,
-        // and on first load trigger auto-sync with the robot controller.
+        // After each cell swap: populate KRL dropdowns and select tool for active tab.
         Viewport.OnCellSwapCompleted = () =>
         {
             var cell = Viewport.ActiveCell;
@@ -234,10 +271,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 if (idx >= 0) robot.SelectedToolIndex = idx;
             }
 
-            if (!_startupSyncDone)
+            SyncKrlFrameIndicesToActiveTab();
+
+            if (_pendingWorkspaceRestore is { } pending)
             {
-                _startupSyncDone = true;
-                robot.ConnectCommand.Execute(null);
+                _pendingWorkspaceRestore = null;
+                ApplyWorkspaceState(pending.Doc, pending.Path);
             }
         };
     }
@@ -485,6 +524,235 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Loads a <c>.mass</c> workspace from <paramref name="path"/> (File → Open).
+    /// </summary>
+    public void OpenWorkspace(string path)
+    {
+        var doc = WorkspaceLoader.Load(path);
+        if (doc is null)
+        {
+            Console.Log($"[workspace] Failed to load '{path}'.");
+            return;
+        }
+
+        if (doc.CellPath is { } cellPath)
+        {
+            int idx = LeftPanel.FindCellIndex(cellPath);
+            if (idx >= 0 && idx != LeftPanel.SelectedCellIndex)
+            {
+                _pendingWorkspaceRestore = (doc, path);
+                LeftPanel.SelectedCellIndex = idx;
+                return;
+            }
+        }
+
+        ApplyWorkspaceState(doc, path);
+    }
+
+    /// <summary>
+    /// Saves to <see cref="AppPreferences.LastWorkspacePath"/> when set.
+    /// Returns <c>false</c> when no file is open yet (caller should run Save As).
+    /// </summary>
+    public bool TrySaveCurrentWorkspace()
+    {
+        if (AppPreferences.LastWorkspacePath is not { Length: > 0 } path)
+            return false;
+
+        SaveWorkspace(path);
+        return true;
+    }
+
+    /// <summary>
+    /// Saves all outliner models, camera, cell, and settings to <paramref name="path"/>.
+    /// </summary>
+    public void SaveWorkspace(string path)
+    {
+        if (!path.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
+            path += ".mass";
+
+        PersistSettings();
+        var doc = WorkspaceService.Build(Viewport, RightPanel, AppPreferences, path);
+        WorkspaceLoader.Save(doc, path);
+        AppPreferences.LastWorkspacePath = path;
+        PreferencesLoader.Save(AppPreferences);
+        Console.Log($"[workspace] Saved {doc.Models.Count} model(s) and settings to {path}");
+    }
+
+    /// <summary>Suggested filename for the Save As dialog (last save or default).</summary>
+    internal string SuggestedWorkspaceFileName =>
+        AppPreferences.LastWorkspacePath is { } last
+            ? System.IO.Path.GetFileName(last)
+            : "workspace.mass";
+
+    private void ApplyWorkspaceState(WorkspaceDocument doc, string workspacePath)
+    {
+        _applyingUndoRedo = true;
+        try
+        {
+            ApplyWorkspaceStateCore(doc, workspacePath);
+        }
+        finally
+        {
+            _applyingUndoRedo = false;
+            PersistSettings();
+            _lastCommittedPrefsJson = CapturePrefsJson();
+        }
+    }
+
+    private void ApplyWorkspaceStateCore(WorkspaceDocument doc, string workspacePath)
+    {
+        CopyPreferences(doc.Settings);
+        SyncViewportFromPrefs();
+        RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName);
+
+        if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
+            RightPanel.ActiveTab = tab;
+
+        WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
+
+        if (doc.Camera is { } camera)
+            Viewport.ApplyCameraState?.Invoke(camera);
+
+        AppPreferences.LastWorkspacePath = workspacePath;
+        SyncKrlFrameIndicesToActiveTab();
+        PreferencesLoader.Save(AppPreferences);
+        Console.Log($"[workspace] Restored {doc.Models.Count} model(s) from {workspacePath}");
+    }
+
+    private void OnSettingsChanged()
+    {
+        if (_applyingUndoRedo) return;
+        PersistSettings();
+        ScheduleSettingsUndo();
+    }
+
+    private void ScheduleSettingsUndo()
+    {
+        if (_applyingUndoRedo) return;
+
+        _settingsUndoDebounce?.Cancel();
+        _settingsUndoDebounce = new CancellationTokenSource();
+        var token = _settingsUndoDebounce.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(400, token);
+                Dispatcher.UIThread.Post(CommitSettingsUndo);
+            }
+            catch (TaskCanceledException) { }
+        }, token);
+    }
+
+    private void CommitSettingsUndo()
+    {
+        if (_applyingUndoRedo) return;
+
+        PersistSettings();
+        var after = CapturePrefsJson();
+        if (!string.Equals(_lastCommittedPrefsJson, after, StringComparison.Ordinal))
+        {
+            var before = _lastCommittedPrefsJson;
+            UndoRedo.Push(new SettingsUndoAction(before, after, ApplyPrefsFromJson, "Settings"));
+            _lastCommittedPrefsJson = after;
+        }
+    }
+
+    private string CapturePrefsJson()
+        => JsonSerializer.Serialize(AppPreferences, PrefsJsonOptions);
+
+    private void ApplyPrefsFromJson(string json)
+    {
+        var copy = JsonSerializer.Deserialize<AppPreferences>(json, PrefsJsonOptions);
+        if (copy is null) return;
+
+        _applyingUndoRedo = true;
+        try
+        {
+            CopyPreferences(copy);
+            SyncViewportFromPrefs();
+            RestoreMaterialPresetSelection(copy.SelectedMaterialPresetName);
+            PersistSettings();
+            _lastCommittedPrefsJson = json;
+        }
+        finally
+        {
+            _applyingUndoRedo = false;
+        }
+    }
+
+    private void CopyPreferences(AppPreferences src)
+    {
+        string json = System.Text.Json.JsonSerializer.Serialize(src);
+        var copy = System.Text.Json.JsonSerializer.Deserialize<AppPreferences>(json);
+        if (copy is null) return;
+
+        // Preserve navigation preset wiring not stored in workspace snapshots.
+        copy.ActivePreset = src.ActivePreset;
+        AppPreferences.SelectedMaterialPresetName = copy.SelectedMaterialPresetName;
+
+        // Overwrite scalar/collection fields onto the live instance.
+        var live = AppPreferences;
+        live.AutoDepth              = copy.AutoDepth;
+        live.OrbitAroundSelection   = copy.OrbitAroundSelection;
+        live.AntiAliasing           = copy.AntiAliasing;
+        live.ActiveTheme            = copy.ActiveTheme;
+        live.DefaultBackdropPath    = copy.DefaultBackdropPath;
+        live.DefaultBackdropBlur    = copy.DefaultBackdropBlur;
+        live.ShowGrid               = copy.ShowGrid;
+        live.ShowAxes               = copy.ShowAxes;
+        live.ShowBedGrid            = copy.ShowBedGrid;
+        live.DefaultHomePositionNames = copy.DefaultHomePositionNames;
+        live.SelectedMaterialPresetName = copy.SelectedMaterialPresetName;
+        live.LightAzimuth           = copy.LightAzimuth;
+        live.LightElevation         = copy.LightElevation;
+        live.LightIntensity         = copy.LightIntensity;
+        live.ShaderMode             = copy.ShaderMode;
+        live.ShowEdges              = copy.ShowEdges;
+        live.ShadowCatcherEnabled     = copy.ShadowCatcherEnabled;
+        live.ToolpathExtrudeColor   = copy.ToolpathExtrudeColor;
+        live.ToolpathTravelColor    = copy.ToolpathTravelColor;
+        live.ToolpathSeamColor      = copy.ToolpathSeamColor;
+        live.ToolpathUnselectedColor = copy.ToolpathUnselectedColor;
+        live.LayerHeight            = copy.LayerHeight;
+        live.BeadWidth              = copy.BeadWidth;
+        live.FirstLayerHeight       = copy.FirstLayerHeight;
+        live.SliceMethod            = copy.SliceMethod;
+        live.PassAngle              = copy.PassAngle;
+        live.TiltAngle              = copy.TiltAngle;
+        live.TiltAngleX             = copy.TiltAngleX;
+        live.PrintSpeed             = copy.PrintSpeed;
+        live.TravelSpeed            = copy.TravelSpeed;
+        live.Acceleration           = copy.Acceleration;
+        live.ApproachZ              = copy.ApproachZ;
+        live.ToolDataIndex          = copy.ToolDataIndex;
+        live.BaseDataIndex          = copy.BaseDataIndex;
+        live.ToolheadA              = copy.ToolheadA;
+        live.ToolheadB              = copy.ToolheadB;
+        live.ToolheadC              = copy.ToolheadC;
+        live.ApoCvel                = copy.ApoCvel;
+        live.ScanCameraIp           = copy.ScanCameraIp;
+        live.ScanOutputDirectory    = copy.ScanOutputDirectory;
+        live.ScanToolDataIndex      = copy.ScanToolDataIndex;
+        live.ScanBaseDataIndex      = copy.ScanBaseDataIndex;
+    }
+
+    private void RestoreMaterialPresetSelection(string? presetName)
+    {
+        if (presetName is null)
+        {
+            RightPanel.Additive.SelectedPresetIndex = -1;
+            return;
+        }
+
+        int idx = RightPanel.Additive.MaterialPresets
+            .Select((p, i) => (p, i))
+            .FirstOrDefault(t => t.p.Name == presetName, (null!, -1)).i;
+        if (idx >= 0)
+            RightPanel.Additive.SelectedPresetIndex = idx;
+    }
+
+    /// <summary>
     /// Saves the current camera view into the active cell JSON (shared via the file, so every
     /// user opens to it) and refreshes the in-memory cell. Logs the result to the console.
     /// </summary>
@@ -566,6 +834,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.TravelSpeed   = p.TravelSpeed;
         add.Acceleration  = p.Acceleration;
         add.ApproachZ     = p.ApproachZ;
+        add.ZHopMm                  = p.ZHopMm;
+        add.WipeModeDisplay         = p.WipeModeDisplay;
+        add.WipeLengthMm            = p.WipeLengthMm;
+        add.WipeRampMm              = p.WipeRampMm;
+        add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
+        add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.ToolDataIndex = p.ToolDataIndex;
         add.BaseDataIndex = p.BaseDataIndex;
         add.ToolheadA     = p.ToolheadA;
@@ -579,6 +853,26 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.OutputDirectory = p.ScanOutputDirectory;
         scan.ToolDataIndex   = p.ScanToolDataIndex;
         scan.BaseDataIndex   = p.ScanBaseDataIndex;
+    }
+
+    /// <summary>
+    /// Mirrors the robot panel's KRL TOOL/BASE indices into the export settings
+    /// for whichever workflow tab is active (additive extruder vs scan camera).
+    /// </summary>
+    private void SyncKrlFrameIndicesToActiveTab()
+    {
+        var robot = RightPanel.Settings.Robot;
+        switch (RightPanel.ActiveTab)
+        {
+            case RightPanelTab.Additive:
+                RightPanel.Additive.ToolDataIndex = robot.KrlToolIndex;
+                RightPanel.Additive.BaseDataIndex = robot.KrlBaseIndex;
+                break;
+            case RightPanelTab.Scan:
+                RightPanel.Scan.ToolDataIndex = robot.KrlToolIndex;
+                RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
+                break;
+        }
     }
 
     /// <summary>
@@ -625,6 +919,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.TravelSpeed      = add.TravelSpeed;
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;
+        p.ZHopMm                  = add.ZHopMm;
+        p.WipeModeDisplay         = add.WipeModeDisplay;
+        p.WipeLengthMm            = add.WipeLengthMm;
+        p.WipeRampMm              = add.WipeRampMm;
+        p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
+        p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
         p.ToolDataIndex    = add.ToolDataIndex;
         p.BaseDataIndex    = add.BaseDataIndex;
         p.ToolheadA        = add.ToolheadA;

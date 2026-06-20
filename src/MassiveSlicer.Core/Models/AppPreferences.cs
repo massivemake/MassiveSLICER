@@ -122,6 +122,17 @@ public sealed class AppPreferences
     /// <summary>Approach Z height above part in mm.</summary>
     public double ApproachZ { get; set; } = 50.0;
 
+    /// <summary>Vertical z-hop on travel moves in mm.</summary>
+    public double ZHopMm { get; set; }
+
+    /// <summary>Wipe mode display: Off, Retrace, Natural.</summary>
+    public string WipeModeDisplay { get; set; } = "Off";
+
+    public double WipeLengthMm { get; set; } = 10.0;
+    public double WipeRampMm { get; set; } = 5.0;
+    public double ExtrusionStartWaitSec { get; set; } = 1.0;
+    public double ExtrusionResumeWaitSec { get; set; }
+
     /// <summary>KUKA TOOL_DATA index (1–16).</summary>
     public int ToolDataIndex { get; set; } = 1;
 
@@ -153,5 +164,8 @@ public sealed class AppPreferences
 
     /// <summary>KUKA BASE_DATA index used while scanning (1–32).</summary>
     public int ScanBaseDataIndex { get; set; } = 1;
+
+    /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
+    public string? LastWorkspacePath { get; set; }
 
 }

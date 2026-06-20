@@ -12,6 +12,9 @@ namespace MassiveSlicer.App;
 
 public partial class MainWindow : Window
 {
+    private static readonly Vector4 BedLimeGreen = new(0.35f, 1.0f, 0.05f, 1f);
+    private const float BedAluminumLimeTint = 0.45f;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -57,12 +60,12 @@ public partial class MainWindow : Window
 
         vm.LeftPanel.SetCells(cells);
 
-        // Default to LFAM 3 cell if present.
-        var lfam3Idx = cells.FindIndex(c =>
-            c.name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) ||
-            c.name.Contains("LFAM3",  StringComparison.OrdinalIgnoreCase));
-        if (lfam3Idx > 0)
-            vm.LeftPanel.SelectedCellIndex = lfam3Idx;
+        // Default to LFAM 2 — empty outliner, robot not synced until user connects.
+        var lfam2Idx = cells.FindIndex(c =>
+            c.name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) ||
+            c.name.Contains("LFAM2",  StringComparison.OrdinalIgnoreCase));
+        if (cells.Count > 0)
+            vm.LeftPanel.SelectedCellIndex = lfam2Idx >= 0 ? lfam2Idx : 0;
 
         // -- Model loading -----------------------------------------------------
         vm.Toolbar.ModelLoadRequested += async (_, _) =>
@@ -88,11 +91,62 @@ public partial class MainWindow : Window
             await LoadAndAddNodeAsync(path, vm);
         };
 
+        // -- Workspace open / save (File menu) ---------------------------------
+        vm.Toolbar.OpenWorkspaceRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Open Workspace",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("MassiveSlicer Workspace") { Patterns = ["*.mass"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.OpenWorkspace(path);
+        };
+
+        vm.Toolbar.SaveWorkspaceRequested += (_, _) =>
+        {
+            if (!vm.TrySaveCurrentWorkspace())
+                _ = SaveWorkspaceAsAsync(vm);
+        };
+
+        vm.Toolbar.SaveWorkspaceAsRequested += async (_, _) =>
+        {
+            await SaveWorkspaceAsAsync(vm);
+        };
+
         // -- Preferences -------------------------------------------------------
         vm.Toolbar.PreferencesRequested += async (_, _) =>
         {
             var win = new Views.PreferencesWindow { DataContext = vm.Preferences };
             await win.ShowDialog(this);
+        };
+
+        // -- Import KRL (File menu) --------------------------------------------
+        vm.Toolbar.ImportKrlRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Import KRL",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("KUKA Robot Language") { Patterns = ["*.src", "*.SRC"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.Console.Log($"[krl] Import selected: {System.IO.Path.GetFileName(path)} (parser not yet implemented).");
         };
     }
 
@@ -157,8 +211,10 @@ public partial class MainWindow : Window
             catch { /* non-critical */ }
         }
 
+        var environment = CellEnvironmentBuilder.Build(cell);
+
         SceneNode? bedNode = null;
-        if (cell.Bed.ModelPath is { } bedPath && File.Exists(bedPath))
+        if (!cell.Bed.Hidden && cell.Bed.ModelPath is { } bedPath && File.Exists(bedPath))
         {
             try
             {
@@ -166,7 +222,7 @@ public partial class MainWindow : Window
                 var bed     = (bedExt is ".glb" or ".gltf")
                     ? GltfLoader.Load(bedPath)
                     : StlLoader.Load(bedPath, $"{cell.Name}_Bed");
-                var o       = cell.Bed.Origin;
+                var o       = cell.Bed.VisualMeshOrigin(cell.Robot.WorldPosition);
                 var wrapper = new SceneNode
                 {
                     Name           = bed.Name + "_Root",
@@ -174,6 +230,7 @@ public partial class MainWindow : Window
                     Selectable     = false,
                 };
                 wrapper.AddChild(bed);
+                ApplyBedMaterialTint(wrapper);
                 bedNode = wrapper;
             }
             catch { /* non-critical */ }
@@ -194,14 +251,28 @@ public partial class MainWindow : Window
                      ?? (cell.EffectiveTools.Count > 0 ? cell.EffectiveTools[0] : null);
 
         SceneNode? toolHolder = null;
-        if (firstTool is not null && File.Exists(firstTool.ModelPath))
+        if (environment.MultiTools is null && firstTool is not null)
         {
             try { toolHolder = BuildToolHolder(firstTool); }
             catch { /* non-critical */ }
         }
 
+        SceneNode? flangeAttachment = null;
+        if (cell.FlangeAttachment is { } fa)
+            flangeAttachment = CellEnvironmentBuilder.BuildFlangeAttachment(fa);
+
+        var bedCfg = cell.Bed;
+        var rp     = cell.Robot.WorldPosition;
+        var marker = bedCfg.BaseMarkerWorld(rp);
+        var grid   = bedCfg.VisualGridCorner(rp);
+        var off    = bedCfg.VisualOffset is { } vo ? $"{vo.X:F1}, {vo.Y:F1}" : "none";
+        vm.Console.Log(
+            $"[bed] {cell.Name}: visualOffset=({off})  BASE marker=({marker.X:F1}, {marker.Y:F1})  visual grid=({grid.X:F1}, {grid.Y:F1})");
+
         vm.Viewport.PendingCellSwap.Enqueue(new CellSwapPayload(
-            cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool));
+            cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool,
+            environment.EnvironmentNodes, environment.RotaryBedPivot, environment.MultiTools,
+            flangeAttachment));
         vm.Viewport.NotifyRenderNeeded();
     }
 
@@ -216,6 +287,49 @@ public partial class MainWindow : Window
             return;
         }
         vm.Viewport.AddUserNode(node);
+    }
+
+    /// <summary>Tints only bed aluminum (e.g. GLB "Silver") with a subtle anodized lime cast; base stays white.</summary>
+    private static void ApplyBedMaterialTint(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is not { } mesh) continue;
+            if (!IsBedAluminumMesh(mesh)) continue;
+
+            n.PendingMesh = new MeshData(
+                mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
+                TintToward(mesh.BaseColor, BedLimeGreen, BedAluminumLimeTint),
+                metallic: 0.85f, roughness: 0.38f);
+        }
+    }
+
+    private static bool IsBedAluminumMesh(MeshData mesh)
+    {
+        if (mesh.Name.Contains("BaseKuka", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (mesh.Name.Contains("Silver", StringComparison.OrdinalIgnoreCase)
+         || mesh.Name.Contains("Aluminum", StringComparison.OrdinalIgnoreCase)
+         || mesh.Name.Contains("Aluminium", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Warm white dielectric bed plate (LFAM2 BaseKuka fallback when unnamed).
+        var c = mesh.BaseColor;
+        if (c.X > 0.9f && c.Y > 0.9f && c.Z > 0.85f && mesh.Metallic < 0.25f)
+            return false;
+
+        return mesh.Metallic >= 0.35f;
+    }
+
+    private static Vector4 TintToward(Vector4 from, Vector4 toward, float amount)
+    {
+        amount = Math.Clamp(amount, 0f, 1f);
+        return new Vector4(
+            from.X + (toward.X - from.X) * amount,
+            from.Y + (toward.Y - from.Y) * amount,
+            from.Z + (toward.Z - from.Z) * amount,
+            from.W);
     }
 
     private static SceneNode BuildToolHolder(ToolCellConfig tool)
@@ -254,5 +368,22 @@ public partial class MainWindow : Window
             holder.AddChild(stlNode);
             return holder;
         }
+    }
+
+    private async Task SaveWorkspaceAsAsync(MainWindowViewModel vm)
+    {
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Save Workspace As",
+            DefaultExtension  = "mass",
+            SuggestedFileName = vm.SuggestedWorkspaceFileName,
+            FileTypeChoices   = [new("MassiveSlicer Workspace") { Patterns = ["*.mass"] }],
+        });
+        if (file is null) return;
+
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        vm.SaveWorkspace(path);
     }
 }

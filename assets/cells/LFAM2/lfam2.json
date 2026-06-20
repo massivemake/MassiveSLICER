@@ -109,6 +109,12 @@
     },
     "width": 3000,
     "depth": 3000,
+    "visualOffset": {
+      "x": -127.8,
+      "y": -103.6,
+      "z": 0
+    },
+    "hasVisualShift": true,
     "baseData": {
       "x": 1433.829,
       "y": -1377.359,
@@ -149,6 +155,15 @@
       "krlIndex": 2
     }
   ],
+  "krlBases": [],
   "bridgeIp": "192.168.0.152",
-  "bridgePort": 7000
+  "bridgePort": 7000,
+  "view": {
+    "azimuth": -39.000046,
+    "elevation": 10.299952,
+    "radius": 5407.7847,
+    "targetX": 2171.2898,
+    "targetY": 217.61844,
+    "targetZ": 1231.4637
+  }
 }
