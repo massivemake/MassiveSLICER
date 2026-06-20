@@ -13,4 +13,13 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// <summary>True when this extrude move stitches the end of one layer to the start of the next
     /// (XY gap below the layer-change travel threshold). Post-processing effects should skip these.</summary>
     public bool    IsLayerStitch { get; init; } = false;
+
+    /// <summary>Pre-travel filament wipe extrusion segment.</summary>
+    public bool  IsWipe { get; init; }
+
+    /// <summary>RPM scale [0, 1] for wipe ramp-down (1 = full extrusion speed).</summary>
+    public float WipeRpmScale { get; init; } = 1f;
+
+    /// <summary>Vertical or lifted component of a z-hop travel sequence.</summary>
+    public bool IsZHop { get; init; }
 }

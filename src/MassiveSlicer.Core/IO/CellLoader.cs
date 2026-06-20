@@ -110,11 +110,14 @@ public static class CellLoader
             {
                 Bed = cell.Bed with
                 {
-                    Origin       = new Float3(x, y, z),
-                    GridOrigin   = newGrid,
-                    BaseData     = new Float3(x - rw.X, y - rw.Y, z - rw.Z),
-                    Diameter     = diameter is > 0f ? diameter : cell.Bed.Diameter,
-                    RotationSign = rotationSign ?? cell.Bed.RotationSign,
+                    Origin        = new Float3(x, y, z),
+                    GridOrigin    = newGrid,
+                    BaseData      = new Float3(x - rw.X, y - rw.Y, z - rw.Z),
+                    Diameter      = diameter is > 0f ? diameter : cell.Bed.Diameter,
+                    RotationSign  = rotationSign ?? cell.Bed.RotationSign,
+                    // Preserve visualOffset — it is independent of measured rotary centre.
+                    VisualOffset  = cell.Bed.VisualOffset,
+                    VisualOrigin  = cell.Bed.VisualOrigin,
                 },
             };
             File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));

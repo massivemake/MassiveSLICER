@@ -85,7 +85,8 @@ public static class GltfLoader
         {
             foreach (var prim in gltfNode.Mesh.Primitives)
             {
-                var data = ExtractPrimitive(prim, gltfNode.Name ?? gltfNode.Mesh.Name ?? "Mesh");
+                var nodeLabel = gltfNode.Name ?? gltfNode.Mesh.Name ?? "Mesh";
+                var data = ExtractPrimitive(prim, nodeLabel);
                 if (data is not null)
                     node.AddChild(new SceneNode { Name = data.Name, PendingMesh = data });
             }
@@ -142,6 +143,9 @@ public static class GltfLoader
         float roughness = 0.5f;
 
         var mat = prim.Material;
+        if (mat?.Name is { Length: > 0 } matName)
+            name = $"{name}__{matName}";
+
         if (mat is not null)
         {
             var bcCh = mat.FindChannel("BaseColor");

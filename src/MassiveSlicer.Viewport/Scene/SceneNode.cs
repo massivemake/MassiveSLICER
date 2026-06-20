@@ -16,6 +16,12 @@ public sealed class SceneNode
     public string Name { get; set; } = "Node";
 
     /// <summary>
+    /// Original file path when this node was imported from disk.
+    /// Used by workspace save/restore; may be shared across exploded shells.
+    /// </summary>
+    public string? SourceFilePath { get; set; }
+
+    /// <summary>
     /// When <c>false</c> this node cannot be picked or selected by the user.
     /// Set on application-owned scene objects (robot, tool, bed) that are not
     /// user geometry.

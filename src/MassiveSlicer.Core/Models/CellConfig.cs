@@ -22,6 +22,15 @@ public sealed record CellConfig
     public BoosterFrameCellConfig? BoosterFrame { get; init; }
     public ToolCellConfig? Tool { get; init; }
 
+    /// <summary>Permanent flange-mounted coupler (e.g. Affecto Staubli on LFAM 3).</summary>
+    public FlangeAttachmentCellConfig? FlangeAttachment { get; init; }
+
+    /// <summary>Tool-change stands and other static cell geometry.</summary>
+    public IReadOnlyList<StandCellConfig> Stands { get; init; } = [];
+
+    /// <summary>Rotary positioner bed (LFAM 3). Null = flat bed only.</summary>
+    public RotaryBedCellConfig? RotaryBed { get; init; }
+
     /// <summary>Named list of available tool configurations.</summary>
     public IReadOnlyList<ToolCellConfig> Tools { get; init; } = [];
 
@@ -152,6 +161,46 @@ public sealed record BedCellConfig
     public Float3? GridOrigin { get; init; }
 
     /// <summary>
+    /// Optional world-space placement for the bed mesh STL and print-area grid only.
+    /// Prefer <see cref="VisualOffset"/> (BASE-frame mm from the locked origin).
+    /// </summary>
+    public Float3? VisualOrigin { get; init; }
+
+    /// <summary>
+    /// BASE-frame XY offset (mm) from the locked origin to the visual bed back-left corner.
+    /// Set from synced TCP at the physical bed corner (e.g. X=-127.8, Y=-103.6).
+    /// Does not affect KRL export or <see cref="BaseData"/>.
+    /// </summary>
+    public Float3? VisualOffset { get; init; }
+
+    /// <summary>
+    /// World-space BASE 0,0,0 corner on the bed surface (locked origin marker).
+    /// XY from ROBROOT + <see cref="BaseData"/>; Z from <see cref="Origin"/> surface height.
+    /// </summary>
+    public Float3 BaseMarkerWorld(Float3 robrootWorld) => new(
+        robrootWorld.X + BaseData.X,
+        robrootWorld.Y + BaseData.Y,
+        Origin.Z);
+
+    /// <summary>Whether the visual bed/grid is shifted away from the locked BASE marker.</summary>
+    public bool HasVisualShift => VisualOffset is not null || VisualOrigin is not null;
+
+    /// <summary>Back-left grid corner for rendering; does not affect the locked BASE marker.</summary>
+    public Float3 VisualGridCorner(Float3 robrootWorld)
+    {
+        var locked = BaseMarkerWorld(robrootWorld);
+        if (VisualOffset is { } d)
+            return new Float3(locked.X + d.X, locked.Y + d.Y, locked.Z);
+        if (VisualOrigin is { } v)
+            return v;
+        return GridOrigin ?? Origin;
+    }
+
+    /// <summary>World-space translation for the bed mesh STL wrapper.</summary>
+    public Float3 VisualMeshOrigin(Float3 robrootWorld)
+        => HasVisualShift && GridOrigin is null ? VisualGridCorner(robrootWorld) : Origin;
+
+    /// <summary>
     /// BASE_DATA position relative to ROBROOT in mm. Used for IK solving and KRL export.
     /// NOT a world position -- add ROBROOT world position to get world coords.
     /// </summary>
@@ -170,6 +219,9 @@ public sealed record BedCellConfig
     /// Null defaults to −1 (the original hard-coded direction).
     /// </summary>
     public float? RotationSign { get; init; }
+
+    /// <summary>When true the flat bed mesh is omitted (rotary bed replaces it).</summary>
+    public bool Hidden { get; init; }
 }
 
 public sealed record BoosterFrameCellConfig
@@ -227,6 +279,54 @@ public sealed record ToolCellConfig
 
     [System.Text.Json.Serialization.JsonIgnore]
     public bool HasSensorOrigin => SensorOriginX.HasValue;
+
+    /// <summary>Parked tool pose in ROBROOT mm + KUKA ABC (tool-change dock).</summary>
+    public ToolDockCellConfig? Dock { get; init; }
+
+    /// <summary>Shown mounted on the flange when the cell first loads.</summary>
+    public bool Default { get; init; }
+}
+
+/// <summary>Dock pose for a parked tool head (ROBROOT frame, mm + KUKA ZYX degrees).</summary>
+public sealed record ToolDockCellConfig
+{
+    public float X { get; init; }
+    public float Y { get; init; }
+    public float Z { get; init; }
+    public float A { get; init; }
+    public float B { get; init; }
+    public float C { get; init; }
+}
+
+/// <summary>Permanent coupler mesh parented to joint_6.</summary>
+public sealed record FlangeAttachmentCellConfig
+{
+    public string Name { get; init; } = "";
+    public required string ModelPath { get; init; }
+}
+
+/// <summary>Static cell prop (tool stand, enclosure, etc.).</summary>
+public sealed record StandCellConfig
+{
+    public required string Id { get; init; }
+    public required string Name { get; init; }
+    public required string ModelPath { get; init; }
+
+    /// <summary>Seed placement in scene metres (MassiveCONNECT convention).</summary>
+    public float[] Position { get; init; } = [0f, 0f, 0f];
+
+    /// <summary>Seed rotation in radians (XYZ order).</summary>
+    public float[] Rotation { get; init; } = [0f, 0f, 0f];
+}
+
+/// <summary>LFAM 3 rotary positioner: fixed bottom + E1-driven top section.</summary>
+public sealed record RotaryBedCellConfig
+{
+    public required string BottomPath { get; init; }
+    public required string TopPath { get; init; }
+    public float[] BasePos { get; init; } = [0f, 0f, 0f];
+    public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
+    public float E1Sign { get; init; } = 1f;
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>

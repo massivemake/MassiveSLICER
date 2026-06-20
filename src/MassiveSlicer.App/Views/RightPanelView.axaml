@@ -197,6 +197,64 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- MOVEMENT -->
+                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="True">
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Z hop (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Vertical lift on travel moves. 0 = no hop."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ZHopMm}"/>
+                            </Grid>
+
+                            <TextBlock Text="Wipe" Classes="LabelMuted" Margin="8,4,8,2"/>
+                            <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
+                                      ItemsSource="{Binding Additive.WipeModeOptions}"
+                                      SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
+                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Natural = continue forward along the print path."/>
+
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Distance at the end of the wipe where extrusion RPM ramps down to zero."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Start wait (s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Pause after first RPM-on before the first extrusion move."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding Additive.ExtrusionStartWaitSec, Mode=TwoWay}"
+                                               Minimum="0" Maximum="60" Increment="0.5"
+                                               FormatString="F1" FontSize="11"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Resume wait (s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Pause after each travel before the next extrusion move — lets lagging extrusion catch up."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding Additive.ExtrusionResumeWaitSec, Mode=TwoWay}"
+                                               Minimum="0" Maximum="60" Increment="0.5"
+                                               FormatString="F1" FontSize="11"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
+
                     <!-- KRC4 -->
                     <Expander Classes="SectionExpander" Header="KRC4" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
@@ -876,11 +934,64 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
-                        <Button Content="Export KRL"
-                                Classes="PrimaryButton"
+                        <Button Content="Update Slice"
+                                Classes="SecondaryButton"
                                 HorizontalAlignment="Stretch"
                                 Margin="8,4,8,4"
-                                Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+                                ToolTip.Tip="Re-slice the source mesh at its current position/rotation/scale using current settings, and replace this toolpath."
+                                Command="{Binding $parent[Window].DataContext.Viewport.UpdateSliceCommand}"/>
+
+                        <TextBlock Text="KRL EXPORT" Classes="SectionHeader"
+                                   ToolTip.Tip="Values written to the SRC file. Temperatures and extrusion speed are converted to $ANOUT automatically."/>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="Temp all zones (°C)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Material preset temperature for all extruder zones. Written to $ANOUT[1–3] at export."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.ExportTemperatureC, StringFormat={}{0:F0}}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.TemperatureOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ±°C adjustment applied to all zones. +10 raises export temp by 10°C; -10 lowers it. Leave empty for no change."/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
+                            <TextBlock Grid.Column="0" Text="Extrusion Speed"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Computed from bead width, layer height, print speed, and material flow. Written to $ANOUT[4] at export."/>
+                            <TextBlock Grid.Column="1"
+                                       Text="{Binding Additive.ExtrusionSpeedPercent, StringFormat={}{0:F0}%}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"/>
+                            <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
+                                       Text="{Binding Additive.ExtrusionSpeedOffset, Mode=TwoWay}"
+                                       PlaceholderText="+/-"
+                                       ToolTip.Tip="Optional ±% adjustment. +10 exports 10 points higher; -10 exports 10 points lower. Leave empty for no change."/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
+                            <Button Grid.Column="0"
+                                    Content="Export KRL"
+                                    Classes="PrimaryButton"
+                                    HorizontalAlignment="Stretch"
+                                    Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+                            <Button Grid.Column="1"
+                                    Classes="ToolbarButton"
+                                    Margin="6,0,0,0"
+                                    Padding="8,6"
+                                    Click="OnKrlPostProcessClicked"
+                                    ToolTip.Tip="KRL post-processing: travel rules, SRC header, and footer">
+                                <ia:Icon Value="mdi-cog" FontSize="16"/>
+                            </Button>
+                        </Grid>
+
+                        <Button Margin="8,0,8,4"
+                                Content="Send to Robot"
+                                Classes="SecondaryButton"
+                                HorizontalAlignment="Stretch"
+                                ToolTip.Tip="Save KRL to this cell's robot D: drive (\\?\UNC\bridgeIp\d). Filename defaults to yyyy_MMdd - name.src."
+                                Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

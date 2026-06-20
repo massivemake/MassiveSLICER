@@ -295,6 +295,22 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>
+    /// Re-uploads GPU data for an existing toolpath node (same outliner entry, new geometry).
+    /// The node must already be in <see cref="SceneRoot"/>. Must be called on the GL thread.
+    /// </summary>
+    public void ReplaceToolpath(Toolpath toolpath, SceneNode node,
+        float beadWidth = 6f, float layerHeight = 3f,
+        System.Numerics.Vector3 materialColor = default)
+    {
+        RemoveToolpathIfExists(node);
+        var centroid = ComputeToolpathCentroid(toolpath);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
+        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor);
+        node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
+        _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
+    }
+
+    /// <summary>
     /// Disposes the toolpath renderer for <paramref name="node"/> if one is registered.
     /// Call before removing the node from the scene. Safe to call on non-toolpath nodes.
     /// </summary>
@@ -332,11 +348,11 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>World-space Z coordinate of the build plate surface.</summary>
     public float BedZ { get; private set; }
 
-    public void SetBedBoundary(Vector3 origin, float width, float depth, Vector3 datum, float diameter = 0f)
+    public void SetBedBoundary(Vector3 baseOrigin, Vector3 gridOrigin, float width, float depth, Vector3 datum, float diameter = 0f)
     {
-        BedZ         = origin.Z;
+        BedZ         = gridOrigin.Z;
         _bedBoundary?.Dispose();
-        _bedBoundary = new BedBoundaryRenderer(origin, width, depth, datum, diameter);
+        _bedBoundary = new BedBoundaryRenderer(baseOrigin, gridOrigin, width, depth, datum, diameter);
     }
 
     /// <summary>
@@ -552,7 +568,7 @@ public sealed class SceneRenderer : IDisposable
 
         if (ShowGrid)    _grid?.Draw(mvp);
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid) _bedBoundary?.Draw(BedBoundaryModel * mvp);
+        if (ShowBedGrid) _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
         // Unit 0 is left for other samplers; unit 1 stays bound for all mesh draws.

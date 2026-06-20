@@ -389,10 +389,15 @@ public sealed class RobotPanelViewModel : ViewModelBase
         ToolNames.Clear();
         foreach (var t in tools)
             ToolNames.Add(string.IsNullOrEmpty(t.Name) ? t.ModelPath : t.Name);
-        _selectedToolIndex = 0;
+        int def = 0;
+        for (int i = 0; i < tools.Count; i++)
+        {
+            if (tools[i].Default) { def = i; break; }
+        }
+        _selectedToolIndex = def;
         OnPropertyChanged(nameof(SelectedToolIndex));
         if (tools.Count > 0)
-            LoadToolTcpEdit(tools[0]);
+            LoadToolTcpEdit(tools[def]);
     }
 
     // -- TCP offset editing -------------------------------------------------------

@@ -1,5 +1,7 @@
 ﻿using System.Collections.ObjectModel;
+using System.Globalization;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels.Base;
 
@@ -12,9 +14,22 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class AdditiveSettingsViewModel : ViewModelBase
 {
+    /// <summary>KRL SRC post-processing rules and header/footer templates.</summary>
+    public KrlPostProcessSettingsViewModel KrlPostProcess { get; } = new();
+
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(BeadWidth) or nameof(LayerHeight) or nameof(PrintSpeed)
+                or nameof(SelectedPresetIndex) or nameof(ExtrusionSpeedOffset))
+                OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+
+            if (e.PropertyName is nameof(SelectedPresetIndex) or nameof(TemperatureOffset))
+                OnPropertyChanged(nameof(ExportTemperatureC));
+        };
     }
 
     // -- Geometry -------------------------------------------------------------
@@ -627,11 +642,136 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public bool HasSelectedPreset => _selectedPresetIndex >= 0 && _selectedPresetIndex < MaterialPresets.Count;
 
+    /// <summary>Active material preset, or <c>null</c> when none is selected.</summary>
+    public MaterialPreset? SelectedPreset =>
+        HasSelectedPreset ? MaterialPresets[_selectedPresetIndex] : null;
+
     private void ApplyPreset(MaterialPreset p)
     {
         Temperature1 = p.Temperature1;
         Temperature2 = p.Temperature2;
         Temperature3 = p.Temperature3;
+        OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+        OnPropertyChanged(nameof(ExportTemperatureC));
+    }
+
+    // -- KRL export (Toolpath tab) ---------------------------------------------
+
+    private string _temperatureOffset = "";
+
+    /// <summary>±°C adjustment applied to all extruder zones at export. Empty = no change.</summary>
+    public string TemperatureOffset
+    {
+        get => _temperatureOffset;
+        set => SetField(ref _temperatureOffset, value);
+    }
+
+    /// <summary>Material preset temperature (°C) shown for all zones before offset.</summary>
+    public double ExportTemperatureC => Temperature1;
+
+    /// <summary>Zone temperature (°C) written to KRL after applying <see cref="TemperatureOffset"/>.</summary>
+    public float GetEffectiveExportTemperature()
+    {
+        float temp = (float)Temperature1 + (float)ParseSignedOffset(_temperatureOffset);
+        return Math.Clamp(temp, 0f, 450f);
+    }
+
+    private string _extrusionSpeedOffset = "";
+
+    /// <summary>±% adjustment applied to computed extrusion speed at export. Empty = no change.</summary>
+    public string ExtrusionSpeedOffset
+    {
+        get => _extrusionSpeedOffset;
+        set => SetField(ref _extrusionSpeedOffset, value);
+    }
+
+    /// <summary>Computed extrusion motor speed (%) from bead geometry and material flow.</summary>
+    public double ExtrusionSpeedPercent => ComputeExtrusionSpeedPercent();
+
+    private double ComputeExtrusionSpeedPercent()
+    {
+        float flow = (float)(SelectedPreset?.FlowRate ?? 0.463);
+        return KrlAnout.ComputeRpmPercent(
+            (float)BeadWidth, (float)LayerHeight, (float)(PrintSpeed / 1000.0), flow);
+    }
+
+    /// <summary>Extrusion motor speed (%) written to KRL after applying <see cref="ExtrusionSpeedOffset"/>.</summary>
+    public float GetEffectiveExtrusionSpeedPercent()
+    {
+        float pct = (float)ComputeExtrusionSpeedPercent() + (float)ParseSignedOffset(_extrusionSpeedOffset);
+        return Math.Max(0f, pct);
+    }
+
+    private double _extrusionStartWaitSec = 1.0;
+
+    /// <summary>Pause (seconds) after first RPM-on before the first extrusion move.</summary>
+    public double ExtrusionStartWaitSec
+    {
+        get => _extrusionStartWaitSec;
+        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 60.0));
+    }
+
+    private double _extrusionResumeWaitSec;
+
+    /// <summary>Pause (seconds) after each travel before the next extrusion move.</summary>
+    public double ExtrusionResumeWaitSec
+    {
+        get => _extrusionResumeWaitSec;
+        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 60.0));
+    }
+
+    // -- Movement (z-hop, wipe) ------------------------------------------------
+
+    private double _zHopMm;
+
+    /// <summary>Vertical lift on travel moves in mm. 0 = disabled.</summary>
+    public double ZHopMm
+    {
+        get => _zHopMm;
+        set => SetField(ref _zHopMm, Math.Max(0.0, value));
+    }
+
+    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Natural"];
+
+    private string _wipeModeDisplay = "Off";
+
+    /// <summary>Wipe path before travel: Off, Retrace (back), or Natural (forward).</summary>
+    public string WipeModeDisplay
+    {
+        get => _wipeModeDisplay;
+        set => SetField(ref _wipeModeDisplay, value);
+    }
+
+    private double _wipeLengthMm = 10.0;
+
+    /// <summary>Total wipe distance in mm.</summary>
+    public double WipeLengthMm
+    {
+        get => _wipeLengthMm;
+        set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
+    }
+
+    private double _wipeRampMm = 5.0;
+
+    /// <summary>Trailing wipe distance in mm where extrusion RPM ramps down.</summary>
+    public double WipeRampMm
+    {
+        get => _wipeRampMm;
+        set => SetField(ref _wipeRampMm, Math.Max(0.0, value));
+    }
+
+    private static double ParseSignedOffset(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith('+'))
+            trimmed = trimmed[1..];
+
+        return double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v
+            : 0;
     }
 
     // -- Home positions --------------------------------------------------------

@@ -1,4 +1,5 @@
 ﻿using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows.Input;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Viewport.Scene;
@@ -39,6 +40,22 @@ public sealed class LeftPanelViewModel : ViewModelBase
     /// </summary>
     internal Action<string>? OnCellSelected { get; set; }
 
+    /// <summary>Returns the cell JSON path at <paramref name="index"/>, or null.</summary>
+    internal string? GetCellPath(int index)
+        => (uint)index < (uint)_cellPaths.Count ? _cellPaths[index] : null;
+
+    /// <summary>Finds the index of a cell by path (case-insensitive full-path match).</summary>
+    internal int FindCellIndex(string cellPath)
+    {
+        string full = Path.GetFullPath(cellPath);
+        for (int i = 0; i < _cellPaths.Count; i++)
+        {
+            if (string.Equals(Path.GetFullPath(_cellPaths[i]), full, StringComparison.OrdinalIgnoreCase))
+                return i;
+        }
+        return -1;
+    }
+
     /// <summary>
     /// Populates the cell selector. Selecting index 0 immediately fires
     /// <see cref="OnCellSelected"/> so the first cell is loaded automatically.
@@ -53,8 +70,6 @@ public sealed class LeftPanelViewModel : ViewModelBase
             _cellPaths.Add(path);
             CellNames.Add(name);
         }
-        if (_cellPaths.Count > 0)
-            SelectedCellIndex = 0;
     }
 
 

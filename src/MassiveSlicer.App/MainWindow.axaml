@@ -15,9 +15,15 @@
         <vm:MainWindowViewModel/>
     </Window.DataContext>
 
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding Toolbar.UndoCommand}"/>
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding Toolbar.RedoCommand}"/>
+        <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding Toolbar.RedoCommand}"/>
+    </Window.KeyBindings>
+
     <!--
         Root layout: three rows.
-          Row 0 — Toolbar (48 px, fixed)
+          Row 0 — Toolbar (48 px, fixed; brand + File/Edit menus inline)
           Row 1 — Main work area (grows to fill)
           Row 2 — Status bar (24 px, fixed)
     -->

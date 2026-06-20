@@ -20,6 +20,18 @@ public sealed class SliceSettings
     /// <summary>Travel move speed in m/s.</summary>
     public float TravelSpeed { get; init; } = 0.5f;
 
+    /// <summary>Lift height (mm) inserted on travel moves. 0 = disabled.</summary>
+    public float ZHopMm { get; init; }
+
+    /// <summary>Pre-travel wipe mode. None = disabled.</summary>
+    public WipeMode WipeMode { get; init; } = WipeMode.None;
+
+    /// <summary>Total wipe path length in mm.</summary>
+    public float WipeLengthMm { get; init; } = 10f;
+
+    /// <summary>Trailing wipe distance (mm) over which extrusion RPM ramps down to zero.</summary>
+    public float WipeRampMm { get; init; } = 5f;
+
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
 

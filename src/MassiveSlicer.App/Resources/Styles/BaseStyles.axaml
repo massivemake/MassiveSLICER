@@ -81,6 +81,24 @@
         <Setter Property="BorderThickness"  Value="0,0,0,2"/>
     </Style>
 
+    <!-- Secondary action button — lighter than PrimaryButton for de-emphasized actions -->
+    <Style Selector="Button.SecondaryButton">
+        <Setter Property="Background"   Value="{DynamicResource Bg3}"/>
+        <Setter Property="Foreground"   Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="FontSize"     Value="12"/>
+        <Setter Property="FontWeight"   Value="Normal"/>
+        <Setter Property="Padding"      Value="12,6"/>
+        <Setter Property="CornerRadius" Value="4"/>
+        <Setter Property="BorderBrush"  Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="Button.SecondaryButton:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Bg4}"/>
+    </Style>
+    <Style Selector="Button.SecondaryButton:pressed">
+        <Setter Property="Background" Value="{DynamicResource Bg3}"/>
+    </Style>
+
     <!-- Primary action button -->
     <Style Selector="Button.PrimaryButton">
         <Setter Property="Background"   Value="{DynamicResource Accent}"/>
