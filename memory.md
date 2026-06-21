@@ -327,7 +327,7 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 ## Session changelog (reverse chronological)
 
 ### 2026-06-21 — Milestone: LFAM 3 Live I/O Phases 1–3 (GitHub)
-- **Committed & pushed** full Live I/O stack: `Lfam3LiveIoCatalog`, `ExtruderBridgeClient`, `MillingModbusClient`, `LiveIoMonitorViewModel`, `Lfam3LiveIoPanelView`, workflow host, snapshot tests.
+- **Committed & pushed** @ `dae3b33` on `feature/scan-rotary-bed-calibration`: full Live I/O stack — `Lfam3LiveIoCatalog`, `ExtruderBridgeClient`, `MillingModbusClient`, `LiveIoMonitorViewModel`, `Lfam3LiveIoPanelView`, workflow host, snapshot tests.
 - **Phases 1–3** marked complete in `LiveIoPhasePlan`; roadmap: `P1 live · P2 live · P3 live`.
 - **Documented** signal map + spindle-RPM limitation in **LFAM 3 Live I/O map** (this file).
 - **Field:** milling bridge live on `192.168.0.249:8765` (8/8 `MILLING_IO` keys).
