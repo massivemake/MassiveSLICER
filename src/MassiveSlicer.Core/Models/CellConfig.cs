@@ -1,4 +1,5 @@
-﻿using MassiveSlicer.Core.Kinematics;
+﻿using System.Text.Json.Serialization;
+using MassiveSlicer.Core.Kinematics;
 
 namespace MassiveSlicer.Core.Models;
 
@@ -54,6 +55,21 @@ public sealed record CellConfig
     /// <summary>C3Bridge host IP for live robot connection.</summary>
     public string BridgeIp { get; init; } = "192.168.0.1";
     public int BridgePort { get; init; } = 7000;
+
+    /// <summary>Extruder RevPi lfam-monitor bridge host (LFAM 3: 192.168.0.196).</summary>
+    public string? ExtIp { get; init; }
+
+    /// <summary>TCP port for the extruder JSON bridge (default 8765).</summary>
+    public int ExtBridgePort { get; init; } = 8765;
+
+    /// <summary>Milling cabinet RevPi lfam-monitor bridge host (LFAM 3: 192.168.0.249).</summary>
+    public string? MillIp { get; init; }
+
+    /// <summary>TCP port for the milling JSON bridge (default 8765).</summary>
+    public int MillBridgePort { get; init; } = 8765;
+
+    /// <summary>When true the cell has a milling spindle cabinet (LFAM 3).</summary>
+    public bool HasMilling { get; init; }
 
     /// <summary>
     /// Saved default camera view for this cell, applied on load. Null = auto-frame the bed.
@@ -183,6 +199,7 @@ public sealed record BedCellConfig
         Origin.Z);
 
     /// <summary>Whether the visual bed/grid is shifted away from the locked BASE marker.</summary>
+    [JsonIgnore]
     public bool HasVisualShift => VisualOffset is not null || VisualOrigin is not null;
 
     /// <summary>Back-left grid corner for rendering; does not affect the locked BASE marker.</summary>

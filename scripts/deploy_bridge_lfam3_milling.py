@@ -3,14 +3,14 @@
 deploy_bridge_lfam3_milling.py
 ──────────────────────────────
 One-shot deployer: copies lfam_monitor_bridge.py and installs
-lfam-monitor.service on the LFAM 3 milling cabinet RevPi (192.168.0.246).
+lfam-monitor.service on the LFAM 3 milling cabinet RevPi (192.168.0.249).
 
 Canonical path in MassiveSlicer repo: scripts/deploy_bridge_lfam3_milling.py
 GitHub: https://github.com/MattWhite3194/MassiveSlicer
 
 Run from the monitoring PC when the milling RevPi is reachable:
   python scripts/deploy_bridge_lfam3_milling.py --pass yourpassword
-  python scripts/deploy_bridge_lfam3_milling.py --ip 192.168.0.246 --pass yourpassword
+  python scripts/deploy_bridge_lfam3_milling.py --ip 192.168.0.249 --pass yourpassword
 
 The bridge serves MILLING_IO RevPi DIO over TCP/JSON on port 8765.
 Protocol matches MassiveSLICER MillingModbusClient / ExtruderBridgeClient:
@@ -30,9 +30,9 @@ import socket
 import sys
 import time
 
-DEFAULT_IP   = "192.168.0.246"
+DEFAULT_IP   = "192.168.0.249"
 DEFAULT_USER = "pi"
-DEFAULT_PASS = "Massiveasfuck45!!"
+DEFAULT_PASS = ""  # pass via --pass (field default: hs60cw on LFAM 3 milling RevPi)
 BRIDGE_PY    = "/home/pi/lfam_monitor_bridge.py"
 SERVICE_PATH = "/etc/systemd/system/lfam-monitor.service"
 BRIDGE_PORT  = 8765
@@ -345,11 +345,14 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--ip",   default=DEFAULT_IP,   help=f"Milling RevPi IP (default {DEFAULT_IP})")
     p.add_argument("--user", default=DEFAULT_USER, help=f"SSH user (default {DEFAULT_USER})")
-    p.add_argument("--pass", dest="password", default=DEFAULT_PASS,
-                   help="SSH password (default from lfam_settings.json LFAM 3 profile)")
+    p.add_argument("--pass", dest="password", default=DEFAULT_PASS or None,
+                   help="SSH password (required — LFAM 3 milling RevPi uses pi + field password)")
     return p.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
+    if not args.password:
+        print("ERROR: pass --pass YOUR_SSH_PASSWORD")
+        sys.exit(1)
     deploy(args.ip, args.user, args.password)
