@@ -8,7 +8,23 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class SubtractiveSettingsViewModel : ViewModelBase
 {
+    private double _feedRateMmMin = 3000;
+    private double _stepdownMm = 2;
     private string _headerTemplate = string.Empty;
+
+    /// <summary>Spindle feed rate for mill toolpaths (mm/min).</summary>
+    public double FeedRateMmMin
+    {
+        get => _feedRateMmMin;
+        set => SetField(ref _feedRateMmMin, value);
+    }
+
+    /// <summary>Axial stepdown per mill pass (mm).</summary>
+    public double StepdownMm
+    {
+        get => _stepdownMm;
+        set => SetField(ref _stepdownMm, value);
+    }
 
     /// <summary>
     /// Editable KRL program header. Supports template variables such as

@@ -121,10 +121,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Viewport.PropertyChanged += (_, e) =>
         {
-            // Cross-panel side-effect: switch to toolpath tab on selection.
-            if (e.PropertyName == nameof(ViewportViewModel.IsToolpathSelected)
-                && Viewport.IsToolpathSelected)
-                RightPanel.ActiveTab = RightPanelTab.Toolpath;
+            // Cross-panel: mesh → Additive (or LFAM 3 phase tab); toolpath → Toolpath.
+            if (e.PropertyName is nameof(ViewportViewModel.IsToolpathSelected)
+                                or nameof(ViewportViewModel.HasMeshSelected))
+                SyncRightPanelToViewportSelection();
 
             if (e.PropertyName is nameof(ViewportViewModel.ShowLfam3ToolPicker)
                                 or nameof(ViewportViewModel.IsPrintStepActive)
@@ -136,6 +136,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             // Skip transient / non-persistent properties to avoid unnecessary disk writes.
             if (e.PropertyName is nameof(ViewportViewModel.HasSelection)
+                                or nameof(ViewportViewModel.HasMeshSelected)
                                 or nameof(ViewportViewModel.IsSlicing)
                                 or nameof(ViewportViewModel.IsToolpathSelected)
                                 or nameof(ViewportViewModel.IsLayFlatMode)
@@ -971,6 +972,37 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.OutputDirectory = p.ScanOutputDirectory;
         scan.ToolDataIndex   = p.ScanToolDataIndex;
         scan.BaseDataIndex   = p.ScanBaseDataIndex;
+    }
+
+    /// <summary>
+    /// Keeps the right sidebar tab aligned with the viewport selection:
+    /// source meshes → Additive (slicing settings); toolpaths → Toolpath.
+    /// </summary>
+    void SyncRightPanelToViewportSelection()
+    {
+        if (Viewport.IsToolpathSelected)
+        {
+            RightPanel.ActiveTab = RightPanelTab.Toolpath;
+            return;
+        }
+
+        if (!Viewport.HasMeshSelected) return;
+
+        if (RightPanel.ShowAdditiveTabButton)
+        {
+            RightPanel.ActiveTab = RightPanelTab.Additive;
+            return;
+        }
+
+        // LFAM 3 phase gating hides Additive outside Print — use the active phase tab.
+        if (!Viewport.ShowLfam3ToolPicker) return;
+
+        if (Viewport.IsMillStepActive)
+            RightPanel.ActiveTab = RightPanelTab.Subtractive;
+        else if (Viewport.IsScannerToolActive && RightPanel.HasScanTab)
+            RightPanel.ActiveTab = RightPanelTab.Scan;
+        else
+            RightPanel.ActiveTab = RightPanelTab.Additive;
     }
 
     /// <summary>

@@ -28,17 +28,33 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MassiveSlicer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MassiveSlicer.Core\MassiveSlicer.Core.csproj" />
     <ProjectReference Include="..\MassiveSlicer.Viewport\MassiveSlicer.Viewport.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <AvaloniaResource Include="Assets\icon.ico"/>
+    <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
   </ItemGroup>
 
   <!-- Bed-calibration KRL deployed to the KRC over SMB during AUTO-CALIBRATE. -->
   <ItemGroup>
     <None Include="..\..\assets\krl\*.src" Link="assets\krl\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Cell definitions + GLB/STL geometry (LFAM2/LFAM3 robots, tools, stands, rotary bed). -->
+  <ItemGroup>
+    <None Include="..\..\assets\cells\**\*.*" Link="assets\cells\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Shared preset libraries (git-tracked under repo assets/). -->
+  <ItemGroup>
+    <None Include="..\..\assets\materials.json" Link="assets\materials.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\assets\krl_postprocess.json" Link="assets\krl_postprocess.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

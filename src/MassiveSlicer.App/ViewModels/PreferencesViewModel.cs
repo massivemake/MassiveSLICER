@@ -97,6 +97,20 @@ public sealed class PreferencesViewModel : ViewModelBase
         set { if (SetField(ref _toolpathUnselectedColor, value)) Commit(() => _prefs.ToolpathUnselectedColor = ColorToHex(value)); }
     }
 
+    private Color _toolpathWipeColor;
+    public Color ToolpathWipeColor
+    {
+        get => _toolpathWipeColor;
+        set { if (SetField(ref _toolpathWipeColor, value)) Commit(() => _prefs.ToolpathWipeColor = ColorToHex(value)); }
+    }
+
+    private Color _toolpathRetractionColor;
+    public Color ToolpathRetractionColor
+    {
+        get => _toolpathRetractionColor;
+        set { if (SetField(ref _toolpathRetractionColor, value)) Commit(() => _prefs.ToolpathRetractionColor = ColorToHex(value)); }
+    }
+
     private static string ColorToHex(Color c) => $"#{c.A:X2}{c.R:X2}{c.G:X2}{c.B:X2}";
 
     private static Color HexToColor(string hex)
@@ -150,6 +164,8 @@ public sealed class PreferencesViewModel : ViewModelBase
         ToolpathTravelColor     = HexToColor(_prefs.ToolpathTravelColor);
         ToolpathSeamColor       = HexToColor(_prefs.ToolpathSeamColor);
         ToolpathUnselectedColor = HexToColor(_prefs.ToolpathUnselectedColor);
+        ToolpathWipeColor       = HexToColor(_prefs.ToolpathWipeColor);
+        ToolpathRetractionColor = HexToColor(_prefs.ToolpathRetractionColor);
         _loading                = false;
     }
 

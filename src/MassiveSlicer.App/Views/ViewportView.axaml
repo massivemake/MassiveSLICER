@@ -1,19 +1,22 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:MassiveSlicer.App.Views"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
              x:Class="MassiveSlicer.App.Views.ViewportView"
+             x:DataType="vm:ViewportViewModel"
+             x:CompileBindings="True"
              Background="#07090f"
              DragDrop.AllowDrop="True">
 
     <!-- GlHostControl is a platform-specific GL host:
-           Windows  — WGL P/Invoke, renders off-screen via PBO into a WriteableBitmap.
+           Windows  — WGL P/Invoke off-screen FBO, async PBO pack readback into WriteableBitmap.
                        No native HWND visible, so overlay stacks normally (no airspace issue).
            macOS/Linux — extends OpenGlControlBase, renders into own FBO and blits to Avalonia's FB.
          In both cases the public API (GlInitialized / GlRender / GlDeinitialized events +
          RequestNextFrameRendering) is identical, so this XAML reference never changes. -->
     <Grid>
         <local:GlHostControl x:Name="GlCanvas"/>
-        <local:ViewportOverlayView x:Name="OverlayView"/>
+        <local:ViewportOverlayView x:Name="OverlayView" DataContext="{Binding}"/>
     </Grid>
 
 </UserControl>

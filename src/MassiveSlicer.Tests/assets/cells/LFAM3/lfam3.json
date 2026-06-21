@@ -1,0 +1,321 @@
+{
+  "name": "LFAM 3",
+  "robot": {
+    "modelPath": "assets/cells/LFAM3/LFAM3Robot.glb",
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 1000
+    },
+    "joints": [
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -185,
+        "maxDeg": 185,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 90,
+        "krlSign": -1,
+        "minDeg": -140,
+        "maxDeg": -5,
+        "axis": "X"
+      },
+      {
+        "krlOffset": -90,
+        "krlSign": -1,
+        "minDeg": -120,
+        "maxDeg": 168,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -125,
+        "maxDeg": 125,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      }
+    ],
+    "homePosition": [
+      0,
+      -90,
+      90,
+      0,
+      15,
+      0
+    ],
+    "homePositions": [
+      {
+        "name": "Home",
+        "angles": [
+          0,
+          -90,
+          90,
+          0,
+          15,
+          0
+        ]
+      },
+      {
+        "name": "Service",
+        "angles": [
+          0,
+          -90,
+          110,
+          0,
+          35,
+          0
+        ]
+      }
+    ],
+    "defaultHomePosition": "Home",
+    "flangeDisplayRoll": -15,
+    "defaultToolheadA": 0,
+    "defaultToolheadB": -15,
+    "defaultToolheadC": 0
+  },
+  "bed": {
+    "modelPath": "assets/cells/LFAM3/LFAM3Bed.glb",
+    "origin": {
+      "x": 2032.71,
+      "y": 56.09,
+      "z": 891.83
+    },
+    "width": 1800,
+    "depth": 1800,
+    "gridOrigin": {
+      "x": 1132.71,
+      "y": -843.91,
+      "z": 891.83
+    },
+    "baseData": {
+      "x": 2032.71,
+      "y": 56.09,
+      "z": -108.17
+    },
+    "diameter": 1828.8,
+    "hidden": true
+  },
+  "boosterFrame": {
+    "modelPath": "assets/cells/LFAM3/booster_frame.glb",
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 0
+    }
+  },
+  "flangeAttachment": {
+    "name": "Affecto Coupler",
+    "modelPath": "assets/cells/LFAM3/Toolheads/affecto_staubli.glb"
+  },
+  "stands": [
+    {
+      "id": "extruder",
+      "name": "Extruder Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_extruder.glb",
+      "position": [
+        0.236,
+        0.26573002,
+        2.34092
+      ],
+      "rotation": [
+        -1.5707964,
+        -0,
+        0
+      ]
+    },
+    {
+      "id": "scanner",
+      "name": "Scanner Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_scanner.glb",
+      "position": [
+        1.34,
+        0.26572505,
+        2.1268914
+      ],
+      "rotation": [
+        1.5707964,
+        -8.742278E-08,
+        -3.1415925
+      ]
+    },
+    {
+      "id": "spindle",
+      "name": "Spindle Stand",
+      "modelPath": "assets/cells/LFAM3/Stands/stand_spindle.glb",
+      "position": [
+        -0.769,
+        0.26573002,
+        2.3776698
+      ],
+      "rotation": [
+        -1.5707964,
+        -0,
+        0
+      ]
+    }
+  ],
+  "rotaryBed": {
+    "bottomPath": "assets/cells/LFAM3/rotary_bed_bottom.glb",
+    "topPath": "assets/cells/LFAM3/rotary_bed_top.glb",
+    "basePos": [
+      2048.242,
+      63.63916,
+      -1090.5845
+    ],
+    "baseAbc": [
+      0,
+      -0,
+      -90
+    ],
+    "e1Sign": 1
+  },
+  "tools": [
+    {
+      "name": "HV Extruder",
+      "modelPath": "assets/cells/LFAM3/Toolheads/hv_extruder.glb",
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": -90,
+      "krlIndex": 2,
+      "dock": {
+        "x": 236.36894,
+        "y": -2633.3901,
+        "z": -545.52795,
+        "a": 28.063517,
+        "b": 88.72588,
+        "c": 117.37034
+      },
+      "default": true
+    },
+    {
+      "name": "Scanner",
+      "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
+      "tcpX": -100,
+      "tcpY": 100,
+      "tcpZ": 661.74,
+      "tcpA": 105.21,
+      "tcpB": 177.55,
+      "tcpC": 178.63,
+      "toolFrameRoll": 0,
+      "krlIndex": 6,
+      "sensorOriginX": -114.11,
+      "sensorOriginY": 26.69,
+      "sensorOriginZ": 262.23,
+      "sensorOriginA": 105.21,
+      "sensorOriginB": 177.55,
+      "sensorOriginC": 178.63,
+      "dock": {
+        "x": 1340.3301,
+        "y": -2028.6117,
+        "z": -100.89441,
+        "a": -75.55139,
+        "b": -0.5073994,
+        "c": -179.70712
+      },
+      "default": false
+    },
+    {
+      "name": "Spindle",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 3,
+      "dock": {
+        "x": -768.6094,
+        "y": -2027.8746,
+        "z": -219.42023,
+        "a": -52.249447,
+        "b": 89.66839,
+        "c": -53.10206
+      },
+      "default": false
+    },
+    {
+      "name": "ZividScanner",
+      "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 5,
+      "default": false
+    }
+  ],
+  "krlBases": [
+    {
+      "name": "ROBROOT",
+      "index": 1
+    },
+    {
+      "name": "Base Rotary",
+      "index": 2
+    },
+    {
+      "name": "KP1-MB2000 HW-2",
+      "index": 3
+    },
+    {
+      "name": "Base 4",
+      "index": 4
+    },
+    {
+      "name": "Base 5",
+      "index": 5
+    }
+  ],
+  "scanToolName": "ZividScanner",
+  "bridgeIp": "192.168.0.153",
+  "bridgePort": 7000,
+  "extIp": "192.168.0.196",
+  "extBridgePort": 8765,
+  "millBridgePort": 8765,
+  "hasMilling": false,
+  "view": {
+    "azimuth": -43.800022,
+    "elevation": 8,
+    "radius": 3419.4116,
+    "targetX": 1749.5077,
+    "targetY": 45.24054,
+    "targetZ": 1631.6459
+  },
+  "bedScan": {
+    "scanPose": [
+      0,
+      -90,
+      90,
+      0,
+      15,
+      0
+    ],
+    "rotaryAxisIndex": 1,
+    "scanSteps": 8
+  }
+}

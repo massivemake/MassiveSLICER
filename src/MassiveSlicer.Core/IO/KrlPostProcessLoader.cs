@@ -16,24 +16,7 @@ public static class KrlPostProcessLoader
         AllowTrailingCommas         = true,
     };
 
-    private static string ResolvePath()
-    {
-        var cwdPath = Path.GetFullPath(RelativePath);
-        if (File.Exists(cwdPath) || Directory.Exists(Path.GetDirectoryName(cwdPath)!))
-            return cwdPath;
-
-        var dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 6; i++)
-        {
-            var candidate = Path.Combine(dir, RelativePath);
-            if (File.Exists(candidate)) return candidate;
-            var parent = Directory.GetParent(dir);
-            if (parent is null) break;
-            dir = parent.FullName;
-        }
-
-        return cwdPath;
-    }
+    private static string ResolvePath() => AssetPaths.Resolve(RelativePath);
 
     public static KrlPostProcessSettings Load()
     {

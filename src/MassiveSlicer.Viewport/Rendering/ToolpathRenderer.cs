@@ -86,10 +86,12 @@ public sealed class ToolpathRenderer : IDisposable
 
     private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
 
-    private Vector3 _extrudeColor   = new(0.1f,  0.45f, 0.9f);
-    private Vector3 _travelColor    = new(0.85f, 0.18f, 0.18f);
-    private Vector3 _seamColor      = new(1.0f,  0.9f,  0.0f);
-    private Vector3 _unselectedGray = new(0.38f, 0.38f, 0.38f);
+    private Vector3 _extrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _travelColor      = new(0.85f, 0.18f, 0.18f);
+    private Vector3 _wipeColor        = new(1.0f,  0.53f, 0.0f);
+    private Vector3 _retractionColor  = new(0.61f, 0.15f, 0.69f);
+    private Vector3 _seamColor        = new(1.0f,  0.9f,  0.0f);
+    private Vector3 _unselectedGray   = new(0.38f, 0.38f, 0.38f);
 
     private float    _beadWidth;
     private float    _beadLayerHeight;
@@ -137,13 +139,17 @@ public sealed class ToolpathRenderer : IDisposable
     /// <summary>
     /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
     /// </summary>
-    public void UpdateColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected)
+    public void UpdateColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected,
+        Vector3 wipe, Vector3 retraction)
     {
-        bool vbosDirty = _extrudeColor != extrude || _travelColor != travel || _seamColor != seam;
-        _extrudeColor   = extrude;
-        _travelColor    = travel;
-        _seamColor      = seam;
-        _unselectedGray = unselected;
+        bool vbosDirty = _extrudeColor != extrude || _travelColor != travel || _seamColor != seam
+                      || _wipeColor != wipe || _retractionColor != retraction;
+        _extrudeColor     = extrude;
+        _travelColor      = travel;
+        _seamColor        = seam;
+        _unselectedGray   = unselected;
+        _wipeColor        = wipe;
+        _retractionColor  = retraction;
         if (vbosDirty) RebuildLineVbos();
     }
 
@@ -188,8 +194,13 @@ public sealed class ToolpathRenderer : IDisposable
             {
                 if (move.Kind == MoveKind.Extrude)
                 {
-                    var color = _reachability is not null && mi < _reachability.Length && !_reachability[mi]
-                        ? UnreachableColor : _extrudeColor;
+                    Vector3 color;
+                    if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
+                        color = UnreachableColor;
+                    else if (move.IsWipe)
+                        color = _wipeColor;
+                    else
+                        color = _extrudeColor;
                     WriteVert(move.From, color);
                     WriteVert(move.To,   color);
                 }
@@ -323,8 +334,9 @@ public sealed class ToolpathRenderer : IDisposable
             foreach (var move in layer.Moves)
                 if (move.Kind != MoveKind.Extrude)
                 {
-                    WriteTr(move.From, _travelColor);
-                    WriteTr(move.To,   _travelColor);
+                    var color = move.IsZHop ? _retractionColor : _travelColor;
+                    WriteTr(move.From, color);
+                    WriteTr(move.To,   color);
                 }
 
         return trData;

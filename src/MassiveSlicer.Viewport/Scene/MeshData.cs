@@ -9,6 +9,11 @@ namespace MassiveSlicer.Viewport.Scene;
 /// </summary>
 public sealed class MeshData
 {
+    private static int _nextCacheId;
+
+    /// <summary>Stable id for GPU mesh pooling across cell swaps.</summary>
+    public int CacheId { get; } = Interlocked.Increment(ref _nextCacheId);
+
     /// <summary>Vertex positions in world space (Z-up, right-hand).</summary>
     public Vector3[] Positions { get; }
 

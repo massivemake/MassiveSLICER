@@ -31,15 +31,26 @@ public static class MovementPostProcessor
                 if (move.Kind == MoveKind.Extrude && !move.IsLayerStitch && !move.IsWipe)
                     lastExtrude = move;
 
-                if (move.Kind == MoveKind.Travel && doWipe && lastExtrude is not null && !lastExtrude.IsLayerStitch)
+                if (move.Kind != MoveKind.Travel)
                 {
-                    foreach (var wipe in BuildWipeMoves(move.From, lastExtrude, settings))
-                        newLayer.Moves.Add(wipe);
+                    newLayer.Moves.Add(move);
+                    continue;
                 }
 
-                if (move.Kind == MoveKind.Travel && doZHop)
+                var hopStart = move.From;
+                if (doWipe && lastExtrude is not null && !lastExtrude.IsLayerStitch)
                 {
-                    foreach (var hop in ExpandZHop(move, settings.ZHopMm))
+                    var wipeMoves = BuildWipeMoves(move.From, lastExtrude, settings).ToList();
+                    foreach (var wipe in wipeMoves)
+                        newLayer.Moves.Add(wipe);
+                    if (wipeMoves.Count > 0)
+                        hopStart = wipeMoves[^1].To;
+                }
+
+                if (doZHop)
+                {
+                    var hopTravel = hopStart == move.From ? move : move with { From = hopStart };
+                    foreach (var hop in ExpandZHop(hopTravel, settings.ZHopMm))
                         newLayer.Moves.Add(hop);
                 }
                 else
@@ -63,14 +74,28 @@ public static class MovementPostProcessor
             dir = -dir;
 
         float total = settings.WipeLengthMm;
-        float ramp  = Math.Clamp(settings.WipeRampMm, 0f, total);
-        float full  = total - ramp;
-        var   pos   = travelStart;
-        var   norm  = lastExtrude.Normal;
+        float ramp  = settings.WipeRampMm;
+        float fullLen;
+        float rampLen;
 
-        if (full > 0.01f)
+        if (ramp >= 0f)
         {
-            var next = pos + dir * full;
+            rampLen = Math.Min(ramp, total);
+            fullLen = total - rampLen;
+        }
+        else
+        {
+            // e.g. 35 mm same-direction + -1.5 mm ramp → 35 mm full extrusion, then 1.5 mm squeeze-down.
+            fullLen = total;
+            rampLen = -ramp;
+        }
+
+        var pos  = travelStart;
+        var norm = lastExtrude.Normal;
+
+        if (fullLen > 0.01f)
+        {
+            var next = pos + dir * fullLen;
             yield return new ToolpathMove(pos, next, MoveKind.Extrude)
             {
                 IsWipe       = true,
@@ -80,9 +105,9 @@ public static class MovementPostProcessor
             pos = next;
         }
 
-        if (ramp > 0.01f)
+        if (rampLen > 0.01f)
         {
-            float segLen = ramp / WipeRampSegments;
+            float segLen = rampLen / WipeRampSegments;
             for (int i = 0; i < WipeRampSegments; i++)
             {
                 float scale = 1f - (i + 1) / (float)WipeRampSegments;

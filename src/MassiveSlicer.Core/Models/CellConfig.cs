@@ -72,6 +72,12 @@ public sealed record CellConfig
     public bool HasMilling { get; init; }
 
     /// <summary>
+    /// Path to the KUKA <c>ROBOTER/KRC/R1</c> folder (contains <c>Program/</c> with tool-change KRL).
+    /// LFAM 3 live share: <c>\\192.168.0.153\krc\ROBOTER\KRC\R1</c>.
+    /// </summary>
+    public string? KrcRoot { get; init; }
+
+    /// <summary>
     /// Saved default camera view for this cell, applied on load. Null = auto-frame the bed.
     /// Shared via the cell JSON so every user opens to the same saved angle.
     /// </summary>

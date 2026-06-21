@@ -84,12 +84,14 @@
             <Grid Grid.Row="4">
 
                 <!-- Outliner tab -->
-                <ListBox ItemsSource="{Binding OutlinerItems}"
+                <ListBox x:Name="OutlinerList"
+                         ItemsSource="{Binding OutlinerItems}"
                          Background="Transparent"
                          BorderThickness="0"
                          Padding="0"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         IsVisible="{Binding IsOutlinerTabActive}">
+                         IsVisible="{Binding IsOutlinerTabActive}"
+                         SelectionChanged="OnOutlinerSelectionChanged">
                     <ListBox.Resources>
                         <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#21273a"/>
                         <SolidColorBrush x:Key="ThemeAccentBrush4"             Color="#1e3800"/>
@@ -142,7 +144,8 @@
                                               IsVisible="{Binding HasChildren}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Grid Margin="20,0,4,0">
+                                            <Grid Margin="20,0,4,0"
+                                                  PointerPressed="OnOutlinerChildPressed">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*"/>
                                                     <ColumnDefinition Width="Auto"/>

@@ -11,7 +11,7 @@ namespace MassiveSlicer.Viewport.Rendering;
 /// </summary>
 public sealed class MeshRenderer : IDisposable
 {
-    private readonly Shader _shader;
+    private readonly Shader _shader = SharedShaders.MeshPhong;
     private int  _vao, _vbo, _ebo;
     private int  _count;
     private bool _indexed;
@@ -31,6 +31,9 @@ public sealed class MeshRenderer : IDisposable
 
     /// <summary>When true, renders horizontal layer-height stripes in world Z instead of Phong shading.</summary>
     public bool LayerPreviewMode { get; set; }
+
+    /// <summary>When true, uses a cheap Lambert pass (cell robot/stands/tools).</summary>
+    public bool FastCellMode { get; set; }
 
     /// <summary>Layer height (mm) used to scale the stripe frequency in LayerPreview mode.</summary>
     public float LayerHeight { get; set; } = 3f;
@@ -64,7 +67,7 @@ public sealed class MeshRenderer : IDisposable
 
     // -- GLSL source ----------------------------------------------------------
 
-    private static readonly string VertSrc = """
+    internal static readonly string VertSrc = """
         #version 330 core
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
@@ -84,7 +87,7 @@ public sealed class MeshRenderer : IDisposable
         }
         """;
 
-    private static readonly string FragSrc = """
+    internal static readonly string FragSrc = """
         #version 330 core
         in vec3 vWorldPos;
         in vec3 vNormal;
@@ -155,6 +158,15 @@ public sealed class MeshRenderer : IDisposable
 
             if (uShadingMode == 1) {
                 fragColor = vec4(N * 0.5 + 0.5, 1.0);
+                return;
+            }
+
+            if (uShadingMode == 3) {
+                vec3 L = normalize(uLightDir);
+                float NdotL = max(dot(N, L), 0.0);
+                vec3 baseLinear = pow(max(uBaseColor.rgb, vec3(0.0)), vec3(2.2));
+                vec3 lit = baseLinear * (0.32 + 0.68 * NdotL) * uLightIntensity;
+                fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), uBaseColor.a);
                 return;
             }
 
@@ -256,7 +268,6 @@ public sealed class MeshRenderer : IDisposable
         Shininess        = MathF.Pow(2f, smoothness * 5f);
         SpecularStrength = smoothness * (0.25f + data.Metallic * 0.5f);
 
-        _shader = new Shader(VertSrc, FragSrc);
         Upload(data);
     }
 
@@ -287,7 +298,7 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uShininess",        Shininess);
         _shader.SetFloat("uMetallic",         Metallic);
         _shader.SetFloat("uLightIntensity",   lightIntensity);
-        int shadingMode = LayerPreviewMode ? 2 : NormalsMode ? 1 : 0;
+        int shadingMode = LayerPreviewMode ? 2 : NormalsMode ? 1 : FastCellMode ? 3 : 0;
         _shader.SetInt("uShadingMode",        shadingMode);
         _shader.SetFloat("uLayerHeight",      LayerHeight);
         _shader.SetFloat("uLayerZOffset",     LayerZOffset);
@@ -327,7 +338,6 @@ public sealed class MeshRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        _shader.Dispose();
         GL.DeleteVertexArray(_vao);
         GL.DeleteBuffer(_vbo);
         if (_indexed) GL.DeleteBuffer(_ebo);

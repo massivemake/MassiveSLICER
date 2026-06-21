@@ -27,6 +27,23 @@ public sealed class RobotSyncService : IDisposable
     /// <summary>Fired each time $POS_ACT is read.</summary>
     public event EventHandler<(double X, double Y, double Z, double A, double B, double C)>? TcpUpdated;
 
+    /// <summary>Fired when live I/O polling reads a batch of KRL variables.</summary>
+    public event EventHandler<IReadOnlyDictionary<string, string>>? IoSnapshotUpdated;
+
+    private bool _ioPollingEnabled;
+    private IReadOnlyList<string> _ioPollVariables = [];
+    private int _streamTick;
+
+    /// <summary>When true, the stream loop periodically batch-reads <see cref="SetIoPollVariables"/>.</summary>
+    public bool IoPollingEnabled
+    {
+        get => _ioPollingEnabled;
+        set => _ioPollingEnabled = value;
+    }
+
+    /// <summary>Configures KRL variables to poll when <see cref="IoPollingEnabled"/> is true.</summary>
+    public void SetIoPollVariables(IReadOnlyList<string> variables) => _ioPollVariables = variables;
+
     // -- Lifecycle -------------------------------------------------------------
 
     public RobotSyncService()
@@ -140,9 +157,27 @@ public sealed class RobotSyncService : IDisposable
             catch (OperationCanceledException) { break; }
             catch { break; } // socket error -- _client fires Disconnected
 
+            if (_ioPollingEnabled && _ioPollVariables.Count > 0 && ++_streamTick % 5 == 0)
+            {
+                try { await PollIoSnapshotAsync(ct); }
+                catch (OperationCanceledException) { break; }
+                catch { /* keep axis stream alive */ }
+            }
+
             try   { await Task.Delay(intervalMs, ct); }
             catch (OperationCanceledException) { break; }
         }
+    }
+
+    async Task PollIoSnapshotAsync(CancellationToken ct)
+    {
+        var dict = new Dictionary<string, string>(_ioPollVariables.Count, StringComparer.Ordinal);
+        foreach (var variable in _ioPollVariables)
+        {
+            try { dict[variable] = await _client.ReadAsync(variable, 1500, ct); }
+            catch { dict[variable] = ""; }
+        }
+        IoSnapshotUpdated?.Invoke(this, dict);
     }
 
     // -- Dispose ---------------------------------------------------------------

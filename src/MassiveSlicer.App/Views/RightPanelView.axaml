@@ -19,10 +19,10 @@
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1">
                 <StackPanel Orientation="Horizontal">
-                    <Button Content="ADDITIVE"    Classes="TabButton" Classes.active="{Binding IsAdditiveTab}"    Command="{Binding ShowAdditiveCommand}"/>
-                    <Button Content="SCAN"        Classes="TabButton" Classes.active="{Binding IsScanTab}"        Command="{Binding ShowScanCommand}" IsVisible="{Binding HasScanTab}"/>
-                    <Button Content="SUBTRACTIVE" Classes="TabButton" Classes.active="{Binding IsSubtractiveTab}" Command="{Binding ShowSubtractiveCommand}"/>
-                    <Button Content="TOOLPATH"    Classes="TabButton" Classes.active="{Binding IsToolpathTab}"    Command="{Binding ShowToolpathCommand}"/>
+                    <Button Content="ADDITIVE"    Classes="TabButton" Classes.active="{Binding IsAdditiveTab}"    Command="{Binding ShowAdditiveCommand}"    IsVisible="{Binding ShowAdditiveTabButton}"/>
+                    <Button Content="SCAN"        Classes="TabButton" Classes.active="{Binding IsScanTab}"        Command="{Binding ShowScanCommand}"        IsVisible="{Binding ShowScanTabButton}"/>
+                    <Button Content="SUBTRACTIVE" Classes="TabButton" Classes.active="{Binding IsSubtractiveTab}" Command="{Binding ShowSubtractiveCommand}" IsVisible="{Binding ShowSubtractiveTabButton}"/>
+                    <Button Content="TOOLPATH"    Classes="TabButton" Classes.active="{Binding IsToolpathTab}"    Command="{Binding ShowToolpathCommand}"    IsVisible="{Binding ShowToolpathTabButton}"/>
                 </StackPanel>
             </Border>
 
@@ -33,12 +33,21 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- Method selector -->
-                <ComboBox Grid.Row="0"
-                          Margin="8,8,8,4"
-                          HorizontalAlignment="Stretch"
-                          ItemsSource="{Binding Additive.AvailableMethodNames}"
-                          SelectedItem="{Binding Additive.MethodDisplayName, Mode=TwoWay}"/>
+                <!-- Method + slicing mode -->
+                <StackPanel Grid.Row="0" Margin="8,8,8,4" Spacing="4">
+                    <ComboBox HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding Additive.AvailableMethodNames}"
+                              SelectedItem="{Binding Additive.MethodDisplayName, Mode=TwoWay}"/>
+                    <Grid ColumnDefinitions="*,Auto"
+                          IsVisible="{Binding Additive.ShowSlicingMode}">
+                        <TextBlock Grid.Column="0" Text="Slicing mode" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <ComboBox  Grid.Column="1"
+                                   ItemsSource="{Binding Additive.SlicingModeOptions}"
+                                   SelectedItem="{Binding Additive.SlicingMode, Mode=TwoWay}"
+                                   Width="100" FontSize="11"
+                                   ToolTip.Tip="Normal: solid volume with shells and infill. Surface: cladding/boundary paths on mesh intersections; tool stays vertical unless Overhang orientation is enabled."/>
+                    </Grid>
+                </StackPanel>
 
                 <ScrollViewer Grid.Row="1"
                               VerticalScrollBarVisibility="Auto"
@@ -47,7 +56,7 @@
                 <StackPanel Margin="0,4,0,8">
 
                     <!-- MATERIAL -->
-                    <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="True">
+                    <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="False">
                         <StackPanel Margin="0,0,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -88,7 +97,7 @@
                     </Expander>
 
                     <!-- GEOMETRY -->
-                    <Expander Classes="SectionExpander" Header="GEOMETRY" IsExpanded="True">
+                    <Expander Classes="SectionExpander" Header="GEOMETRY" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -142,7 +151,7 @@
                     </Expander>
 
                     <!-- SEAM -->
-                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="True"
+                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False"
                               IsVisible="{Binding Additive.ShowContourOffsetOption}">
                         <StackPanel Margin="0,2,0,6">
                             <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
@@ -151,6 +160,21 @@
                                            ItemsSource="{Binding Additive.SeamModeOptions}"
                                            SelectedItem="{Binding Additive.SeamMode, Mode=TwoWay}"
                                            Width="90" FontSize="11"/>
+                            </Grid>
+
+                            <TextBlock Text="LOCATION" Classes="LabelMuted" FontSize="10" Margin="8,6,8,2" LetterSpacing="1"/>
+
+                            <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                                    <TextBlock Text="Seam position guides" Classes="LabelMuted"/>
+                                    <TextBlock Text="{Binding Additive.SeamGuideSummary}" FontSize="10" Opacity="0.7"/>
+                                </StackPanel>
+                                <Button Grid.Column="1"
+                                        Content="Edit"
+                                        Classes="ToolbarButton"
+                                        Padding="10,4"
+                                        Command="{Binding Additive.OpenSeamEditorCommand}"
+                                        ToolTip.Tip="Place points on the model. Seams start at the contour point closest to each guide."/>
                             </Grid>
 
                             <CheckBox Content="Overhang orientation"
@@ -175,7 +199,7 @@
                     </Expander>
 
                     <!-- MOTION -->
-                    <Expander Classes="SectionExpander" Header="MOTION" IsExpanded="True">
+                    <Expander Classes="SectionExpander" Header="MOTION" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -198,7 +222,7 @@
                     </Expander>
 
                     <!-- MOVEMENT -->
-                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="True">
+                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -214,7 +238,7 @@
                             <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
                                       ItemsSource="{Binding Additive.WipeModeOptions}"
                                       SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
-                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Natural = continue forward along the print path."/>
+                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
 
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -231,8 +255,18 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Distance at the end of the wipe where extrusion RPM ramps down to zero."/>
+                                           ToolTip.Tip="Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp (e.g. 35 length, -1.5 ramp)."/>
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Wipe speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Linear speed for wipe extrusion moves. Can differ from travel speed."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeSpeed}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
@@ -251,6 +285,47 @@
                                                Value="{Binding Additive.ExtrusionResumeWaitSec, Mode=TwoWay}"
                                                Minimum="0" Maximum="60" Increment="0.5"
                                                FormatString="F1" FontSize="11"/>
+                            </Grid>
+
+                            <TextBlock Text="Post-travel ramp" Classes="LabelMuted" Margin="8,6,8,2"/>
+                            <CheckBox Content="Ramp speed + RPM after travel"
+                                      Margin="8,0,8,4"
+                                      IsChecked="{Binding Additive.ResumeRampEnabled, Mode=TwoWay}"
+                                      FontSize="11"
+                                      ToolTip.Tip="After each travel, start extrusion at low speed/RPM and step up over a set distance before reaching full print speed."/>
+
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ResumeRampEnabled}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ramp start speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ResumeRampStartSpeed}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ResumeRampEnabled}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ramp start RPM (%)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ResumeRampStartRpmPercent}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ResumeRampEnabled}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ramp distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Total path length over which speed and RPM step up. 609.6 mm ≈ 2 ft."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ResumeRampDistanceMm}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ResumeRampEnabled}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ramp steps" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ResumeRampSteps}"/>
                             </Grid>
                         </StackPanel>
                     </Expander>
@@ -550,7 +625,7 @@
                     <StackPanel Margin="0,8">
 
                         <!-- CAMERA -->
-                        <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="True">
+                        <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="False">
                             <StackPanel Margin="0,2,0,6">
                                 <Grid Margin="8,2,8,4">
                                     <Grid.ColumnDefinitions>
@@ -574,7 +649,7 @@
                         </Expander>
 
                         <!-- OUTPUT -->
-                        <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="True">
+                        <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="False">
                             <StackPanel Margin="0,2,0,6">
                                 <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
                                            ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
@@ -593,7 +668,7 @@
                               IsVisible="{Binding Scan.IsCalibrationSubTab}">
                     <StackPanel Margin="0,8">
 
-                        <Expander Classes="SectionExpander" Header="HAND-EYE CALIBRATION" IsExpanded="True">
+                        <Expander Classes="SectionExpander" Header="HAND-EYE CALIBRATION" IsExpanded="False">
                             <StackPanel Margin="0,2,0,6">
 
                                 <TextBlock Classes="LabelMuted" Margin="8,4,8,8" TextWrapping="Wrap"
@@ -766,6 +841,9 @@
                     <!-- Options — shown only when a toolpath is selected -->
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
 
+                    <Expander Classes="SectionExpander" Header="GLOBAL" IsExpanded="False" Margin="0,0,0,4">
+                        <StackPanel>
+
                         <TextBlock Text="HOME POSITION" Classes="SectionHeader"/>
 
                         <Grid Margin="8,0,8,4">
@@ -842,6 +920,41 @@
                         </Grid>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsMergedToolpathSelected}">
+                            <TextBlock Text="MERGED TOOLPATH" Classes="SectionHeader"
+                                       ToolTip.Tip="Connector settings between the original toolpath segments"/>
+
+                            <Grid Margin="8,0,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Retraction height (mm)"
+                                           VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Z-hop lift after each segment finishes before traveling to the next"/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding $parent[Window].DataContext.Viewport.MergedRetractionHeightMm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="200" Increment="1"
+                                               FormatString="F1" FontSize="11"/>
+                            </Grid>
+
+                            <Grid Margin="8,0,8,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Travel speed (mm/s)"
+                                           VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Speed for connector moves between merged segments"/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding $parent[Window].DataContext.Viewport.MergedTravelSpeed, Mode=TwoWay}"
+                                               Minimum="1" Maximum="2000" Increment="10"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        </StackPanel>
 
                         <TextBlock Text="VISIBILITY" Classes="SectionHeader"/>
 
@@ -934,6 +1047,19 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
+                        </StackPanel>
+                    </Expander>
+
+                    <Expander Classes="SectionExpander"
+                              Header="PRINT TOOLPATH"
+                              IsExpanded="False"
+                              Margin="0,0,0,4"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.Lfam3ToolpathShowPrintOptions}">
+                        <StackPanel>
+
+                        <TextBlock Text="Pellet extrusion paths — export temps and RPM to KUKA $ANOUT."
+                                   Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+
                         <Button Content="Update Slice"
                                 Classes="SecondaryButton"
                                 HorizontalAlignment="Stretch"
@@ -992,6 +1118,123 @@
                                 HorizontalAlignment="Stretch"
                                 ToolTip.Tip="Save KRL to this cell's robot D: drive (\\?\UNC\bridgeIp\d). Filename defaults to yyyy_MMdd - name.src."
                                 Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
+
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- Scan-phase toolpath options -->
+                    <Expander Classes="SectionExpander"
+                              Header="SCAN TOOLPATH"
+                              IsExpanded="False"
+                              Margin="0,0,0,4"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.Lfam3ToolpathShowScanOptions}">
+                        <StackPanel>
+
+                        <TextBlock Text="Scanner bed capture and verification moves."
+                                   Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="TOOL data index" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.ToolDataIndex, Mode=TwoWay}"/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="BASE data index" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.BaseDataIndex, Mode=TwoWay}"/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="120"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp, Mode=TwoWay}"/>
+                        </Grid>
+
+                        <Button Margin="8,4,8,4"
+                                Content="Test Scan Capture"
+                                Classes="SecondaryButton"
+                                HorizontalAlignment="Stretch"
+                                Command="{Binding Scan.TestScanCommand}"
+                                ToolTip.Tip="Run a single Zivid capture using the scan toolpath pose"/>
+
+                        <TextBlock Text="{Binding Scan.ScanStatus}"
+                                   Classes="LabelMuted"
+                                   FontSize="10"
+                                   Margin="8,0,8,4"
+                                   TextWrapping="Wrap"/>
+
+                        <Button Margin="8,0,8,4"
+                                Content="Export Scan KRL"
+                                Classes="PrimaryButton"
+                                HorizontalAlignment="Stretch"
+                                ToolTip.Tip="Export scanner motion program (uses global home and orientation above)"
+                                Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+
+                        </StackPanel>
+                    </Expander>
+
+                    <!-- Mill-phase toolpath options -->
+                    <Expander Classes="SectionExpander"
+                              Header="MILL TOOLPATH"
+                              IsExpanded="False"
+                              Margin="0,0,0,4"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.Lfam3ToolpathShowMillOptions}">
+                        <StackPanel>
+
+                        <TextBlock Text="Spindle finish paths — feed, stepdown, and subtractive KRL."
+                                   Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+
+                        <Grid Margin="8,0,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Feed rate (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Subtractive.FeedRateMmMin, Mode=TwoWay}"
+                                           Minimum="100" Maximum="15000" Increment="100"
+                                           FormatString="F0" FontSize="11"/>
+                        </Grid>
+
+                        <Grid Margin="8,0,8,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="80"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Stepdown (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <NumericUpDown Grid.Column="1"
+                                           Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
+                                           Minimum="0.1" Maximum="20" Increment="0.1"
+                                           FormatString="F1" FontSize="11"/>
+                        </Grid>
+
+                        <Button Margin="8,0,8,4"
+                                Content="Export Mill KRL"
+                                Classes="PrimaryButton"
+                                HorizontalAlignment="Stretch"
+                                ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
+                                Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+
+                        <Button Margin="8,0,8,4"
+                                Content="Send to Robot"
+                                Classes="SecondaryButton"
+                                HorizontalAlignment="Stretch"
+                                ToolTip.Tip="Save mill KRL to the cell robot"
+                                Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
+
+                        </StackPanel>
+                    </Expander>
+
                     </StackPanel>
                 </StackPanel>
             </ScrollViewer>

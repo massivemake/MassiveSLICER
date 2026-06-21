@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:MassiveSlicer.App.Views"
+             x:Class="MassiveSlicer.App.Views.Lfam3WorkflowPhaseColumn"
+             x:Name="Root"
+             Height="56"
+             VerticalAlignment="Center"
+             HorizontalAlignment="Stretch"
+             Background="Transparent"
+             ClipToBounds="False">
+
+    <!-- Fixed 56px cell keeps rivet on the connector line; floats overflow upward (ClipToBounds=False). -->
+    <Grid ClipToBounds="False">
+
+        <local:Lfam3WorkflowPhaseBlock VerticalAlignment="Center"
+                                       HorizontalAlignment="Stretch"
+                                       ZIndex="10"
+                                       ToolPanel="{Binding ToolPanel, ElementName=Root}"
+                                       PhaseTitle="{Binding PhaseTitle, ElementName=Root}"
+                                       PhaseToolTip="{Binding PhaseToolTip, ElementName=Root}"
+                                       PhaseIcon="{Binding PhaseIcon, ElementName=Root}"
+                                       SelectPhaseCommand="{Binding SelectPhaseCommand, ElementName=Root}"
+                                       IsStepActive="{Binding IsStepActive, ElementName=Root}"
+                                       IsStepCompleted="{Binding IsStepCompleted, ElementName=Root}"
+                                       IsStepPending="{Binding IsStepPending, ElementName=Root}"
+                                       IsDetailExpanded="{Binding IsDetailExpanded, ElementName=Root}"
+                                       ShowPlayback="{Binding ShowPlayback, ElementName=Root}"
+                                       DetailContent="{Binding DetailContent, ElementName=Root}"
+                                       DetailTemplate="{Binding DetailTemplate, ElementName=Root}"/>
+
+        <!-- Float lives in a Canvas so it is measured with infinite height (no 56px clamp).
+             Canvas.Bottom pins the float's BOTTOM edge just above the rivet; the playback +
+             param card stack ABOVE the pills and the whole thing grows strictly UPWARD when
+             expanded. A height-clamped Grid/Border cell forced the content to overflow
+             downward over the rivet and off-screen — the Canvas is what removes the clamp. -->
+        <Canvas x:Name="FloatCanvas"
+                ClipToBounds="False"
+                IsVisible="{Binding IsStepActive, ElementName=Root}">
+            <Border Classes="Lfam3WorkflowPhaseFloat"
+                    Canvas.Left="0"
+                    Canvas.Bottom="78"
+                    Width="{Binding #FloatCanvas.Bounds.Width}"
+                    ZIndex="100">
+                <StackPanel Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                    <Border Classes="Lfam3WorkflowSeqPanel"
+                            Classes.expanded="{Binding ShowPlayback, ElementName=Root}">
+                        <local:Lfam3ToolChangePlaybackView DataContext="{Binding ToolPanel, ElementName=Root}"/>
+                    </Border>
+
+                    <Border Classes="Lfam3WorkflowPhaseCard"
+                            Classes.active="{Binding ShowPlayback, ElementName=Root}"
+                            IsVisible="{Binding ShowPlayback, ElementName=Root}">
+                        <ContentControl Content="{Binding DetailContent, ElementName=Root}"
+                                        ContentTemplate="{Binding DetailTemplate, ElementName=Root}"/>
+                    </Border>
+
+                    <local:Lfam3WorkflowPickDepositFloat ToolPanel="{Binding ToolPanel, ElementName=Root}"/>
+                </StackPanel>
+            </Border>
+        </Canvas>
+    </Grid>
+</UserControl>

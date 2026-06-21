@@ -17,6 +17,49 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
 
     public bool UsesSplitIoLayout { get; }
 
+    /// <summary>Robot section shows live axis + TCP readout from C3Bridge sync.</summary>
+    public bool ShowRobotPose { get; }
+
+    /// <summary>Robot I/O uses Position | Inputs | Outputs columns.</summary>
+    public bool UsesRobotTripleLayout => ShowRobotPose;
+
+    /// <summary>Extruder-style Inputs | Outputs only (no position column).</summary>
+    public bool UsesDualIoLayout => UsesSplitIoLayout && !ShowRobotPose;
+
+    private bool _isRobotPoseLive;
+    public bool IsRobotPoseLive
+    {
+        get => _isRobotPoseLive;
+        set
+        {
+            if (!SetField(ref _isRobotPoseLive, value)) return;
+            NotifyRobotPoseLines();
+        }
+    }
+
+    private double _a1, _a2, _a3, _a4, _a5, _a6, _e1;
+    private double _tcpX, _tcpY, _tcpZ, _tcpA, _tcpB, _tcpC;
+
+    public double A1 { get => _a1; set => SetField(ref _a1, value); }
+    public double A2 { get => _a2; set => SetField(ref _a2, value); }
+    public double A3 { get => _a3; set => SetField(ref _a3, value); }
+    public double A4 { get => _a4; set => SetField(ref _a4, value); }
+    public double A5 { get => _a5; set => SetField(ref _a5, value); }
+    public double A6 { get => _a6; set => SetField(ref _a6, value); }
+    public double E1 { get => _e1; set => SetField(ref _e1, value); }
+    public double TcpX { get => _tcpX; set => SetField(ref _tcpX, value); }
+    public double TcpY { get => _tcpY; set => SetField(ref _tcpY, value); }
+    public double TcpZ { get => _tcpZ; set => SetField(ref _tcpZ, value); }
+    public double TcpA { get => _tcpA; set => SetField(ref _tcpA, value); }
+    public double TcpB { get => _tcpB; set => SetField(ref _tcpB, value); }
+    public double TcpC { get => _tcpC; set => SetField(ref _tcpC, value); }
+
+    public string TcpPositionLine =>
+        IsRobotPoseLive ? $"X {TcpX:F1}  Y {TcpY:F1}  Z {TcpZ:F1} mm" : "—";
+
+    public string TcpOrientationLine =>
+        IsRobotPoseLive ? $"A {TcpA:F2}  B {TcpB:F2}  C {TcpC:F2}°" : "—";
+
     private string _statusLine = "—";
     public string StatusLine
     {
@@ -31,6 +74,32 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
     {
         Title = title;
         UsesSplitIoLayout = title is "Robot (KUKA)" or "Pellet Extruder";
+        ShowRobotPose = title == "Robot (KUKA)";
+    }
+
+    internal void ClearRobotPose()
+    {
+        IsRobotPoseLive = false;
+        A1 = A2 = A3 = A4 = A5 = A6 = E1 = 0;
+        TcpX = TcpY = TcpZ = TcpA = TcpB = TcpC = 0;
+        NotifyRobotPoseLines();
+    }
+
+    internal void ApplyRobotPose(
+        double a1, double a2, double a3, double a4, double a5, double a6, double e1,
+        double tcpX, double tcpY, double tcpZ, double tcpA, double tcpB, double tcpC)
+    {
+        IsRobotPoseLive = true;
+        A1 = a1; A2 = a2; A3 = a3; A4 = a4; A5 = a5; A6 = a6; E1 = e1;
+        TcpX = tcpX; TcpY = tcpY; TcpZ = tcpZ;
+        TcpA = tcpA; TcpB = tcpB; TcpC = tcpC;
+        NotifyRobotPoseLines();
+    }
+
+    void NotifyRobotPoseLines()
+    {
+        OnPropertyChanged(nameof(TcpPositionLine));
+        OnPropertyChanged(nameof(TcpOrientationLine));
     }
 
     internal void PartitionInputOutputSignals()
@@ -284,6 +353,7 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
         }
 
         UpdateSectionStatus();
+        UpdateRobotPoseSection();
         ApplyPolling();
     }
 
@@ -337,8 +407,7 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
             {
                 "Robot (KUKA)"    => true,
                 "Pellet Extruder" => _showExtruderSection,
-                // Pos28 valves — always available when Live I/O is expanded for manual control.
-                "Scanner"         => _showScannerSection || IsExpanded,
+                "Scanner"         => _showScannerSection,
                 "Milling Spindle" => _showMillingSection,
                 _                 => false,
             };
@@ -355,8 +424,38 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
         {
             UpdateSectionStatus();
             ApplyPolling();
+            UpdateRobotPoseSection();
             OnPropertyChanged(nameof(Phase1Hint));
+            return;
         }
+
+        if (IsRobotPoseProperty(e.PropertyName))
+            UpdateRobotPoseSection();
+    }
+
+    static bool IsRobotPoseProperty(string? name) => name is
+        nameof(RobotPanelViewModel.A1) or nameof(RobotPanelViewModel.A2) or
+        nameof(RobotPanelViewModel.A3) or nameof(RobotPanelViewModel.A4) or
+        nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6) or
+        nameof(RobotPanelViewModel.E1) or
+        nameof(RobotPanelViewModel.TcpX) or nameof(RobotPanelViewModel.TcpY) or
+        nameof(RobotPanelViewModel.TcpZ) or nameof(RobotPanelViewModel.TcpA) or
+        nameof(RobotPanelViewModel.TcpB) or nameof(RobotPanelViewModel.TcpC);
+
+    void UpdateRobotPoseSection()
+    {
+        var section = Sections.FirstOrDefault(s => s.ShowRobotPose);
+        if (section is null) return;
+
+        if (_robot?.IsConnected != true)
+        {
+            section.ClearRobotPose();
+            return;
+        }
+
+        section.ApplyRobotPose(
+            _robot.A1, _robot.A2, _robot.A3, _robot.A4, _robot.A5, _robot.A6, _robot.E1,
+            _robot.TcpX, _robot.TcpY, _robot.TcpZ, _robot.TcpA, _robot.TcpB, _robot.TcpC);
     }
 
     void OnIoSnapshotUpdated(object? sender, IReadOnlyDictionary<string, string> snapshot)

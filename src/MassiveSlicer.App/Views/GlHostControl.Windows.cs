@@ -32,8 +32,8 @@ namespace MassiveSlicer.App.Views;
 //      framebuffer is ever allocated or touched by the driver during resize).
 //   2. Render into our own FBO whose teardown code manually detaches all
 //      attachments and calls GL.Finish() both before and after (see DestroyResources).
-//   3. Read the finished pixels back to CPU with glReadPixels and blit them into
-//      an Avalonia WriteableBitmap displayed by a normal Image control.
+//   3. Read finished pixels via PBO pack buffers (no synchronous client readback)
+//      and present into an Avalonia WriteableBitmap on an Image control.
 //
 // This avoids the AMD resize crash entirely and also sidesteps the Win32 airspace
 // problem (no native child HWND is visible on screen, so Avalonia overlay controls
@@ -77,18 +77,23 @@ internal sealed class GlHostControl : UserControl, IDisposable
     private int _outputFbo, _outputColorTex, _outputDepthRbo;
     private int _fboW, _fboH;
 
-    // -- CPU pixel buffers -----------------------------------------------------
-    // _rawPixels receives the bottom-up GL read; _staging holds the Y-flipped
-    // result ready for the Avalonia WriteableBitmap.
+    // -- PBO readback (replaces synchronous glReadPixels-to-CPU) ---------------
+    // Ping-pong pack buffers: GPU DMAs the prior frame while we map the other.
 
-    private byte[]? _rawPixels;
+    private int _packPbo0, _packPbo1;
+    private int _packPboBytes;
+    private int _writePbo;          // index (0|1) receiving the next read
+    private int _mapPbo = -1;       // index ready to map, or -1
+    private IntPtr _readFence;
     private byte[]? _staging;
+    private byte[]? _packRaw;
 
     // -- GL thread -------------------------------------------------------------
 
     private Thread? _glThread;
     private volatile bool _running;
     private volatile int _pendingW, _pendingH;
+    private volatile int _pendingFrames;
     private readonly System.Threading.ManualResetEventSlim _frameSignal = new(false);
 
     // -- Timing ----------------------------------------------------------------
@@ -107,7 +112,17 @@ internal sealed class GlHostControl : UserControl, IDisposable
     }
 
     /// <summary>Queues one render frame on the GL thread. Safe to call from any thread.</summary>
-    public void RequestNextFrameRendering() => _frameSignal.Set();
+    public void RequestNextFrameRendering()
+    {
+        Interlocked.Increment(ref _pendingFrames);
+        _frameSignal.Set();
+    }
+
+    /// <summary>
+    /// Fraction of viewport resolution used while orbiting/panning (0.25–1).
+    /// Lower values cut GPU fill + readback cost on Windows.
+    /// </summary>
+    public float InteractionRenderScale { get; set; } = 1f;
 
     // -- Avalonia lifecycle ----------------------------------------------------
 
@@ -116,6 +131,13 @@ internal sealed class GlHostControl : UserControl, IDisposable
         _running = true;
         _glThread = new Thread(GlThreadProc) { Name = "GL-Offscreen", IsBackground = true };
         _glThread.Start();
+
+        // Layout may not have run before the first cell swap; capture size after attach.
+        Dispatcher.UIThread.Post(() =>
+        {
+            CaptureBoundsSize();
+            RequestNextFrameRendering();
+        }, DispatcherPriority.Loaded);
     }
 
     private void OnDetached(object? sender, VisualTreeAttachmentEventArgs e)
@@ -129,10 +151,15 @@ internal sealed class GlHostControl : UserControl, IDisposable
     protected override void OnSizeChanged(SizeChangedEventArgs e)
     {
         base.OnSizeChanged(e);
+        CaptureBoundsSize();
+        RequestNextFrameRendering();
+    }
+
+    private void CaptureBoundsSize()
+    {
         double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         _pendingW = Math.Max(1, (int)(Bounds.Width  * scale));
         _pendingH = Math.Max(1, (int)(Bounds.Height * scale));
-        RequestNextFrameRendering();
     }
 
     // -- GL thread -------------------------------------------------------------
@@ -152,11 +179,23 @@ internal sealed class GlHostControl : UserControl, IDisposable
                 _frameSignal.Reset();
                 if (!_running) break;
 
-                int w = _pendingW, h = _pendingH;
-                if (w <= 0 || h <= 0) continue;
+                // Coalesce bursty RequestNextFrameRendering (orbit drag) into one draw.
+                if (Interlocked.Exchange(ref _pendingFrames, 0) <= 0)
+                    continue;
+
+                int displayW = _pendingW, displayH = _pendingH;
+                if (displayW <= 0 || displayH <= 0) continue;
+
+                float scale = Math.Clamp(InteractionRenderScale, 0.25f, 1f);
+                int w = Math.Max(1, (int)(displayW * scale));
+                int h = Math.Max(1, (int)(displayH * scale));
 
                 if (w != _fboW || h != _fboH)
                     ResizeResources(w, h);
+
+                // Present the previously issued PBO read while we render the next frame.
+                if (_mapPbo >= 0)
+                    TryPresentPackedFrame(w, h);
 
                 // Render into our output FBO.  SceneRenderer reads the currently
                 // bound draw FBO via GetInteger(DrawFramebufferBinding) and uses it
@@ -169,10 +208,18 @@ internal sealed class GlHostControl : UserControl, IDisposable
                 GL.BindFramebuffer(FramebufferTarget.Framebuffer, _outputFbo);
                 GlRender?.Invoke(delta, w, h);
 
-                // Synchronous pixel readback: stalls ~1-3 ms until the GPU finishes,
-                // then the frame is immediately available with zero presentation delay.
-                // For an on-demand viewer this is preferable to a one-frame async lag.
-                ReadPixelsAndPresent(w, h);
+                IssuePboRead(w, h);
+
+                // On-demand frames (cell switch, single orbit step) must present immediately.
+                if (Interlocked.CompareExchange(ref _pendingFrames, 0, 0) == 0)
+                    TryPresentPackedFrame(w, h);
+            }
+
+            // Drain the final packed frame when shutting down or after the last render.
+            if (_mapPbo >= 0 && _fboW > 0 && _fboH > 0)
+            {
+                WaitForReadFence();
+                TryPresentPackedFrame(_fboW, _fboH);
             }
 
             // Fire deinit on the GL context so SceneRenderer can release GPU resources.
@@ -181,34 +228,116 @@ internal sealed class GlHostControl : UserControl, IDisposable
         }
         finally
         {
+            DestroyPackBuffers();
             DestroyResources();
             DestroyContext();
         }
     }
 
-    // -- Synchronous readback -> WriteableBitmap -------------------------------
+    // -- PBO pack readback -> WriteableBitmap ----------------------------------
 
-    private void ReadPixelsAndPresent(int w, int h)
+    private void EnsurePackBuffers(int byteSize)
+    {
+        if (_packPbo0 != 0 && _packPboBytes == byteSize) return;
+
+        DestroyPackBuffers();
+        _packPbo0 = GL.GenBuffer();
+        _packPbo1 = GL.GenBuffer();
+        foreach (var id in new[] { _packPbo0, _packPbo1 })
+        {
+            GL.BindBuffer(BufferTarget.PixelPackBuffer, id);
+            GL.BufferData(BufferTarget.PixelPackBuffer, byteSize, IntPtr.Zero, BufferUsageHint.StreamRead);
+        }
+        GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+
+        _packPboBytes = byteSize;
+        _writePbo     = 0;
+        _mapPbo       = -1;
+        DeleteReadFence();
+    }
+
+    private void IssuePboRead(int w, int h)
     {
         int stride  = w * 4;
         int bufSize = stride * h;
+        EnsurePackBuffers(bufSize);
 
-        if (_rawPixels is null || _rawPixels.Length != bufSize) _rawPixels = new byte[bufSize];
-        if (_staging   is null || _staging.Length   != bufSize) _staging   = new byte[bufSize];
-
-        // Blocking read -- GPU stalls until all prior draw calls complete and the
-        // pixels are transferred to _rawPixels.  Typically 1-3 ms on modern hardware.
+        int pbo = _writePbo == 0 ? _packPbo0 : _packPbo1;
         GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _outputFbo);
-        GL.ReadPixels(0, 0, w, h, GlPixelFormat.Rgba, PixelType.UnsignedByte, _rawPixels);
+        GL.BindBuffer(BufferTarget.PixelPackBuffer, pbo);
+        // Offset 0 => pack into PBO, not client memory (no synchronous bus stall here).
+        GL.ReadPixels(0, 0, w, h, GlPixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
 
-        // Flip rows: OpenGL origin is bottom-left; Avalonia bitmap origin is top-left.
-        for (int row = 0; row < h; row++)
-            System.Buffer.BlockCopy(_rawPixels, (h - 1 - row) * stride, _staging, row * stride, stride);
+        DeleteReadFence();
+        _readFence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, 0);
+        GL.Flush();
 
-        var staging = _staging;
+        _mapPbo   = _writePbo;
+        _writePbo = 1 - _writePbo;
+    }
+
+    private void TryPresentPackedFrame(int w, int h)
+    {
+        if (_mapPbo < 0) return;
+
+        WaitForReadFence();
+
+        int stride  = w * 4;
+        int bufSize = stride * h;
+        if (_staging is null || _staging.Length != bufSize)
+            _staging = new byte[bufSize];
+
+        if (_packRaw is null || _packRaw.Length != bufSize)
+            _packRaw = new byte[bufSize];
+
+        int pbo = _mapPbo == 0 ? _packPbo0 : _packPbo1;
+        GL.BindBuffer(BufferTarget.PixelPackBuffer, pbo);
+        GL.GetBufferSubData(BufferTarget.PixelPackBuffer, IntPtr.Zero, bufSize, _packRaw);
+        GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+
+        FlipRowsRgba(_packRaw, _staging, w, h);
+
+        _mapPbo = -1;
+        DeleteReadFence();
+
+        var staging   = _staging;
         int capturedW = w, capturedH = h;
-        Dispatcher.UIThread.InvokeAsync(() => UpdateBitmap(staging, capturedW, capturedH))
-                           .GetAwaiter().GetResult();
+        Dispatcher.UIThread.Post(() => UpdateBitmap(staging, capturedW, capturedH));
+    }
+
+    private static void FlipRowsRgba(byte[] bottomUp, byte[] topDown, int w, int h)
+    {
+        int stride = w * 4;
+        for (int row = 0; row < h; row++)
+            System.Buffer.BlockCopy(bottomUp, (h - 1 - row) * stride, topDown, row * stride, stride);
+    }
+
+    private void WaitForReadFence()
+    {
+        if (_readFence == IntPtr.Zero) return;
+
+        var status = GL.ClientWaitSync(_readFence, ClientWaitSyncFlags.SyncFlushCommandsBit, 50_000_000);
+        if (status == WaitSyncStatus.TimeoutExpired)
+            GL.ClientWaitSync(_readFence, ClientWaitSyncFlags.None, uint.MaxValue);
+
+        DeleteReadFence();
+    }
+
+    private void DeleteReadFence()
+    {
+        if (_readFence == IntPtr.Zero) return;
+        GL.DeleteSync(_readFence);
+        _readFence = IntPtr.Zero;
+    }
+
+    private void DestroyPackBuffers()
+    {
+        DeleteReadFence();
+        if (_packPbo0 != 0) { GL.DeleteBuffer(_packPbo0); _packPbo0 = 0; }
+        if (_packPbo1 != 0) { GL.DeleteBuffer(_packPbo1); _packPbo1 = 0; }
+        _packPboBytes = 0;
+        _mapPbo       = -1;
     }
 
     private void UpdateBitmap(byte[] staging, int w, int h)
@@ -233,6 +362,7 @@ internal sealed class GlHostControl : UserControl, IDisposable
 
     private void ResizeResources(int w, int h)
     {
+        DestroyPackBuffers();
         DestroyResources();
 
         // Output FBO: SceneRenderer composites its final frame here.

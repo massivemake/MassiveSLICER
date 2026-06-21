@@ -291,6 +291,8 @@ public partial class ViewportView : UserControl
                 _playbackStopwatch.Restart();
             };
 
+            WireToolChangeSequence(vm);
+
             vm.OnPlaybackToggled = playing =>
             {
                 if (playing)
@@ -840,6 +842,7 @@ public partial class ViewportView : UserControl
         }
 
         _renderer.Render(w, h);
+        UpdateSequenceWaypointTags(w, h);
     }
 
     // -- TCP readout -----------------------------------------------------------
@@ -1051,8 +1054,31 @@ public partial class ViewportView : UserControl
 
     // -- Cell swap -------------------------------------------------------------
 
+    void ClearAllViewportToolpaths()
+    {
+        _renderer.ClearAllToolpaths();
+        _toolpathByNode.Clear();
+        _rawToolpathByNode.Clear();
+        _toolpathMetaByNode.Clear();
+        _mergedByNode.Clear();
+        _toolpathOriginByNode.Clear();
+        _scrubCacheByNode.Clear();
+        _ikSolutionsByNode.Clear();
+        _moveTimesMsByNode.Clear();
+        _singularityByNode.Clear();
+        _activeScrubNode = null;
+    }
+
     private void ApplyCellSwap(CellSwapPayload swap, ViewportViewModel vm)
     {
+        // Stop tool-change playback on the UI thread before FK / multi-tool state is torn down.
+        if (Dispatcher.UIThread.CheckAccess())
+            ClearToolChangeSequence(restorePriorMount: false);
+        else
+            Dispatcher.UIThread.Invoke(() => ClearToolChangeSequence(restorePriorMount: false));
+
+        ClearAllViewportToolpaths();
+
         _cellGpuUploadQueue.Clear();
         _cellGpuUploadPending = false;
 
@@ -1184,7 +1210,7 @@ public partial class ViewportView : UserControl
             {
                 _multiToolFlangeParented = true;
                 AddMultiToolVisualsToScene(mt, flange);
-                ApplyDefaultMultiToolMount(swap, mt, vm);
+                ApplyInitialMultiToolState(vm);
             }
             else if (swap.ToolHolder is not null && swap.FirstTool is { } firstTool)
             {
@@ -1207,7 +1233,7 @@ public partial class ViewportView : UserControl
         {
             System.Console.Error.WriteLine("[cell] robot flange not found — docked tools only");
             AddMultiToolVisualsToScene(mtNoFlange, flange: null);
-            ApplyDefaultMultiToolMount(swap, mtNoFlange, vm);
+            ApplyInitialMultiToolState(vm);
         }
 
         RebuildFrameMatrices();
@@ -1230,6 +1256,7 @@ public partial class ViewportView : UserControl
         // Dispatch UI-thread updates: joint limits, home angles, tool library.
         Dispatcher.UIThread.InvokeAsync(() =>
         {
+            ClearToolChangeSequence(restorePriorMount: false);
             vm.ResetViewportOverlayState();
             UpdateFocusOverlay();
             vm.NotifyCellChanged();
@@ -1241,10 +1268,13 @@ public partial class ViewportView : UserControl
             vm.LiveIo.SetMillingBridgeConfig(swap.Config.MillIp, swap.Config.HasMilling, swap.Config.MillBridgePort);
             vm.Robot.SetToolLibrary(swap.Config.EffectiveTools);
 
-            if (swap.MultiTools is { } mt)
-                vm.MountedToolName = mt.MountedToolName ?? mt.DefaultToolName;
+            if (swap.MultiTools is not null)
+                vm.MountedToolName = swap.MultiTools.MountedToolName ?? "";
             else if (swap.FirstTool is { Name: var mountName })
                 vm.MountedToolName = mountName;
+
+            KrlToolChangeSequenceParser.KrcRootOverride = swap.Config.KrcRoot;
+            vm.RaiseToolChangeCommandsCanExecuteChanged();
 
             if (swap.FirstTool is { } tool)
             {
@@ -1656,6 +1686,12 @@ public partial class ViewportView : UserControl
                     }
                     flatVm2.IsLayFlatMode = false;
                 }
+                else if (DataContext is ViewportViewModel seqVm
+                         && seqVm.IsDevMode
+                         && TryPickSequenceWaypoint((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH))
+                {
+                    GlCanvas.RequestNextFrameRendering();
+                }
                 else
                 {
                     float vpW2 = (float)GlCanvas.Bounds.Width;
@@ -1778,14 +1814,8 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private void ApplyDefaultMultiToolMount(CellSwapPayload swap, CellEnvironmentBuilder.CellMultiToolSet mt, ViewportViewModel vm)
-    {
-        var mountName = mt.MountedToolName ?? mt.DefaultToolName;
-        var mountCfg  = swap.Config.EffectiveTools.FirstOrDefault(t => t.Name == mountName)
-                     ?? swap.FirstTool;
-        if (mountCfg is not null)
-            ApplyMultiToolMount(mountCfg, vm);
-    }
+    /// <summary>LFAM 3: all toolheads parked on docks; flange empty until a Pick simulation or manual mount.</summary>
+    void ApplyInitialMultiToolState(ViewportViewModel vm) => ApplyMultiToolUnmount(vm, updateVm: false);
 
     private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm)
     {
@@ -1826,11 +1856,8 @@ public partial class ViewportView : UserControl
         RebuildIkSolver(vm);
         if (vm.Robot is not null)
             SyncTcpReadout(vm);
-        Dispatcher.UIThread.Post(() =>
-        {
-            vm.MountedToolName = tool.Name;
-            vm.NotifyCellChanged();
-        });
+        PostMultiToolVmState(vm, tool.Name);
+        Dispatcher.UIThread.Post(vm.NotifyCellChanged);
     }
 
     private void DeleteSelectedNode()

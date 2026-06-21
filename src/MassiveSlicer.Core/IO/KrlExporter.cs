@@ -15,6 +15,8 @@ public sealed record KrlExportSettings
     public float PrintSpeedMps { get; init; } = 0.1f;
     /// <summary>Travel (non-extrusion) move speed in m/s.</summary>
     public float TravelSpeedMps { get; init; } = 0.5f;
+    /// <summary>Wipe extrusion move speed in m/s.</summary>
+    public float WipeSpeedMps { get; init; } = 0.12f;
     public int AccelerationPercent { get; init; } = 100;
     /// <summary>World Z lift above the first/last print position for approach and retreat.</summary>
     public float ApproachZMm { get; init; } = 50f;
@@ -240,7 +242,8 @@ public static class KrlExporter
                             inZHopSequence = true;
                         }
 
-                        sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
+                        var zHopSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
+                        sb.AppendLine($"$VEL.CP = {zHopSpeed.ToString("F6", Inv)}");
                         var (za, zb, zc) = lastAbc;
                         sb.AppendLine(FormatLinExact(to, za, zb, zc));
                         lastPos = to;
@@ -249,12 +252,13 @@ public static class KrlExporter
                     }
 
                     inZHopSequence = false;
-                    sb.AppendLine(move.IsLayerChange ? ";layer change" : ";travel");
+                    sb.AppendLine(move.IsLayerChange ? ";layer change" : move.IsMergeConnector ? ";merge travel" : ";travel");
                     if (s.TravelSetAnout4Zero)
                         sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
                     else
                         sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
-                    sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
+                    var travelSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
+                    sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
                     var (ta, tb, tc) = lastAbc;
                     sb.AppendLine(FormatLinExact(to, ta, tb, tc));
                     sb.AppendLine();
@@ -281,7 +285,43 @@ public static class KrlExporter
                         sb.AppendLine(";wipe");
                         sb.AppendLine(FormatDirectAnout4(
                             ResolveAnout4ExtrudeText(s, move.WipeRpmScale), "wipe"));
-                        sb.AppendLine($"$VEL.CP = {s.PrintSpeedMps.ToString("F6", Inv)}");
+                        sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
+                        sb.AppendLine(FormatLin(to, ma, mb, mc));
+                        lastAbc = (ma, mb, mc);
+                        lastPos = to;
+                        continue;
+                    }
+
+                    if (move.IsResumeRamp)
+                    {
+                        if (needsRpmOn)
+                        {
+                            float waitSec = isFirstPrintStart
+                                ? s.ExtrusionStartWaitSec
+                                : s.ExtrusionResumeWaitSec;
+                            if (waitSec > 0f)
+                            {
+                                sb.AppendLine(FormatDirectAnout4(
+                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                                sb.AppendLine(FormatWaitSec(waitSec));
+                            }
+                            else
+                            {
+                                sb.AppendLine(FormatDirectAnout4(
+                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                            }
+
+                            isFirstPrintStart = false;
+                            needsRpmOn = false;
+                        }
+                        else
+                        {
+                            sb.AppendLine(FormatDirectAnout4(
+                                ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                        }
+
+                        float rampSpeed = s.PrintSpeedMps * move.ResumeSpeedScale;
+                        sb.AppendLine($"$VEL.CP = {rampSpeed.ToString("F6", Inv)}");
                         sb.AppendLine(FormatLin(to, ma, mb, mc));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
