@@ -35,13 +35,21 @@ public static class PreferencesLoader
         try
         {
             string json = File.ReadAllText(PrefsPath);
-            return JsonSerializer.Deserialize<AppPreferences>(json, Options)
-                   ?? new AppPreferences();
+            var prefs = JsonSerializer.Deserialize<AppPreferences>(json, Options)
+                        ?? new AppPreferences();
+            MigrateLegacyPrefs(prefs);
+            return prefs;
         }
         catch
         {
             return new AppPreferences();
         }
+    }
+
+    private static void MigrateLegacyPrefs(AppPreferences prefs)
+    {
+        if (prefs.WipeModeDisplay is "Natural" or "Normal")
+            prefs.WipeModeDisplay = "Same-Direction";
     }
 
     /// <summary>Serialises <paramref name="prefs"/> to disk, creating the directory if needed.</summary>

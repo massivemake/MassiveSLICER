@@ -1,6 +1,6 @@
 # MassiveSLICER V2 — Project Memory
 
-Last updated: 2026-06-21
+Last updated: 2026-06-21 (session 6)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -141,7 +141,8 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 ## Completed features
 
 ### LFAM 3 workflow timeline UI
-- Refactored all 7 phase columns in `Lfam3WorkflowTimelineView.axaml`: `HeaderPad` → `Fold` → `PhaseDetails` / param cards.
+- **Architecture (3- and 4-phase tracks):** `Lfam3WorkflowPhaseBlock` = rivet + phase label only. `Lfam3WorkflowPhaseColumn` wraps block + float layer (`Lfam3WorkflowPickDepositFloat`, playback, param card). Both grids in `Lfam3WorkflowTimelineView.axaml` use `Lfam3WorkflowPhaseColumn` — `Lfam3WorkflowPickDepositOverlay` removed.
+- **Rivet alignment (user-verified):** track grid `RowDefinitions="56"`, `Lfam3WorkflowTrack` height **68px**, phase column `Height="56"` + `VerticalAlignment="Center"`, connector `VerticalAlignment="Center"` through 52px icon centers. `ClipToBounds="False"` on track/panel/column.
 - Larger phase icons in `BaseStyles.axaml` (76×76 host, 54px node, 32px icons).
 - Cleaner phase borders and column structure; chevron/stem/connected layout removed.
 - Live I/O toggle above workflow phases; expands into `Lfam3LiveIoPanelView`.
@@ -149,6 +150,12 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 - **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi DIO names in bridge `io` dict. LFAM 3: `millIp` **192.168.0.249** (RevPi130866), `hasMilling: true`. Bridge deployed (`lfam-monitor.service` active). Status: `P3 live · bridge`.
 - **Live I/O milestone (Phases 1–3):** `LiveIoPhasePlan` all **Implemented**; catalog in `Lfam3LiveIoCatalog.cs`; panel in `Lfam3LiveIoPanelView`; poll loops in `LiveIoMonitorViewModel`. See **LFAM 3 Live I/O map** below.
 - LFAM 3 sidebar tab gating: Print → Additive, Scan → Scan, Mill → Subtractive (`SyncLfam3WorkflowSidebar`).
+- **LFAM 3 Pick/Deposit simulation:** KRL parser (`KrlToolChangeSequenceParser`), path overlay (`SequencePathRenderer`), Pick/Deposit buttons in workflow phase cards; 8 s playback, tool dock/flange swap at `USRTOOLTYPE` waypoint; active button highlight + chevron icons; deselects toolpath on start.
+- **Pick/Deposit placement:** Visible only on **active** phase (`IsStepActive`). Float lives in a **`Canvas`** in `Lfam3WorkflowPhaseColumn.axaml` (`Canvas.Bottom="78"` pins the float's bottom above the rivet). Track reserves 90px paint room (spacer + `Margin="0,-90,0,0"`). Click Pick/Deposit → `ActiveToolChangeSequenceId` → `ToolPanel.ShowPlayback` expands playback strip + param card. Stack order bottom→top is **pills → param card → playback**, so it grows strictly **upward** (independent of `LiveIo.IsExpanded`). See **LFAM 3 workflow layout — do not regress** below.
+- **Closing the menu clears the viewport toolpath:** the playback collapse chevron (`CollapseToolChangePlaybackCommand` → `CollapseToolChangePlayback` in `ViewportView.ToolChangeSequence.cs`) calls `ClearToolChangeSequence()` — hides the playback strip **and** removes the tool-change path overlay/markers, restores the prior mounted tool, and deactivates the pills.
+- **Connector line ends at the rivet perimeter:** each rivet (`Lfam3WorkflowPhaseBlock`) has an opaque 54px disc (`#0A0E14`, track bg) behind the node ellipse so the green/grey connector line is masked behind the circle instead of showing through the semi-transparent node fill.
+- **Live I/O robot position column:** Robot panel uses **Position | Inputs | Outputs** (`Lfam3LiveIoPanelView.axaml`, `LiveIoMonitorViewModel.cs`). When synced: A1–A6 + E1 from `$AXIS_ACT`, TCP X/Y/Z + A/B/C from `$POS_ACT` via existing `RobotSyncService` stream (~10 Hz). Extruder panel stays Inputs | Outputs only.
+- **Viewport selection → right panel:** mesh click → ADDITIVE tab; toolpath click → TOOLPATH tab (`SyncRightPanelToViewportSelection` in `MainWindowViewModel`).
 
 ### LFAM 3 Live I/O map (Phases 1–3 complete)
 
@@ -161,6 +168,7 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 | Milling cabinet RevPi | `millIp` **192.168.0.249** | 8765 | lfam-monitor JSON bridge |
 
 **Phase 1 — Robot (KUKA)** — `LiveIoSource.Kuka`, ~2×/s via C3Bridge when synced:
+- **Position readout** (sync only, separate from I/O poll): `$AXIS_ACT` → A1–A6 + E1 °; `$POS_ACT` → TCP X/Y/Z mm + A/B/C °. Wired `RobotPanelViewModel` → `LiveIoSectionViewModel` pose props; shown in left **POSITION** column.
 - Digital IN: `$IN[6,7,10–15,17]` (extruder ready, flange, tool changer, pressure)
 - Digital OUT (writable + confirm): `$OUT[5,7,9,11–16]`
 - Analog OUT (display): `$ANOUT[1–4]` — zones 1–3 °C, **extruder** RPM % (`KrlAnout` scaling)
@@ -268,6 +276,26 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 ### Phase UI polish (earlier)
 - Phase borders sloppy / icons cropped → new column structure, larger icon host, `ClipToBounds=False`.
 
+### LFAM 3 workflow layout — do not regress
+
+| Layer | File | Role |
+|-------|------|------|
+| Rivet | `Lfam3WorkflowPhaseBlock.axaml` | 52px circle button + phase title chip only — **no** Pick/Deposit, playback, or param cards |
+| Column | `Lfam3WorkflowPhaseColumn.axaml` | Fixed 56px layout cell; float hosted in a `Canvas` (sibling of rivet) so it is measured with **infinite height** (no 56px clamp); `Canvas.Bottom="58"` pins the float bottom just above the rivet and content grows **up** |
+| Pills | `Lfam3WorkflowPickDepositFloat.axaml` | Pick/Deposit pill group; binds `ToolPanel.PickCommand` / `DepositCommand` |
+| Track | `Lfam3WorkflowTimelineView.axaml` | 90px spacer above track; both 3- and 4-phase grids use `Lfam3WorkflowPhaseColumn` |
+
+**Never:**
+- Put Pick/Deposit inside the 56px rivet layout tree (stacks, large negative margins) — breaks alignment or collapses float to 0px height.
+- Host the float in a height-clamped `Grid`/`Border` cell and lift with a **fixed** `TranslateTransform` — the float height changes (~32px collapsed vs ~240px expanded) and an oversized child **top-anchors and overflows DOWNWARD** in the 56px cell, covering the rivet and running off the bottom of the screen. (This was the bug fixed 2026-06-21 session 6.) A `Bounds.Height`-driven dynamic translate also fails: the cell clamps every measured/arranged height to 56.
+- Tie phase detail expansion to `LiveIo.IsExpanded` — use `ToolPanel.ShowPlayback` only.
+- Re-add `Lfam3WorkflowPickDepositOverlay` sibling grid — superseded by per-column floats.
+
+**Always:**
+- Keep rivet row at 56px; host the float in a **`Canvas`** (no height clamp) and pin its bottom with `Canvas.Bottom` so content grows up. Float `Border` `Width` binds to `#FloatCanvas.Bounds.Width`, content `HorizontalAlignment="Center"`.
+- `ClipToBounds="False"` on track, panel, phase column, Canvas, and workflow overlay.
+- `NotifyToolChangePanels()` → `NotifyPhaseExpansionChanged()` when sequence state changes.
+
 ---
 
 ## Test status (last verified 2026-06-21)
@@ -295,6 +323,51 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 - `lfam3.json`: `"bed": { "hidden": true }` — flat bed omitted; **rotary bed** expected in environment nodes (`RotaryBed`).
 - Console: `robot=True bed=False rotary=True` is normal for LFAM 3.
 
+### LFAM 3 KUKA joint limits & cell poses
+
+**Joint limit source (KRC4):** `\\192.168.0.153\krc\ROBOTER\KRC\R1\Mada\$machine.dat` — `$SOFTN_END[1..7]` (min), `$SOFTP_END[1..7]` (max).
+
+| Axis | Min (°) | Max (°) |
+|------|---------|---------|
+| A1 | −185 | +185 |
+| A2 | −140 | **−5** |
+| A3 | −120 | +168 |
+| A4 | −350 | +350 |
+| A5 | −125 | +125 |
+| A6 | −350 | +350 |
+| E1 | −185 | +185 |
+
+Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
+
+**Cell load priority:** `CellPaths.PreferredCellsDirectory()` prefers repo `assets/cells/` (NAS) over `%LOCALAPPDATA%\MassiveSlicer\assets\cells` and publish folder. Dev-tuned stand poses live in AppData; repo copy must stay complete or geometry disappears.
+
+**Robot:** `worldPosition` (0, 0, 1000); homes — Home [0,−90,90,0,15,0], Service [0,−90,110,0,35,0].
+
+**Rotary bed** (`rotaryBed`):
+- `basePos`: [2048.242, 63.63916, −1090.5845] mm
+- `baseAbc`: [0, 0, −90]°
+- `e1Sign`: 1
+
+**Stands** (AppData dev-tuned, metres + radians):
+
+| id | position [x,y,z] | rotation [x,y,z] |
+|----|------------------|------------------|
+| extruder | 0.236, 0.26573, 2.34092 | −π/2, 0, 0 |
+| scanner | 1.34, 0.26573, 2.12689 | π/2, ~0, −π |
+| spindle | −0.769, 0.26573, 2.37767 | −π/2, 0, 0 |
+
+**Tool docks** (KRL mm/deg):
+
+| Tool | dock (x,y,z,a,b,c) | krlIndex |
+|------|-------------------|----------|
+| HV Extruder | 236.37, −2633.39, −545.53, 28.06, 88.73, 117.37 | 2 |
+| Scanner | 1340.33, −2028.61, −100.89, −75.55, −0.51, −179.71 | 6 |
+| Spindle | −768.61, −2027.87, −219.42, −52.25, 89.67, −53.10 | 3 |
+
+**Tool TCPs:** Extruder/Spindle share 694.76, 17.74, 312.44, A15; Scanner has distinct TCP + sensor origin.
+
+**Bridge:** `bridgeIp` 192.168.0.153, port 7000; `extIp` 192.168.0.196.
+
 ---
 
 ## Key files (quick reference)
@@ -304,8 +377,9 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 | Cell load | `MainWindow.axaml.cs` (`SwitchCell`), `CellSceneLoader.cs`, `CellEnvironmentBuilder.cs`, `ViewportView.axaml.cs` (`ApplyCellSwap`) |
 | Scene cache | `CellSceneCache.cs` (`Invalidate` for `reload-cell`) |
 | Console | `ConsoleViewModel.cs`, `ConsoleCommandRegistry.cs`, `ConsoleView.axaml` |
-| Workflow | `Lfam3WorkflowTimelineView.axaml`, `BaseStyles.axaml`, `ViewportViewModel.cs` |
-| Live I/O | `LiveIoMonitorViewModel.cs`, `ExtruderBridgeClient.cs`, `MillingModbusClient.cs`, `Lfam3LiveIoCatalog.cs`, `LiveIoPhasePlan.cs` |
+| Workflow | `Lfam3WorkflowTimelineView.axaml`, `Lfam3WorkflowPhaseBlock.axaml`, `Lfam3WorkflowPhaseColumn.axaml`, `Lfam3WorkflowPickDepositFloat.axaml`, `ToolChangePanelBinding.cs`, `BaseStyles.axaml`, `ViewportViewModel.cs` |
+| Live I/O | `Lfam3LiveIoPanelView.axaml`, `LiveIoMonitorViewModel.cs`, `ExtruderBridgeClient.cs`, `MillingModbusClient.cs`, `Lfam3LiveIoCatalog.cs`, `LiveIoPhasePlan.cs` |
+| Robot sync / pose | `RobotSyncService.cs`, `RobotPanelViewModel.cs` (`$AXIS_ACT`, `$POS_ACT` stream) |
 | Milling bridge deploy | `scripts/deploy_bridge_lfam3_milling.py` (GitHub: [scripts/deploy_bridge_lfam3_milling.py](https://github.com/MattWhite3194/MassiveSlicer/blob/main/scripts/deploy_bridge_lfam3_milling.py)) |
 | GL host | `GlHostControl.Windows.cs`, `ViewportView.axaml` |
 | Overlay | `ViewportOverlayView.axaml` |
@@ -319,12 +393,66 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 1. **PBR / textured GLB rendering** — UVs, normal maps, albedo textures in `MeshData` / `GltfLoader` / `MeshRenderer`; `UvSettingsViewModel` still stub.
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
 3. **KRL import** — parser not implemented (console/file menu stub only).
-4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O panel shows P1–P3 live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
+4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline expands on click; **rivets aligned on connector** (done); **Pick/Deposit pills above active phase** after expand + phase select, details expand **upward** on pill click (session-6 Canvas fix); transform bar; rock select → Focus bar; Live I/O **Position** column shows A1–A6/E1 + TCP when robot synced; P1–P3 I/O live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
 5. **Spindle RPM display** — not implemented; would need KUKA spindle `$ANOUT` or ATV340 Modbus (see LFAM 3 Live I/O map).
 
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-06-21 — Workflow polish: lift pills, clear toolpath on close, connector ends at rivet (session 6)
+- **Header caret direction:** `Lfam3WorkflowMinimizeIcon` (ViewportViewModel) was hardcoded `mdi-chevron-up`; now `IsLfam3WorkflowExpanded ? mdi-chevron-down : mdi-chevron-up` (down = collapse when expanded).
+- **Pills up ~20px:** `Lfam3WorkflowPhaseColumn.axaml` `Canvas.Bottom` 58 → 78.
+- **Close menu hides toolpath:** `CollapseToolChangePlayback` now calls `ClearToolChangeSequence()` (was only hiding the strip) → viewport path overlay/markers cleared, prior tool restored, pills deactivated.
+- **Connector line:** added opaque 54px disc (`#0A0E14`) behind the node ellipse in `Lfam3WorkflowPhaseBlock.axaml` so the line terminates at the circle perimeter (no show-through on active/pending/completed rivets).
+- **Verified** all three live via screenshots (Pick click + collapse chevron). Published: `%LOCALAPPDATA%\MassiveSlicer\build`
+
+### 2026-06-21 — Workflow Pick/Deposit menu opens UPWARD (session 6)
+- **Symptom:** Clicking Pick/Deposit on an active LFAM 3 phase expanded the playback strip + param card **downward** — covering the phase rivet and running off the bottom of the screen behind the status bar/taskbar.
+- **Cause:** Float was a `Border` (`VerticalAlignment="Bottom"`, fixed `TranslateTransform Y=-74`) inside the **56px** phase-column cell. When expanded content (~240px) exceeds the cell, Avalonia clamps the arranged height to 56 and **top-anchors** it, so the StackPanel overflows downward; the fixed −74 lift was far too small. Verified live via screenshots (UIA-driven Pick click).
+- **Fix:** `Lfam3WorkflowPhaseColumn.axaml` — host the float in a **`Canvas`** (measures children with infinite height → no clamp). `Canvas.Bottom="58"` pins the float bottom ~2px above the rivet; float `Border Width="{Binding #FloatCanvas.Bounds.Width}"`, inner `StackPanel HorizontalAlignment="Center"`. Stack order pills(bottom)→card→playback grows strictly upward. No converter / code-behind needed.
+- **Verified:** Build + run on this machine; expanded menu sits fully above the rivet, on-screen; rivet still aligned on the connector line.
+- Published: `%LOCALAPPDATA%\MassiveSlicer\build`
+
+### 2026-06-21 — memory: workflow layout rules consolidated (session 5)
+- Documented canonical split: `PhaseBlock` (rivet) vs `PhaseColumn` (floats) vs `PickDepositFloat` (pills).
+- Added **LFAM 3 workflow layout — do not regress** table + never/always rules.
+- Marked rivet alignment user-verified; Pick/Deposit fix published, awaiting user confirm on pill visibility.
+
+### 2026-06-21 — Workflow Pick/Deposit floats + icon alignment (session 4)
+- **Symptom:** Phase rivets aligned on connector; Pick/Deposit pills invisible.
+- **Cause:** Float `Border` used `Margin="0,0,0,62"` inside a 56px-tall column — layout allocated negative height → 0px float.
+- **Fix:**
+  - `Lfam3WorkflowPhaseColumn.axaml`: floats use `TranslateTransform Y=-74` (visual lift) instead of oversized bottom margin; rivet unchanged in `Lfam3WorkflowPhaseBlock`.
+  - `Lfam3WorkflowTimelineView.axaml`: 90px spacer + negative margin above track for float paint room; 4-phase grid migrated to `Lfam3WorkflowPhaseColumn` (overlay removed).
+  - `ViewportViewModel.cs`: phase detail expansion gated on `ToolPanel.ShowPlayback` (Pick/Deposit), not `LiveIo.IsExpanded`.
+- **Rule:** Never share layout tree between rivet row and floats; never bottom-margin floats beyond cell height.
+- Published: `%LOCALAPPDATA%\MassiveSlicer\build`
+
+### 2026-06-21 — Pick/Deposit layout regression attempts (superseded)
+- **Symptom:** Pick/Deposit pills vanished when moved “up” via large negative bottom margins inside the 56px phase block.
+- **Failed approaches:** `Margin bottom: 148` inside `Lfam3WorkflowPhaseBlock`; bottom-anchored stack in phase block (shifted rivets); track-level `Lfam3WorkflowPickDepositOverlay` (icons OK, pills still invisible).
+- **Superseded by:** `Lfam3WorkflowPhaseColumn` + `TranslateTransform` lift + track spacer (session 4 entry above).
+
+### 2026-06-21 — Live I/O robot position column
+- **Robot (KUKA)** panel: three columns **Position | Inputs | Outputs** (`Lfam3LiveIoPanelView.axaml`, styles in `BaseStyles.axaml`).
+- **Position column:** JOINTS (A1–A6, E1), TCP mm (X/Y/Z), ABC ° — live when C3Bridge synced; copies from `RobotPanelViewModel` on `$AXIS_ACT` / `$POS_ACT` updates (`LiveIoMonitorViewModel.UpdateRobotPoseSection`).
+- Extruder section unchanged (dual Inputs | Outputs).
+
+### 2026-06-21 — LFAM 3 geometry regression (corrupt `lfam3.json`)
+- **Symptom:** After joint-limit sync, LFAM 3 robot/beds/stands/tools vanished at runtime.
+- **Cause:** Repo `assets/cells/LFAM3/lfam3.json` was stubbed (`joints: []`, `stands: []`, `tools: []`, `modelPath: "robot.glb"`). `CellPaths` prefers NAS repo over AppData, so app loaded the empty config.
+- **Fix:** Restored repo copy from `%LOCALAPPDATA%\MassiveSlicer\assets\cells\LFAM3\lfam3.json` (dev-tuned stand poses + updated joint limits). Documented limits/poses in **LFAM 3 KUKA joint limits & cell poses** (this file).
+
+### 2026-06-21 — LFAM 3 joint limits from KUKA `$machine.dat`
+- Read soft limits from `\\192.168.0.153\krc\ROBOTER\KRC\R1\Mada\$machine.dat`.
+- Corrected A1 (was ±60 → ±185) and A2 max (was +70 → **−5**).
+- Updated `lfam3.json` in AppData + `src/MassiveSlicer.App/Assets` (repo `assets/cells` was corrupted separately — see above).
+
+### 2026-06-21 — Pick/Deposit sim + selection-driven sidebar
+- **Tool-change simulation:** `ToolChangeSequence.cs`, `KrlToolChangeSequenceParser.cs`, `ToolChangeSequencePathBuilder.cs`, `SequencePathRenderer.cs`, `ViewportView.ToolChangeSequence.cs`; buttons in `Lfam3WorkflowTimelineView.axaml`; MassiveCONNECT parity (KRL parse, LIN/PTP path, yellow marker, mount gating).
+- **Sidebar sync:** `SyncRightPanelToViewportSelection` — source mesh → ADDITIVE; toolpath → TOOLPATH; LFAM 3 phase fallback when Additive tab hidden.
+- **Polish:** Pick/Deposit chevron icons, white border when sequence active; toolpath deselected on sim start; sequence cleared on cell swap.
 
 ### 2026-06-21 — Milestone: LFAM 3 Live I/O Phases 1–3 (GitHub)
 - **Committed & pushed** @ `dae3b33` on `feature/scan-rotary-bed-calibration`: full Live I/O stack — `Lfam3LiveIoCatalog`, `ExtruderBridgeClient`, `MillingModbusClient`, `LiveIoMonitorViewModel`, `Lfam3LiveIoPanelView`, workflow host, snapshot tests.

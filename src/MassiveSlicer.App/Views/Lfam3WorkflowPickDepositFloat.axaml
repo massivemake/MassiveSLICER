@@ -1,0 +1,22 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             x:Class="MassiveSlicer.App.Views.Lfam3WorkflowPickDepositFloat"
+             x:Name="Root"
+             Background="Transparent"
+             ClipToBounds="False"
+             IsHitTestVisible="True">
+
+    <Border Classes="Lfam3SeqPillGroup" HorizontalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="0">
+            <Button Classes="Lfam3SeqPill pick"
+                    Classes.active="{Binding ToolPanel.IsPickActive, ElementName=Root}"
+                    Command="{Binding ToolPanel.PickCommand, ElementName=Root}"
+                    Content="Pick"/>
+            <Button Classes="Lfam3SeqPill deposit"
+                    Classes.active="{Binding ToolPanel.IsDepositActive, ElementName=Root}"
+                    Command="{Binding ToolPanel.DepositCommand, ElementName=Root}"
+                    Content="Deposit"/>
+        </StackPanel>
+    </Border>
+</UserControl>

@@ -20,6 +20,21 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// <summary>RPM scale [0, 1] for wipe ramp-down (1 = full extrusion speed).</summary>
     public float WipeRpmScale { get; init; } = 1f;
 
+    /// <summary>Post-travel resume ramp segment (stepped speed + RPM after travel).</summary>
+    public bool IsResumeRamp { get; init; }
+
+    /// <summary>Print speed scale [0, 1] for <see cref="IsResumeRamp"/> segments.</summary>
+    public float ResumeSpeedScale { get; init; } = 1f;
+
+    /// <summary>RPM scale [0, 1] for <see cref="IsResumeRamp"/> segments.</summary>
+    public float ResumeRpmScale { get; init; } = 1f;
+
     /// <summary>Vertical or lifted component of a z-hop travel sequence.</summary>
     public bool IsZHop { get; init; }
+
+    /// <summary>Travel inserted when merging separate toolpaths (retraction + connector).</summary>
+    public bool IsMergeConnector { get; init; }
+
+    /// <summary>Override travel speed (m/s) for this move during KRL export. Null uses global travel speed.</summary>
+    public float? TravelSpeedMps { get; init; }
 }

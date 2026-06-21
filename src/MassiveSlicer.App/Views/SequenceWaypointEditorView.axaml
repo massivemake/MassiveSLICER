@@ -1,0 +1,129 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             x:Class="MassiveSlicer.App.Views.SequenceWaypointEditorView"
+             x:DataType="vm:SequenceWaypointEditorViewModel"
+             x:CompileBindings="True"
+             IsVisible="{Binding IsVisible}"
+             Background="Transparent">
+
+    <Border Classes="SeqWaypointEditorPanel"
+            HorizontalAlignment="Center"
+            VerticalAlignment="Center"
+            Width="380"
+            Margin="16">
+        <StackPanel Spacing="10">
+            <Grid ColumnDefinitions="*,Auto">
+                <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock Text="{Binding Title}"
+                               FontSize="16"
+                               FontWeight="Bold"
+                               Foreground="#f3f4f6"/>
+                    <TextBlock Text="{Binding Subtitle}"
+                               FontSize="11"
+                               Foreground="#9ca3af"
+                               TextWrapping="Wrap"/>
+                </StackPanel>
+                <Button Grid.Column="1"
+                        Classes="SeqWaypointEditorClose"
+                        Command="{Binding CloseCommand}"
+                        ToolTip.Tip="Close"
+                        Width="28" Height="28"
+                        Padding="0">
+                    <ia:Icon Value="mdi-close" FontSize="14" Foreground="#9ca3af"/>
+                </Button>
+            </Grid>
+
+            <Grid ColumnDefinitions="*,*"
+                  RowDefinitions="Auto,Auto,Auto"
+                  ColumnSpacing="10"
+                  RowSpacing="8"
+                  IsVisible="{Binding ShowCartesianFields}">
+                <StackPanel Grid.Row="0" Grid.Column="0" Spacing="2">
+                    <TextBlock Text="X (mm)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding X}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="1"
+                                   FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Row="0" Grid.Column="1" Spacing="2">
+                    <TextBlock Text="Y (mm)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding Y}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="1"
+                                   FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="0" Spacing="2">
+                    <TextBlock Text="Z (mm)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding Z}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="1"
+                                   FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
+                    <TextBlock Text="A (°)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding A}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="0.1"
+                                   FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="0" Spacing="2">
+                    <TextBlock Text="B (°)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding B}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="0.1"
+                                   FontSize="11"/>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="1" Spacing="2">
+                    <TextBlock Text="C (°)" Classes="LabelMuted" FontSize="10"/>
+                    <NumericUpDown Value="{Binding C}"
+                                   IsEnabled="{Binding IsEditable}"
+                                   FormatString="F3"
+                                   Increment="0.1"
+                                   FontSize="11"/>
+                </StackPanel>
+            </Grid>
+
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8" IsVisible="{Binding ShowCartesianFields}">
+                <Button Grid.Column="0"
+                        Classes="SeqWaypointEditorSecondary"
+                        Command="{Binding CopyAllCommand}"
+                        Content="Copy All Positions"/>
+                <Button Grid.Column="1"
+                        Classes="SeqWaypointEditorSecondary"
+                        Command="{Binding PasteAllCommand}"
+                        Content="Paste All Positions"/>
+            </Grid>
+
+            <TextBlock Text="{Binding Note}"
+                       IsVisible="{Binding HasNote}"
+                       FontSize="10"
+                       Foreground="#9ca3af"
+                       TextWrapping="Wrap"/>
+            <TextBlock Text="{Binding StatusMessage}"
+                       IsVisible="{Binding HasStatusMessage}"
+                       FontSize="10"
+                       Foreground="#59FF0D"
+                       TextWrapping="Wrap"/>
+
+            <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
+                <Button Grid.Column="0"
+                        Classes="SeqWaypointEditorSecondary"
+                        Command="{Binding ResetCommand}"
+                        IsEnabled="{Binding IsEditable}"
+                        Content="Reset"/>
+                <Button Grid.Column="1"
+                        Classes="SeqWaypointEditorSave"
+                        Command="{Binding SaveCommand}"
+                        IsEnabled="{Binding IsEditable}"
+                        Content="Save changes"/>
+            </Grid>
+        </StackPanel>
+    </Border>
+</UserControl>

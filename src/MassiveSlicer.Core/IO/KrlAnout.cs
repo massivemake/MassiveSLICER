@@ -65,4 +65,11 @@ public static class KrlAnout
     public static string RpmToAnoutText(
         float beadWidthMm, float layerHeightMm, float printSpeedMps, float flowRate)
         => RpmPercentToAnoutText(ComputeRpmPercent(beadWidthMm, layerHeightMm, printSpeedMps, flowRate));
+
+    /// <summary>Inverse of <see cref="TempToAnout"/> for live $ANOUT display.</summary>
+    public static float AnoutToTempC(float anout)
+        => (float)(((anout * 10.0 / 0.032) - 0.032) + 150.0);
+
+    /// <summary>Inverse of <see cref="RpmPercentToAnout"/> for live $ANOUT display.</summary>
+    public static float AnoutToRpmPercent(float anout) => anout * 100f;
 }

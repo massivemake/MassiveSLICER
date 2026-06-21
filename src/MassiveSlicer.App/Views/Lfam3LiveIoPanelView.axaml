@@ -92,6 +92,7 @@
                     <DataTemplate>
                         <Border Classes="Lfam3LiveIoSection"
                                 Classes.split-io="{Binding UsesSplitIoLayout}"
+                                Classes.robot-triple="{Binding UsesRobotTripleLayout}"
                                 Classes.pending="{Binding !IsPhaseLive}"
                                 VerticalAlignment="Top">
                             <StackPanel Spacing="4">
@@ -108,9 +109,121 @@
                                                MaxWidth="120"/>
                                 </Grid>
 
-                                <!-- Split I/O: inputs left, outputs right -->
+                                <!-- Robot: Position | Inputs | Outputs -->
+                                <Grid ColumnDefinitions="Auto,10,*,10,*"
+                                      IsVisible="{Binding UsesRobotTripleLayout}">
+                                    <!-- Position column -->
+                                    <Border Grid.Column="0" Classes="Lfam3LiveIoPoseColumn">
+                                        <StackPanel Spacing="6">
+                                            <Grid ColumnDefinitions="*,Auto">
+                                                <TextBlock Grid.Column="0"
+                                                           Text="POSITION"
+                                                           FontSize="9"
+                                                           FontWeight="SemiBold"
+                                                           Foreground="#59FF0D"
+                                                           LetterSpacing="0.8"
+                                                           VerticalAlignment="Center"/>
+                                                <Border Grid.Column="1"
+                                                        Classes="Lfam3LiveIoPoseLivePill"
+                                                        IsVisible="{Binding IsRobotPoseLive}">
+                                                    <TextBlock Text="LIVE"
+                                                               FontSize="7"
+                                                               FontWeight="Bold"
+                                                               Foreground="#59FF0D"
+                                                               LetterSpacing="0.5"/>
+                                                </Border>
+                                            </Grid>
+
+                                            <TextBlock Text="Sync robot for live position"
+                                                       FontSize="9"
+                                                       Classes="LabelMuted"
+                                                       TextWrapping="Wrap"
+                                                       IsVisible="{Binding !IsRobotPoseLive}"/>
+
+                                            <StackPanel Spacing="5" IsVisible="{Binding IsRobotPoseLive}">
+                                                <!-- Joint angles ($AXIS_ACT) -->
+                                                <Border Classes="Lfam3LiveIoPoseGroup">
+                                                    <StackPanel Spacing="1">
+                                                        <TextBlock Text="JOINTS" Classes="Lfam3LiveIoPoseGroupTitle"/>
+                                                        <Grid ColumnDefinitions="22,*,6,22,*" RowDefinitions="Auto,Auto,Auto,Auto">
+                                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="A1" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding A1, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="0" Grid.Column="3" Text="A4" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="0" Grid.Column="4" Text="{Binding A4, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="A2" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding A2, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="3" Text="A5" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="4" Text="{Binding A5, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="A3" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding A3, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="3" Text="A6" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="4" Text="{Binding A6, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="3" Grid.Column="0" Text="E1" Classes="Lfam3LiveIoPoseLabel" Margin="0,2,0,0"/>
+                                                            <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding E1, StringFormat={}{0:F1}°}" Classes="Lfam3LiveIoPoseValue" Margin="0,2,0,0"/>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- TCP Cartesian ($POS_ACT) -->
+                                                <Border Classes="Lfam3LiveIoPoseGroup">
+                                                    <StackPanel Spacing="1">
+                                                        <TextBlock Text="TCP · mm" Classes="Lfam3LiveIoPoseGroupTitle"/>
+                                                        <Grid ColumnDefinitions="14,*" RowDefinitions="Auto,Auto,Auto">
+                                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="X" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding TcpX, StringFormat={}{0:F1}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="Y" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding TcpY, StringFormat={}{0:F1}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="Z" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding TcpZ, StringFormat={}{0:F1}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- TCP orientation -->
+                                                <Border Classes="Lfam3LiveIoPoseGroup">
+                                                    <StackPanel Spacing="1">
+                                                        <TextBlock Text="ABC · °" Classes="Lfam3LiveIoPoseGroupTitle"/>
+                                                        <Grid ColumnDefinitions="14,*" RowDefinitions="Auto,Auto,Auto">
+                                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="A" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding TcpA, StringFormat={}{0:F2}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="B" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding TcpB, StringFormat={}{0:F2}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="C" Classes="Lfam3LiveIoPoseLabel"/>
+                                                            <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding TcpC, StringFormat={}{0:F2}}" Classes="Lfam3LiveIoPoseValue"/>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <Border Grid.Column="1" Classes="Lfam3LiveIoColumnDivider"/>
+                                    <StackPanel Grid.Column="2" Spacing="2">
+                                        <TextBlock Text="INPUTS"
+                                                   FontSize="9"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#59FF0D"
+                                                   LetterSpacing="0.8"
+                                                   Margin="0,0,0,2"/>
+                                        <ItemsControl ItemsSource="{Binding InputSignals}"
+                                                      ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
+                                    </StackPanel>
+                                    <Border Grid.Column="3" Classes="Lfam3LiveIoColumnDivider"/>
+                                    <StackPanel Grid.Column="4" Spacing="2">
+                                        <TextBlock Text="OUTPUTS"
+                                                   FontSize="9"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#59FF0D"
+                                                   LetterSpacing="0.8"
+                                                   Margin="0,0,0,2"/>
+                                        <ItemsControl ItemsSource="{Binding OutputSignals}"
+                                                      ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Extruder: Inputs | Outputs only -->
                                 <Grid ColumnDefinitions="*,10,*"
-                                      IsVisible="{Binding UsesSplitIoLayout}">
+                                      IsVisible="{Binding UsesDualIoLayout}">
                                     <StackPanel Grid.Column="0" Spacing="2">
                                         <TextBlock Text="INPUTS"
                                                    FontSize="9"
@@ -121,10 +234,7 @@
                                         <ItemsControl ItemsSource="{Binding InputSignals}"
                                                       ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
                                     </StackPanel>
-                                    <Border Grid.Column="1"
-                                            Width="1"
-                                            Background="#2a2f42"
-                                            Margin="0,2"/>
+                                    <Border Grid.Column="1" Classes="Lfam3LiveIoColumnDivider"/>
                                     <StackPanel Grid.Column="2" Spacing="2">
                                         <TextBlock Text="OUTPUTS"
                                                    FontSize="9"

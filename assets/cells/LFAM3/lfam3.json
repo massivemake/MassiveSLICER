@@ -11,15 +11,15 @@
       {
         "krlOffset": 0,
         "krlSign": -1,
-        "minDeg": -60,
-        "maxDeg": 60,
+        "minDeg": -185,
+        "maxDeg": 185,
         "axis": "Y"
       },
       {
         "krlOffset": 90,
         "krlSign": -1,
-        "minDeg": -120,
-        "maxDeg": 70,
+        "minDeg": -140,
+        "maxDeg": -5,
         "axis": "X"
       },
       {
@@ -130,8 +130,8 @@
       "modelPath": "assets/cells/LFAM3/Stands/stand_extruder.glb",
       "position": [
         0.236,
-        0.45,
-        2.340924
+        0.26573002,
+        2.34092
       ],
       "rotation": [
         -1.5707964,
@@ -145,13 +145,13 @@
       "modelPath": "assets/cells/LFAM3/Stands/stand_scanner.glb",
       "position": [
         1.34,
-        0.45,
-        2.3776686
+        0.26572505,
+        2.1268914
       ],
       "rotation": [
-        -1.5707964,
-        -0,
-        0
+        1.5707964,
+        -8.742278E-08,
+        -3.1415925
       ]
     },
     {
@@ -159,14 +159,14 @@
       "name": "Spindle Stand",
       "modelPath": "assets/cells/LFAM3/Stands/stand_spindle.glb",
       "position": [
-        -0.769,
-        0.45,
-        2.3776698
+        -0.5538245,
+        0.25787845,
+        2.0828164
       ],
       "rotation": [
-        -1.5707964,
-        -0,
-        0
+        1.5707964,
+        -8.742278E-08,
+        -3.1415925
       ]
     }
   ],
@@ -296,13 +296,12 @@
   "bridgePort": 7000,
   "extIp": "192.168.0.196",
   "extBridgePort": 8765,
-  "millIp": "192.168.0.249",
   "millBridgePort": 8765,
-  "hasMilling": true,
+  "hasMilling": false,
   "view": {
-    "azimuth": 24.999983,
-    "elevation": 12.399997,
-    "radius": 2436.2322,
+    "azimuth": -43.800022,
+    "elevation": 8,
+    "radius": 3419.4116,
     "targetX": 1749.5077,
     "targetY": 45.24054,
     "targetZ": 1631.6459

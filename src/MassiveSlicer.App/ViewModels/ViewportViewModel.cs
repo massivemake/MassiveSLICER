@@ -7,6 +7,7 @@ using MassiveSlicer.App;
 using MassiveSlicer.App.Enums;
 using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
@@ -254,10 +255,20 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _mountedToolName, value)) return;
+            OnPropertyChanged(nameof(MountedToolLabel));
+            OnPropertyChanged(nameof(HasFlangeMountedTool));
             SyncWorkflowPhaseFromMountedTool();
             NotifyWorkflowStateChanged();
+            RaiseToolChangeCommandsCanExecuteChanged();
         }
     }
+
+    /// <summary>Human-readable mounted tool for HUD (empty flange → "No tool").</summary>
+    public string MountedToolLabel =>
+        string.IsNullOrEmpty(MountedToolName) ? "No tool" : MountedToolName;
+
+    /// <summary>True when a toolhead mesh is on the robot flange.</summary>
+    public bool HasFlangeMountedTool => !string.IsNullOrEmpty(MountedToolName);
 
     /// <summary>LFAM 3 workflow timeline (Print → Scan → Mill, optional pre-print scan).</summary>
     public bool ShowLfam3ToolPicker =>
@@ -279,6 +290,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(Lfam3WorkflowMinimizeTip));
             OnPropertyChanged(nameof(Lfam3WorkflowMargin));
             OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+            OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
         }
     }
 
@@ -286,7 +298,7 @@ public sealed class ViewportViewModel : ViewModelBase
         IsLfam3WorkflowExpanded ? "mdi-chevron-down" : "mdi-chevron-up";
 
     public string Lfam3WorkflowMinimizeTip =>
-        IsLfam3WorkflowExpanded ? "Minimize workflow bar" : "Show workflow phases";
+        IsLfam3WorkflowExpanded ? "Collapse workflow panel" : "Expand workflow panel upward";
 
     public string Lfam3WorkflowStatusLabel =>
         IsPrePrintScanStepActive ? "Pre-print scan"
@@ -339,11 +351,11 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool IsMillStepActive    => _lfam3WorkflowPhaseIndex == MillPhaseIndex;
     public bool IsMillStepPending   => _lfam3WorkflowPhaseIndex < MillPhaseIndex;
 
-    /// <summary>Active phase column is visually expanded into its detail card.</summary>
-    public bool IsPrePrintScanStepExpanded => IsPrePrintScanStepActive && LiveIo.IsExpanded;
-    public bool IsPrintStepExpanded        => IsPrintStepActive && LiveIo.IsExpanded;
-    public bool IsVerifyScanStepExpanded   => IsVerifyScanStepActive && LiveIo.IsExpanded;
-    public bool IsMillStepExpanded         => IsMillStepActive && LiveIo.IsExpanded;
+    /// <summary>Active phase column shows playback/details after Pick or Deposit is clicked.</summary>
+    public bool IsPrePrintScanStepExpanded => IsPrePrintScanStepActive && ScannerToolPanel.ShowPlayback;
+    public bool IsPrintStepExpanded        => IsPrintStepActive && ExtruderToolPanel.ShowPlayback;
+    public bool IsVerifyScanStepExpanded   => IsVerifyScanStepActive && ScannerToolPanel.ShowPlayback;
+    public bool IsMillStepExpanded         => IsMillStepActive && SpindleToolPanel.ShowPlayback;
 
     // Inactive phase cards stack over the viewport when Live I/O is open — only the active
     // phase column expands; click another phase icon to switch.
@@ -404,18 +416,53 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get
         {
-            var bottom = _isToolpathSelected ? 78 : 20;
+            var bottom = _isToolpathSelected ? 88 : 32;
             return new Avalonia.Thickness(20, 0, 20, bottom);
         }
     }
 
-    /// <summary>Max height for the workflow overlay — taller when Live I/O is expanded.</summary>
-    public double Lfam3WorkflowMaxHeight =>
-        !IsLfam3WorkflowExpanded ? 52 :
-        LiveIo.IsExpanded ? 560 : 300;
+    const double Lfam3WorkflowPanelPadding = 14;
+    const double Lfam3WorkflowCollapsedMaxHeight = 56;
+    const double Lfam3WorkflowExpandedMaxHeight = 240;
+    const double Lfam3WorkflowSeqPlaybackMaxHeight = 340;
+    const double Lfam3WorkflowLiveIoExpandedMaxHeight = 720;
+    const double Lfam3WorkflowPhaseTrackHeight = 68;
+    const double Lfam3WorkflowSeqStripHeight = 120;
 
-    /// <summary>Scroll area height for the expanded Live I/O monitor.</summary>
-    public double Lfam3LiveIoMaxHeight => 400;
+    bool AnyLfam3PhaseColumnExpanded => AnyLfam3SeqPlaybackExpanded;
+
+    /// <summary>Viewport chrome above the Live I/O scroll region (header, timeline, gaps).</summary>
+    double Lfam3LiveIoLayoutChromeHeight
+    {
+        get
+        {
+            var panelPadding = Lfam3WorkflowPanelPadding * 2;
+            const double headerRow = 36;
+            const double sectionGap = 8;
+            const double dividerBlock = 9;
+            var timeline = AnyLfam3SeqPlaybackExpanded
+                ? Lfam3WorkflowPhaseTrackHeight + Lfam3WorkflowSeqStripHeight
+                : AnyLfam3PhaseColumnExpanded ? 200.0 : Lfam3WorkflowPhaseTrackHeight;
+            return panelPadding + headerRow + sectionGap + timeline + sectionGap + dividerBlock;
+        }
+    }
+
+    /// <summary>Max height for the workflow overlay — taller when Live I/O is expanded.</summary>
+    public double Lfam3WorkflowMaxHeight
+    {
+        get
+        {
+            if (!IsLfam3WorkflowExpanded) return Lfam3WorkflowCollapsedMaxHeight;
+            if (LiveIo.IsExpanded) return Lfam3WorkflowLiveIoExpandedMaxHeight;
+            if (AnyLfam3SeqPlaybackExpanded) return Lfam3WorkflowSeqPlaybackMaxHeight;
+            return Lfam3WorkflowExpandedMaxHeight;
+        }
+    }
+
+    /// <summary>Scroll area height for the expanded Live I/O monitor — fills remaining overlay space.</summary>
+    public double Lfam3LiveIoMaxHeight =>
+        !LiveIo.IsExpanded ? 0 :
+        Math.Max(240, Lfam3WorkflowLiveIoExpandedMaxHeight - Lfam3LiveIoLayoutChromeHeight);
 
     void NotifyPhaseExpansionChanged()
     {
@@ -427,6 +474,9 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowPrintParamCard));
         OnPropertyChanged(nameof(ShowVerifyScanParamCard));
         OnPropertyChanged(nameof(ShowMillParamCard));
+        OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
+        OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+        OnPropertyChanged(nameof(Lfam3LiveIoLayoutChromeHeight));
     }
 
     void NotifyWorkflowStateChanged()
@@ -490,6 +540,170 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand SelectMillPhaseCommand         { get; }
     public RelayCommand ToggleLfam3WorkflowCommand     { get; }
 
+    public RelayCommand SimulateExtruderPickCommand    { get; }
+    public RelayCommand SimulateExtruderDepositCommand { get; }
+    public RelayCommand SimulateScannerPickCommand     { get; }
+    public RelayCommand SimulateScannerDepositCommand  { get; }
+    public RelayCommand SimulateSpindlePickCommand     { get; }
+    public RelayCommand SimulateSpindleDepositCommand  { get; }
+
+    public ToolChangePanelBinding ExtruderToolPanel { get; }
+    public ToolChangePanelBinding ScannerToolPanel  { get; }
+    public ToolChangePanelBinding SpindleToolPanel  { get; }
+
+    /// <summary>Dev-mode editor for tool-change sequence waypoints (Global_Points.dat).</summary>
+    public SequenceWaypointEditorViewModel SequenceWaypointEditor { get; }
+
+    public RelayCommand ToggleToolChangePlaybackCommand { get; }
+    public RelayCommand CollapseToolChangePlaybackCommand { get; }
+
+    string? _activeToolChangeSequenceId;
+    bool _isToolChangePlaybackExpanded;
+
+    /// <summary>KRL tool-change sequence playing in the viewport overlay, or null.</summary>
+    public string? ActiveToolChangeSequenceId
+    {
+        get => _activeToolChangeSequenceId;
+        set
+        {
+            if (!SetField(ref _activeToolChangeSequenceId, value)) return;
+            OnPropertyChanged(nameof(IsExtruderPickSequenceActive));
+            OnPropertyChanged(nameof(IsExtruderDepositSequenceActive));
+            OnPropertyChanged(nameof(IsScannerPickSequenceActive));
+            OnPropertyChanged(nameof(IsScannerDepositSequenceActive));
+            OnPropertyChanged(nameof(IsSpindlePickSequenceActive));
+            OnPropertyChanged(nameof(IsSpindleDepositSequenceActive));
+            if (value is null)
+            {
+                IsToolChangePlaybackExpanded = false;
+                ToolChangeStepText = "";
+                ToolChangeStepTextCompact = "";
+                SetToolChangeScrubFromViewport(0);
+                ToolChangeIsPlaying = false;
+                ClearSequenceWaypointTags();
+            }
+            else
+                IsToolChangePlaybackExpanded = true;
+
+            NotifyToolChangePanels();
+            ToggleToolChangePlaybackCommand.RaiseCanExecuteChanged();
+            CollapseToolChangePlaybackCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>When true, the compact scrub/play strip is shown above the active phase dome.</summary>
+    public bool IsToolChangePlaybackExpanded
+    {
+        get => _isToolChangePlaybackExpanded;
+        set
+        {
+            if (!SetField(ref _isToolChangePlaybackExpanded, value)) return;
+            NotifyToolChangePanels();
+            CollapseToolChangePlaybackCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    string _toolChangeStepText = "";
+    int _toolChangeScrubValue;
+    bool _toolChangeIsPlaying;
+    bool _suppressToolChangeScrubCallback;
+
+    public string ToolChangeStepText
+    {
+        get => _toolChangeStepText;
+        set
+        {
+            if (!SetField(ref _toolChangeStepText, value)) return;
+            NotifyToolChangePanels();
+        }
+    }
+
+    string _toolChangeStepTextCompact = "";
+
+    /// <summary>Compact playback caption (waypoint + move only, no I/O lines).</summary>
+    public string ToolChangeStepTextCompact
+    {
+        get => _toolChangeStepTextCompact;
+        set
+        {
+            if (!SetField(ref _toolChangeStepTextCompact, value)) return;
+            NotifyToolChangePanels();
+        }
+    }
+
+    public ObservableCollection<SequenceWaypointTag> SequenceWaypointTags { get; } = [];
+
+    public bool HasSequenceWaypointTags => SequenceWaypointTags.Count > 0;
+
+    public void SetSequenceWaypointTags(IReadOnlyList<SequenceWaypointTag> tags)
+    {
+        SequenceWaypointTags.Clear();
+        foreach (var tag in tags)
+            SequenceWaypointTags.Add(tag);
+        OnPropertyChanged(nameof(HasSequenceWaypointTags));
+    }
+
+    public void ClearSequenceWaypointTags()
+    {
+        if (SequenceWaypointTags.Count == 0) return;
+        SequenceWaypointTags.Clear();
+        OnPropertyChanged(nameof(HasSequenceWaypointTags));
+    }
+
+    public int ToolChangeScrubValue
+    {
+        get => _toolChangeScrubValue;
+        set
+        {
+            if (!SetField(ref _toolChangeScrubValue, value)) return;
+            if (!_suppressToolChangeScrubCallback)
+                OnToolChangeScrubRequested?.Invoke(value);
+            NotifyToolChangePanels();
+        }
+    }
+
+    public bool ToolChangeIsPlaying
+    {
+        get => _toolChangeIsPlaying;
+        set
+        {
+            if (!SetField(ref _toolChangeIsPlaying, value)) return;
+            OnPropertyChanged(nameof(ToolChangePlaybackToggleIcon));
+            NotifyToolChangePanels();
+        }
+    }
+
+    public string ToolChangePlaybackToggleIcon =>
+        ToolChangeIsPlaying ? "mdi-pause" : "mdi-play";
+
+    internal void SetToolChangeScrubFromViewport(int value)
+    {
+        _suppressToolChangeScrubCallback = true;
+        ToolChangeScrubValue = value;
+        _suppressToolChangeScrubCallback = false;
+    }
+
+    void NotifyToolChangePanels()
+    {
+        ExtruderToolPanel.NotifyStateChanged();
+        ScannerToolPanel.NotifyStateChanged();
+        SpindleToolPanel.NotifyStateChanged();
+        OnPropertyChanged(nameof(AnyLfam3SeqPlaybackExpanded));
+        NotifyPhaseExpansionChanged();
+        OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+        OnPropertyChanged(nameof(Lfam3LiveIoLayoutChromeHeight));
+    }
+
+    public bool AnyLfam3SeqPlaybackExpanded =>
+        ExtruderToolPanel.ShowPlayback || ScannerToolPanel.ShowPlayback || SpindleToolPanel.ShowPlayback;
+
+    public bool IsExtruderPickSequenceActive    => ActiveToolChangeSequenceId == "Extruder_Pick";
+    public bool IsExtruderDepositSequenceActive => ActiveToolChangeSequenceId == "Extruder_Deposit";
+    public bool IsScannerPickSequenceActive     => ActiveToolChangeSequenceId == "Scanner_Pick";
+    public bool IsScannerDepositSequenceActive  => ActiveToolChangeSequenceId == "Scanner_Deposit";
+    public bool IsSpindlePickSequenceActive     => ActiveToolChangeSequenceId == "Spindle_Pick";
+    public bool IsSpindleDepositSequenceActive  => ActiveToolChangeSequenceId == "Spindle_Deposit";
+
     /// <summary>Refreshes LFAM 3 tool-picker visibility after a cell swap (UI thread).</summary>
     public void NotifyCellChanged()
     {
@@ -499,11 +713,16 @@ public sealed class ViewportViewModel : ViewModelBase
             return;
         }
 
+        KrlToolChangeSequenceParser.KrcRootOverride = ActiveCell?.KrcRoot;
         OnPropertyChanged(nameof(ShowLfam3ToolPicker));
         if (ShowLfam3ToolPicker)
             IsLfam3WorkflowExpanded = true;
         else
+        {
+            if (LiveIo.IsExpanded)
+                LiveIo.IsExpanded = false;
             IsLfam3WorkflowExpanded = false;
+        }
         var cellName = ActiveCell?.Name;
         if (!string.Equals(cellName, _lfam3WorkflowCellName, StringComparison.Ordinal))
         {
@@ -513,6 +732,7 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyWorkflowStateChanged();
         NotifyWorkflowParamsChanged();
         RaiseLfam3PhaseCommandsCanExecuteChanged();
+        RaiseToolChangeCommandsCanExecuteChanged();
     }
 
     void SelectLfam3WorkflowPhase(int phaseIndex, string toolName)
@@ -559,6 +779,47 @@ public sealed class ViewportViewModel : ViewModelBase
         SelectVerifyScanPhaseCommand.RaiseCanExecuteChanged();
         SelectMillPhaseCommand.RaiseCanExecuteChanged();
         ToggleLfam3WorkflowCommand.RaiseCanExecuteChanged();
+        RaiseToolChangeCommandsCanExecuteChanged();
+    }
+
+    public void RaiseToolChangeCommandsCanExecuteChanged()
+    {
+        SimulateExtruderPickCommand.RaiseCanExecuteChanged();
+        SimulateExtruderDepositCommand.RaiseCanExecuteChanged();
+        SimulateScannerPickCommand.RaiseCanExecuteChanged();
+        SimulateScannerDepositCommand.RaiseCanExecuteChanged();
+        SimulateSpindlePickCommand.RaiseCanExecuteChanged();
+        SimulateSpindleDepositCommand.RaiseCanExecuteChanged();
+    }
+
+    static bool CanSimulateToolPick(string cellToolName, string mountedToolName, bool showPicker) =>
+        showPicker && string.IsNullOrEmpty(mountedToolName)
+        && KrlToolChangeSequenceParser.IsSequenceAvailable(PickSequenceId(cellToolName));
+
+    static bool CanSimulateToolDeposit(string cellToolName, string mountedToolName, bool showPicker) =>
+        showPicker && mountedToolName == cellToolName
+        && KrlToolChangeSequenceParser.IsSequenceAvailable(DepositSequenceId(cellToolName));
+
+    static string PickSequenceId(string cellToolName) => cellToolName switch
+    {
+        "HV Extruder" => "Extruder_Pick",
+        "Scanner"     => "Scanner_Pick",
+        "Spindle"     => "Spindle_Pick",
+        _             => "",
+    };
+
+    static string DepositSequenceId(string cellToolName) => cellToolName switch
+    {
+        "HV Extruder" => "Extruder_Deposit",
+        "Scanner"     => "Scanner_Deposit",
+        "Spindle"     => "Spindle_Deposit",
+        _             => "",
+    };
+
+    void RequestToolChangeSimulation(string sequenceId)
+    {
+        if (string.IsNullOrEmpty(sequenceId)) return;
+        OnSimulateToolChangeRequested?.Invoke(sequenceId);
     }
 
     void SelectLfam3Tool(string toolName)
@@ -1266,6 +1527,7 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             OnPropertyChanged(nameof(Lfam3WorkflowMargin));
             OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+            OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
             NotifyPhaseExpansionChanged();
         };
 
@@ -1339,6 +1601,43 @@ public sealed class ViewportViewModel : ViewModelBase
             () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle"), () => ShowLfam3ToolPicker);
         ToggleLfam3WorkflowCommand = new RelayCommand(
             () => IsLfam3WorkflowExpanded = !IsLfam3WorkflowExpanded, () => ShowLfam3ToolPicker);
+
+        SimulateExtruderPickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Extruder_Pick"),
+            () => CanSimulateToolPick("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+        SimulateExtruderDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Extruder_Deposit"),
+            () => CanSimulateToolDeposit("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+        SimulateScannerPickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Scanner_Pick"),
+            () => CanSimulateToolPick("Scanner", MountedToolName, ShowLfam3ToolPicker));
+        SimulateScannerDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Scanner_Deposit"),
+            () => CanSimulateToolDeposit("Scanner", MountedToolName, ShowLfam3ToolPicker));
+        SimulateSpindlePickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Spindle_Pick"),
+            () => CanSimulateToolPick("Spindle", MountedToolName, ShowLfam3ToolPicker));
+        SimulateSpindleDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Spindle_Deposit"),
+            () => CanSimulateToolDeposit("Spindle", MountedToolName, ShowLfam3ToolPicker));
+
+        ExtruderToolPanel = new ToolChangePanelBinding(
+            this, "HV EXTRUDER", "Extruder_Pick", "Extruder_Deposit",
+            SimulateExtruderPickCommand, SimulateExtruderDepositCommand);
+        ScannerToolPanel = new ToolChangePanelBinding(
+            this, "SCANNER", "Scanner_Pick", "Scanner_Deposit",
+            SimulateScannerPickCommand, SimulateScannerDepositCommand);
+        SpindleToolPanel = new ToolChangePanelBinding(
+            this, "SPINDLE", "Spindle_Pick", "Spindle_Deposit",
+            SimulateSpindlePickCommand, SimulateSpindleDepositCommand);
+        SequenceWaypointEditor = new SequenceWaypointEditorViewModel(this);
+        SequenceWaypointEditor.WireCommands();
+        ToggleToolChangePlaybackCommand = new RelayCommand(
+            () => OnToggleToolChangePlaybackRequested?.Invoke(),
+            () => ActiveToolChangeSequenceId is not null);
+        CollapseToolChangePlaybackCommand = new RelayCommand(
+            () => OnCollapseToolChangePlaybackRequested?.Invoke(),
+            () => ActiveToolChangeSequenceId is not null && IsToolChangePlaybackExpanded);
 
         var options = new List<BackdropOption> { new("None", null) };
         if (Directory.Exists("assets/Images"))
@@ -1666,6 +1965,13 @@ public sealed class ViewportViewModel : ViewModelBase
     /// startup actions (tool selection, auto-sync).
     /// </summary>
     internal Action? OnCellSwapCompleted { get; set; }
+
+    /// <summary>Viewport plays a KUKA tool-change path overlay (Pick/Deposit simulation).</summary>
+    internal Action<string>? OnSimulateToolChangeRequested { get; set; }
+
+    internal Action? OnToggleToolChangePlaybackRequested { get; set; }
+    internal Action? OnCollapseToolChangePlaybackRequested { get; set; }
+    internal Action<int>? OnToolChangeScrubRequested { get; set; }
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }

@@ -52,4 +52,22 @@ public static class KrlVarParser
         var v = Parse(response, ["X", "Y", "Z", "A", "B", "C"]);
         return (v["X"], v["Y"], v["Z"], v["A"], v["B"], v["C"]);
     }
+
+    /// <summary>Parses a KRL BOOL response (TRUE/FALSE).</summary>
+    public static bool ParseBool(string response)
+        => response.Trim().Equals("TRUE", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Parses a scalar REAL/INT response or the first number in the string.</summary>
+    public static double ParseScalar(string response)
+    {
+        var t = response.Trim();
+        if (double.TryParse(t, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var direct))
+            return direct;
+
+        var m = Regex.Match(t, @"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?");
+        return m.Success
+            ? double.Parse(m.Groups[0].Value, System.Globalization.CultureInfo.InvariantCulture)
+            : 0.0;
+    }
 }

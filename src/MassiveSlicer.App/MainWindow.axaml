@@ -23,15 +23,15 @@
 
     <!--
         Root layout: three rows.
-          Row 0 — Toolbar (48 px, fixed; brand + File/Edit menus inline)
-          Row 1 — Main work area (grows to fill)
-          Row 2 — Status bar (24 px, fixed)
+          Row 0 — Toolbar (48 px, fixed)
+          Row 1 — Main work area (left | viewport | right)
+          Row 2 — Bottom dock (status + optional console), full width
     -->
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="48"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="24"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- ── Toolbar ──────────────────────────────────────────────────── -->
@@ -56,7 +56,8 @@
                           Background="{DynamicResource Border0}"/>
 
             <!-- Viewport — overlays are hosted in ViewportView's VisualLayerManager.OverlayLayer -->
-            <views:ViewportView Grid.Column="2"
+            <views:ViewportView x:Name="Viewport"
+                                Grid.Column="2"
                                 DataContext="{Binding Viewport}"/>
 
             <GridSplitter Grid.Column="3"
@@ -68,18 +69,11 @@
                                   DataContext="{Binding RightPanel}"/>
         </Grid>
 
-        <!-- ── Status bar ────────────────────────────────────────────────── -->
-        <views:StatusBarView Grid.Row="2"
-                             DataContext="{Binding StatusBar}"/>
-
-        <!-- ── Command console (floating overlay, anchored bottom-left) ──── -->
-        <views:ConsoleView x:Name="ConsoleOverlay"
-                           Grid.Row="1"
-                           DataContext="{Binding Console}"
-                           HorizontalAlignment="Left"
-                           VerticalAlignment="Bottom"
-                           Margin="8,0,0,8"
-                           ZIndex="10"/>
+        <!-- ── Bottom dock: full width under all panels ─────────────────── -->
+        <views:BottomLeftDockView Grid.Row="2"
+                                  DataContext="{Binding}"
+                                  HorizontalAlignment="Stretch"
+                                  VerticalAlignment="Bottom"/>
     </Grid>
 
 </Window>

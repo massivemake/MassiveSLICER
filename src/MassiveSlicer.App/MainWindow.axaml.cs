@@ -1,19 +1,18 @@
 ﻿using System.IO;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
-using MassiveSlicer.Viewport.Loading;
-using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels;
-using OpenTK.Mathematics;
+using MassiveSlicer.Viewport.Scene;
 
 namespace MassiveSlicer.App;
 
 public partial class MainWindow : Window
 {
-    private static readonly Vector4 BedLimeGreen = new(0.35f, 1.0f, 0.05f, 1f);
-    private const float BedAluminumLimeTint = 0.45f;
+    private CancellationTokenSource? _cellLoadCts;
+    private int _cellLoadGeneration;
 
     public MainWindow()
     {
@@ -34,29 +33,40 @@ public partial class MainWindow : Window
             WorkAreaGrid.ColumnDefinitions[4].Width = visible ? new GridLength(300)  : new GridLength(0);
         };
 
-        // -- Console overlay toggle --------------------------------------------
-        vm.Toolbar.PropertyChanged += (_, args) =>
-        {
-            if (args.PropertyName != nameof(ToolbarViewModel.IsConsoleVisible)) return;
-            ConsoleOverlay.IsVisible = vm.Toolbar.IsConsoleVisible;
-        };
-        ConsoleOverlay.IsVisible = vm.Toolbar.IsConsoleVisible;
+        // Apply persisted panel visibility before first layout pass.
+        bool rightVisible = vm.Toolbar.IsRightPanelVisible;
+        WorkAreaGrid.ColumnDefinitions[3].Width = rightVisible ? new GridLength(4)   : new GridLength(0);
+        WorkAreaGrid.ColumnDefinitions[4].Width = rightVisible ? new GridLength(300)  : new GridLength(0);
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
+        vm.Viewport.OnDevCellReloadRequested = SwitchCell;
+        vm.Viewport.OnDevLog = msg => vm.Console.Log(msg);
+
+        var cellsRoot = MassiveSlicer.Core.IO.CellPaths.PreferredCellsDirectory();
+        if (cellsRoot is not null)
+            vm.Console.Log($"[cell] using cells directory: {cellsRoot}");
 
         var cells = CellLoader.FindAll()
             .Select(path =>
             {
+                string full = Path.GetFullPath(path);
                 string name;
-                try   { name = CellLoader.Load(path).Name; }
-                catch { name = Path.GetFileNameWithoutExtension(path); }
-                return (name, path);
+                try   { name = CellLoader.Load(full).Name; }
+                catch { name = Path.GetFileNameWithoutExtension(full); }
+                return (name, full);
             })
             .ToList();
 
         if (cells.Count == 0)
+        {
+            vm.Console.LogError("[cell] No cell files found — robot and bed will not appear. Check assets/cells beside the .exe.");
             System.Console.Error.WriteLine("No cell files found in assets/cells/.");
+        }
+        else
+        {
+            vm.Console.Log($"[cell] discovered {cells.Count} cell(s).");
+        }
 
         vm.LeftPanel.SetCells(cells);
 
@@ -155,219 +165,81 @@ public partial class MainWindow : Window
     private void SwitchCell(string path)
     {
         if (DataContext is not MainWindowViewModel vm) return;
+        path = Path.GetFullPath(path);
 
-        CellConfig cell;
-        try   { cell = CellLoader.Load(path); }
-        catch (Exception ex)
-        {
-            System.Console.Error.WriteLine($"Failed to load cell '{path}': {ex.Message}");
-            return;
-        }
+        _cellLoadCts?.Cancel();
+        _cellLoadCts?.Dispose();
+        _cellLoadCts = new CancellationTokenSource();
+        var ct  = _cellLoadCts.Token;
+        var gen = Interlocked.Increment(ref _cellLoadGeneration);
+        var defaultTab = vm.RightPanel.ActiveTab;
+        var cacheKey   = CellSceneCache.CacheKey(path);
+        bool cacheHit  = CellSceneCache.TryGet(cacheKey, out _);
 
-        SceneNode? robotBaseNode = null;
-        if (File.Exists(cell.Robot.ModelPath))
+        vm.Console.Log(cacheHit
+            ? $"[cell] switching to {Path.GetFileNameWithoutExtension(path)} (cached)…"
+            : $"[cell] loading {Path.GetFileNameWithoutExtension(path)}…");
+
+        Task.Run(() =>
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var robot = GltfLoader.Load(cell.Robot.ModelPath);
-                var p     = cell.Robot.WorldPosition;
-                robotBaseNode = new SceneNode
+                ct.ThrowIfCancellationRequested();
+                var payload = CellSceneLoader.Load(path, defaultTab, ct);
+                var elapsed = sw.ElapsedMilliseconds;
+                if (ct.IsCancellationRequested || gen != Volatile.Read(ref _cellLoadGeneration))
+                    return;
+
+                Dispatcher.UIThread.Post(() =>
                 {
-                    Name           = $"{cell.Name}_Robot",
-                    LocalTransform = Matrix4.CreateTranslation(p.X, p.Y, p.Z),
-                    Selectable     = false,
-                };
-                robotBaseNode.AddChild(robot);
+                    if (ct.IsCancellationRequested || gen != Volatile.Read(ref _cellLoadGeneration))
+                        return;
+
+                    var toolCount = payload.MultiTools?.Tools.Count ?? 0;
+                    vm.Console.Log(
+                        $"[cell] {payload.Config.Name}: robot={(payload.RobotBaseNode is not null)} " +
+                        $"bed={(payload.BedNode is not null)} env={payload.EnvironmentNodes.Count} tools={toolCount} " +
+                        $"rotary={(payload.RotaryBedPivot is not null)} — CPU ready in {elapsed}ms" +
+                        (cacheHit ? " (geometry cache)" : "") +
+                        " (GPU upload continues in viewport…)");
+
+                    if (payload.RobotBaseNode is null)
+                        vm.Console.LogError("[cell] Robot model did not load — check console for missing .glb paths.");
+                    if (payload.BedNode is null && payload.RotaryBedPivot is null && !payload.Config.Bed.Hidden)
+                        vm.Console.LogError("[cell] Bed model did not load.");
+                    if (payload.Config.Bed.Hidden && payload.RotaryBedPivot is null)
+                        vm.Console.Log("[cell] LFAM 3 uses a hidden flat bed; rotary bed mesh was not built.");
+
+                    var bedCfg = payload.Config.Bed;
+                    var rp     = payload.Config.Robot.WorldPosition;
+                    var marker = bedCfg.BaseMarkerWorld(rp);
+                    var grid   = bedCfg.VisualGridCorner(rp);
+                    var off    = bedCfg.VisualOffset is { } vo ? $"{vo.X:F1}, {vo.Y:F1}" : "none";
+                    vm.Console.Log(
+                        $"[bed] {payload.Config.Name}: visualOffset=({off})  BASE marker=({marker.X:F1}, {marker.Y:F1})  visual grid=({grid.X:F1}, {grid.Y:F1})");
+
+                    vm.Viewport.PendingCellSwap.Enqueue(payload);
+                    vm.Viewport.NotifyRenderNeeded();
+                });
             }
-            catch (Exception ex) { System.Console.Error.WriteLine($"Failed to load robot model: {ex.Message}"); }
-        }
-
-        SceneNode? boosterNode = null;
-        if (cell.BoosterFrame is { } frame && File.Exists(frame.ModelPath))
-        {
-            try
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
             {
-                var ext  = Path.GetExtension(frame.ModelPath).ToLowerInvariant();
-                var node = (ext is ".glb" or ".gltf")
-                    ? GltfLoader.Load(frame.ModelPath)
-                    : StlLoader.Load(frame.ModelPath, $"{cell.Name}_BoosterFrame");
-                var p    = frame.WorldPosition;
-                if (p.X != 0f || p.Y != 0f || p.Z != 0f)
+                if (!ct.IsCancellationRequested)
                 {
-                    boosterNode = new SceneNode
-                    {
-                        Name           = node.Name + "_Root",
-                        LocalTransform = Matrix4.CreateTranslation(p.X, p.Y, p.Z),
-                        Selectable     = false,
-                    };
-                    boosterNode.AddChild(node);
+                    vm.Console.LogError($"[cell] Failed to load '{Path.GetFileName(path)}': {ex.Message}");
+                    System.Console.Error.WriteLine($"Failed to load cell '{path}': {ex.Message}");
                 }
-                else
-                {
-                    node.Selectable = false;
-                    boosterNode     = node;
-                }
             }
-            catch { /* non-critical */ }
-        }
-
-        var environment = CellEnvironmentBuilder.Build(cell);
-
-        SceneNode? bedNode = null;
-        if (!cell.Bed.Hidden && cell.Bed.ModelPath is { } bedPath && File.Exists(bedPath))
-        {
-            try
-            {
-                var bedExt  = Path.GetExtension(bedPath).ToLowerInvariant();
-                var bed     = (bedExt is ".glb" or ".gltf")
-                    ? GltfLoader.Load(bedPath)
-                    : StlLoader.Load(bedPath, $"{cell.Name}_Bed");
-                var o       = cell.Bed.VisualMeshOrigin(cell.Robot.WorldPosition);
-                var wrapper = new SceneNode
-                {
-                    Name           = bed.Name + "_Root",
-                    LocalTransform = Matrix4.CreateTranslation(o.X, o.Y, o.Z),
-                    Selectable     = false,
-                };
-                wrapper.AddChild(bed);
-                ApplyBedMaterialTint(wrapper);
-                bedNode = wrapper;
-            }
-            catch { /* non-critical */ }
-        }
-
-        // Pick the tool that matches the default active tab so the viewport shows
-        // the right end-effector immediately without waiting for OnCellSwapCompleted.
-        bool cellHasScan = cell.ScanToolName is not null;
-        var defaultTabToolName = vm.RightPanel.ActiveTab switch
-        {
-            RightPanelTab.Scan when cellHasScan => cell.ScanToolName,
-            RightPanelTab.Additive              => "HV Extruder",
-            _                                   => cellHasScan ? cell.ScanToolName : "HV Extruder",
-        };
-        var firstTool = (defaultTabToolName is not null
-                            ? cell.EffectiveTools.FirstOrDefault(t => t.Name == defaultTabToolName)
-                            : null)
-                     ?? (cell.EffectiveTools.Count > 0 ? cell.EffectiveTools[0] : null);
-
-        SceneNode? toolHolder = null;
-        if (environment.MultiTools is null && firstTool is not null)
-        {
-            try { toolHolder = BuildToolHolder(firstTool); }
-            catch { /* non-critical */ }
-        }
-
-        SceneNode? flangeAttachment = null;
-        if (cell.FlangeAttachment is { } fa)
-            flangeAttachment = CellEnvironmentBuilder.BuildFlangeAttachment(fa);
-
-        var bedCfg = cell.Bed;
-        var rp     = cell.Robot.WorldPosition;
-        var marker = bedCfg.BaseMarkerWorld(rp);
-        var grid   = bedCfg.VisualGridCorner(rp);
-        var off    = bedCfg.VisualOffset is { } vo ? $"{vo.X:F1}, {vo.Y:F1}" : "none";
-        vm.Console.Log(
-            $"[bed] {cell.Name}: visualOffset=({off})  BASE marker=({marker.X:F1}, {marker.Y:F1})  visual grid=({grid.X:F1}, {grid.Y:F1})");
-
-        vm.Viewport.PendingCellSwap.Enqueue(new CellSwapPayload(
-            cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool,
-            environment.EnvironmentNodes, environment.RotaryBedPivot, environment.MultiTools,
-            flangeAttachment));
-        vm.Viewport.NotifyRenderNeeded();
+        }, ct);
     }
 
-    private async Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
+    private Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
     {
-        bool place = true;
-
-        SceneNode? node = ImportHelper.LoadAndPlace(filePath, place ? vm.Viewport.ActiveCell : null);
-        if (node is null)
-        {
+        if (!vm.ImportModelFromPath(filePath))
             System.Console.Error.WriteLine($"Failed to load model: {filePath}");
-            return;
-        }
-        vm.Viewport.AddUserNode(node);
-    }
-
-    /// <summary>Tints only bed aluminum (e.g. GLB "Silver") with a subtle anodized lime cast; base stays white.</summary>
-    private static void ApplyBedMaterialTint(SceneNode root)
-    {
-        foreach (var n in root.SelfAndDescendants())
-        {
-            if (n.PendingMesh is not { } mesh) continue;
-            if (!IsBedAluminumMesh(mesh)) continue;
-
-            n.PendingMesh = new MeshData(
-                mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
-                TintToward(mesh.BaseColor, BedLimeGreen, BedAluminumLimeTint),
-                metallic: 0.85f, roughness: 0.38f);
-        }
-    }
-
-    private static bool IsBedAluminumMesh(MeshData mesh)
-    {
-        if (mesh.Name.Contains("BaseKuka", StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (mesh.Name.Contains("Silver", StringComparison.OrdinalIgnoreCase)
-         || mesh.Name.Contains("Aluminum", StringComparison.OrdinalIgnoreCase)
-         || mesh.Name.Contains("Aluminium", StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        // Warm white dielectric bed plate (LFAM2 BaseKuka fallback when unnamed).
-        var c = mesh.BaseColor;
-        if (c.X > 0.9f && c.Y > 0.9f && c.Z > 0.85f && mesh.Metallic < 0.25f)
-            return false;
-
-        return mesh.Metallic >= 0.35f;
-    }
-
-    private static Vector4 TintToward(Vector4 from, Vector4 toward, float amount)
-    {
-        amount = Math.Clamp(amount, 0f, 1f);
-        return new Vector4(
-            from.X + (toward.X - from.X) * amount,
-            from.Y + (toward.Y - from.Y) * amount,
-            from.Z + (toward.Z - from.Z) * amount,
-            from.W);
-    }
-
-    private static SceneNode BuildToolHolder(ToolCellConfig tool)
-    {
-        bool isGlb = tool.ModelPath.EndsWith(".glb",  StringComparison.OrdinalIgnoreCase)
-                  || tool.ModelPath.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase);
-
-        if (isGlb)
-        {
-            var toolRoot = GltfLoader.Load(tool.ModelPath);
-            var children = toolRoot.Children.ToList();
-            foreach (var child in children)
-                toolRoot.RemoveChild(child);
-
-            var holder = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            foreach (var child in children)
-                holder.AddChild(child);
-            return holder;
-        }
-        else
-        {
-            var stlNode = StlLoader.Load(tool.ModelPath, "Tool");
-            var holder  = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateScale(1f / 1000f)
-                               * Matrix4.CreateRotationX(-MathF.PI / 2f)
-                               * Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            holder.AddChild(stlNode);
-            return holder;
-        }
+        return Task.CompletedTask;
     }
 
     private async Task SaveWorkspaceAsAsync(MainWindowViewModel vm)

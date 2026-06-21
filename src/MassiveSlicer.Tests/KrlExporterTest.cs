@@ -164,4 +164,42 @@ public sealed class KrlExporterTest
 
         Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.6 ; RPM on", krl);
     }
+
+    [Fact]
+    public void Export_resume_ramp_emits_stepped_speed_and_rpm()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(60, 0, 10), MoveKind.Extrude)
+        {
+            IsResumeRamp     = true,
+            ResumeSpeedScale = 0.005f,
+            ResumeRpmScale   = 0.02f,
+            Normal           = Vector3.UnitZ,
+        });
+        layer.Moves.Add(new ToolpathMove(new Vector3(60, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+        {
+            IsResumeRamp     = true,
+            ResumeSpeedScale = 1f,
+            ResumeRpmScale   = 1f,
+            Normal           = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        var settings = new KrlExportSettings
+        {
+            ProgramName         = "test_ramp",
+            ExtrusionRpmPercent = 50f,
+            PrintSpeedMps       = 0.1f,
+            TravelSetAnout4Zero = true,
+        };
+
+        var krl = KrlExporter.Export(tp, settings);
+
+        Assert.Contains("$ANOUT[4] = 0.01 ; RPM ramp", krl);
+        Assert.Contains("$VEL.CP = 0.000500", krl);
+        Assert.Contains("$ANOUT[4] = 0.5 ; RPM ramp", krl);
+        Assert.Contains("$VEL.CP = 0.100000", krl);
+    }
 }

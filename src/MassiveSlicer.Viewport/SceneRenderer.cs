@@ -23,6 +23,26 @@ public sealed class SceneRenderer : IDisposable
     private GizmoRenderer?       _gizmo;
     private BackdropRenderer?    _backdrop;
     private PlanePreviewRenderer? _planePreview;
+    private SeamGuideRenderer?    _seamGuides;
+    private SequencePathRenderer? _sequencePath;
+    private IReadOnlyList<Vector3> _seamGuidePoints = [];
+    private int _seamGuideSelectedIndex = -1;
+    private bool _seamGuidesDirty;
+    private bool _sequencePathActive;
+    private bool _sequencePathDirty;
+    private bool _sequencePathClearPending;
+    private SequencePathOverlayState? _sequencePathPending;
+    private IReadOnlyList<Vector3> _sequenceWaypointWorld = [];
+    private int _sequenceWaypointSelectedIndex = -1;
+
+    private sealed record SequencePathOverlayState(
+        IReadOnlyList<Vector3> DenseRobroot,
+        Vector3 RobrootOffset,
+        IReadOnlyList<float> Cum,
+        IReadOnlyList<KrlMoveKind> SegMove,
+        float Progress,
+        Vector3 MarkerRobroot,
+        IReadOnlyList<Vector3> WaypointWorld);
 
     private readonly struct ToolpathEntry
     {
@@ -34,10 +54,12 @@ public sealed class SceneRenderer : IDisposable
     private bool _disposed;
     private bool _initialised;
 
-    private Vector3 _toolpathExtrudeColor    = new(0.1f,  0.45f, 0.9f);
-    private Vector3 _toolpathTravelColor     = new(0.85f, 0.18f, 0.18f);
-    private Vector3 _toolpathSeamColor       = new(1.0f,  0.9f,  0.0f);
-    private Vector3 _toolpathUnselectedColor = new(0.38f, 0.38f, 0.38f);
+    private Vector3 _toolpathExtrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _toolpathTravelColor      = new(0.85f, 0.18f, 0.18f);
+    private Vector3 _toolpathWipeColor        = new(1.0f,  0.53f, 0.0f);
+    private Vector3 _toolpathRetractionColor  = new(0.61f, 0.15f, 0.69f);
+    private Vector3 _toolpathSeamColor        = new(1.0f,  0.9f,  0.0f);
+    private Vector3 _toolpathUnselectedColor  = new(0.38f, 0.38f, 0.38f);
 
     // -- Off-screen FBOs -------------------------------------------------------
     // Scene is rendered into _sceneFbo so it can be read back as a texture.
@@ -63,6 +85,16 @@ public sealed class SceneRenderer : IDisposable
     private Shader? _maskShader;                // flat-white mask renderer
     private Shader? _compositeShader;           // Roberts Cross + scene blend
     private int _fboWidth, _fboHeight;
+
+    private ShaderMode _shaderMode = ShaderMode.Standard;
+    private float _layerPreviewHeight = 3f;
+    private bool _shaderAppearanceDirty = true;
+    private ShaderMode _appliedShaderMode = (ShaderMode)(-1);
+    private bool _appliedHasEnv;
+    private float _appliedLayerPreviewHeight;
+    private float _appliedLayerZMin;
+    private float _appliedLayerZMax;
+    private int _appliedLayerBoundaryCount;
 
     // -- Shader sources --------------------------------------------------------
 
@@ -170,6 +202,19 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Currently selected node (direct child of <see cref="SceneRoot"/>), or <c>null</c>.</summary>
     public SceneNode? SelectedNode { get; private set; }
 
+    private readonly HashSet<SceneNode> _selectedToolpaths = [];
+    private readonly List<SceneNode> _selectedToolpathOrder = [];
+
+    /// <summary>Toolpath nodes in the current multi-selection (shift+click), in pick order.</summary>
+    public IReadOnlyList<SceneNode> SelectedToolpaths => _selectedToolpathOrder;
+
+    /// <summary>Number of toolpaths in the current multi-selection.</summary>
+    public int SelectedToolpathCount => _selectedToolpathOrder.Count;
+
+    /// <summary>Returns <c>true</c> when <paramref name="node"/> is highlighted as selected.</summary>
+    public bool IsToolpathHighlighted(SceneNode node)
+        => node == SelectedNode || _selectedToolpaths.Contains(node);
+
     /// <summary>Returns <c>true</c> if <paramref name="node"/> is a registered toolpath node.</summary>
     public bool IsToolpathNode(SceneNode node) => _toolpaths.ContainsKey(node);
 
@@ -208,10 +253,31 @@ public sealed class SceneRenderer : IDisposable
     public int ToolpathActiveScrubIndex { get; set; } = int.MaxValue;
 
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
-    public ShaderMode ShaderMode { get; set; } = ShaderMode.Standard;
+    public ShaderMode ShaderMode
+    {
+        get => _shaderMode;
+        set
+        {
+            if (_shaderMode == value) return;
+            _shaderMode = value;
+            _shaderAppearanceDirty = true;
+        }
+    }
 
     /// <summary>Layer height (mm) used when <see cref="ShaderMode"/> is <see cref="ShaderMode.LayerPreview"/>.</summary>
-    public float LayerPreviewHeight { get; set; } = 3f;
+    public float LayerPreviewHeight
+    {
+        get => _layerPreviewHeight;
+        set
+        {
+            if (MathF.Abs(_layerPreviewHeight - value) < 0.0001f) return;
+            _layerPreviewHeight = value;
+            _shaderAppearanceDirty = true;
+        }
+    }
+
+    /// <summary>Marks mesh shader uniforms dirty (e.g. backdrop or layer-preview toggle).</summary>
+    public void InvalidateShaderAppearance() => _shaderAppearanceDirty = true;
 
     /// <summary>Path of the currently loaded backdrop image, or <c>null</c> for none.</summary>
     public string? BackdropPath { get; private set; }
@@ -223,21 +289,26 @@ public sealed class SceneRenderer : IDisposable
     /// Updates toolpath line colours for all registered renderers. Must be called on the GL thread.
     /// No-op when the values are unchanged to avoid unnecessary VBO rebuilds.
     /// </summary>
-    public void SetToolpathColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected)
+    public void SetToolpathColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected,
+        Vector3 wipe, Vector3 retraction)
     {
-        if (_toolpathExtrudeColor    == extrude   &&
-            _toolpathTravelColor     == travel    &&
-            _toolpathSeamColor       == seam      &&
-            _toolpathUnselectedColor == unselected)
+        if (_toolpathExtrudeColor     == extrude     &&
+            _toolpathTravelColor      == travel      &&
+            _toolpathSeamColor        == seam        &&
+            _toolpathUnselectedColor  == unselected  &&
+            _toolpathWipeColor        == wipe        &&
+            _toolpathRetractionColor  == retraction)
             return;
 
-        _toolpathExtrudeColor    = extrude;
-        _toolpathTravelColor     = travel;
-        _toolpathSeamColor       = seam;
-        _toolpathUnselectedColor = unselected;
+        _toolpathExtrudeColor     = extrude;
+        _toolpathTravelColor      = travel;
+        _toolpathSeamColor        = seam;
+        _toolpathUnselectedColor  = unselected;
+        _toolpathWipeColor        = wipe;
+        _toolpathRetractionColor  = retraction;
 
         foreach (var entry in _toolpaths.Values)
-            entry.Renderer.UpdateColors(extrude, travel, seam, unselected);
+            entry.Renderer.UpdateColors(extrude, travel, seam, unselected, wipe, retraction);
     }
 
     /// <summary>
@@ -250,7 +321,8 @@ public sealed class SceneRenderer : IDisposable
     {
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
-        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor);
+        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
+            _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
         _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
         SceneRoot.AddChild(node);
@@ -305,7 +377,8 @@ public sealed class SceneRenderer : IDisposable
         RemoveToolpathIfExists(node);
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
-        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor);
+        renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
+            _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
         _toolpaths[node]    = new ToolpathEntry { Renderer = renderer, Data = toolpath, Origin = centroid };
     }
@@ -321,6 +394,14 @@ public sealed class SceneRenderer : IDisposable
             entry.Renderer.Dispose();
             _toolpaths.Remove(node);
         }
+    }
+
+    /// <summary>Disposes every registered toolpath renderer (e.g. before a full cell swap).</summary>
+    public void ClearAllToolpaths()
+    {
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.Dispose();
+        _toolpaths.Clear();
     }
 
     /// <summary>
@@ -449,6 +530,7 @@ public sealed class SceneRenderer : IDisposable
                         (int)TextureWrapMode.ClampToEdge);
         GL.BindTexture(TextureTarget.Texture1D, 0);
         _layerBoundaryCount = zBoundaries.Length;
+        _shaderAppearanceDirty = true;
     }
 
     private static (float r, float g, float b) HeatmapColor(float t)
@@ -497,6 +579,8 @@ public sealed class SceneRenderer : IDisposable
         // Sensor origin gizmo: orange X / lime Y / sky-blue Z, 150mm to distinguish from TCP.
         _sensorAxes       = new AxisRenderer(0.95f, 0.50f, 0.15f, 0.30f, 0.90f, 0.45f, 0.15f, 0.65f, 0.95f, 150f);
         _gizmo            = new GizmoRenderer();
+        _seamGuides       = new SeamGuideRenderer();
+        _sequencePath     = new SequencePathRenderer();
         _maskShader       = new Shader(MaskVertSrc, MaskFragSrc);
         _compositeShader  = new Shader(CompositeVertSrc, CompositeFragSrc);
 
@@ -587,12 +671,35 @@ public sealed class SceneRenderer : IDisposable
         GL.BindTexture(TextureTarget.Texture1D, _layerBoundaryTex);  // 0 = nothing bound; safe when uLayerBoundCount=0
         GL.ActiveTexture(TextureUnit.Texture0);
 
+        bool hasEnv = _backdrop is not null;
+        if (_shaderAppearanceDirty
+            || _shaderMode != _appliedShaderMode
+            || hasEnv != _appliedHasEnv
+            || MathF.Abs(_layerPreviewHeight - _appliedLayerPreviewHeight) > 0.0001f
+            || MathF.Abs(_layerColorZMin - _appliedLayerZMin) > 0.0001f
+            || MathF.Abs(_layerColorZMax - _appliedLayerZMax) > 0.0001f
+            || _layerBoundaryCount != _appliedLayerBoundaryCount)
+        {
+            foreach (var child in SceneRoot.Children)
+            {
+                if (child.Overlay) continue;
+                ApplyShaderModeToSubtree(child, hasEnv);
+            }
+
+            _appliedShaderMode            = _shaderMode;
+            _appliedHasEnv                = hasEnv;
+            _appliedLayerPreviewHeight    = _layerPreviewHeight;
+            _appliedLayerZMin             = _layerColorZMin;
+            _appliedLayerZMax             = _layerColorZMax;
+            _appliedLayerBoundaryCount    = _layerBoundaryCount;
+            _shaderAppearanceDirty        = false;
+        }
+
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1f, 1f);
         foreach (var child in SceneRoot.Children)
         {
             if (child.Overlay) continue; // drawn in overlay pass instead
-            ApplyShaderModeToSubtree(child);
             if (!child.CullFaces) GL.Disable(EnableCap.CullFace);
             child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
             if (!child.CullFaces) GL.Enable(EnableCap.CullFace);
@@ -604,7 +711,7 @@ public sealed class SceneRenderer : IDisposable
         {
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
-            bool isSelected = tpNode == SelectedNode;
+            bool isSelected = IsToolpathHighlighted(tpNode);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
@@ -616,16 +723,13 @@ public sealed class SceneRenderer : IDisposable
         _planePreview?.Draw(mvp);
 
         // -- Selection mask pass -----------------------------------------------
-        // Render the selected object as flat white into the mask FBO. The mask FBO
-        // shares the scene depth buffer so hidden surfaces are correctly excluded.
-        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
-        GL.ClearColor(0f, 0f, 0f, 0f);
-        GL.Clear(ClearBufferMask.ColorBufferBit);
-        // Do NOT clear depth -- it holds the scene values and gives us occlusion for free.
-
         if (SelectedNode is not null && _maskShader is not null)
         {
-            GL.DepthMask(false); // read scene depth for occlusion, never overwrite it
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
+            GL.ClearColor(0f, 0f, 0f, 0f);
+            GL.Clear(ClearBufferMask.ColorBufferBit);
+
+            GL.DepthMask(false);
             _maskShader.Use();
             foreach (var n in SelectedNode.SelfAndDescendants())
             {
@@ -706,6 +810,55 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.CullFace);
         }
 
+        // -- Seam guide pass (always on top) -----------------------------------
+        if (_seamGuidePoints.Count > 0 && _seamGuides is not null)
+        {
+            if (_seamGuidesDirty)
+            {
+                _seamGuides.Update(_seamGuidePoints, _seamGuideSelectedIndex);
+                _seamGuidesDirty = false;
+            }
+
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            _seamGuides.Draw(mvp,
+                new Vector3(0.1f, 0.85f, 0.95f),
+                new Vector3(1.0f, 0.85f, 0.1f));
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        // -- Tool-change sequence overlay (MassiveCONNECT-style path + marker) -
+        if (_sequencePath is not null)
+        {
+            if (_sequencePathDirty)
+            {
+                if (_sequencePathClearPending || !_sequencePathActive)
+                    _sequencePath.Clear();
+                else if (_sequencePathPending is { } pending)
+                {
+                    _sequencePath.SetWaypointMarkers(pending.WaypointWorld, _sequenceWaypointSelectedIndex);
+                    _sequencePath.UpdateProgress(
+                        pending.DenseRobroot,
+                        pending.RobrootOffset,
+                        pending.Cum,
+                        pending.SegMove,
+                        pending.Progress,
+                        pending.MarkerRobroot);
+                }
+
+                _sequencePathDirty = false;
+                _sequencePathClearPending = false;
+            }
+
+            if (_sequencePathActive)
+            {
+                GL.Clear(ClearBufferMask.DepthBufferBit);
+                GL.Disable(EnableCap.DepthTest);
+                _sequencePath.Draw(mvp);
+                GL.Enable(EnableCap.DepthTest);
+            }
+        }
+
         // -- Gizmo pass --------------------------------------------------------
         // Drawn directly into the output FBO after the composite so it always
         // appears on top of the selection outline.
@@ -736,8 +889,40 @@ public sealed class SceneRenderer : IDisposable
 
     // -- Selection -------------------------------------------------------------
 
-    /// <summary>Selects <paramref name="node"/>, or clears selection if <c>null</c>.</summary>
-    public void Select(SceneNode? node) => SelectedNode = node;
+    /// <summary>Selects <paramref name="node"/> exclusively, or clears selection if <c>null</c>.</summary>
+    public void Select(SceneNode? node)
+    {
+        SelectedNode = node;
+        _selectedToolpaths.Clear();
+        _selectedToolpathOrder.Clear();
+        if (node is not null && IsToolpathNode(node))
+        {
+            _selectedToolpaths.Add(node);
+            _selectedToolpathOrder.Add(node);
+        }
+    }
+
+    /// <summary>Shift+click toggle for toolpath multi-selection.</summary>
+    public void ToggleToolpathSelection(SceneNode node)
+    {
+        if (!IsToolpathNode(node)) return;
+
+        SelectedNode = node;
+        if (_selectedToolpaths.Contains(node))
+        {
+            _selectedToolpaths.Remove(node);
+            _selectedToolpathOrder.Remove(node);
+            if (_selectedToolpathOrder.Count > 0)
+                SelectedNode = _selectedToolpathOrder[^1];
+            else
+                SelectedNode = null;
+        }
+        else
+        {
+            _selectedToolpaths.Add(node);
+            _selectedToolpathOrder.Add(node);
+        }
+    }
 
     /// <summary>
     /// Casts <paramref name="worldRay"/> against all pickable nodes and returns
@@ -754,11 +939,174 @@ public sealed class SceneRenderer : IDisposable
     /// selectable root node plus the face normal in world space (camera-facing).
     /// Node is <c>null</c> if nothing was hit.
     /// </summary>
-    public (SceneNode? node, Vector3 faceNormal) PickFace(Ray worldRay)
+    public (SceneNode? node, Vector3 faceNormal, Vector3 hitPoint) PickFace(Ray worldRay)
     {
-        var hit  = Picker.PickFace(worldRay, SceneRoot, out var normal, out _);
+        var hit  = Picker.PickFace(worldRay, SceneRoot, out var normal, out float dist);
         var root = hit is null ? null : Picker.FindSelectableRoot(hit, SceneRoot);
-        return (root, root is null ? Vector3.Zero : normal);
+        var hitPoint = root is null ? Vector3.Zero : worldRay.At(dist);
+        return (root, root is null ? Vector3.Zero : normal, hitPoint);
+    }
+
+    /// <summary>Queues seam guide marker positions; GPU upload happens on the next render frame.</summary>
+    public void SetSeamGuides(IReadOnlyList<Vector3> points, int selectedIndex = -1)
+    {
+        _seamGuidePoints        = points;
+        _seamGuideSelectedIndex = selectedIndex;
+        _seamGuidesDirty        = true;
+    }
+
+    /// <summary>Queues tool-change sequence overlay data; GPU upload runs on the GL thread.</summary>
+    public void SetSequencePathOverlay(
+        bool active,
+        IReadOnlyList<Vector3>? denseRobroot = null,
+        Vector3 robrootOffset = default,
+        IReadOnlyList<float>? cum = null,
+        IReadOnlyList<MassiveSlicer.Core.Models.KrlMoveKind>? segMove = null,
+        float progress = 0f,
+        Vector3 markerRobroot = default,
+        IReadOnlyList<Vector3>? waypointWorld = null,
+        int selectedWaypointIndex = -1)
+    {
+        _sequencePathActive = active;
+        if (!active)
+        {
+            _sequencePathPending = null;
+            _sequenceWaypointWorld = [];
+            _sequenceWaypointSelectedIndex = -1;
+            _sequencePathClearPending = true;
+            _sequencePathDirty = true;
+            return;
+        }
+
+        if (denseRobroot is null || cum is null || segMove is null) return;
+        _sequenceWaypointWorld = waypointWorld ?? [];
+        _sequenceWaypointSelectedIndex = selectedWaypointIndex;
+        _sequencePathPending = new(
+            denseRobroot,
+            robrootOffset,
+            cum,
+            segMove,
+            progress,
+            markerRobroot,
+            waypointWorld ?? []);
+        _sequencePathClearPending = false;
+        _sequencePathDirty = true;
+    }
+
+    public void SetSequenceWaypointSelection(int selectedIndex)
+    {
+        if (_sequenceWaypointSelectedIndex == selectedIndex) return;
+        _sequenceWaypointSelectedIndex = selectedIndex;
+        _sequencePathDirty = true;
+    }
+
+    /// <summary>Returns resolved waypoint index closest to the click, or -1.</summary>
+    public int PickSequenceWaypoint(float mx, float my, float vpW, float vpH, float pickRadiusPx = 24f)
+    {
+        if (vpW <= 0 || vpH <= 0 || !_sequencePathActive || _sequenceWaypointWorld.Count == 0)
+            return -1;
+
+        float aspect   = vpW / vpH;
+        var   click    = new Vector2(mx, my);
+        var   viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+
+        int   best     = -1;
+        float bestDist = pickRadiusPx * pickRadiusPx;
+
+        for (int i = 0; i < _sequenceWaypointWorld.Count; i++)
+        {
+            var screen = WorldToScreen(_sequenceWaypointWorld[i], viewProj, vpW, vpH);
+            if (float.IsNaN(screen.X)) continue;
+            float d2 = (screen - click).LengthSquared;
+            if (d2 < bestDist)
+            {
+                bestDist = d2;
+                best     = i;
+            }
+        }
+
+        return best;
+    }
+
+    /// <summary>Projects a world-space point to viewport pixels (top-left origin).</summary>
+    public Vector2 ProjectToScreen(Vector3 world, float vpW, float vpH)
+    {
+        if (vpW <= 0f || vpH <= 0f) return new Vector2(float.NaN);
+        float aspect = vpW / vpH;
+        var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+        return WorldToScreen(world, viewProj, vpW, vpH);
+    }
+
+    /// <summary>Intersects <paramref name="ray"/> with the build-plate plane at <see cref="BedZ"/>.</summary>
+    public bool TryPickBed(Ray ray, out Vector3 hit)
+    {
+        const float eps = 1e-5f;
+        if (MathF.Abs(ray.Direction.Z) < eps)
+        {
+            hit = default;
+            return false;
+        }
+
+        float t = (BedZ - ray.Origin.Z) / ray.Direction.Z;
+        if (t < 0f)
+        {
+            hit = default;
+            return false;
+        }
+
+        hit = ray.At(t);
+        return true;
+    }
+
+    /// <summary>Intersects <paramref name="ray"/> with a horizontal plane at <paramref name="z"/>.</summary>
+    public static bool TryPickHorizontalPlane(Ray ray, float z, out Vector3 hit)
+    {
+        const float eps = 1e-5f;
+        if (MathF.Abs(ray.Direction.Z) < eps)
+        {
+            hit = default;
+            return false;
+        }
+
+        float t = (z - ray.Origin.Z) / ray.Direction.Z;
+        if (t < 0f)
+        {
+            hit = default;
+            return false;
+        }
+
+        hit = ray.At(t);
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the index of the seam guide closest to the click within <paramref name="pickRadiusPx"/>,
+    /// or <c>-1</c> when nothing is near enough.
+    /// </summary>
+    public int PickSeamGuide(float mx, float my, float vpW, float vpH, float pickRadiusPx = 14f)
+    {
+        if (vpW <= 0 || vpH <= 0 || _seamGuidePoints.Count == 0) return -1;
+
+        float aspect   = vpW / vpH;
+        var   click    = new Vector2(mx, my);
+        var   viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+
+        int   best     = -1;
+        float bestDist = pickRadiusPx * pickRadiusPx;
+
+        for (int i = 0; i < _seamGuidePoints.Count; i++)
+        {
+            var screen = WorldToScreen(_seamGuidePoints[i], viewProj, vpW, vpH);
+            if (float.IsNaN(screen.X)) continue;
+            float d2 = (screen - click).LengthSquared;
+            if (d2 < bestDist)
+            {
+                bestDist = d2;
+                best     = i;
+            }
+        }
+
+        return best;
     }
 
     /// <summary>
@@ -861,6 +1209,8 @@ public sealed class SceneRenderer : IDisposable
         _gizmo?.Dispose();
         _backdrop?.Dispose();
         _planePreview?.Dispose();
+        _seamGuides?.Dispose();
+        _sequencePath?.Dispose();
         foreach (var entry in _toolpaths.Values) entry.Renderer.Dispose();
         _toolpaths.Clear();
         _maskShader?.Dispose();
@@ -880,21 +1230,22 @@ public sealed class SceneRenderer : IDisposable
     private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.07f, 0.07f, 0.07f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 PurpleColor    = new(0.53f, 0.25f, 0.80f, 1f);
 
-    private void ApplyShaderModeToSubtree(SceneNode root)
+    private void ApplyShaderModeToSubtree(SceneNode root, bool hasEnv)
     {
-        bool hasEnv          = _backdrop is not null;
         bool forceLayerPreview = root.LayerPreview;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
-            mesh.HasEnvMap        = hasEnv;
+            // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
+            mesh.HasEnvMap        = hasEnv && n.Selectable;
+            mesh.FastCellMode     = !n.Selectable && _shaderMode == ShaderMode.Standard;
             mesh.LayerPreviewMode = false;
 
             if (forceLayerPreview)
             {
                 mesh.NormalsMode      = false;
                 mesh.LayerPreviewMode = true;
-                mesh.LayerHeight      = LayerPreviewHeight;
+                mesh.LayerHeight      = _layerPreviewHeight;
                 mesh.LayerZOffset     = BedZ;
                 mesh.LayerZMin           = _layerColorZMin;
                 mesh.LayerZMax           = _layerColorZMax;
@@ -903,7 +1254,7 @@ public sealed class SceneRenderer : IDisposable
                 continue;
             }
 
-            switch (ShaderMode)
+            switch (_shaderMode)
             {
                 case ShaderMode.Standard:
                 {

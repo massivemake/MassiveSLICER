@@ -1,4 +1,5 @@
 using System.Windows.Input;
+using Avalonia.Threading;
 
 namespace MassiveSlicer.Commands;
 
@@ -19,7 +20,16 @@ public sealed class RelayCommand : ICommand
 
     public void Execute(object? parameter) => _execute();
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() => RaiseCanExecuteChangedCore(CanExecuteChanged);
+
+    internal static void RaiseCanExecuteChangedCore(EventHandler? handlers)
+    {
+        if (handlers is null) return;
+        if (Dispatcher.UIThread.CheckAccess())
+            handlers.Invoke(null, EventArgs.Empty);
+        else
+            Dispatcher.UIThread.Post(() => handlers.Invoke(null, EventArgs.Empty));
+    }
 }
 
 public sealed class RelayCommand<T> : ICommand
@@ -41,5 +51,5 @@ public sealed class RelayCommand<T> : ICommand
     public void Execute(object? parameter)
         => _execute(parameter is T t ? t : default);
 
-    public void RaiseCanExecuteChanged() => CanExecuteChanged?.Invoke(this, EventArgs.Empty);
+    public void RaiseCanExecuteChanged() => RelayCommand.RaiseCanExecuteChangedCore(CanExecuteChanged);
 }

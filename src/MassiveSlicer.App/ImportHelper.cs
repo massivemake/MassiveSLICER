@@ -82,6 +82,33 @@ internal static class ImportHelper
         node.LocalTransform = lt;
     }
 
+    /// <summary>
+    /// Recenters native Y-up metre stand geometry so the wrapper origin sits at the
+    /// stand base centre. Matches MassiveCONNECT <c>robots.html</c> (-cx, -minY, -cz).
+    /// </summary>
+    internal static SceneNode RecenterStandYup(SceneNode nativeRoot)
+    {
+        var (min, max) = ComputeSubtreeAabb(nativeRoot);
+        if (min.X > max.X) return nativeRoot;
+
+        var center = (min + max) * 0.5f;
+        var recenter = new SceneNode
+        {
+            Name           = nativeRoot.Name + "_Recenter",
+            LocalTransform = Matrix4.CreateTranslation(-center.X, -min.Y, -center.Z),
+            Selectable     = false,
+        };
+
+        foreach (var child in nativeRoot.Children.ToList())
+        {
+            nativeRoot.RemoveChild(child);
+            recenter.AddChild(child);
+        }
+
+        nativeRoot.AddChild(recenter);
+        return nativeRoot;
+    }
+
     // -- AABB ------------------------------------------------------------------
 
     /// <summary>
@@ -90,7 +117,7 @@ internal static class ImportHelper
     /// are not yet attached to the scene graph (uses WorldTransform up to root).
     /// Returns (MaxValue, MinValue) when no geometry is found.
     /// </summary>
-    private static (Vector3 Min, Vector3 Max) ComputeSubtreeAabb(SceneNode root)
+    internal static (Vector3 Min, Vector3 Max) ComputeSubtreeAabb(SceneNode root)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);

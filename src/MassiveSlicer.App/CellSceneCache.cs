@@ -1,0 +1,88 @@
+using MassiveSlicer.ViewModels;
+using MassiveSlicer.Viewport.Scene;
+
+namespace MassiveSlicer.App;
+
+/// <summary>Caches pre-built cell swap payloads keyed by cell JSON path and mtime.</summary>
+internal static class CellSceneCache
+{
+    private static readonly Dictionary<string, (long MtimeUtcTicks, CellSwapPayload Template)> _cache = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Bump when stand prep / env build changes so cached cells rebuild.</summary>
+    private const int GeometryVersion = 13;
+
+    public static string CacheKey(string cellPath)
+    {
+        var full = Path.GetFullPath(cellPath);
+        if (!File.Exists(full))
+            return $"{full}|0|0|v{GeometryVersion}";
+
+        var fi = new FileInfo(full);
+        return $"{full}|{fi.LastWriteTimeUtc.Ticks}|{fi.Length}|v{GeometryVersion}";
+    }
+
+    /// <summary>Drop cached geometry for a cell (required after dev-mode saves on NAS shares).</summary>
+    public static void Invalidate(string cellPath)
+    {
+        var prefix = Path.GetFullPath(cellPath) + "|";
+        foreach (var key in _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList())
+            _cache.Remove(key);
+    }
+
+    public static bool TryGet(string cacheKey, out CellSwapPayload template)
+    {
+        if (_cache.TryGetValue(cacheKey, out var entry))
+        {
+            template = entry.Template;
+            return true;
+        }
+
+        template = null!;
+        return false;
+    }
+
+    public static void Store(string cacheKey, CellSwapPayload payload)
+        => _cache[cacheKey] = (0, ClonePayload(payload));
+
+    public static CellSwapPayload ClonePayload(CellSwapPayload src)
+    {
+        var env = new List<SceneNode>(src.EnvironmentNodes.Count);
+        foreach (var node in src.EnvironmentNodes)
+            env.Add(SceneNodeClone.DeepClone(node));
+
+        CellEnvironmentBuilder.CellMultiToolSet? multi = null;
+        if (src.MultiTools is { } mt)
+        {
+            var tools = new Dictionary<string, CellEnvironmentBuilder.ToolVisualPair>(StringComparer.Ordinal);
+            foreach (var (name, pair) in mt.Tools)
+            {
+                tools[name] = new CellEnvironmentBuilder.ToolVisualPair(
+                    SceneNodeClone.DeepClone(pair.FlangeHolder),
+                    pair.DockHolder is null ? null : SceneNodeClone.DeepClone(pair.DockHolder));
+            }
+
+            multi = new CellEnvironmentBuilder.CellMultiToolSet
+            {
+                Tools           = tools,
+                DefaultToolName = mt.DefaultToolName,
+                MountedToolName = mt.MountedToolName,
+            };
+        }
+
+        return new CellSwapPayload(
+            src.Config,
+            src.CellPath,
+            CloneOpt(src.RobotBaseNode),
+            CloneOpt(src.BoosterNode),
+            CloneOpt(src.BedNode),
+            CloneOpt(src.ToolHolder),
+            src.FirstTool,
+            env,
+            CloneOpt(src.RotaryBedPivot),
+            multi,
+            CloneOpt(src.FlangeAttachment));
+    }
+
+    private static SceneNode? CloneOpt(SceneNode? node)
+        => node is null ? null : SceneNodeClone.DeepClone(node);
+}

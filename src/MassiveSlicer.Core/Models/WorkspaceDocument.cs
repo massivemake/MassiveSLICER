@@ -94,5 +94,8 @@ public sealed class WorkspaceToolpathMoveData
     public bool IsLayerStitch { get; set; }
     public bool IsWipe { get; set; }
     public float WipeRpmScale { get; set; } = 1f;
+    public bool IsResumeRamp { get; set; }
+    public float ResumeSpeedScale { get; set; } = 1f;
+    public float ResumeRpmScale { get; set; } = 1f;
     public bool IsZHop { get; set; }
 }

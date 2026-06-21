@@ -58,14 +58,39 @@ public sealed class ToolbarViewModel : ViewModelBase
         set => SetField(ref _isRightPanelVisible, value);
     }
 
+    public const double DefaultConsoleHeight = 250;
+    public const double MinConsoleHeight     = 120;
+    public const double MaxConsoleHeight     = 600;
+
     private bool _isConsoleVisible = false;
 
-    /// <summary>Whether the floating command console overlay is open.</summary>
+    /// <summary>Whether the bottom-left console panel is expanded.</summary>
     public bool IsConsoleVisible
     {
         get => _isConsoleVisible;
-        set => SetField(ref _isConsoleVisible, value);
+        set
+        {
+            if (!SetField(ref _isConsoleVisible, value)) return;
+            OnPropertyChanged(nameof(DockedConsoleHeight));
+        }
     }
+
+    private double _consolePanelHeight = DefaultConsoleHeight;
+
+    /// <summary>Height of the resizable console body (history + input), in pixels.</summary>
+    public double ConsolePanelHeight
+    {
+        get => _consolePanelHeight;
+        set
+        {
+            var clamped = Math.Clamp(value, MinConsoleHeight, MaxConsoleHeight);
+            if (!SetField(ref _consolePanelHeight, clamped)) return;
+            OnPropertyChanged(nameof(DockedConsoleHeight));
+        }
+    }
+
+    /// <summary>Effective console height — zero when collapsed.</summary>
+    public double DockedConsoleHeight => IsConsoleVisible ? ConsolePanelHeight : 0;
 
     // -- Commands -------------------------------------------------------------
 
@@ -138,7 +163,7 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         FrontViewCommand        = new RelayCommand(FrontView);
         IsometricViewCommand    = new RelayCommand(IsometricView);
         ToggleRightPanelCommand = new RelayCommand(() => IsRightPanelVisible = !IsRightPanelVisible);
-        ToggleConsoleCommand    = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
+        ToggleConsoleCommand    = new RelayCommand(ToggleConsole);
         UndoCommand             = new RelayCommand(Undo, () => _undoRedo?.CanUndo ?? false);
         RedoCommand             = new RelayCommand(Redo, () => _undoRedo?.CanRedo ?? false);
         SyncRobotCommand        = new RelayCommand(SyncRobot);
@@ -201,4 +226,17 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     private void FrontView()       { /* TODO: notify viewport camera preset    */ }
     private void IsometricView()   { /* TODO: notify viewport camera preset    */ }
     private void SyncRobot() => SyncRobotRequested?.Invoke(this, EventArgs.Empty);
+
+    private void ToggleConsole()
+    {
+        if (IsConsoleVisible)
+        {
+            IsConsoleVisible = false;
+            return;
+        }
+
+        if (_consolePanelHeight < MinConsoleHeight)
+            ConsolePanelHeight = DefaultConsoleHeight;
+        IsConsoleVisible = true;
+    }
 }

@@ -28,9 +28,12 @@ public static class ToolpathSerializer
                     Normal        = ToArray(move.Normal),
                     IsLayerChange = move.IsLayerChange,
                     IsLayerStitch = move.IsLayerStitch,
-                    IsWipe        = move.IsWipe,
-                    WipeRpmScale  = move.WipeRpmScale,
-                    IsZHop        = move.IsZHop,
+                    IsWipe           = move.IsWipe,
+                    WipeRpmScale     = move.WipeRpmScale,
+                    IsResumeRamp     = move.IsResumeRamp,
+                    ResumeSpeedScale = move.ResumeSpeedScale,
+                    ResumeRpmScale   = move.ResumeRpmScale,
+                    IsZHop           = move.IsZHop,
                 });
             }
             data.Layers.Add(layerDto);
@@ -57,9 +60,12 @@ public static class ToolpathSerializer
                     Normal        = FromArray3(moveDto.Normal),
                     IsLayerChange = moveDto.IsLayerChange,
                     IsLayerStitch = moveDto.IsLayerStitch,
-                    IsWipe        = moveDto.IsWipe,
-                    WipeRpmScale  = moveDto.WipeRpmScale,
-                    IsZHop        = moveDto.IsZHop,
+                    IsWipe           = moveDto.IsWipe,
+                    WipeRpmScale     = moveDto.WipeRpmScale,
+                    IsResumeRamp     = moveDto.IsResumeRamp,
+                    ResumeSpeedScale = moveDto.ResumeSpeedScale,
+                    ResumeRpmScale   = moveDto.ResumeRpmScale,
+                    IsZHop           = moveDto.IsZHop,
                 });
             }
             toolpath.Layers.Add(layer);

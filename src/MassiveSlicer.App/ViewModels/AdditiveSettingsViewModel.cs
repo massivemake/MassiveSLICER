@@ -20,6 +20,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        OpenSeamEditorCommand         = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
 
         PropertyChanged += (_, e) =>
         {
@@ -88,6 +89,33 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
     public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
 
+    // -- Slicing mode (Normal vs Surface) -------------------------------------
+
+    public string[] SlicingModeOptions { get; } = ["Normal", "Surface"];
+
+    private string _slicingMode = "Normal";
+
+    /// <summary>
+    /// Normal = volumetric shells + infill. Surface = boundary/cladding paths; tool stays vertical unless Overhang orientation is on.
+    /// </summary>
+    public string SlicingMode
+    {
+        get => _slicingMode;
+        set
+        {
+            if (SetField(ref _slicingMode, value))
+            {
+                OnPropertyChanged(nameof(ShowInfillControls));
+                OnPropertyChanged(nameof(SurfaceModeActive));
+            }
+        }
+    }
+
+    public bool SurfaceModeActive => _slicingMode == "Surface";
+
+    /// <summary>Surface mode is for planar/angled strategies (not geodesic).</summary>
+    public bool ShowSlicingMode => _method != SliceMethod.Geodesic;
+
     private double _adaptiveQuality = 0.5;
 
     /// <summary>0 = finest detail (thin layers on slopes), 1 = fastest (thick layers where possible).</summary>
@@ -123,6 +151,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
+                OnPropertyChanged(nameof(ShowSlicingMode));
             }
         }
     }
@@ -167,6 +196,27 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _seamMode;
         set => SetField(ref _seamMode, value);
     }
+
+    /// <summary>World-space seam position guides for planar slicing.</summary>
+    public ObservableCollection<SeamGuidePoint> SeamGuides { get; } = [];
+
+    public string SeamGuideSummary =>
+        SeamGuides.Count == 0 ? "No guides" : $"{SeamGuides.Count} guide point(s)";
+
+    public void SetSeamGuides(IEnumerable<SeamGuidePoint> guides)
+    {
+        SeamGuides.Clear();
+        foreach (var g in guides)
+            SeamGuides.Add(g);
+        OnPropertyChanged(nameof(SeamGuideSummary));
+    }
+
+    public IReadOnlyList<SeamGuidePoint> BuildSeamGuideList() => [.. SeamGuides];
+
+    /// <summary>Opens the viewport seam guide editor.</summary>
+    public RelayCommand OpenSeamEditorCommand { get; }
+
+    internal Action? OnOpenSeamEditorRequested { get; set; }
 
     private double _passAngle;
 
@@ -441,7 +491,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public bool ShowInfillControls => InfillPattern != "None";
+    public bool ShowInfillControls => InfillPattern != "None" && !SurfaceModeActive;
 
     private double _infillSpacingMm = 0.0;
 
@@ -731,11 +781,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _zHopMm, Math.Max(0.0, value));
     }
 
-    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Natural"];
+    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction"];
 
     private string _wipeModeDisplay = "Off";
 
-    /// <summary>Wipe path before travel: Off, Retrace (back), or Natural (forward).</summary>
+    /// <summary>Wipe path before travel: Off, Retrace (back), or Same-Direction (forward past the point).</summary>
     public string WipeModeDisplay
     {
         get => _wipeModeDisplay;
@@ -753,11 +803,68 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private double _wipeRampMm = 5.0;
 
-    /// <summary>Trailing wipe distance in mm where extrusion RPM ramps down.</summary>
+    /// <summary>
+    /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
+    /// Negative = extra |N| mm past wipe length with ramp-down squeeze.
+    /// </summary>
     public double WipeRampMm
     {
         get => _wipeRampMm;
-        set => SetField(ref _wipeRampMm, Math.Max(0.0, value));
+        set => SetField(ref _wipeRampMm, Math.Clamp(value, -500.0, 500.0));
+    }
+
+    private double _wipeSpeed = 120.0;
+
+    /// <summary>Linear speed for wipe moves in mm/s (independent of travel speed).</summary>
+    public double WipeSpeed
+    {
+        get => _wipeSpeed;
+        set => SetField(ref _wipeSpeed, Math.Clamp(value, 1.0, 2000.0));
+    }
+
+    private bool _resumeRampEnabled;
+
+    /// <summary>Stepped speed/RPM ramp after each travel before full extrusion resumes.</summary>
+    public bool ResumeRampEnabled
+    {
+        get => _resumeRampEnabled;
+        set => SetField(ref _resumeRampEnabled, value);
+    }
+
+    private double _resumeRampStartSpeed = 0.5;
+
+    /// <summary>Print speed at the start of the post-travel ramp (mm/s).</summary>
+    public double ResumeRampStartSpeed
+    {
+        get => _resumeRampStartSpeed;
+        set => SetField(ref _resumeRampStartSpeed, Math.Clamp(value, 0.01, 2000.0));
+    }
+
+    private double _resumeRampStartRpmPercent = 1.0;
+
+    /// <summary>Extruder motor speed at ramp start (%).</summary>
+    public double ResumeRampStartRpmPercent
+    {
+        get => _resumeRampStartRpmPercent;
+        set => SetField(ref _resumeRampStartRpmPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _resumeRampDistanceMm = 609.6;
+
+    /// <summary>Total ramp distance along the path (mm). Default 609.6 ≈ 2 ft.</summary>
+    public double ResumeRampDistanceMm
+    {
+        get => _resumeRampDistanceMm;
+        set => SetField(ref _resumeRampDistanceMm, Math.Clamp(value, 1.0, 10000.0));
+    }
+
+    private int _resumeRampSteps = 10;
+
+    /// <summary>Number of discrete speed/RPM steps over the ramp distance.</summary>
+    public int ResumeRampSteps
+    {
+        get => _resumeRampSteps;
+        set => SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50));
     }
 
     private static double ParseSignedOffset(string? text)

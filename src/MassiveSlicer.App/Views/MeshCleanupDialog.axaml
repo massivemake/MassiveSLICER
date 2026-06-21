@@ -1,0 +1,113 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ia="https://github.com/projektanker/icons.avalonia"
+        x:Class="MassiveSlicer.App.Views.MeshCleanupDialog"
+        x:CompileBindings="False"
+        Title="Mesh Cleanup"
+        Width="460" Height="560"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg0}">
+
+    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="44"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" x:Name="TitleBar"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1"
+                    Cursor="SizeAll">
+                <Grid Margin="14,0">
+                    <TextBlock Text="Mesh Cleanup"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontSize="13" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Button HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Classes="ToolbarButton"
+                            Padding="6,2"
+                            Click="OnCancel">
+                        <ia:Icon Value="mdi-close" FontSize="14"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{DynamicResource Bg2}">
+                <StackPanel Margin="20,16,20,16" Spacing="6">
+                    <TextBlock Text="Repair imported mesh geometry before slicing or export. Toggle the operations you need, then click OK."
+                               TextWrapping="Wrap"
+                               Classes="LabelMuted"
+                               Margin="0,0,0,8"/>
+
+                    <CheckBox Content="Remove Floating Vertices"
+                              IsChecked="{Binding RemoveFloatingVertices, Mode=TwoWay}"
+                              ToolTip.Tip="Delete isolated vertices not used by any triangle."/>
+                    <CheckBox Content="Remove One Point Polygons"
+                              IsChecked="{Binding RemoveOnePointPolygons, Mode=TwoWay}"
+                              ToolTip.Tip="Remove degenerate triangles where all corners share one vertex."/>
+                    <CheckBox Content="Remove Two Point Polygons"
+                              IsChecked="{Binding RemoveTwoPointPolygons, Mode=TwoWay}"
+                              ToolTip.Tip="Remove degenerate triangles with only two unique corners."/>
+                    <CheckBox Content="Fix Duplicate Points in Polygons"
+                              IsChecked="{Binding FixDuplicatePointsInPolygons, Mode=TwoWay}"
+                              ToolTip.Tip="Remove triangles whose corners occupy duplicate positions."/>
+                    <CheckBox Content="Remove Colinear Vertices"
+                              IsChecked="{Binding RemoveColinearVertices, Mode=TwoWay}"
+                              ToolTip.Tip="Collapse unnecessary vertices that lie on a straight edge."/>
+                    <CheckBox Content="Fix Face Normal Vectors"
+                              IsChecked="{Binding FixFaceNormalVectors, Mode=TwoWay}"
+                              ToolTip.Tip="Drop zero-area faces and recompute vertex normals."/>
+                    <CheckBox Content="Merge Vertices"
+                              IsChecked="{Binding MergeVertices, Mode=TwoWay}"
+                              ToolTip.Tip="Weld vertices at the same position. Disable if you rely on intentional overlaps."/>
+                    <CheckBox Content="Unify Polygons"
+                              IsChecked="{Binding UnifyPolygons, Mode=TwoWay}"
+                              ToolTip.Tip="Remove duplicate triangles that share the same vertex indices."/>
+                    <CheckBox Content="Force Unify"
+                              IsChecked="{Binding ForceUnify, Mode=TwoWay}"
+                              ToolTip.Tip="Aggressively remove duplicate triangles that share the same vertex positions."/>
+                    <CheckBox Content="Fix Gaps"
+                              IsChecked="{Binding FixGaps, Mode=TwoWay}"
+                              ToolTip.Tip="Insert colinear edge vertices on adjacent polygons to close one-sided edge gaps."/>
+
+                    <TextBlock Text="Not applicable to triangle meshes in MassiveSlicer:"
+                               Classes="SectionHeader"
+                               Margin="0,12,0,4"/>
+                    <CheckBox Content="Merge Disco UVs" IsEnabled="False"
+                              ToolTip.Tip="UV maps are not stored on imported meshes."/>
+                    <CheckBox Content="Remove Disco Weight Values" IsEnabled="False"
+                              ToolTip.Tip="Weight maps are not stored on imported meshes."/>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,1,0,0">
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Spacing="8"
+                            Margin="0,0,16,0">
+                    <Button Content="Cancel"
+                            Classes="ToolbarButton"
+                            Padding="14,6"
+                            Click="OnCancel"/>
+                    <Button Content="OK"
+                            Classes="PrimaryButton"
+                            Padding="14,6"
+                            Click="OnOk"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

@@ -9,6 +9,6 @@ public enum WipeMode
     /// <summary>Retrace backward along the last extrusion segment.</summary>
     Retrace,
 
-    /// <summary>Continue forward along the natural print direction.</summary>
-    Natural,
+    /// <summary>Continue forward along the print direction past the travel start point.</summary>
+    SameDirection,
 }

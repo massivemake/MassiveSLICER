@@ -31,7 +31,7 @@ public sealed class OrbitCamera
     // -- Projection --------------------------------------------------------
 
     /// <summary>Vertical field of view in degrees.</summary>
-    public float FovDegrees { get; set; } = 45f;
+    public float FovDegrees { get; set; } = 85f;
 
     /// <summary>Near clip plane distance in mm.</summary>
     public float NearClip { get; set; } = 1f;

@@ -114,12 +114,12 @@
       "y": -103.6,
       "z": 0
     },
-    "hasVisualShift": true,
     "baseData": {
       "x": 1433.829,
       "y": -1377.359,
       "z": -870
-    }
+    },
+    "hidden": false
   },
   "boosterFrame": {
     "modelPath": "assets/cells/LFAM2/booster_frame.glb",
@@ -129,6 +129,7 @@
       "z": 0
     }
   },
+  "stands": [],
   "tools": [
     {
       "name": "HF Extruder",
@@ -140,7 +141,8 @@
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
-      "krlIndex": 1
+      "krlIndex": 1,
+      "default": false
     },
     {
       "name": "HV Extruder",
@@ -152,16 +154,18 @@
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
-      "krlIndex": 2
+      "krlIndex": 2,
+      "default": false
     }
   ],
   "krlBases": [],
   "bridgeIp": "192.168.0.152",
   "bridgePort": 7000,
+  "extBridgePort": 8765,
   "view": {
     "azimuth": -39.000046,
-    "elevation": 10.299952,
-    "radius": 5407.7847,
+    "elevation": 8,
+    "radius": 3480.3018,
     "targetX": 2171.2898,
     "targetY": 217.61844,
     "targetZ": 1231.4637
