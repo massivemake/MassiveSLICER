@@ -353,6 +353,61 @@
 
                         </WrapPanel>
 
+                        <!-- Material channels — inspector debug views of the selected mesh's PBR maps. -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="MATERIAL CHANNELS" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <WrapPanel>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Base Color"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="BaseColor"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Metalness"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Metalness"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Roughness"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Roughness"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Normal"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="NormalMap"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="AO"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="AO"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Emission"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Emission"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="UV Checker"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="UvChecker"/>
+                        </WrapPanel>
+
                         <!-- Lighting -->
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
                         <TextBlock Text="LIGHTING" Classes="SectionHeader" Margin="0,0,0,6"/>
