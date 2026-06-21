@@ -146,7 +146,7 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 - Cleaner phase borders and column structure; chevron/stem/connected layout removed.
 - Live I/O toggle above workflow phases; expands into `Lfam3LiveIoPanelView`.
 - **Live I/O Phase 2 (Pellet Extruder):** `ExtruderBridgeClient` polls `extIp:8765` every 2 s — flat `io` (Pos30 DI/DO, Pos28 `O_*`, MIO/RTD analog) + `modbus` holding regs (`hr_301xx`/`hr_302xx` zone temps). Writable DO with confirm on bridge pins. Status: `P2 live · bridge + Modbus`.
-- **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi names in bridge `io` dict. LFAM 3: `millIp` 192.168.0.246, `hasMilling: true`. Status: `P3 live · bridge`.
+- **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi names in bridge `io` dict. LFAM 3: `millIp` **192.168.0.249** (RevPi130866), `hasMilling: true`. Bridge deployed (`lfam-monitor.service` active). Status: `P3 live · bridge`.
 - LFAM 3 sidebar tab gating: Print → Additive, Scan → Scan, Mill → Subtractive (`SyncLfam3WorkflowSidebar`).
 
 ### Bottom status / console dock
@@ -289,16 +289,20 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 1. **PBR / textured GLB rendering** — UVs, normal maps, albedo textures in `MeshData` / `GltfLoader` / `MeshRenderer`; `UvSettingsViewModel` still stub.
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
 3. **KRL import** — parser not implemented (console/file menu stub only).
-4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O Phases 2–3 on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.246).
-5. **Deploy milling lfam-monitor bridge** — from repo: `python scripts/deploy_bridge_lfam3_milling.py --pass YOUR_SSH_PASSWORD` (installs `lfam-monitor.service` on milling RevPi 192.168.0.246:8765). Requires `pip install paramiko`.
+4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O Phases 2–3 on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
 
 ---
 
 ## Session changelog (reverse chronological)
 
+### 2026-06-21 — Milling bridge live on 192.168.0.249
+- **Deployed** `lfam-monitor.service` on milling RevPi `192.168.0.249` (`pi`) — bridge ping + 8/8 `MILLING_IO` keys OK (yellow lamp ON at deploy time).
+- **Corrected IP** from stale `192.168.0.246` → `192.168.0.249` in `lfam3.json`, deploy script default, tests, `LiveIoPhasePlan`.
+- Redeploy: `python scripts/deploy_bridge_lfam3_milling.py --pass …` (requires `pip install paramiko`).
+
 ### 2026-06-21 — Milling bridge deploy script on GitHub
-- **`scripts/deploy_bridge_lfam3_milling.py`** committed to [MassiveSlicer](https://github.com/MattWhite3194/MassiveSlicer) — SSH deployer for LFAM 3 milling RevPi (`192.168.0.246`): uploads `lfam_monitor_bridge.py`, installs `lfam-monitor.service` on :8765, verifies ping + `MILLING_IO` read.
-- Canonical copy: repo `scripts/` — on GitHub `main` @ `98c5aee` (also `feature/scan-rotary-bed-calibration` @ `49db522`). Network `Install/` folder is an optional mirror.
+- **`scripts/deploy_bridge_lfam3_milling.py`** committed to [MassiveSlicer](https://github.com/MattWhite3194/MassiveSlicer) — SSH deployer for LFAM 3 milling RevPi (`192.168.0.249`): uploads `lfam_monitor_bridge.py`, installs `lfam-monitor.service` on :8765, verifies ping + `MILLING_IO` read.
+- Canonical copy: repo `scripts/` — on GitHub `main` @ `c96efb8` (also `feature/scan-rotary-bed-calibration` @ `bd06307`). Network `Install/` folder is an optional mirror.
 
 ### 2026-06-21 — Live I/O Phase 3: Milling Spindle
 - **`MillingModbusClient`:** polls milling RevPi lfam-monitor bridge (`millIp:8765`, 3 s) — `MILLING_IO` names in `io` dict (matches `modbus_monitor.py`, not Modbus TCP :502).
