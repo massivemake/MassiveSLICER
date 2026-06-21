@@ -158,6 +158,9 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>True while a live C3Bridge session is active.</summary>
     public bool IsConnected => _connectionStatus == ConnectionStatus.Ready;
 
+    /// <summary>Fired on the UI thread when live KUKA I/O variables are batch-read.</summary>
+    public event EventHandler<IReadOnlyDictionary<string, string>>? IoSnapshotUpdated;
+
     /// <summary>Button label -- "Sync Robot" when disconnected, "Desync Robot" when live.</summary>
     public string SyncButtonLabel => IsConnected ? "Desync Robot" : "Sync Robot";
 
@@ -179,6 +182,33 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     /// <summary>Resumes the live polling loop if connected.</summary>
     public void ResumeStreaming() { if (_sync.IsConnected) _sync.StartStreaming(100); }
+
+    /// <summary>Enables periodic KUKA I/O reads on the existing C3Bridge stream.</summary>
+    public void SetLiveIoPolling(bool enabled)
+    {
+        _sync.IoPollingEnabled = enabled;
+        _sync.SetIoPollVariables(enabled ? Lfam3LiveIoCatalog.KukaPollVariables : []);
+    }
+
+    /// <summary>Writes a KRL digital output. Pauses streaming briefly.</summary>
+    public async Task<bool> TryWriteKukaDigitalAsync(string varName, bool value)
+    {
+        if (!_sync.IsConnected) return false;
+        PauseStreaming();
+        try
+        {
+            await _sync.SetBoolAsync(varName, value);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            ResumeStreaming();
+        }
+    }
 
     /// <summary>Reads a KRL <c>$FLAG[idx]</c> (streaming must be paused).</summary>
     public Task<bool> ReadFlagAsync(int idx, CancellationToken ct = default) => _sync.ReadFlagAsync(idx, ct);
@@ -629,6 +659,9 @@ public sealed class RobotPanelViewModel : ViewModelBase
             TcpB = Math.Round(pos.B, 3);
             TcpC = Math.Round(pos.C, 3);
         });
+
+        _sync.IoSnapshotUpdated += (_, snapshot) =>
+            Dispatcher.UIThread.Post(() => IoSnapshotUpdated?.Invoke(this, snapshot));
     }
 
     private void GoToBedCenter()

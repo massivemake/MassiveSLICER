@@ -1,0 +1,157 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:shapes="using:Avalonia.Controls.Shapes"
+             x:Class="MassiveSlicer.App.Views.Lfam3LiveIoPanelView"
+             x:CompileBindings="False">
+
+    <UserControl.Resources>
+        <DataTemplate x:Key="LiveIoSignalRowTemplate">
+            <StackPanel Spacing="2" Margin="0,0,0,2">
+                <Border Classes="Lfam3LiveIoRow">
+                    <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+                        <TextBlock Grid.Column="0"
+                                   Text="{Binding KindLabel}"
+                                   Width="18"
+                                   Classes="LabelMuted"
+                                   FontSize="9"
+                                   VerticalAlignment="Center"/>
+                        <Grid Grid.Column="1"
+                              Width="12"
+                              Height="12"
+                              Margin="4,0,6,0"
+                              IsVisible="{Binding IsDigital}">
+                            <shapes:Ellipse Classes="Lfam3LiveIoDot"
+                                            Classes.inactive="{Binding ShowInactive}"
+                                            Classes.active="{Binding IsActive}"
+                                            Classes.warning="{Binding IsWarning}"
+                                            Classes.fault="{Binding IsFault}"/>
+                        </Grid>
+                        <TextBlock Grid.Column="2"
+                                   Text="{Binding Label}"
+                                   FontSize="10"
+                                   VerticalAlignment="Center"
+                                   TextWrapping="Wrap"/>
+                        <TextBlock Grid.Column="3"
+                                   Text="{Binding DisplayValue}"
+                                   FontSize="10"
+                                   Classes="LabelMuted"
+                                   Margin="6,0,0,0"
+                                   VerticalAlignment="Center"
+                                   MinWidth="44"
+                                   HorizontalAlignment="Right"/>
+                        <Button Grid.Column="4"
+                                Content="⇅"
+                                FontSize="10"
+                                Padding="4,2"
+                                Margin="4,0,0,0"
+                                Classes="Lfam3LiveIoToggle"
+                                IsVisible="{Binding IsWritable}"
+                                Command="{Binding RequestToggleCommand}"
+                                ToolTip.Tip="Force output (requires confirmation)"/>
+                    </Grid>
+                </Border>
+                <StackPanel Orientation="Horizontal"
+                            Spacing="6"
+                            Margin="24,0,0,0"
+                            IsVisible="{Binding IsConfirmPending}">
+                    <TextBlock Text="{Binding ConfirmMessage}"
+                               FontSize="9"
+                               Foreground="#f0c040"
+                               VerticalAlignment="Center"
+                               TextWrapping="Wrap"/>
+                    <Button Content="Confirm"
+                            FontSize="9"
+                            Padding="6,2"
+                            Classes="Lfam3LiveIoToggle"
+                            Command="{Binding ConfirmToggleCommand}"/>
+                    <Button Content="Cancel"
+                            FontSize="9"
+                            Padding="6,2"
+                            Classes="Lfam3LiveIoToggle"
+                            Command="{Binding CancelToggleCommand}"/>
+                </StackPanel>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <Border Classes="Lfam3LiveIoPanel nested">
+        <StackPanel Spacing="6">
+            <TextBlock Text="{Binding Phase1Hint}"
+                       FontSize="9"
+                       Foreground="#59FF0D"
+                       Margin="2,0"
+                       TextWrapping="Wrap"/>
+
+            <ItemsControl ItemsSource="{Binding VisibleSections}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" Spacing="10"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Border Classes="Lfam3LiveIoSection"
+                                Classes.split-io="{Binding UsesSplitIoLayout}"
+                                Classes.pending="{Binding !IsPhaseLive}"
+                                VerticalAlignment="Top">
+                            <StackPanel Spacing="4">
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
+                                    <TextBlock Grid.Column="0"
+                                               Text="{Binding Title}"
+                                               Classes="Lfam3LiveIoSectionTitle"/>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding StatusLine}"
+                                               Classes="LabelMuted"
+                                               FontSize="9"
+                                               VerticalAlignment="Center"
+                                               TextWrapping="Wrap"
+                                               MaxWidth="120"/>
+                                </Grid>
+
+                                <!-- Split I/O: inputs left, outputs right -->
+                                <Grid ColumnDefinitions="*,10,*"
+                                      IsVisible="{Binding UsesSplitIoLayout}">
+                                    <StackPanel Grid.Column="0" Spacing="2">
+                                        <TextBlock Text="INPUTS"
+                                                   FontSize="9"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#59FF0D"
+                                                   LetterSpacing="0.8"
+                                                   Margin="0,0,0,2"/>
+                                        <ItemsControl ItemsSource="{Binding InputSignals}"
+                                                      ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
+                                    </StackPanel>
+                                    <Border Grid.Column="1"
+                                            Width="1"
+                                            Background="#2a2f42"
+                                            Margin="0,2"/>
+                                    <StackPanel Grid.Column="2" Spacing="2">
+                                        <TextBlock Text="OUTPUTS"
+                                                   FontSize="9"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="#59FF0D"
+                                                   LetterSpacing="0.8"
+                                                   Margin="0,0,0,2"/>
+                                        <ItemsControl ItemsSource="{Binding OutputSignals}"
+                                                      ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <!-- Single-column phase equipment -->
+                                <ItemsControl ItemsSource="{Binding Signals}"
+                                              ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"
+                                              IsVisible="{Binding !UsesSplitIoLayout}"/>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Text="{Binding PhaseRoadmapSummary}"
+                       Classes="LabelMuted"
+                       FontSize="9"
+                       Margin="2,0"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
+    </Border>
+</UserControl>
