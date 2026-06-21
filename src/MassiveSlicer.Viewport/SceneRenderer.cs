@@ -1233,13 +1233,18 @@ public sealed class SceneRenderer : IDisposable
     private void ApplyShaderModeToSubtree(SceneNode root, bool hasEnv)
     {
         bool forceLayerPreview = root.LayerPreview;
+        bool debugChannel = IsMaterialDebug(_shaderMode);
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
             mesh.HasEnvMap        = hasEnv && n.Selectable;
-            mesh.FastCellMode     = !n.Selectable && _shaderMode == ShaderMode.Standard;
+            // Cell geometry stays on the cheap path for Standard *and* debug modes
+            // (debug channels are meant to inspect imported meshes, not the robot).
+            mesh.FastCellMode     = !n.Selectable && (_shaderMode == ShaderMode.Standard || debugChannel);
             mesh.LayerPreviewMode = false;
+            mesh.MaterialChannel  = 0;
+            mesh.SuppressTextures = false;
 
             if (forceLayerPreview)
             {
@@ -1254,6 +1259,19 @@ public sealed class SceneRenderer : IDisposable
                 continue;
             }
 
+            // Material-channel debug views: keep the mesh's real material/textures, render
+            // the raw channel (Base Color / Metalness / Roughness / Normal / AO / Emission / UV).
+            if (debugChannel)
+            {
+                var pd = mesh.PickingData;
+                mesh.NormalsMode     = false;
+                mesh.Color           = pd.Material?.BaseColorFactor ?? pd.BaseColor;
+                mesh.Metallic        = pd.Material?.MetallicFactor ?? pd.Metallic;
+                mesh.RoughnessFactor = pd.Material?.RoughnessFactor ?? pd.Roughness;
+                mesh.MaterialChannel = MaterialChannelOf(_shaderMode);
+                continue;
+            }
+
             switch (_shaderMode)
             {
                 case ShaderMode.Standard:
@@ -1261,43 +1279,54 @@ public sealed class SceneRenderer : IDisposable
                     var pd = mesh.PickingData;
                     float smoothness = 1f - pd.Roughness;
                     mesh.NormalsMode      = false;
-                    mesh.Color            = pd.BaseColor;
-                    mesh.Metallic         = pd.Metallic;
+                    mesh.Color            = pd.Material?.BaseColorFactor ?? pd.BaseColor;
+                    mesh.Metallic         = pd.Material?.MetallicFactor ?? pd.Metallic;
+                    mesh.RoughnessFactor  = pd.Material?.RoughnessFactor ?? pd.Roughness;
                     mesh.Shininess        = MathF.Pow(2f, smoothness * 5f);
                     mesh.SpecularStrength = smoothness * (0.25f + pd.Metallic * 0.5f);
                     break;
                 }
                 case ShaderMode.Clay:
                     mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
                     mesh.Metallic         = 0f;
+                    mesh.RoughnessFactor  = 0.9f;
                     mesh.Color            = ClayColor;
                     mesh.SpecularStrength = 0f;
                     mesh.Shininess        = 1f;
                     break;
                 case ShaderMode.Metal:
                     mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
                     mesh.Metallic         = 0.85f;
+                    mesh.RoughnessFactor  = 0.35f;
                     mesh.Color            = MetalColor;
                     mesh.SpecularStrength = 0.35f;
                     mesh.Shininess        = 18f;
                     break;
                 case ShaderMode.Chrome:
                     mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
                     mesh.Metallic         = 1f;
+                    mesh.RoughnessFactor  = 0.05f;
                     mesh.Color            = ChromeColor;
                     mesh.SpecularStrength = 1.20f;
                     mesh.Shininess        = 256f;
                     break;
                 case ShaderMode.MatteBlack:
                     mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
                     mesh.Metallic         = 0f;
+                    mesh.RoughnessFactor  = 0.95f;
                     mesh.Color            = MatteBlackColor;
                     mesh.SpecularStrength = 0f;
                     mesh.Shininess        = 1f;
                     break;
                 case ShaderMode.Purple:
                     mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
                     mesh.Metallic         = 0.1f;
+                    mesh.RoughnessFactor  = 0.4f;
                     mesh.Color            = PurpleColor;
                     mesh.SpecularStrength = 0.15f;
                     mesh.Shininess        = 16f;
@@ -1309,6 +1338,23 @@ public sealed class SceneRenderer : IDisposable
             }
         }
     }
+
+    private static bool IsMaterialDebug(ShaderMode m) => m is
+        ShaderMode.BaseColor or ShaderMode.Metalness or ShaderMode.Roughness or
+        ShaderMode.NormalMap or ShaderMode.AO or ShaderMode.Emission or ShaderMode.UvChecker;
+
+    /// <summary>Maps a debug ShaderMode to the MeshRenderer.MaterialChannel value (1..7).</summary>
+    private static int MaterialChannelOf(ShaderMode m) => m switch
+    {
+        ShaderMode.BaseColor => 1,
+        ShaderMode.Metalness => 2,
+        ShaderMode.Roughness => 3,
+        ShaderMode.NormalMap => 4,
+        ShaderMode.AO        => 5,
+        ShaderMode.Emission  => 6,
+        ShaderMode.UvChecker => 7,
+        _                     => 0,
+    };
 
     // -- FBO management --------------------------------------------------------
 

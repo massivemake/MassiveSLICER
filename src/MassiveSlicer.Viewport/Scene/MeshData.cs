@@ -41,9 +41,27 @@ public sealed class MeshData
     /// <summary>PBR roughness factor (0 = mirror, 1 = fully diffuse). Default 0.5.</summary>
     public float Roughness { get; }
 
+    /// <summary>Per-vertex UV0 (TEXCOORD_0), same length as <see cref="Positions"/>, or <c>null</c>.</summary>
+    public Vector2[]? Uvs { get; }
+
+    /// <summary>Per-vertex tangents (xyz + w handedness), same length as <see cref="Positions"/>, or <c>null</c>.</summary>
+    public Vector4[]? Tangents { get; }
+
+    /// <summary>Full PBR material (factors + textures), or <c>null</c> for factor-only meshes.</summary>
+    public MaterialData? Material { get; }
+
     public MeshData(Vector3[] positions, Vector3[] normals, uint[]? indices,
                     string name = "Mesh", Vector4? baseColor = null,
                     float metallic = 0f, float roughness = 1f)
+        : this(positions, normals, indices, name, baseColor, metallic, roughness,
+               uvs: null, tangents: null, material: null)
+    {
+    }
+
+    /// <summary>Full constructor with PBR vertex streams and material (UVs/tangents/textures).</summary>
+    public MeshData(Vector3[] positions, Vector3[] normals, uint[]? indices,
+                    string name, Vector4? baseColor, float metallic, float roughness,
+                    Vector2[]? uvs, Vector4[]? tangents, MaterialData? material)
     {
         Positions   = positions;
         Normals     = normals;
@@ -52,6 +70,9 @@ public sealed class MeshData
         BaseColor   = baseColor ?? Vector4.One;
         Metallic    = metallic;
         Roughness   = roughness;
+        Uvs         = uvs;
+        Tangents    = tangents;
+        Material    = material;
         LocalBounds = ComputeBounds(positions);
     }
 

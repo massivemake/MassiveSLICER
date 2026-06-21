@@ -2,7 +2,9 @@
 using OpenTK.Mathematics;
 using SharpGLTF.Schema2;
 using SharpGLTF.Validation;
+using StbImageSharp;
 using SysNum = System.Numerics;
+using AlphaMode = MassiveSlicer.Viewport.Scene.AlphaMode;
 
 namespace MassiveSlicer.Viewport.Loading;
 
@@ -104,8 +106,11 @@ public static class GltfLoader
         var scene = model.DefaultScene;
         if (scene != null)
         {
+            // Per-load image cache: a glTF image shared by several materials decodes once
+            // and yields a single TextureData (one GPU upload). Keyed by Image.LogicalIndex.
+            var textureCache = new Dictionary<int, TextureData>();
             foreach (var child in scene.VisualChildren)
-                root.AddChild(BuildNode(child));
+                root.AddChild(BuildNode(child, textureCache));
         }
 
         _graphCache[fullPath] = (mtime, SceneNodeClone.DeepClone(root));
@@ -195,7 +200,7 @@ public static class GltfLoader
         return (min, max);
     }
 
-    private static SceneNode BuildNode(Node gltfNode)
+    private static SceneNode BuildNode(Node gltfNode, Dictionary<int, TextureData> textureCache)
     {
         var node = new SceneNode
         {
@@ -208,19 +213,26 @@ public static class GltfLoader
             foreach (var prim in gltfNode.Mesh.Primitives)
             {
                 var nodeLabel = gltfNode.Name ?? gltfNode.Mesh.Name ?? "Mesh";
-                var data = ExtractPrimitive(prim, nodeLabel);
+                var data = ExtractPrimitive(prim, nodeLabel, textureCache);
                 if (data is not null)
-                    node.AddChild(new SceneNode { Name = data.Name, PendingMesh = data });
+                {
+                    var meshNode = new SceneNode { Name = data.Name, PendingMesh = data };
+                    // Double-sided materials must not back-face cull.
+                    if (data.Material?.DoubleSided == true)
+                        meshNode.CullFaces = false;
+                    node.AddChild(meshNode);
+                }
             }
         }
 
         foreach (var child in gltfNode.VisualChildren)
-            node.AddChild(BuildNode(child));
+            node.AddChild(BuildNode(child, textureCache));
 
         return node;
     }
 
-    private static MeshData? ExtractPrimitive(MeshPrimitive prim, string name)
+    private static MeshData? ExtractPrimitive(MeshPrimitive prim, string name,
+                                              Dictionary<int, TextureData> textureCache)
     {
         var posAccessor = prim.GetVertexAccessor("POSITION");
         if (posAccessor is null) return null;
@@ -259,6 +271,32 @@ public static class GltfLoader
         if (normAccessor is null && indices is not null)
             normals = ComputeFlatNormals(positions, indices);
 
+        // UV0 (TEXCOORD_0) -- required for any texture sampling.
+        Vector2[]? uvs = null;
+        var uvAccessor = prim.GetVertexAccessor("TEXCOORD_0");
+        if (uvAccessor is not null)
+        {
+            var rawUv = uvAccessor.AsVector2Array();
+            uvs = new Vector2[rawUv.Count];
+            for (int i = 0; i < rawUv.Count; i++)
+                uvs[i] = new Vector2(rawUv[i].X, rawUv[i].Y);
+        }
+
+        // Tangents (xyz + w handedness) for normal mapping; compute from UVs when absent.
+        Vector4[]? tangents = null;
+        var tanAccessor = prim.GetVertexAccessor("TANGENT");
+        if (tanAccessor is not null)
+        {
+            var rawTan = tanAccessor.AsVector4Array();
+            tangents = new Vector4[rawTan.Count];
+            for (int i = 0; i < rawTan.Count; i++)
+                tangents[i] = new Vector4(rawTan[i].X, rawTan[i].Y, rawTan[i].Z, rawTan[i].W);
+        }
+        else if (uvs is not null)
+        {
+            tangents = ComputeTangents(positions, normals, uvs, indices);
+        }
+
         // Extract PBR material properties.
         Vector4? baseColor = null;
         float metallic  = 0f;
@@ -268,6 +306,7 @@ public static class GltfLoader
         if (mat?.Name is { Length: > 0 } matName)
             name = $"{name}__{matName}";
 
+        MaterialData? material = null;
         if (mat is not null)
         {
             var bcCh = mat.FindChannel("BaseColor");
@@ -286,9 +325,117 @@ public static class GltfLoader
                 if (parms.Count >= 1 && parms[0].Value is float mf) metallic  = mf;
                 if (parms.Count >= 2 && parms[1].Value is float rf) roughness = rf;
             }
+
+            material = ExtractMaterial(mat, baseColor ?? Vector4.One, metallic, roughness, textureCache);
         }
 
-        return new MeshData(positions, normals, indices, name, baseColor, metallic, roughness);
+        return new MeshData(positions, normals, indices, name,
+                            baseColor, metallic, roughness, uvs, tangents, material);
+    }
+
+    // -- Material / texture extraction ----------------------------------------
+
+    private static MaterialData ExtractMaterial(
+        Material mat, Vector4 baseColorFactor, float metallic, float roughness,
+        Dictionary<int, TextureData> textureCache)
+    {
+        var emissive = Vector3.Zero;
+        var emCh = mat.FindChannel("Emissive");
+        if (emCh.HasValue)
+        {
+#pragma warning disable CS0618
+            var e = emCh.Value.Parameter;
+#pragma warning restore CS0618
+            emissive = new Vector3(e.X, e.Y, e.Z);
+        }
+
+        var alphaMode = mat.Alpha switch
+        {
+            SharpGLTF.Schema2.AlphaMode.MASK  => AlphaMode.Mask,
+            SharpGLTF.Schema2.AlphaMode.BLEND => AlphaMode.Blend,
+            _                                  => AlphaMode.Opaque,
+        };
+
+        return new MaterialData
+        {
+            BaseColorFactor   = baseColorFactor,
+            MetallicFactor    = metallic,
+            RoughnessFactor   = roughness,
+            EmissiveFactor    = emissive,
+            NormalScale       = ChannelFloat(mat, "Normal",    "Scale",    1f),
+            OcclusionStrength = ChannelFloat(mat, "Occlusion", "Strength", 1f),
+            AlphaMode         = alphaMode,
+            AlphaCutoff       = mat.AlphaCutoff,
+            DoubleSided       = mat.DoubleSided,
+            BaseColor         = DecodeChannelTexture(mat, "BaseColor",         srgb: true,  textureCache),
+            MetallicRoughness = DecodeChannelTexture(mat, "MetallicRoughness", srgb: false, textureCache),
+            Normal            = DecodeChannelTexture(mat, "Normal",            srgb: false, textureCache),
+            Occlusion         = DecodeChannelTexture(mat, "Occlusion",         srgb: false, textureCache),
+            Emissive          = DecodeChannelTexture(mat, "Emissive",          srgb: true,  textureCache),
+        };
+    }
+
+    /// <summary>Reads a named float parameter from a material channel (e.g. normal Scale,
+    /// occlusion Strength), matching by substring; returns <paramref name="def"/> if absent.</summary>
+    private static float ChannelFloat(Material mat, string channel, string paramContains, float def)
+    {
+        var ch = mat.FindChannel(channel);
+        if (!ch.HasValue) return def;
+        foreach (var p in ch.Value.Parameters)
+            if (p.Name.ToString()?.Contains(paramContains, StringComparison.OrdinalIgnoreCase) == true
+                && p.Value is float f)
+                return f;
+        return def;
+    }
+
+    private static TextureData? DecodeChannelTexture(
+        Material mat, string channel, bool srgb, Dictionary<int, TextureData> textureCache)
+    {
+        var ch = mat.FindChannel(channel);
+        if (ch?.Texture?.PrimaryImage is not { } image) return null;
+
+        int key = image.LogicalIndex;
+        if (textureCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var content = image.Content;          // SharpGLTF MemoryImage (encoded PNG/JPEG bytes)
+        var bytes   = content.Content;          // ReadOnlyMemory<byte>
+        if (bytes.Length == 0) return null;
+
+        var (wrapS, wrapT) = MapWrap(ch.Value.Texture?.Sampler);
+        var decoded = DecodeImage(bytes.ToArray(), srgb, wrapS, wrapT);
+        if (decoded is not null)
+            textureCache[key] = decoded;
+        return decoded;
+    }
+
+    private static TextureData? DecodeImage(byte[] encoded, bool srgb,
+                                            TextureWrapKind wrapS, TextureWrapKind wrapT)
+    {
+        try
+        {
+            var img = ImageResult.FromMemory(encoded, ColorComponents.RedGreenBlueAlpha);
+            if (img is null || img.Width <= 0 || img.Height <= 0) return null;
+            return new TextureData(img.Data, img.Width, img.Height, srgb, wrapS, wrapT);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[gltf] texture decode failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static (TextureWrapKind S, TextureWrapKind T) MapWrap(TextureSampler? sampler)
+    {
+        static TextureWrapKind Map(TextureWrapMode m) => m switch
+        {
+            TextureWrapMode.CLAMP_TO_EDGE   => TextureWrapKind.ClampToEdge,
+            TextureWrapMode.MIRRORED_REPEAT => TextureWrapKind.MirroredRepeat,
+            _                                => TextureWrapKind.Repeat,
+        };
+        return sampler is null
+            ? (TextureWrapKind.Repeat, TextureWrapKind.Repeat)
+            : (Map(sampler.WrapS), Map(sampler.WrapT));
     }
 
     private static Matrix4 ToMatrix4(SysNum.Matrix4x4 m) => new(
@@ -330,5 +477,52 @@ public static class GltfLoader
                 normals[i] = Vector3.Normalize(normals[i]);
 
         return normals;
+    }
+
+    /// <summary>
+    /// Per-vertex tangents (xyz + w handedness) via the Lengyel algorithm, used when the glTF
+    /// has UVs but no TANGENT attribute. Accumulates per-triangle tangent/bitangent from
+    /// position+UV deltas, then Gram-Schmidt orthonormalises against the vertex normal.
+    /// </summary>
+    private static Vector4[] ComputeTangents(Vector3[] pos, Vector3[] nrm, Vector2[] uv, uint[]? indices)
+    {
+        int n = pos.Length;
+        var tan1 = new Vector3[n];
+        var tan2 = new Vector3[n];
+
+        void Accumulate(int i0, int i1, int i2)
+        {
+            if (i0 >= n || i1 >= n || i2 >= n) return;
+            var e1 = pos[i1] - pos[i0];
+            var e2 = pos[i2] - pos[i0];
+            var d1 = uv[i1] - uv[i0];
+            var d2 = uv[i2] - uv[i0];
+            float denom = d1.X * d2.Y - d2.X * d1.Y;
+            if (MathF.Abs(denom) < 1e-9f) return;
+            float r = 1f / denom;
+            var sdir = (e1 * d2.Y - e2 * d1.Y) * r;
+            var tdir = (e2 * d1.X - e1 * d2.X) * r;
+            tan1[i0] += sdir; tan1[i1] += sdir; tan1[i2] += sdir;
+            tan2[i0] += tdir; tan2[i1] += tdir; tan2[i2] += tdir;
+        }
+
+        if (indices is not null)
+            for (int i = 0; i + 2 < indices.Length; i += 3)
+                Accumulate((int)indices[i], (int)indices[i + 1], (int)indices[i + 2]);
+        else
+            for (int i = 0; i + 2 < pos.Length; i += 3)
+                Accumulate(i, i + 1, i + 2);
+
+        var result = new Vector4[n];
+        for (int i = 0; i < n; i++)
+        {
+            var nv = nrm[i];
+            var t  = tan1[i];
+            var tang = t - nv * Vector3.Dot(nv, t);               // Gram-Schmidt
+            tang = tang.LengthSquared > 1e-12f ? Vector3.Normalize(tang) : new Vector3(1f, 0f, 0f);
+            float w = Vector3.Dot(Vector3.Cross(nv, t), tan2[i]) < 0f ? -1f : 1f;
+            result[i] = new Vector4(tang, w);
+        }
+        return result;
     }
 }

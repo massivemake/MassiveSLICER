@@ -140,6 +140,10 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 
 ## Completed features
 
+### PBR rendering (metallic-roughness + material inspector)
+- Imported GLBs render real **metallic-roughness PBR** from their textures (base colour, MR, normal, AO, emissive) via Cook-Torrance + env IBL + ACES tonemap. Data model: `TextureData`/`MaterialData` + `MeshData.Uvs/Tangents/Material`; loader decodes/dedups images (StbImageSharp); GPU textures pooled in `GpuTextureCache` (units 4-8). Single uber-shader in `MeshRenderer.FragSrc` (mode 0 = PBR; modes 1/2/3 = normals/layer/fastcell unchanged; presets via factor path).
+- **Material debug channels** (`ShaderMode` BaseColor/Metalness/Roughness/NormalMap/AO/Emission/UvChecker → shader modes 4-10), picked from the **MATERIAL CHANNELS** section in `LeftPanelView` (Viewport tab). Full details + the NAS stale-build gotcha in the session-6 changelog.
+
 ### LFAM 3 workflow timeline UI
 - **Architecture (3- and 4-phase tracks):** `Lfam3WorkflowPhaseBlock` = rivet + phase label only. `Lfam3WorkflowPhaseColumn` wraps block + float layer (`Lfam3WorkflowPickDepositFloat`, playback, param card). Both grids in `Lfam3WorkflowTimelineView.axaml` use `Lfam3WorkflowPhaseColumn` — `Lfam3WorkflowPickDepositOverlay` removed.
 - **Rivet alignment (user-verified):** track grid `RowDefinitions="56"`, `Lfam3WorkflowTrack` height **68px**, phase column `Height="56"` + `VerticalAlignment="Center"`, connector `VerticalAlignment="Center"` through 52px icon centers. `ClipToBounds="False"` on track/panel/column.
@@ -390,7 +394,7 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Pending / not started
 
-1. **PBR / textured GLB rendering** — UVs, normal maps, albedo textures in `MeshData` / `GltfLoader` / `MeshRenderer`; `UvSettingsViewModel` still stub.
+1. **PBR polish (core done — see Completed features):** real metallic-roughness PBR with textures now renders. Remaining nice-to-haves: full prefiltered-env + BRDF LUT IBL (v1 uses roughness→LOD + analytic Karis fit); alpha **blend** ordering (v1 = Opaque + Mask only); scene env/exposure tuning (Final Render reads a touch dark vs a studio HDR viewer); populate `UvSettingsViewModel` from the selected mesh; later: apply the material system to toolpath meshes + feed the slicer.
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
 3. **KRL import** — parser not implemented (console/file menu stub only).
 4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline expands on click; **rivets aligned on connector** (done); **Pick/Deposit pills above active phase** after expand + phase select, details expand **upward** on pill click (session-6 Canvas fix); transform bar; rock select → Focus bar; Live I/O **Position** column shows A1–A6/E1 + TCP when robot synced; P1–P3 I/O live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
@@ -399,6 +403,17 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-06-21 — Real PBR rendering + material debug channels (session 6)
+- **Metallic-roughness PBR with textures.** Imported GLBs now render base colour, metallic-roughness, normal, AO, and emissive maps with a Cook-Torrance BRDF + env IBL (ACES tonemap). Verified on `crystal_stone_rock(1).glb` — textured Final Render matches a reference glTF viewer.
+- **New data model:** `Scene/TextureData.cs` (+ `TextureWrapKind`), `Scene/MaterialData.cs` (+ `AlphaMode`); `MeshData` gained nullable `Uvs`/`Tangents`/`Material` via a ctor overload (old ctor delegates with nulls — all existing loaders unchanged). `CloneMeshData` passes them through reusing refs.
+- **Loader:** `GltfLoader.ExtractPrimitive` reads `TEXCOORD_0` + `TANGENT` (computes tangents via Lengyel when absent), decodes embedded PNG/JPEG via StbImageSharp, dedups images by `Image.LogicalIndex`, sets `node.CullFaces` from `DoubleSided`. Correct sRGB (baseColor/emissive) vs linear (normal/MR/AO) flags.
+- **GPU:** `MeshRenderer.Upload` now interleaves 12 floats (pos3+nrm3+uv2+tan4); new `Rendering/GpuTextureCache.cs` (ref-counted, keyed by `TextureData.CacheId`, sRGB vs RGBA8, mipmaps) mirrors `GpuMeshCache`; material maps bound to units 4-8 (1=env,2=heatmap,3=boundary).
+- **Shader (uber, single program):** `MeshRenderer.FragSrc` mode 0 = Cook-Torrance (GGX/Smith/Schlick, F0=mix(0.04,albedo,metal)) + normal mapping via TBN + IBL (env diffuse high-LOD, specular roughness→LOD + analytic Karis EnvBRDF) + ACES. Mask discard + double-sided `gl_FrontFacing` flip. Modes 1/2/3 (normals/layer/fastcell) untouched; presets route through the factor path with `SuppressTextures`.
+- **Material debug channels:** `ShaderMode` += BaseColor/Metalness/Roughness/NormalMap/AO/Emission/UvChecker (shader modes 4-10, early-return raw-channel branches; UV checker procedural, magenta when no UVs). Wired in `SceneRenderer.ApplyShaderModeToSubtree` + a **MATERIAL CHANNELS** section in `LeftPanelView` (Viewport tab). All verified live (Standard, Base Color, UV Checker, Normal).
+- **GOTCHA — stale incremental build on the NAS:** a "white/untextured" render turned out to be a stale `MassiveSlicer.Viewport.dll` from incremental MSBuild on the network share. `dotnet build … --no-incremental` (clean) fixed it. If a Viewport render change "doesn't take", clean-rebuild Viewport before debugging further.
+- **Note:** `ActiveShaderMode` persists across launches (AppPreferences) — left on **Standard** so Final Render is the default.
+- Files: `Scene/TextureData.cs`, `Scene/MaterialData.cs`, `Scene/MeshData.cs`, `Loading/GltfLoader.cs`, `Rendering/MeshRenderer.cs`, `Rendering/GpuTextureCache.cs`, `SceneRenderer.cs`, `ShaderMode.cs`, `Views/LeftPanelView.axaml`, `Views/ViewportView.axaml.cs` (`CloneMeshData`); test in `GltfImportTest.cs`. Published to `%LOCALAPPDATA%\MassiveSlicer\build`.
 
 ### 2026-06-21 — Workflow polish: lift pills, clear toolpath on close, connector ends at rivet (session 6)
 - **Header caret direction:** `Lfam3WorkflowMinimizeIcon` (ViewportViewModel) was hardcoded `mdi-chevron-up`; now `IsLfam3WorkflowExpanded ? mdi-chevron-down : mdi-chevron-up` (down = collapse when expanded).

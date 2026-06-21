@@ -35,6 +35,50 @@ public class GltfImportTest(ITestOutputHelper output)
     }
 
     [Fact]
+    public void CrystalStoneGlb_ExtractsPbrUvsTangentsAndTextures()
+    {
+        var path = ResolveCrystalTestAsset();
+        if (path is null)
+        {
+            output.WriteLine("SKIP: crystal_stone_rock GLB not found.");
+            return;
+        }
+
+        var root = GltfLoader.Load(path);
+        var meshes = root.SelfAndDescendants()
+                         .Select(n => n.PendingMesh)
+                         .Where(m => m is not null)
+                         .Select(m => m!)
+                         .ToList();
+
+        Assert.NotEmpty(meshes);
+
+        var textured = meshes.FirstOrDefault(m => m.Material?.HasAnyTexture == true);
+        Assert.True(textured is not null, "Expected at least one mesh with material textures.");
+
+        Assert.NotNull(textured!.Uvs);
+        Assert.Equal(textured.Positions.Length, textured.Uvs!.Length);
+        Assert.NotNull(textured.Tangents);
+        Assert.Equal(textured.Positions.Length, textured.Tangents!.Length);
+
+        var mat = textured.Material!;
+        Assert.NotNull(mat.BaseColor);
+        Assert.True(mat.BaseColor!.IsSrgb, "Base colour must be sRGB.");
+        Assert.True(mat.BaseColor.Pixels.Length == mat.BaseColor.Width * mat.BaseColor.Height * 4,
+            "Decoded base colour must be tightly packed RGBA8.");
+        if (mat.Normal is not null)
+            Assert.False(mat.Normal.IsSrgb, "Normal map must be linear.");
+        if (mat.MetallicRoughness is not null)
+            Assert.False(mat.MetallicRoughness.IsSrgb, "Metallic-roughness must be linear.");
+
+        output.WriteLine($"PASS: textured mesh '{textured.Name}' verts={textured.Positions.Length} " +
+            $"baseColor={mat.BaseColor.Width}x{mat.BaseColor.Height} " +
+            $"normal={(mat.Normal is null ? "-" : $"{mat.Normal.Width}x{mat.Normal.Height}")} " +
+            $"mr={(mat.MetallicRoughness is null ? "-" : "yes")} ao={(mat.Occlusion is null ? "-" : "yes")} " +
+            $"emissive={(mat.Emissive is null ? "-" : "yes")} doubleSided={mat.DoubleSided}");
+    }
+
+    [Fact]
     public void HvExtruderGlb_LoadsForRegression()
     {
         var path = ResolveRepoAsset("assets", "cells", "LFAM3", "Toolheads", "hv_extruder.glb");

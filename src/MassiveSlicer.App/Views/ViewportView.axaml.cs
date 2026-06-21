@@ -2404,7 +2404,8 @@ public partial class ViewportView : UserControl
 
     private static MeshData CloneMeshData(MeshData mesh) =>
         new(mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
-            mesh.BaseColor, mesh.Metallic, mesh.Roughness);
+            mesh.BaseColor, mesh.Metallic, mesh.Roughness,
+            mesh.Uvs, mesh.Tangents, mesh.Material);
 
     private static bool HasExplodableMeshes(SceneNode root)
     {
