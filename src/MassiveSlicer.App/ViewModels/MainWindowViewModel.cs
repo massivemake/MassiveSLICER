@@ -2,6 +2,7 @@ using System.Text.Json;
 using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
+using MassiveSlicer.App.Console;
 using MassiveSlicer.App.Undo;
 using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.IO;
@@ -10,6 +11,7 @@ using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Loading;
+using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
 using OpenTK.Mathematics;
 
@@ -71,6 +73,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Give the viewport direct access to the robot panel so the render loop
         // can read joint angles for FK without a cross-tree binding.
         Viewport.Robot = RightPanel.Settings.Robot;
+        Viewport.LiveIo.AttachRobot(RightPanel.Settings.Robot);
 
         // Give the viewport direct access to additive settings for the slice command.
         Viewport.AdditiveSettings = RightPanel.Additive;
@@ -91,6 +94,11 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         RightPanel.Additive.PropertyChanged += (_, e) =>
         {
+            if (e.PropertyName is nameof(AdditiveSettingsViewModel.LayerHeight)
+                              or nameof(AdditiveSettingsViewModel.BeadWidth)
+                              or nameof(AdditiveSettingsViewModel.SelectedPresetIndex))
+                Viewport.NotifyWorkflowParamsChanged();
+
             if (e.PropertyName != nameof(AdditiveSettingsViewModel.SelectedPresetIndex)) return;
             var idx = RightPanel.Additive.SelectedPresetIndex;
             AppPreferences.SelectedMaterialPresetName = idx >= 0 && idx < RightPanel.Additive.MaterialPresets.Count
@@ -117,6 +125,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (e.PropertyName == nameof(ViewportViewModel.IsToolpathSelected)
                 && Viewport.IsToolpathSelected)
                 RightPanel.ActiveTab = RightPanelTab.Toolpath;
+
+            if (e.PropertyName is nameof(ViewportViewModel.ShowLfam3ToolPicker)
+                                or nameof(ViewportViewModel.IsPrintStepActive)
+                                or nameof(ViewportViewModel.IsVerifyScanStepActive)
+                                or nameof(ViewportViewModel.IsMillStepActive)
+                                or nameof(ViewportViewModel.IsPrePrintScanStepActive)
+                                or nameof(ViewportViewModel.HasPrePrintScanStep))
+                SyncLfam3WorkflowSidebar();
 
             // Skip transient / non-persistent properties to avoid unnecessary disk writes.
             if (e.PropertyName is nameof(ViewportViewModel.HasSelection)
@@ -150,6 +166,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Wire toolbar commands to cross-panel actions.
         Toolbar.FrameAllRequested       += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
         Viewport.OnSaveViewRequested    = SaveCurrentView;
+
+        Console.Attach(this, new ConsoleCommandContext
+        {
+            Main = this,
+            Log = Console.Log,
+            LogError = Console.LogError,
+            RequestOpenWorkspacePicker = () => Toolbar.OpenWorkspaceCommand.Execute(null),
+            RequestSaveWorkspaceAs = () => Toolbar.SaveWorkspaceAsCommand.Execute(null),
+            RequestOpenModelPicker = () => Toolbar.OpenModelCommand.Execute(null),
+            RequestImportKrlPicker = () => Toolbar.ImportKrlCommand.Execute(null),
+            RequestPreferencesDialog = () => Toolbar.OpenPreferencesCommand.Execute(null),
+        });
 
         // Wire the robot connect button to the robot panel and mirror status to toolbar.
         var robot = RightPanel.Settings.Robot;
@@ -204,21 +232,24 @@ public sealed class MainWindowViewModel : ViewModelBase
         };
         bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
 
-        // Swap the displayed end-effector to match the active workflow tab:
-        // the Scan tab shows the scanner, Additive shows the extruder.
+        // Swap the displayed end-effector to match the active sidebar tab (non-LFAM 3).
+        // LFAM 3 workflow phase buttons own tool selection (print / scan / mill).
         RightPanel.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName != nameof(RightPanelViewModel.ActiveTab)) return;
-            var toolName = RightPanel.ActiveTab switch
+            if (!Viewport.ShowLfam3ToolPicker)
             {
-                RightPanelTab.Scan     => Viewport.ActiveCell?.ScanToolName,
-                RightPanelTab.Additive => "HV Extruder",
-                _                      => null,
-            };
-            if (toolName is not null)
-            {
-                int idx = robot.ToolNames.IndexOf(toolName);
-                if (idx >= 0) robot.SelectedToolIndex = idx;
+                var toolName = RightPanel.ActiveTab switch
+                {
+                    RightPanelTab.Scan     => Viewport.ActiveCell?.ScanToolName,
+                    RightPanelTab.Additive => "HV Extruder",
+                    _                      => null,
+                };
+                if (toolName is not null)
+                {
+                    int idx = robot.ToolNames.IndexOf(toolName);
+                    if (idx >= 0) robot.SelectedToolIndex = idx;
+                }
             }
             SyncKrlFrameIndicesToActiveTab();
         };
@@ -259,18 +290,22 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Show/hide the Scan tab based on whether this cell has a scanner.
             RightPanel.HasScanTab = cell?.ScanToolName is not null;
 
-            var toolName = RightPanel.ActiveTab switch
+            if (!Viewport.ShowLfam3ToolPicker)
             {
-                RightPanelTab.Scan     => cell?.ScanToolName,
-                RightPanelTab.Additive => "HV Extruder",
-                _                      => null,
-            };
-            if (toolName is not null)
-            {
-                int idx = robot.ToolNames.IndexOf(toolName);
-                if (idx >= 0) robot.SelectedToolIndex = idx;
+                var toolName = RightPanel.ActiveTab switch
+                {
+                    RightPanelTab.Scan     => cell?.ScanToolName,
+                    RightPanelTab.Additive => "HV Extruder",
+                    _                      => null,
+                };
+                if (toolName is not null)
+                {
+                    int idx = robot.ToolNames.IndexOf(toolName);
+                    if (idx >= 0) robot.SelectedToolIndex = idx;
+                }
             }
 
+            SyncLfam3WorkflowSidebar();
             SyncKrlFrameIndicesToActiveTab();
 
             if (_pendingWorkspaceRestore is { } pending)
@@ -359,6 +394,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             }
 
             Viewport.AddUserNode(node);
+            if (Viewport.IsPrePrintScanRegistrationPhase)
+                Viewport.RegisterArmatureScanMesh(node);
             var saved = result.SavedZdfPath is { } p
                 ? $", saved {System.IO.Path.GetFileName(p)}{(result.SavedMetadataPath is not null ? " + .json" : "")}"
                 : "";
@@ -521,6 +558,59 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (captured >= 3)
             bedCal.Compute();
+    }
+
+    /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
+    public void NewWorkspace()
+    {
+        Viewport.ClearUserScene();
+        UndoRedo.Clear();
+        AppPreferences.LastWorkspacePath = null;
+        PreferencesLoader.Save(AppPreferences);
+        Console.Log("[workspace] New workspace.");
+    }
+
+    /// <summary>Imports a model file into the scene and logs material diagnostics.</summary>
+    public bool ImportModelFromPath(string path)
+    {
+        path = System.IO.Path.GetFullPath(path);
+        if (!ImportHelper.IsSupported(path))
+        {
+            Console.LogError($"[import] Unsupported file type: {path}");
+            return false;
+        }
+
+        if (!System.IO.File.Exists(path))
+        {
+            Console.LogError($"[import] File not found: {path}");
+            return false;
+        }
+
+        SceneNode? node;
+        try
+        {
+            node = ImportHelper.LoadAndPlace(path, Viewport.ActiveCell);
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[import] Failed to load '{path}': {ex.Message}");
+            return false;
+        }
+
+        if (node is null)
+        {
+            Console.LogError($"[import] Failed to load '{path}'.");
+            return false;
+        }
+
+        Viewport.AddUserNode(node);
+
+        var report = GltfImportInspector.InspectLoaded(node, path);
+        foreach (var line in report.ToLogLines())
+            Console.Log(line);
+
+        Console.Log($"[import] Added '{node.Name}' to scene.");
+        return true;
     }
 
     /// <summary>
@@ -710,14 +800,30 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ShaderMode             = copy.ShaderMode;
         live.ShowEdges              = copy.ShowEdges;
         live.ShadowCatcherEnabled     = copy.ShadowCatcherEnabled;
-        live.ToolpathExtrudeColor   = copy.ToolpathExtrudeColor;
-        live.ToolpathTravelColor    = copy.ToolpathTravelColor;
-        live.ToolpathSeamColor      = copy.ToolpathSeamColor;
+        live.ToolpathExtrudeColor    = copy.ToolpathExtrudeColor;
+        live.ToolpathTravelColor     = copy.ToolpathTravelColor;
+        live.ToolpathSeamColor       = copy.ToolpathSeamColor;
         live.ToolpathUnselectedColor = copy.ToolpathUnselectedColor;
+        live.ToolpathWipeColor       = copy.ToolpathWipeColor;
+        live.ToolpathRetractionColor = copy.ToolpathRetractionColor;
+        live.ZHopMm                  = copy.ZHopMm;
+        live.WipeModeDisplay         = MigrateWipeModeDisplay(copy.WipeModeDisplay);
+        live.WipeLengthMm            = copy.WipeLengthMm;
+        live.WipeRampMm              = copy.WipeRampMm;
+        live.WipeSpeed               = copy.WipeSpeed;
+        live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
+        live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
+        live.ResumeRampEnabled         = copy.ResumeRampEnabled;
+        live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
+        live.ResumeRampStartRpmPercent = copy.ResumeRampStartRpmPercent;
+        live.ResumeRampDistanceMm      = copy.ResumeRampDistanceMm;
+        live.ResumeRampSteps           = copy.ResumeRampSteps;
+        live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.LayerHeight            = copy.LayerHeight;
         live.BeadWidth              = copy.BeadWidth;
         live.FirstLayerHeight       = copy.FirstLayerHeight;
         live.SliceMethod            = copy.SliceMethod;
+        live.SlicingMode            = copy.SlicingMode;
         live.PassAngle              = copy.PassAngle;
         live.TiltAngle              = copy.TiltAngle;
         live.TiltAngleX             = copy.TiltAngleX;
@@ -794,6 +900,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         vp.ToolpathTravelColor     = HexToVec3(p.ToolpathTravelColor);
         vp.ToolpathSeamColor       = HexToVec3(p.ToolpathSeamColor);
         vp.ToolpathUnselectedColor = HexToVec3(p.ToolpathUnselectedColor);
+        vp.ToolpathWipeColor       = HexToVec3(p.ToolpathWipeColor);
+        vp.ToolpathRetractionColor = HexToVec3(p.ToolpathRetractionColor);
 
         // Lighting
         vp.LightAzimuth   = p.LightAzimuth;
@@ -827,6 +935,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.FirstLayerHeight = p.FirstLayerHeight;
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
+        add.SlicingMode   = p.SlicingMode is "Surface" ? "Surface" : "Normal";
         add.PassAngle     = p.PassAngle;
         add.TiltAngle     = p.TiltAngle;
         add.TiltAngleX    = p.TiltAngleX;
@@ -835,11 +944,20 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.Acceleration  = p.Acceleration;
         add.ApproachZ     = p.ApproachZ;
         add.ZHopMm                  = p.ZHopMm;
-        add.WipeModeDisplay         = p.WipeModeDisplay;
+        add.WipeModeDisplay         = MigrateWipeModeDisplay(p.WipeModeDisplay);
         add.WipeLengthMm            = p.WipeLengthMm;
         add.WipeRampMm              = p.WipeRampMm;
+        add.WipeSpeed               = p.WipeSpeed;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
+        add.ResumeRampEnabled         = p.ResumeRampEnabled;
+        add.ResumeRampStartSpeed      = p.ResumeRampStartSpeed;
+        add.ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent;
+        add.ResumeRampDistanceMm      = p.ResumeRampDistanceMm;
+        add.ResumeRampSteps           = p.ResumeRampSteps;
+        add.SetSeamGuides(p.SeamGuidePoints
+            .Where(a => a is { Length: >= 3 })
+            .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
         add.ToolDataIndex = p.ToolDataIndex;
         add.BaseDataIndex = p.BaseDataIndex;
         add.ToolheadA     = p.ToolheadA;
@@ -853,6 +971,27 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.OutputDirectory = p.ScanOutputDirectory;
         scan.ToolDataIndex   = p.ScanToolDataIndex;
         scan.BaseDataIndex   = p.ScanBaseDataIndex;
+    }
+
+    /// <summary>
+    /// LFAM 3: sidebar tabs per workflow phase (+ Toolpath on all phases).
+    /// Print → Additive; Scan → Scan; Mill → Subtractive.
+    /// </summary>
+    void SyncLfam3WorkflowSidebar()
+    {
+        if (!Viewport.ShowLfam3ToolPicker)
+        {
+            RightPanel.SetLfam3WorkflowTabGating(active: false, showAdditive: true, showScan: true, showSubtractive: true);
+            return;
+        }
+
+        bool showScan        = Viewport.IsScannerToolActive;
+        bool showAdditive    = Viewport.IsPrintStepActive;
+        bool showSubtractive = Viewport.IsMillStepActive;
+        if (!showScan && !showAdditive && !showSubtractive)
+            showAdditive = true;
+
+        RightPanel.SetLfam3WorkflowTabGating(active: true, showAdditive, showScan, showSubtractive);
     }
 
     /// <summary>
@@ -912,6 +1051,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.BeadWidth        = add.BeadWidth;
         p.FirstLayerHeight = add.FirstLayerHeight;
         p.SliceMethod      = add.Method.ToString();
+        p.SlicingMode      = add.SlicingMode;
         p.PassAngle        = add.PassAngle;
         p.TiltAngle        = add.TiltAngle;
         p.TiltAngleX       = add.TiltAngleX;
@@ -923,8 +1063,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeModeDisplay         = add.WipeModeDisplay;
         p.WipeLengthMm            = add.WipeLengthMm;
         p.WipeRampMm              = add.WipeRampMm;
+        p.WipeSpeed               = add.WipeSpeed;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
+        p.ResumeRampEnabled         = add.ResumeRampEnabled;
+        p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
+        p.ResumeRampStartRpmPercent = add.ResumeRampStartRpmPercent;
+        p.ResumeRampDistanceMm      = add.ResumeRampDistanceMm;
+        p.ResumeRampSteps           = add.ResumeRampSteps;
+        p.SeamGuidePoints = add.SeamGuides
+            .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
+            .ToList();
         p.ToolDataIndex    = add.ToolDataIndex;
         p.BaseDataIndex    = add.BaseDataIndex;
         p.ToolheadA        = add.ToolheadA;
@@ -941,6 +1090,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         PreferencesLoader.Save(p);
     }
+
+    private static string MigrateWipeModeDisplay(string? mode) => mode switch
+    {
+        "Natural" or "Normal" => "Same-Direction",
+        _                     => mode ?? "Off",
+    };
 
     private static System.Numerics.Vector3 HexToVec3(string hex)
     {

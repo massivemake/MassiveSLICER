@@ -146,8 +146,38 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 - Cleaner phase borders and column structure; chevron/stem/connected layout removed.
 - Live I/O toggle above workflow phases; expands into `Lfam3LiveIoPanelView`.
 - **Live I/O Phase 2 (Pellet Extruder):** `ExtruderBridgeClient` polls `extIp:8765` every 2 s — flat `io` (Pos30 DI/DO, Pos28 `O_*`, MIO/RTD analog) + `modbus` holding regs (`hr_301xx`/`hr_302xx` zone temps). Writable DO with confirm on bridge pins. Status: `P2 live · bridge + Modbus`.
-- **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi names in bridge `io` dict. LFAM 3: `millIp` **192.168.0.249** (RevPi130866), `hasMilling: true`. Bridge deployed (`lfam-monitor.service` active). Status: `P3 live · bridge`.
+- **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi DIO names in bridge `io` dict. LFAM 3: `millIp` **192.168.0.249** (RevPi130866), `hasMilling: true`. Bridge deployed (`lfam-monitor.service` active). Status: `P3 live · bridge`.
+- **Live I/O milestone (Phases 1–3):** `LiveIoPhasePlan` all **Implemented**; catalog in `Lfam3LiveIoCatalog.cs`; panel in `Lfam3LiveIoPanelView`; poll loops in `LiveIoMonitorViewModel`. See **LFAM 3 Live I/O map** below.
 - LFAM 3 sidebar tab gating: Print → Additive, Scan → Scan, Mill → Subtractive (`SyncLfam3WorkflowSidebar`).
+
+### LFAM 3 Live I/O map (Phases 1–3 complete)
+
+**Cell endpoints** (`lfam3.json`):
+
+| Subsystem | IP | Port | Protocol |
+|-----------|-----|------|----------|
+| KUKA C3Bridge | `bridgeIp` (cell) | 7000 | TCP JSON vars |
+| Pellet extruder RevPi | `extIp` **192.168.0.196** | 8765 | lfam-monitor JSON bridge |
+| Milling cabinet RevPi | `millIp` **192.168.0.249** | 8765 | lfam-monitor JSON bridge |
+
+**Phase 1 — Robot (KUKA)** — `LiveIoSource.Kuka`, ~2×/s via C3Bridge when synced:
+- Digital IN: `$IN[6,7,10–15,17]` (extruder ready, flange, tool changer, pressure)
+- Digital OUT (writable + confirm): `$OUT[5,7,9,11–16]`
+- Analog OUT (display): `$ANOUT[1–4]` — zones 1–3 °C, **extruder** RPM % (`KrlAnout` scaling)
+
+**Phase 2 — Pellet Extruder** — `ExtruderBridgeClient` 2 s poll on `extIp:8765`:
+- Pos30 DI/DO: safety gate, emergencies, contactors, lamps, motor enable, extruder-ready
+- Pos28 valve DIO: `O_1` (lock), `O_5` (unlock) — writable
+- Bridge analog: `AI_09_MIO_extruderMotorVel`, `AI_01_MIO_HLFB_motorVel`, `RTDValue_1/2`
+- Modbus holding regs (when `modbus_connected`): `hr_30101–30103` setpoints, `hr_30200–30203` actuals (°C)
+- Scanner bridge pins (Phase 2 shared): `DI_scanReady`, `DI_captureActive`
+
+**Phase 3 — Milling Spindle** — `MillingModbusClient` 3 s poll on `millIp:8765`:
+- DI: `DI_04_gateOpenStop`, `DI_05_SS1standstill`, `DI_06_SS1stop`, `DI_07_emergencyState`, `DI_08_digitalFromKUKA`
+- DO (writable lamps): `DO_01_redLamp`, `DO_02_yellowLamp`, `DO_03_greenLamp`
+- Deploy: `python scripts/deploy_bridge_lfam3_milling.py --pass …` → `lfam-monitor.service`
+
+**Not on milling RevPi (confirmed):** spindle **RPM setpoint or actual speed**. Milling cabinet exposes **digital safety/status only**. Spindle speed is KUKA hardwired 0–10 V → Schneider ATV340 VFD (documented in `Install/CONTROLS_REFERENCE.md`); not in `MILLING_IO` or current bridge. `$ANOUT[4]` / `hr_30100` are **extruder** motor, not spindle. `DI_05_SS1standstill` = VFD at rest (bool), not RPM. Future: poll spindle `$ANOUT[n]` from KUKA or ATV340 Modbus.
 
 ### Bottom status / console dock
 - Full-width bottom dock in `MainWindow.axaml` + `BottomLeftDockView.axaml`.
@@ -289,11 +319,18 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 1. **PBR / textured GLB rendering** — UVs, normal maps, albedo textures in `MeshData` / `GltfLoader` / `MeshRenderer`; `UvSettingsViewModel` still stub.
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
 3. **KRL import** — parser not implemented (console/file menu stub only).
-4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O Phases 2–3 on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
+4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O panel shows P1–P3 live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
+5. **Spindle RPM display** — not implemented; would need KUKA spindle `$ANOUT` or ATV340 Modbus (see LFAM 3 Live I/O map).
 
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-06-21 — Milestone: LFAM 3 Live I/O Phases 1–3 (GitHub)
+- **Committed & pushed** full Live I/O stack: `Lfam3LiveIoCatalog`, `ExtruderBridgeClient`, `MillingModbusClient`, `LiveIoMonitorViewModel`, `Lfam3LiveIoPanelView`, workflow host, snapshot tests.
+- **Phases 1–3** marked complete in `LiveIoPhasePlan`; roadmap: `P1 live · P2 live · P3 live`.
+- **Documented** signal map + spindle-RPM limitation in **LFAM 3 Live I/O map** (this file).
+- **Field:** milling bridge live on `192.168.0.249:8765` (8/8 `MILLING_IO` keys).
 
 ### 2026-06-21 — Milling bridge live on 192.168.0.249
 - **Deployed** `lfam-monitor.service` on milling RevPi `192.168.0.249` (`pi`) — bridge ping + 8/8 `MILLING_IO` keys OK (yellow lamp ON at deploy time).

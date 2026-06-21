@@ -1,0 +1,536 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:shapes="using:Avalonia.Controls.Shapes"
+             xmlns:local="clr-namespace:MassiveSlicer.App.Views"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             x:Class="MassiveSlicer.App.Views.Lfam3WorkflowTimelineView"
+             x:DataType="vm:ViewportViewModel"
+             x:CompileBindings="True"
+             Background="Transparent"
+             ClipToBounds="False"
+             VerticalAlignment="Bottom"
+             x:Name="WorkflowRoot">
+
+    <UserControl.Resources>
+        <!-- Shared phase detail card body -->
+        <DataTemplate x:Key="PrintParamCardBody" x:DataType="vm:ViewportViewModel">
+            <StackPanel Spacing="2">
+                <TextBlock Text="Pellet Extruder" Classes="Lfam3WorkflowPhaseSub" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding PrintParamLine1}" FontSize="10" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding PrintParamLine2}" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="VerifyScanParamCardBody" x:DataType="vm:ViewportViewModel">
+            <StackPanel Spacing="2">
+                <TextBlock Text="Collision check" Classes="Lfam3WorkflowPhaseSub" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding VerifyScanParamLine1}" FontSize="10" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding VerifyScanParamLine2}" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="MillParamCardBody" x:DataType="vm:ViewportViewModel">
+            <StackPanel Spacing="2">
+                <TextBlock Text="Spindle" Classes="Lfam3WorkflowPhaseSub" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding MillParamLine1}" FontSize="10" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding MillParamLine2}" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"/>
+            </StackPanel>
+        </DataTemplate>
+        <DataTemplate x:Key="PrePrintScanParamCardBody" x:DataType="vm:ViewportViewModel">
+            <StackPanel Spacing="2">
+                <TextBlock Text="Scene scan" Classes="Lfam3WorkflowPhaseSub" FontWeight="SemiBold"/>
+                <TextBlock Text="{Binding PrePrintScanParamLine1}" FontSize="10" TextWrapping="Wrap"/>
+                <TextBlock Text="{Binding PrePrintScanParamLine2}" Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"/>
+            </StackPanel>
+        </DataTemplate>
+    </UserControl.Resources>
+
+    <StackPanel Spacing="4" HorizontalAlignment="Stretch" VerticalAlignment="Bottom">
+
+    <Border Classes="Lfam3WorkflowPanel" HorizontalAlignment="Stretch">
+        <StackPanel Spacing="8">
+
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <Button Grid.Column="0"
+                        Classes="ToolbarButton"
+                        Command="{Binding ToggleLfam3WorkflowCommand}"
+                        Padding="8,6"
+                        HorizontalAlignment="Left"
+                        ToolTip.Tip="{Binding Lfam3WorkflowMinimizeTip}">
+                    <ia:Icon Value="{Binding Lfam3WorkflowMinimizeIcon}" FontSize="14" Foreground="#59FF0D"/>
+                </Button>
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            Spacing="8"
+                            VerticalAlignment="Center"
+                            Margin="8,0,0,0"
+                            IsVisible="{Binding !IsLfam3WorkflowExpanded}">
+                    <TextBlock Text="LFAM 3" Classes="LabelMuted" FontSize="10" LetterSpacing="1" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding Lfam3WorkflowStatusLabel}" FontSize="11" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Button Grid.Column="2"
+                        Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding LiveIo.IsExpanded}"
+                        Command="{Binding LiveIo.ToggleExpandedCommand}"
+                        IsVisible="{Binding IsLfam3WorkflowExpanded}"
+                        ToolTip.Tip="Expand live digital and analog I/O monitor">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#59FF0D"/>
+                        <TextBlock Text="{Binding LiveIo.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#59FF0D"
+                                   LetterSpacing="0.8"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+
+            <StackPanel Spacing="8" IsVisible="{Binding IsLfam3WorkflowExpanded}">
+
+            <!-- Default: Print → Scan → Mill (column-aligned phases) -->
+            <Grid ColumnDefinitions="Auto,*,*,*"
+                  ColumnSpacing="4"
+                  IsVisible="{Binding !HasPrePrintScanStep}">
+                <Button Grid.Column="0"
+                        Classes="Lfam3WorkflowAddStep"
+                        Command="{Binding TogglePrePrintScanStepCommand}"
+                        ToolTip.Tip="{Binding PrePrintScanToggleTip}"
+                        VerticalAlignment="Top"
+                        Margin="0,8,4,0">
+                    <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="14" Foreground="#59FF0D"/>
+                </Button>
+
+                <Grid Grid.Column="1" Grid.ColumnSpan="3">
+                    <Border Height="2"
+                            VerticalAlignment="Top"
+                            Margin="20,46,20,0"
+                            Background="#2a2f42"
+                            CornerRadius="1"/>
+                    <Grid ColumnDefinitions="*,*,*" ColumnSpacing="4" Margin="0,0,0,0">
+                        <!-- Connectors span icon-center to icon-center (0.5* padding + line + 0.5* padding). -->
+                        <Grid Grid.Column="0"
+                              Grid.ColumnSpan="2"
+                              Height="2"
+                              VerticalAlignment="Top"
+                              Margin="0,46,0,0"
+                              ColumnDefinitions="0.5*,*,0.5*"
+                              IsVisible="{Binding IsWorkflowSegment0Complete}">
+                            <Border Grid.Column="1" Height="2" Background="#59FF0D" CornerRadius="1"/>
+                        </Grid>
+                        <Grid Grid.Column="1"
+                              Grid.ColumnSpan="2"
+                              Height="2"
+                              VerticalAlignment="Top"
+                              Margin="0,46,0,0"
+                              ColumnDefinitions="0.5*,*,0.5*"
+                              IsVisible="{Binding IsWorkflowSegment1Complete}">
+                            <Border Grid.Column="1" Height="2" Background="#59FF0D" CornerRadius="1"/>
+                        </Grid>
+
+                        <!-- PRINT column -->
+                        <Border Grid.Column="0"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsPrintStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectPrintPhaseCommand}"
+                                                ToolTip.Tip="Print phase — pellet extruder"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsPrintStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsPrintStepCompleted}"
+                                                                Classes.active="{Binding IsPrintStepActive}"
+                                                                Classes.pending="{Binding IsPrintStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsPrintStepCompleted}"/>
+                                                <ia:Icon Value="mdi-printer-3d-nozzle" FontSize="32"
+                                                         IsVisible="{Binding IsPrintStepActive}"/>
+                                                <ia:Icon Value="mdi-printer-3d-nozzle" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsPrintStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="PRINT"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsPrintStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsPrintStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsPrintStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrintParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsPrintStepActive}"
+                                        IsVisible="{Binding ShowPrintParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrintParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- SCAN column -->
+                        <Border Grid.Column="1"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsVerifyScanStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectVerifyScanPhaseCommand}"
+                                                ToolTip.Tip="Verification scan — collision check before laydown"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsVerifyScanStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsVerifyScanStepCompleted}"
+                                                                Classes.active="{Binding IsVerifyScanStepActive}"
+                                                                Classes.pending="{Binding IsVerifyScanStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsVerifyScanStepCompleted}"/>
+                                                <ia:Icon Value="mdi-shield-check" FontSize="32"
+                                                         IsVisible="{Binding IsVerifyScanStepActive}"/>
+                                                <ia:Icon Value="mdi-shield-check" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsVerifyScanStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="SCAN"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsVerifyScanStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsVerifyScanStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsVerifyScanStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource VerifyScanParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsVerifyScanStepActive}"
+                                        IsVisible="{Binding ShowVerifyScanParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource VerifyScanParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- MILL column -->
+                        <Border Grid.Column="2"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsMillStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectMillPhaseCommand}"
+                                                ToolTip.Tip="Mill phase — spindle finish pass"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsMillStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsMillStepCompleted}"
+                                                                Classes.active="{Binding IsMillStepActive}"
+                                                                Classes.pending="{Binding IsMillStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsMillStepCompleted}"/>
+                                                <ia:Icon Value="mdi-rotate-3d-variant" FontSize="32"
+                                                         IsVisible="{Binding IsMillStepActive}"/>
+                                                <ia:Icon Value="mdi-rotate-3d-variant" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsMillStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="MILL"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsMillStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsMillStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsMillStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource MillParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsMillStepActive}"
+                                        IsVisible="{Binding ShowMillParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource MillParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <!-- Extended: Scene scan → Print → Scan → Mill -->
+            <Grid ColumnDefinitions="Auto,*,*,*,*"
+                  ColumnSpacing="4"
+                  IsVisible="{Binding HasPrePrintScanStep}">
+                <Button Grid.Column="0"
+                        Classes="Lfam3WorkflowAddStep"
+                        Classes.active="{Binding HasPrePrintScanStep}"
+                        Command="{Binding TogglePrePrintScanStepCommand}"
+                        ToolTip.Tip="{Binding PrePrintScanToggleTip}"
+                        VerticalAlignment="Top"
+                        Margin="0,8,4,0">
+                    <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="14" Foreground="#59FF0D"/>
+                </Button>
+
+                <Grid Grid.Column="1" Grid.ColumnSpan="4">
+                    <Border Height="2"
+                            VerticalAlignment="Top"
+                            Margin="20,46,20,0"
+                            Background="#2a2f42"
+                            CornerRadius="1"/>
+                    <Grid ColumnDefinitions="*,*,*,*" ColumnSpacing="4">
+                        <Grid Grid.Column="0"
+                              Grid.ColumnSpan="2"
+                              Height="2"
+                              VerticalAlignment="Top"
+                              Margin="0,46,0,0"
+                              ColumnDefinitions="0.5*,*,0.5*"
+                              IsVisible="{Binding IsWorkflowSegment0Complete}">
+                            <Border Grid.Column="1" Height="2" Background="#59FF0D" CornerRadius="1"/>
+                        </Grid>
+                        <Grid Grid.Column="1"
+                              Grid.ColumnSpan="2"
+                              Height="2"
+                              VerticalAlignment="Top"
+                              Margin="0,46,0,0"
+                              ColumnDefinitions="0.5*,*,0.5*"
+                              IsVisible="{Binding IsWorkflowSegment1Complete}">
+                            <Border Grid.Column="1" Height="2" Background="#59FF0D" CornerRadius="1"/>
+                        </Grid>
+                        <Grid Grid.Column="2"
+                              Grid.ColumnSpan="2"
+                              Height="2"
+                              VerticalAlignment="Top"
+                              Margin="0,46,0,0"
+                              ColumnDefinitions="0.5*,*,0.5*"
+                              IsVisible="{Binding IsWorkflowSegment2Complete}">
+                            <Border Grid.Column="1" Height="2" Background="#59FF0D" CornerRadius="1"/>
+                        </Grid>
+
+                        <!-- Pre-print SCAN -->
+                        <Border Grid.Column="0"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsPrePrintScanStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectPrePrintScanPhaseCommand}"
+                                                ToolTip.Tip="Pre-print scan — capture armatures and fixtures"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsPrePrintScanStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsPrePrintScanStepCompleted}"
+                                                                Classes.active="{Binding IsPrePrintScanStepActive}"
+                                                                Classes.pending="{Binding IsPrePrintScanStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsPrePrintScanStepCompleted}"/>
+                                                <ia:Icon Value="mdi-cube-scan" FontSize="32"
+                                                         IsVisible="{Binding IsPrePrintScanStepActive}"/>
+                                                <ia:Icon Value="mdi-cube-scan" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsPrePrintScanStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="SCAN"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsPrePrintScanStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsPrePrintScanStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsPrePrintScanStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrePrintScanParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsPrePrintScanStepActive}"
+                                        IsVisible="{Binding ShowPrePrintScanParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrePrintScanParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- PRINT -->
+                        <Border Grid.Column="1"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsPrintStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectPrintPhaseCommand}"
+                                                ToolTip.Tip="Print phase — pellet extruder"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsPrintStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsPrintStepCompleted}"
+                                                                Classes.active="{Binding IsPrintStepActive}"
+                                                                Classes.pending="{Binding IsPrintStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsPrintStepCompleted}"/>
+                                                <ia:Icon Value="mdi-printer-3d-nozzle" FontSize="32"
+                                                         IsVisible="{Binding IsPrintStepActive}"/>
+                                                <ia:Icon Value="mdi-printer-3d-nozzle" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsPrintStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="PRINT"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsPrintStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsPrintStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsPrintStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrintParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsPrintStepActive}"
+                                        IsVisible="{Binding ShowPrintParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource PrintParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Verify SCAN -->
+                        <Border Grid.Column="2"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsVerifyScanStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectVerifyScanPhaseCommand}"
+                                                ToolTip.Tip="Verification scan — collision check before laydown"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsVerifyScanStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsVerifyScanStepCompleted}"
+                                                                Classes.active="{Binding IsVerifyScanStepActive}"
+                                                                Classes.pending="{Binding IsVerifyScanStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsVerifyScanStepCompleted}"/>
+                                                <ia:Icon Value="mdi-shield-check" FontSize="32"
+                                                         IsVisible="{Binding IsVerifyScanStepActive}"/>
+                                                <ia:Icon Value="mdi-shield-check" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsVerifyScanStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="SCAN"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsVerifyScanStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsVerifyScanStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsVerifyScanStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource VerifyScanParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsVerifyScanStepActive}"
+                                        IsVisible="{Binding ShowVerifyScanParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource VerifyScanParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- MILL -->
+                        <Border Grid.Column="3"
+                                Classes="Lfam3WorkflowPhaseColumn"
+                                Classes.active="{Binding IsMillStepExpanded}">
+                            <StackPanel Spacing="0">
+                                <Border Classes="Lfam3WorkflowPhaseHeaderPad">
+                                    <StackPanel Classes="Lfam3WorkflowPhaseHeader">
+                                        <Button Classes="Lfam3WorkflowStep"
+                                                Command="{Binding SelectMillPhaseCommand}"
+                                                ToolTip.Tip="Mill phase — spindle finish pass"
+                                                HorizontalAlignment="Center">
+                                            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                                                <shapes:Ellipse Classes="Lfam3WorkflowGlow" IsVisible="{Binding IsMillStepActive}"/>
+                                                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                                                Classes.completed="{Binding IsMillStepCompleted}"
+                                                                Classes.active="{Binding IsMillStepActive}"
+                                                                Classes.pending="{Binding IsMillStepPending}"/>
+                                                <ia:Icon Value="mdi-check" FontSize="32" Foreground="#0e1119"
+                                                         IsVisible="{Binding IsMillStepCompleted}"/>
+                                                <ia:Icon Value="mdi-rotate-3d-variant" FontSize="32"
+                                                         IsVisible="{Binding IsMillStepActive}"/>
+                                                <ia:Icon Value="mdi-rotate-3d-variant" FontSize="32" Opacity="0.45"
+                                                         IsVisible="{Binding IsMillStepPending}"/>
+                                            </Grid>
+                                        </Button>
+                                        <TextBlock Text="MILL"
+                                                   HorizontalAlignment="Center"
+                                                   Classes="Lfam3WorkflowPhaseTitle"
+                                                   Classes.active="{Binding IsMillStepActive}"/>
+                                    </StackPanel>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowPhaseFold"
+                                        IsVisible="{Binding IsMillStepExpanded}"/>
+                                <Border Classes="Lfam3WorkflowPhaseDetails"
+                                        IsVisible="{Binding IsMillStepExpanded}">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource MillParamCardBody}"/>
+                                </Border>
+                                <Border Classes="Lfam3WorkflowParamCard"
+                                        Classes.active="{Binding IsMillStepActive}"
+                                        IsVisible="{Binding ShowMillParamCard}"
+                                        Margin="4,0,4,2">
+                                    <ContentControl Content="{Binding}"
+                                                    ContentTemplate="{StaticResource MillParamCardBody}"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </Grid>
+            </Grid>
+
+            <ScrollViewer x:Name="LiveIoScroll"
+                          MaxHeight="{Binding Lfam3LiveIoMaxHeight}"
+                          VerticalScrollBarVisibility="Auto"
+                          IsVisible="{Binding LiveIo.IsExpanded}">
+                <StackPanel Spacing="6">
+                    <Border Height="1" Background="#2a2f42" Margin="0,2,0,0"/>
+                    <local:Lfam3LiveIoPanelView DataContext="{Binding LiveIo}"/>
+                </StackPanel>
+            </ScrollViewer>
+
+            </StackPanel>
+
+        </StackPanel>
+    </Border>
+
+    </StackPanel>
+</UserControl>

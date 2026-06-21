@@ -63,7 +63,250 @@
         <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
     </Style>
 
+    <!-- LFAM 3 workflow timeline (horizontal bottom bar) -->
+    <Style Selector="Border.Lfam3WorkflowPanel">
+        <Setter Property="Background"      Value="#D0131720"/>
+        <Setter Property="BorderBrush"     Value="#2a2f42"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius"    Value="8"/>
+        <Setter Property="Padding"         Value="8,6"/>
+        <Setter Property="Opacity"         Value="0.96"/>
+    </Style>
+    <Style Selector="Button.Lfam3WorkflowStep">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderBrush"     Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding"         Value="2"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="Foreground"      Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="Cursor"          Value="Hand"/>
+        <Setter Property="ClipToBounds"    Value="False"/>
+    </Style>
+    <Style Selector="Button.Lfam3WorkflowStep:pointerover">
+        <Setter Property="Opacity" Value="0.88"/>
+    </Style>
+    <Style Selector="Button.Lfam3WorkflowAddStep">
+        <Setter Property="Width"            Value="24"/>
+        <Setter Property="Height"           Value="24"/>
+        <Setter Property="CornerRadius"     Value="12"/>
+        <Setter Property="Background"       Value="Transparent"/>
+        <Setter Property="BorderBrush"      Value="#3a4055"/>
+        <Setter Property="BorderThickness"  Value="1.5"/>
+        <Setter Property="Padding"          Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment"   Value="Center"/>
+        <Setter Property="Cursor"           Value="Hand"/>
+    </Style>
+    <Style Selector="Button.Lfam3WorkflowAddStep:pointerover">
+        <Setter Property="Opacity" Value="0.85"/>
+    </Style>
+    <Style Selector="Button.Lfam3WorkflowAddStep.active">
+        <Setter Property="BorderBrush" Value="#59FF0D"/>
+        <Setter Property="Background"  Value="#141c10"/>
+    </Style>
+    <Style Selector="Grid.Lfam3WorkflowPhaseIconHost">
+        <Setter Property="Width"                 Value="76"/>
+        <Setter Property="Height"                Value="76"/>
+        <Setter Property="HorizontalAlignment"   Value="Center"/>
+        <Setter Property="VerticalAlignment"     Value="Center"/>
+        <Setter Property="ClipToBounds"          Value="False"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3WorkflowGlow">
+        <Setter Property="Width"            Value="72"/>
+        <Setter Property="Height"           Value="72"/>
+        <Setter Property="Stroke"           Value="#8059FF0D"/>
+        <Setter Property="StrokeThickness"  Value="2"/>
+        <Setter Property="Fill"             Value="Transparent"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3WorkflowNode">
+        <Setter Property="Width"            Value="54"/>
+        <Setter Property="Height"           Value="54"/>
+        <Setter Property="StrokeThickness"  Value="2"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3WorkflowNode.pending">
+        <Setter Property="Fill"        Value="#1a1f2c"/>
+        <Setter Property="Stroke"      Value="#3a4055"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3WorkflowNode.active">
+        <Setter Property="Fill"        Value="#131720"/>
+        <Setter Property="Stroke"      Value="#59FF0D"/>
+        <Setter Property="StrokeThickness" Value="2.5"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3WorkflowNode.completed">
+        <Setter Property="Fill"        Value="#59FF0D"/>
+        <Setter Property="Stroke"      Value="#59FF0D"/>
+    </Style>
+    <Style Selector="TextBlock.Lfam3WorkflowPhaseTitle">
+        <Setter Property="FontSize"   Value="9"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+        <Setter Property="LetterSpacing" Value="1"/>
+    </Style>
+    <Style Selector="TextBlock.Lfam3WorkflowPhaseTitle.active">
+        <Setter Property="Foreground" Value="#59FF0D"/>
+    </Style>
+    <Style Selector="TextBlock.Lfam3WorkflowPhaseSub">
+        <Setter Property="FontSize"   Value="10"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowParamCard">
+        <Setter Property="Background"          Value="#181c28"/>
+        <Setter Property="BorderBrush"         Value="#252b3d"/>
+        <Setter Property="BorderThickness"     Value="1"/>
+        <Setter Property="CornerRadius"        Value="6"/>
+        <Setter Property="Padding"             Value="8,6"/>
+        <Setter Property="MinHeight"           Value="0"/>
+        <Setter Property="VerticalAlignment"   Value="Top"/>
+        <Setter Property="ClipToBounds"        Value="False"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowParamCard.active">
+        <Setter Property="BorderBrush"     Value="#59FF0D"/>
+        <Setter Property="Background"      Value="#1c2230"/>
+    </Style>
+    <!-- LFAM 3 workflow phase column — expands open when active + Live I/O shown -->
+    <Style Selector="Border.Lfam3WorkflowPhaseColumn">
+        <Setter Property="Background"          Value="Transparent"/>
+        <Setter Property="BorderBrush"         Value="Transparent"/>
+        <Setter Property="BorderThickness"     Value="0"/>
+        <Setter Property="CornerRadius"        Value="8"/>
+        <Setter Property="Padding"             Value="2,0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="ClipToBounds"        Value="False"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowPhaseColumn.active">
+        <Setter Property="Background"      Value="#101820"/>
+        <Setter Property="BorderBrush"     Value="#59FF0D"/>
+        <Setter Property="BorderThickness" Value="1.5"/>
+        <Setter Property="Padding"         Value="0"/>
+        <Setter Property="CornerRadius"    Value="8"/>
+        <Setter Property="ClipToBounds"    Value="False"/>
+    </Style>
+    <Style Selector="StackPanel.Lfam3WorkflowPhaseHeader">
+        <Setter Property="Spacing"           Value="6"/>
+        <Setter Property="Margin"            Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowPhaseHeaderPad">
+        <Setter Property="Padding"             Value="8,6,8,4"/>
+        <Setter Property="Background"          Value="Transparent"/>
+        <Setter Property="BorderThickness"     Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="ClipToBounds"        Value="False"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowPhaseFold">
+        <Setter Property="Height"              Value="1"/>
+        <Setter Property="Background"          Value="#59FF0D"/>
+        <Setter Property="BorderThickness"     Value="0"/>
+        <Setter Property="Margin"              Value="0"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Border.Lfam3WorkflowPhaseDetails">
+        <Setter Property="Background"          Value="#1a2030"/>
+        <Setter Property="BorderThickness"     Value="0"/>
+        <Setter Property="CornerRadius"        Value="0,0,6.5,6.5"/>
+        <Setter Property="Padding"             Value="10,8,10,10"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
 
+    <!-- LFAM 3 live I/O monitor -->
+    <Style Selector="Border.Lfam3WorkflowPhaseStrip">
+        <Setter Property="Background"          Value="#181c28"/>
+        <Setter Property="BorderBrush"         Value="#252b3d"/>
+        <Setter Property="BorderThickness"     Value="1"/>
+        <Setter Property="CornerRadius"        Value="6"/>
+        <Setter Property="Padding"             Value="8,6"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Button.Lfam3LiveIoToggleBar">
+        <Setter Property="Background"      Value="#181c28"/>
+        <Setter Property="BorderBrush"     Value="#252b3d"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius"    Value="6"/>
+        <Setter Property="Padding"         Value="8,5"/>
+        <Setter Property="Cursor"          Value="Hand"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment"   Value="Center"/>
+    </Style>
+    <Style Selector="Button.Lfam3LiveIoToggleBar.expanded">
+        <Setter Property="BorderBrush" Value="#59FF0D"/>
+        <Setter Property="Background"  Value="#1c2230"/>
+    </Style>
+    <Style Selector="Button.Lfam3LiveIoToggleBar:pointerover">
+        <Setter Property="Background"  Value="#1c2230"/>
+        <Setter Property="BorderBrush" Value="#3a4055"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoPanel">
+        <Setter Property="Background"      Value="#D0131720"/>
+        <Setter Property="BorderBrush"     Value="#2a2f42"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius"    Value="8"/>
+        <Setter Property="Padding"         Value="8"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoPanel.nested">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding"         Value="0"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoSection">
+        <Setter Property="Background"      Value="#181c28"/>
+        <Setter Property="BorderBrush"     Value="#252b3d"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius"    Value="6"/>
+        <Setter Property="Padding"         Value="8,6"/>
+        <Setter Property="ClipToBounds"    Value="False"/>
+        <Setter Property="MinWidth"        Value="220"/>
+        <Setter Property="MaxWidth"        Value="300"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoSection.split-io">
+        <Setter Property="MinWidth"        Value="520"/>
+        <Setter Property="MaxWidth"        Value="9999"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoSection.pending">
+        <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <Style Selector="TextBlock.Lfam3LiveIoSectionTitle">
+        <Setter Property="FontSize"   Value="10"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Foreground" Value="#59FF0D"/>
+        <Setter Property="LetterSpacing" Value="0.8"/>
+    </Style>
+    <Style Selector="Border.Lfam3LiveIoRow">
+        <Setter Property="Background"      Value="Transparent"/>
+        <Setter Property="Padding"         Value="2,1"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3LiveIoDot">
+        <Setter Property="Width"            Value="10"/>
+        <Setter Property="Height"           Value="10"/>
+        <Setter Property="StrokeThickness"  Value="1"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3LiveIoDot.inactive">
+        <Setter Property="Fill"        Value="#2a3040"/>
+        <Setter Property="Stroke"      Value="#3a4055"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3LiveIoDot.active">
+        <Setter Property="Fill"        Value="#59FF0D"/>
+        <Setter Property="Stroke"      Value="#59FF0D"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3LiveIoDot.warning">
+        <Setter Property="Fill"        Value="#f0c040"/>
+        <Setter Property="Stroke"      Value="#f0c040"/>
+    </Style>
+    <Style Selector="Ellipse.Lfam3LiveIoDot.fault">
+        <Setter Property="Fill"        Value="#f05252"/>
+        <Setter Property="Stroke"      Value="#f05252"/>
+    </Style>
+    <Style Selector="Button.Lfam3LiveIoToggle">
+        <Setter Property="Background"      Value="#1a2030"/>
+        <Setter Property="BorderBrush"     Value="#3a4055"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="Foreground"      Value="{DynamicResource TextSecondary}"/>
+        <Setter Property="CornerRadius"    Value="4"/>
+        <Setter Property="Cursor"          Value="Hand"/>
+    </Style>
+    <Style Selector="Button.Lfam3LiveIoToggle:pointerover">
+        <Setter Property="BorderBrush" Value="#59FF0D"/>
+    </Style>
 
     <!-- Tab button -->
     <Style Selector="Button.TabButton">
@@ -324,7 +567,7 @@
                                       Content="{TemplateBinding Content}"
                                       ContentTemplate="{TemplateBinding ContentTemplate}"
                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                      IsVisible="{TemplateBinding IsExpanded}"/>
+                                      IsVisible="{Binding #PART_toggle.IsChecked}"/>
                 </StackPanel>
             </ControlTemplate>
         </Setter>
