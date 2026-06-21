@@ -110,6 +110,7 @@ dotnet format
 | What | Path |
 |------|------|
 | Repo | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
+| GitHub | https://github.com/MattWhite3194/MassiveSlicer |
 | Publish (only) | `%LOCALAPPDATA%\MassiveSlicer\build` |
 | Cell JSON (canonical) | Repo `assets\cells\` — dev saves mirror here via `CellPaths` |
 | Test GLB | `assets\test\crystal_stone_rock.glb` |
@@ -144,6 +145,8 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 - Larger phase icons in `BaseStyles.axaml` (76×76 host, 54px node, 32px icons).
 - Cleaner phase borders and column structure; chevron/stem/connected layout removed.
 - Live I/O toggle above workflow phases; expands into `Lfam3LiveIoPanelView`.
+- **Live I/O Phase 2 (Pellet Extruder):** `ExtruderBridgeClient` polls `extIp:8765` every 2 s — flat `io` (Pos30 DI/DO, Pos28 `O_*`, MIO/RTD analog) + `modbus` holding regs (`hr_301xx`/`hr_302xx` zone temps). Writable DO with confirm on bridge pins. Status: `P2 live · bridge + Modbus`.
+- **Live I/O Phase 3 (Milling Spindle):** `MillingModbusClient` polls `millIp:8765` every 3 s — `MILLING_IO` RevPi names in bridge `io` dict. LFAM 3: `millIp` 192.168.0.246, `hasMilling: true`. Status: `P3 live · bridge`.
 - LFAM 3 sidebar tab gating: Print → Additive, Scan → Scan, Mill → Subtractive (`SyncLfam3WorkflowSidebar`).
 
 ### Bottom status / console dock
@@ -272,6 +275,8 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 | Scene cache | `CellSceneCache.cs` (`Invalidate` for `reload-cell`) |
 | Console | `ConsoleViewModel.cs`, `ConsoleCommandRegistry.cs`, `ConsoleView.axaml` |
 | Workflow | `Lfam3WorkflowTimelineView.axaml`, `BaseStyles.axaml`, `ViewportViewModel.cs` |
+| Live I/O | `LiveIoMonitorViewModel.cs`, `ExtruderBridgeClient.cs`, `MillingModbusClient.cs`, `Lfam3LiveIoCatalog.cs`, `LiveIoPhasePlan.cs` |
+| Milling bridge deploy | `scripts/deploy_bridge_lfam3_milling.py` (GitHub: [scripts/deploy_bridge_lfam3_milling.py](https://github.com/MattWhite3194/MassiveSlicer/blob/main/scripts/deploy_bridge_lfam3_milling.py)) |
 | GL host | `GlHostControl.Windows.cs`, `ViewportView.axaml` |
 | Overlay | `ViewportOverlayView.axaml` |
 | Import | `ImportHelper.cs`, `GltfImportInspector.cs`, `GltfLoader.cs`, `AssetLocalCache.cs` |
@@ -284,11 +289,29 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 1. **PBR / textured GLB rendering** — UVs, normal maps, albedo textures in `MeshData` / `GltfLoader` / `MeshRenderer`; `UvSettingsViewModel` still stub.
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
 3. **KRL import** — parser not implemented (console/file menu stub only).
-4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar.
+4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline; transform bar; rock select → Focus bar; Live I/O Phases 2–3 on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.246).
+5. **Deploy milling lfam-monitor bridge** — from repo: `python scripts/deploy_bridge_lfam3_milling.py --pass YOUR_SSH_PASSWORD` (installs `lfam-monitor.service` on milling RevPi 192.168.0.246:8765). Requires `pip install paramiko`.
 
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-06-21 — Milling bridge deploy script on GitHub
+- **`scripts/deploy_bridge_lfam3_milling.py`** committed to [MassiveSlicer](https://github.com/MattWhite3194/MassiveSlicer) — SSH deployer for LFAM 3 milling RevPi (`192.168.0.246`): uploads `lfam_monitor_bridge.py`, installs `lfam-monitor.service` on :8765, verifies ping + `MILLING_IO` read.
+- Canonical copy lives in the repo `scripts/` folder (network `Install/` mirror is optional).
+
+### 2026-06-21 — Live I/O Phase 3: Milling Spindle
+- **`MillingModbusClient`:** polls milling RevPi lfam-monitor bridge (`millIp:8765`, 3 s) — `MILLING_IO` names in `io` dict (matches `modbus_monitor.py`, not Modbus TCP :502).
+- **`CellConfig` / `lfam3.json`:** `millIp`, `millBridgePort`, `hasMilling`.
+- **`LiveIoMonitorViewModel`:** milling poll loop + `SetMillingBridgeConfig` wired on cell swap.
+- **`LiveIoPhasePlan`:** Phase 3 **Implemented**; tests in `MillingBridgeSnapshotTest.cs`.
+
+### 2026-06-21 — Live I/O Phase 2: Pellet Extruder
+- **`ExtruderBridgeSnapshot`:** parses bridge `modbus` dict + `modbus_connected` / `modbus_error` (mirrors `modbus_monitor.py` `_poll_extruder`).
+- **`ApplyExtruderSnapshot`:** maps flat `io` → `ExtruderBridge` + `ExtruderIo28`; `modbus` regs → `ExtruderModbus` when connected.
+- **`LiveIoValueFormatter`:** Modbus temps = raw °C; bridge RTD ÷10; MIO raw ÷1000 V.
+- **`Lfam3LiveIoCatalog`:** zone regs aligned to HMI map (`hr_30201`/`hr_30101` … Zone 3, `hr_30200` gearbox).
+- **`LiveIoPhasePlan`:** Phase 2 marked **Implemented**; tests in `ExtruderBridgeSnapshotTest.cs`.
 
 ### 2026-06-21 — Consolidate docs: `memory.md` only
 - Merged evergreen content from `CLAUDE.md` into this file (stack, structure, UI, MVVM, coordinates, glossary).
