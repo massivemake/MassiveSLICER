@@ -298,7 +298,7 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 
 ### 2026-06-21 — Milling bridge deploy script on GitHub
 - **`scripts/deploy_bridge_lfam3_milling.py`** committed to [MassiveSlicer](https://github.com/MattWhite3194/MassiveSlicer) — SSH deployer for LFAM 3 milling RevPi (`192.168.0.246`): uploads `lfam_monitor_bridge.py`, installs `lfam-monitor.service` on :8765, verifies ping + `MILLING_IO` read.
-- Canonical copy: repo `scripts/` — on GitHub `main` @ commit `88c23c7` (also on `feature/scan-rotary-bed-calibration` @ `1cc7220`). Network `Install/` folder is an optional mirror.
+- Canonical copy: repo `scripts/` — on GitHub `main` @ `98c5aee` (also `feature/scan-rotary-bed-calibration` @ `49db522`). Network `Install/` folder is an optional mirror.
 
 ### 2026-06-21 — Live I/O Phase 3: Milling Spindle
 - **`MillingModbusClient`:** polls milling RevPi lfam-monitor bridge (`millIp:8765`, 3 s) — `MILLING_IO` names in `io` dict (matches `modbus_monitor.py`, not Modbus TCP :502).
