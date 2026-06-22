@@ -4,10 +4,15 @@
              xmlns:ctrl="clr-namespace:MassiveSlicer.Controls"
              xmlns:local="clr-namespace:MassiveSlicer.App.Views"
              xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             xmlns:conv="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
              x:DataType="vm:ViewportViewModel"
              x:CompileBindings="True"
              Background="Transparent">
+
+    <UserControl.Resources>
+        <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
+    </UserControl.Resources>
 
     <Grid Background="Transparent">
 
@@ -279,13 +284,7 @@
                 CornerRadius="4"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="Focus"
-                        Classes="ToolbarButton"
-                        Padding="10,4"
-                        Command="{Binding FocusCommand}"
-                        ToolTip.Tip="Focus camera on selected object (F)"/>
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
+                <!-- Transformation tools: place the object on the plate -->
                 <Button Content="Lay on Face"
                         Classes="ToolbarButton"
                         Classes.active="{Binding IsLayFlatMode}"
@@ -300,11 +299,20 @@
                         Command="{Binding DropToPlateCommand}"
                         IsVisible="{Binding !IsToolpathSelected}"
                         ToolTip.Tip="Translate the object down so its lowest point sits on the build plate"/>
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"
+
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
                         IsVisible="{Binding !IsToolpathSelected}"/>
+
+                <!-- Other tools: camera + mesh structure -->
+                <Button Content="Focus"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Command="{Binding FocusCommand}"
+                        ToolTip.Tip="Focus camera on selected object (F)"/>
                 <Button Content="Ungroup"
                         Classes="ToolbarButton"
                         Padding="10,4"
+                        Margin="2,0,0,0"
                         Command="{Binding UngroupCommand}"
                         IsVisible="{Binding !IsToolpathSelected}"
                         ToolTip.Tip="Split a grouped import into separate top-level objects (e.g. OBJ with multiple parts)"/>
@@ -322,6 +330,60 @@
                         Command="{Binding MeshCleanupCommand}"
                         IsVisible="{Binding !IsToolpathSelected}"
                         ToolTip.Tip="Repair common mesh problems (duplicate faces, welded vertices, degenerate polygons) before slicing"/>
+
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
+                        IsVisible="{Binding !IsToolpathSelected}"/>
+
+                <!-- Material options: view channels + exposure/reflection adjust -->
+                <Button Classes="ToolbarButton"
+                        Padding="10,4"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Material view channels and render adjustments">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="Material" VerticalAlignment="Center"/>
+                        <ia:Icon Value="mdi-chevron-down" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="210" Spacing="3">
+                                <TextBlock Text="VIEW CHANNEL" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Final Render"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Standard}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Standard"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Base Color"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="BaseColor"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Metalness"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Metalness"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Roughness"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Roughness"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Normal"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="NormalMap"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="AO"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="AO"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Emission"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Emission"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="UV Checker"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="UvChecker"/>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,5"/>
+                                <TextBlock Text="ADJUST" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <TextBlock Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
+                                <Slider Minimum="0.4" Maximum="2.5" Value="{Binding Exposure, Mode=TwoWay}"
+                                        ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
+                                <TextBlock Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
+                                <Slider Minimum="0" Maximum="3" Value="{Binding IblIntensity, Mode=TwoWay}"
+                                        ToolTip.Tip="Environment reflection / IBL gain"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
             </StackPanel>
         </Border>
 
