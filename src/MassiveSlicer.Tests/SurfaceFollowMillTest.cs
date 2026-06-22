@@ -44,6 +44,32 @@ public class SurfaceFollowMillTest(ITestOutputHelper output)
     }
 
     [Fact]
+    public void MultiAxis_CoversVerticalWall_TopDownDoesNot()
+    {
+        // A vertical wall in the Y-Z plane at x=0, facing +X.
+        Vector3[] pos = [new(0, 0, 0), new(0, 20, 0), new(0, 20, 20), new(0, 0, 20)];
+        Vector3[] nrm = [Vector3.UnitX, Vector3.UnitX, Vector3.UnitX, Vector3.UnitX];
+        int[] idx = [0, 1, 2, 0, 2, 3];
+
+        var topDown = SurfaceFollowMillGenerator.Generate(pos, nrm, idx, Mill());
+        var multi   = SurfaceFollowMillGenerator.GenerateMultiAxis(pos, nrm, idx, Mill());
+
+        int topCuts   = topDown.Layers.Sum(l => l.Moves.Count(m => m.Kind == MoveKind.Mill));
+        var multiCuts = multi.Layers.SelectMany(l => l.Moves).Where(m => m.Kind == MoveKind.Mill).ToList();
+        output.WriteLine($"top-down wall cuts={topCuts}; multi-axis wall cuts={multiCuts.Count}");
+
+        // Top-down can't sample a vertical wall (it projects to a line); multi-axis covers it.
+        Assert.True(multiCuts.Count > topCuts + 10, "side drive should cover the wall the top pass misses");
+
+        // The wall cuts ride x=0 with a horizontal (+X) tool axis, spanning the wall's height.
+        var wall = multiCuts.Where(m => Vector3.Dot(Vector3.Normalize(m.Normal), Vector3.UnitX) > 0.9f).ToList();
+        Assert.NotEmpty(wall);
+        Assert.All(wall, m => Assert.InRange(m.To.X, -0.05f, 0.05f));
+        float zSpan = wall.Max(m => m.To.Z) - wall.Min(m => m.To.Z);
+        Assert.True(zSpan > 10f, $"wall coverage should span its height, got {zSpan}");
+    }
+
+    [Fact]
     public void FlatPlane_ToolAxisIsVertical()
     {
         Vector3[] pos = [new(0, 0, 2), new(30, 0, 2), new(30, 30, 2), new(0, 30, 2)];

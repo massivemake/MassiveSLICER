@@ -2419,7 +2419,7 @@ public partial class ViewportView : UserControl
             var result = built.result;
             var mill   = BuildMillSettings(sub);
 
-            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
+            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
                 result.Positions, result.Normals, result.Indices, mill));
             if (toolpath.Layers.Count == 0)
             {
