@@ -203,6 +203,26 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "slice",
+            Aliases = ["generate-slice"],
+            Description = "Slice the selected mesh into toolpaths",
+            Execute = (ctx, _) =>
+            {
+                var slice = ctx.Main.Viewport.SliceCommand;
+                if (slice.CanExecute(null))
+                {
+                    slice.Execute(null);
+                    ctx.Log("[slice] slicing selected mesh...");
+                }
+                else
+                {
+                    ctx.LogError("Select a mesh first (e.g. `import <path>` auto-selects it), then run `slice`.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "prepare",
             Description = "Switch to Prepare mode",
             Execute = (ctx, _) =>

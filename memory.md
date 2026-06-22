@@ -201,7 +201,9 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 ### Console commands
 - `ConsoleCommandRegistry.cs`, `ConsoleViewModel.cs`, `ConsoleView.axaml`.
 - Typed commands with Tab/↑↓ autocomplete and Enter to run.
-- Commands: `help`, `clear`, `new`, `open`, `save`, `save-as`, `settings`, `panel-settings`, `import`, `import-krl`, `undo`, `redo`, `console`, `right-panel`, `frame`, `prepare`, `preview`, **`reload-cell`**.
+- Commands: `help`, `clear`, `new`, `open`, `save`, `save-as`, `settings`, `panel-settings`, `import`, `import-krl`, `undo`, `redo`, `console`, `right-panel`, `frame`, **`slice`**, `prepare`, `preview`, **`reload-cell`**.
+- **Simple slice flow:** `import <path>` (auto-selects the mesh) → `slice` (runs `Viewport.SliceCommand` on the selected mesh; no need to hunt for the ADDITIVE → Generate Slice button or use the file dialog). Clean printable test part: `assets/test/test_cube.stl` (300mm manifold cube, ASCII STL, Z-up mm). The slice is purely geometric — identical regardless of the material/view mode (PBR vs Wireframe).
+- **Import vert-count log fix:** `ImportModelFromPath` now inspects the node **before** `AddUserNode` enqueues it. Previously the GL upload thread could clear `PendingMesh` before the inspector ran, logging "0 verts" for small meshes (a benign race, but it looked like a load failure).
 - `import [path]` → `MainWindowViewModel.ImportModelFromPath` + `GltfImportInspector`.
 - `reload-cell` → invalidates `CellSceneCache` and reloads active cell via `OnDevCellReloadRequested`.
 

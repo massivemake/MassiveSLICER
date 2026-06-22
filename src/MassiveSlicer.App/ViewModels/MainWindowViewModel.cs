@@ -604,11 +604,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
-        Viewport.AddUserNode(node);
-
+        // Inspect BEFORE enqueuing: AddUserNode hands the node to the GL upload thread,
+        // which clears PendingMesh once uploaded -- for small meshes that can happen before
+        // the inspector runs, making it report 0 verts. Summarize while the mesh is intact.
         var report = GltfImportInspector.InspectLoaded(node, path);
         foreach (var line in report.ToLogLines())
             Console.Log(line);
+
+        Viewport.AddUserNode(node);
 
         Console.Log($"[import] Added '{node.Name}' to scene.");
         return true;
