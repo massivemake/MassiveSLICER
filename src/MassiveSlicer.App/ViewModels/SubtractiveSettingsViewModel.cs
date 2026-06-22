@@ -67,6 +67,17 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     /// <summary>Flip black/white.</summary>
     public bool   InvertHeightmap { get => _invertHeightmap; set => SetField(ref _invertHeightmap, value); }
 
+    // -- Displaced surface (PBR maps -> geometry) ------------------------------
+
+    private double _displacementDistanceMm = 3;
+
+    /// <summary>
+    /// How far the detail map pushes the low-poly surface along its normal (mm). The map's
+    /// source is the supplied displacement/bump/height image (<see cref="HeightmapPath"/>) if set,
+    /// otherwise the model's embedded normal map integrated to height.
+    /// </summary>
+    public double DisplacementDistanceMm { get => _displacementDistanceMm; set => SetField(ref _displacementDistanceMm, value); }
+
     /// <summary>Use the selected part's top-face Z as the reference plane.</summary>
     public bool   AutoReferenceFromTop { get => _autoReferenceFromTop; set => SetField(ref _autoReferenceFromTop, value); }
     /// <summary>Manual reference plane Z (world mm) when <see cref="AutoReferenceFromTop"/> is false.</summary>
