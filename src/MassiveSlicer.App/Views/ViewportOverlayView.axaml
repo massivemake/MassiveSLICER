@@ -371,6 +371,10 @@
                                 <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="UV Checker"
                                         Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
                                         Command="{Binding SetShaderModeCommand}" CommandParameter="UvChecker"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Wireframe"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Wireframe"
+                                        ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
 
                                 <Border Height="1" Background="{DynamicResource Border1}" Margin="0,5"/>
                                 <TextBlock Text="ADJUST" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>

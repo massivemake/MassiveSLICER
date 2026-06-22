@@ -96,6 +96,9 @@ public sealed class MeshRenderer : IDisposable
     /// flat preset modes (Clay/Metal/Chrome/…) so they don't tint the file's albedo map.</summary>
     public bool SuppressTextures { get; set; }
 
+    /// <summary>When true, renders flat (faceted) shading plus a wireframe overlay line pass.</summary>
+    public bool WireframeMode { get; set; }
+
     /// <summary>Final-render exposure multiplier (pre-tonemap). 1 = neutral.</summary>
     public float Exposure { get; set; } = 1f;
 
@@ -172,6 +175,7 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uAlphaCutoff;
         uniform float     uExposure;       // pre-tonemap exposure (1 = neutral)
         uniform float     uIblGain;        // environment/IBL gain (1 = neutral)
+        uniform int       uWireframe;      // 1 during the wireframe line pass
         uniform int       uHasUv;
         uniform int       uHasTangent;
         uniform sampler2D uBaseColorTex;   uniform int uHasBaseColorTex; // unit 4
@@ -242,6 +246,23 @@ public sealed class MeshRenderer : IDisposable
 
         void main() {
             vec3 N = normalize(vNormal);
+
+            // Wireframe overlay line pass -- emit a flat dark edge colour.
+            if (uWireframe == 1) {
+                fragColor = vec4(0.04, 0.05, 0.07, 1.0);
+                return;
+            }
+
+            // Flat (faceted) shading: derive the true face normal from screen-space
+            // derivatives of world position, so smooth meshes still read as polygons.
+            if (uShadingMode == 11) {
+                vec3 fn = normalize(cross(dFdx(vWorldPos), dFdy(vWorldPos)));
+                if (!gl_FrontFacing) fn = -fn;
+                float ndl = max(dot(fn, normalize(uLightDir)), 0.0);
+                vec3 c = vec3(0.60) * (0.32 + 0.68 * ndl) * uLightIntensity;
+                fragColor = vec4(pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+                return;
+            }
 
             if (uShadingMode == 1) {
                 fragColor = vec4(N * 0.5 + 0.5, 1.0);
@@ -463,9 +484,11 @@ public sealed class MeshRenderer : IDisposable
         int shadingMode = LayerPreviewMode ? 2
                         : NormalsMode      ? 1
                         : FastCellMode     ? 3
+                        : WireframeMode    ? 11
                         : MaterialChannel > 0 ? 3 + MaterialChannel   // 1..7 -> 4..10
                         : 0;
         _shader.SetInt("uShadingMode",        shadingMode);
+        _shader.SetInt("uWireframe",          0);
 
         // PBR material factors.
         _shader.SetFloat("uMetallicFactor",   Metallic);
@@ -502,6 +525,24 @@ public sealed class MeshRenderer : IDisposable
             GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
         else
             GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+
+        // Wireframe overlay: redraw the triangles as lines, pulled slightly toward the
+        // camera so the edges sit on top of the flat fill.
+        if (WireframeMode)
+        {
+            _shader.SetInt("uWireframe", 1);
+            GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
+            GL.Enable(EnableCap.PolygonOffsetLine);
+            GL.PolygonOffset(-1f, -1f);
+            if (_indexed)
+                GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
+            else
+                GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+            GL.Disable(EnableCap.PolygonOffsetLine);
+            GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+            _shader.SetInt("uWireframe", 0);
+        }
+
         GL.BindVertexArray(0);
     }
 
