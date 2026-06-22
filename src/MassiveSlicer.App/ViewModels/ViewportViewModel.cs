@@ -1592,6 +1592,7 @@ public sealed class ViewportViewModel : ViewModelBase
         // Relief milling: guard inside RunMillAsync (no canExecute predicate to avoid
         // threading RaiseCanExecuteChanged through every selection-change site).
         MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
+        PreviewDisplacedCommand = new RelayCommand(() => _ = OnPreviewDisplacedRequested?.Invoke());
 
         UpdateSliceCommand = new RelayCommand(
             execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
@@ -1958,6 +1959,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Callback registered by the viewport code-behind to generate a relief-milling toolpath.</summary>
     internal Func<Task>? OnMillRequested { get; set; }
 
+    /// <summary>Callback registered by the viewport code-behind to build + show the displaced surface.</summary>
+    internal Func<Task>? OnPreviewDisplacedRequested { get; set; }
+
     /// <summary>Re-slices the source mesh at its current transform and replaces the selected toolpath.</summary>
     internal Func<Task>? OnUpdateSliceRequested { get; set; }
 
@@ -2016,6 +2020,9 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
     public RelayCommand MillCommand { get; }
+
+    /// <summary>Builds the displaced surface (low-poly mesh + PBR map detail) and adds it to the scene.</summary>
+    public RelayCommand PreviewDisplacedCommand { get; }
 
     /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
     public RelayCommand UpdateSliceCommand { get; }

@@ -237,6 +237,7 @@ public partial class ViewportView : UserControl
             vm.OnSeamGuidesChanged = () => UpdateSeamGuideMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             vm.OnMillRequested        = () => RunMillAsync(vm);
+            vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
@@ -2294,6 +2295,110 @@ public partial class ViewportView : UserControl
         {
             vm.IsSlicing = false;
         }
+    }
+
+    /// <summary>
+    /// Builds the displaced surface for the selected model (low-poly mesh pushed along its
+    /// normals by a PBR-map height field) and adds it to the scene as a preview mesh — the
+    /// detailed geometry a multi-axis mill will follow. Works in world space so the displacement
+    /// distance is true mm regardless of the model's transform.
+    /// </summary>
+    private async Task RunPreviewDisplacedAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+
+        if (_renderer.SelectedNode is not { } selected)
+        {
+            System.Console.Error.WriteLine("[displace] select a model first.");
+            return;
+        }
+        var meshNode = selected.SelfAndDescendants()
+            .FirstOrDefault(n => n.Mesh?.PickingData is { Uvs: not null });
+        if (meshNode?.Mesh?.PickingData is not { } mesh || mesh.Uvs is null)
+        {
+            System.Console.Error.WriteLine("[displace] selected model has no UVs — cannot sample its maps.");
+            return;
+        }
+
+        var height = MassiveSlicer.App.Services.PbrHeightFieldFactory.FromMaterial(
+            mesh.Material,
+            string.IsNullOrWhiteSpace(sub.HeightmapPath) ? null : sub.HeightmapPath,
+            sub.InvertHeightmap);
+        if (height is null)
+        {
+            System.Console.Error.WriteLine(
+                "[displace] no displacement/height image supplied and no normal map on this model.");
+            return;
+        }
+
+        vm.IsSlicing = true;
+        try
+        {
+            var world = meshNode.WorldTransform;
+            float distance = (float)sub.DisplacementDistanceMm;
+            int vcount = mesh.Positions.Length;
+
+            // Lift to world space so the displacement distance is true mm.
+            var wpos = new NVec3[vcount];
+            var wnrm = new NVec3[vcount];
+            var uv   = new System.Numerics.Vector2[vcount];
+            for (int i = 0; i < vcount; i++)
+            {
+                wpos[i] = TransformPoint(mesh.Positions[i], world);
+                wnrm[i] = TransformNormalWorld(mesh.Normals[i], world);
+                uv[i]   = new System.Numerics.Vector2(mesh.Uvs[i].X, mesh.Uvs[i].Y);
+            }
+            int[] idx = mesh.Indices is { } mi
+                ? Array.ConvertAll(mi, u => (int)u)
+                : System.Linq.Enumerable.Range(0, vcount).ToArray();
+
+            var result = await Task.Run(() => MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Build(
+                wpos, wnrm, uv, idx, height, distance, bias: 0f));
+
+            if (result.VertexCount == 0)
+            {
+                System.Console.Error.WriteLine("[displace] produced no geometry.");
+                return;
+            }
+
+            var tkPos = Array.ConvertAll(result.Positions, p => new TkVector3(p.X, p.Y, p.Z));
+            var tkNrm = Array.ConvertAll(result.Normals,   p => new TkVector3(p.X, p.Y, p.Z));
+            var tkUv  = Array.ConvertAll(result.Uvs, p => new OpenTK.Mathematics.Vector2(p.X, p.Y));
+            var tkIdx = Array.ConvertAll(result.Indices, i => (uint)i);
+
+            // Keep the model's material so the displaced surface stays textured.
+            var meshData = new MeshData(tkPos, tkNrm, tkIdx,
+                $"Displaced surface ({distance:0.#} mm)", mesh.BaseColor, mesh.Metallic, mesh.Roughness,
+                tkUv, null, mesh.Material);
+
+            var previewNode = new SceneNode
+            {
+                Name           = meshData.Name,
+                PendingMesh    = meshData,
+                LocalTransform = TkMatrix4.Identity,
+                Selectable     = true,
+            };
+            vm.AddUserNode(previewNode);
+            System.Console.Error.WriteLine(
+                $"[displace] {result.VertexCount:N0} verts, {result.TriangleCount:N0} tris @ {distance:0.#} mm.");
+            GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>Transforms a normal by the matrix's 3x3 (row-vector convention) and renormalizes.</summary>
+    private static NVec3 TransformNormalWorld(TkVector3 n, TkMatrix4 m)
+    {
+        float x = n.X * m.M11 + n.Y * m.M21 + n.Z * m.M31;
+        float y = n.X * m.M12 + n.Y * m.M22 + n.Z * m.M32;
+        float z = n.X * m.M13 + n.Y * m.M23 + n.Z * m.M33;
+        var v = new NVec3(x, y, z);
+        return v.LengthSquared() > 1e-12f ? NVec3.Normalize(v) : new NVec3(0, 0, 1);
     }
 
     private async Task RunUpdateSliceAsync(ViewportViewModel vm)
