@@ -846,12 +846,19 @@
                         <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
                                        Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
                     </Grid>
-                    <Button Margin="8,2,8,6"
+                    <Button Margin="8,2,8,4"
                             Content="Preview Displaced Surface"
                             Classes="SecondaryButton"
                             HorizontalAlignment="Stretch"
                             ToolTip.Tip="Build and show the detailed surface from the model's maps (the geometry the mill rides)"
                             Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
+
+                    <Button Margin="8,0,8,6"
+                            Content="Generate Multi-Axis Toolpath"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Surface-following finish pass over the displaced surface (tool axis follows the surface normal)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.GenerateMultiAxisCommand}"/>
 
                     <!-- Tool &amp; cutting -->
                     <TextBlock Text="TOOL &amp; CUTTING" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
