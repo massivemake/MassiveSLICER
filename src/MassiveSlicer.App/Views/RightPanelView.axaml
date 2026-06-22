@@ -589,6 +589,21 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- Stock from PBR maps: print the detailed (displaced) blank + machining allowance -->
+                    <Expander Classes="SectionExpander" Header="STOCK FROM MAPS" IsExpanded="False" Margin="0,4,0,4">
+                        <StackPanel>
+                            <TextBlock Text="Print the displaced surface (low-poly mesh + the MILLING panel's detail map) plus an allowance, so the blank carries the detail for the mill."
+                                       Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+                            <CheckBox Margin="8,0,8,4" Content="Print detailed stock (use PBR maps)" FontSize="11"
+                                      IsChecked="{Binding Additive.UseDisplacedStock, Mode=TwoWay}"/>
+                            <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding Additive.UseDisplacedStock}">
+                                <TextBlock Grid.Column="0" Text="Machining allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
+
                     <Button Content="Generate Slice"
                             Classes="PrimaryButton"
                             HorizontalAlignment="Stretch"

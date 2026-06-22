@@ -53,6 +53,26 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _beadWidth, Math.Clamp(value, 1.0, 100.0));
     }
 
+    private bool   _useDisplacedStock;
+    private double _stockAllowanceMm = 2.0;
+
+    /// <summary>
+    /// Print the displaced surface (low-poly mesh + PBR-map detail from the MILLING panel) instead of
+    /// the raw mesh, so the blank carries the detail and the later mill has material to cut.
+    /// </summary>
+    public bool UseDisplacedStock
+    {
+        get => _useDisplacedStock;
+        set => SetField(ref _useDisplacedStock, value);
+    }
+
+    /// <summary>Uniform extra skin added over the displaced surface for the mill to remove (mm).</summary>
+    public double StockAllowanceMm
+    {
+        get => _stockAllowanceMm;
+        set => SetField(ref _stockAllowanceMm, Math.Clamp(value, 0.0, 50.0));
+    }
+
     private double _firstLayerHeight = 3.0;
 
     /// <summary>Override height for the first layer only, in mm.</summary>
