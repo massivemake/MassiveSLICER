@@ -952,6 +952,23 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _lightIntensity, value);
     }
 
+    private float _exposure = 1f;
+    private float _iblIntensity = 1f;
+
+    /// <summary>Final-render exposure multiplier applied before tonemapping (1 = neutral).</summary>
+    public float Exposure
+    {
+        get => _exposure;
+        set => SetField(ref _exposure, value);
+    }
+
+    /// <summary>Environment reflection / image-based-lighting gain (1 = neutral).</summary>
+    public float IblIntensity
+    {
+        get => _iblIntensity;
+        set => SetField(ref _iblIntensity, value);
+    }
+
     // -- Shader mode -----------------------------------------------------------
 
     private ShaderMode _activeShaderMode = ShaderMode.Standard;
@@ -1648,7 +1665,18 @@ public sealed class ViewportViewModel : ViewModelBase
                     .Select(f => new BackdropOption(Path.GetFileNameWithoutExtension(f), f)));
         }
         AvailableBackdrops = options;
-        _activeBackdrop    = options[0];
+        // Default to a soft, balanced HDRI so imported models get environment lighting
+        // (reflections + fill) out of the box. Falls back to the first available image,
+        // then to "None". The user can change it in the BACKDROP selector.
+        _activeBackdrop = options[0];
+        string[] preferred = ["AmbienceExposure4k", "CasualDay4K", "DayInTheClouds4k", "FluffballDay4k"];
+        foreach (var name in preferred)
+        {
+            var match = options.FirstOrDefault(o => string.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) { _activeBackdrop = match; break; }
+        }
+        if (ReferenceEquals(_activeBackdrop, options[0]) && options.Count > 1)
+            _activeBackdrop = options[1];
     }
 
     // -- Lay Flat --------------------------------------------------------------

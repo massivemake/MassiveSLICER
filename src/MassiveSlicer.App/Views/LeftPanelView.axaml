@@ -436,6 +436,22 @@
                                             RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                     ToolTip.Tip="Light intensity"/>
                         </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0.4" Maximum="2.5" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.Exposure,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="3" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.IblIntensity,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Environment reflection / IBL gain"/>
+                        </Grid>
 
                         <!-- Visibility toggles -->
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>

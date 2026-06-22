@@ -96,6 +96,12 @@ public sealed class MeshRenderer : IDisposable
     /// flat preset modes (Clay/Metal/Chrome/…) so they don't tint the file's albedo map.</summary>
     public bool SuppressTextures { get; set; }
 
+    /// <summary>Final-render exposure multiplier (pre-tonemap). 1 = neutral.</summary>
+    public float Exposure { get; set; } = 1f;
+
+    /// <summary>Environment / image-based-lighting gain. 1 = neutral.</summary>
+    public float IblGain { get; set; } = 1f;
+
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
@@ -164,6 +170,8 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uOcclusionStrength;
         uniform int       uAlphaMode;      // 0=opaque,1=mask,2=blend
         uniform float     uAlphaCutoff;
+        uniform float     uExposure;       // pre-tonemap exposure (1 = neutral)
+        uniform float     uIblGain;        // environment/IBL gain (1 = neutral)
         uniform int       uHasUv;
         uniform int       uHasTangent;
         uniform sampler2D uBaseColorTex;   uniform int uHasBaseColorTex; // unit 4
@@ -371,12 +379,13 @@ public sealed class MeshRenderer : IDisposable
                 vec3 prefiltered = sampleEnvSmooth(reflect(-V, Nm), rough * 6.0);
                 vec2 ab          = envBRDFApprox(rough, NdotV);
                 vec3 specIBL     = prefiltered * (F0 * ab.x + ab.y);
-                ambient = (diffIBL + specIBL) * ao;
+                ambient = (diffIBL + specIBL) * ao * uIblGain;
             } else {
                 ambient = albedo * 0.15 * ao;
             }
 
             vec3 color = direct + ambient + emissive;
+            color *= uExposure;                      // user exposure (1 = neutral)
             color = aces(color);                     // ACES filmic tonemap
             fragColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2)), alpha);
         }
@@ -466,6 +475,8 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uOcclusionStrength", OcclusionStrength);
         _shader.SetInt("uAlphaMode",          AlphaModeInt);
         _shader.SetFloat("uAlphaCutoff",      AlphaCutoff);
+        _shader.SetFloat("uExposure",         Exposure);
+        _shader.SetFloat("uIblGain",          IblGain);
         _shader.SetInt("uHasUv",              _hasUv ? 1 : 0);
         _shader.SetInt("uHasTangent",         _hasTangent ? 1 : 0);
 
