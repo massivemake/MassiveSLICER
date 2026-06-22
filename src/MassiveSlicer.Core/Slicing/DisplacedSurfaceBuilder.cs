@@ -27,6 +27,8 @@ public static class DisplacedSurfaceBuilder
     }
 
     /// <param name="bias">Map value treated as "no displacement" (0 pushes 0..distance outward; 0.5 is signed +/-).</param>
+    /// <param name="extraOffsetMm">Uniform outward offset added everywhere along the normal (mm). Use as the
+    /// additive machining allowance so the printed blank envelopes the final surface + a constant skin.</param>
     /// <param name="maxSubdiv">Cap on sub-edges per triangle edge (guards against runaway tessellation).</param>
     /// <param name="texelsPerSample">Target map texels per generated sample edge (higher = coarser).</param>
     public static Result Build(
@@ -37,6 +39,7 @@ public static class DisplacedSurfaceBuilder
         HeightField2D height,
         float displacementDistance,
         float bias = 0f,
+        float extraOffsetMm = 0f,
         int maxSubdiv = 24,
         float texelsPerSample = 2f)
     {
@@ -77,7 +80,7 @@ public static class DisplacedSurfaceBuilder
                     Vector2 uv = b0 * t0 + b1 * t1 + b2 * t2;
 
                     float h = height.Sample(uv.X, uv.Y) - bias;
-                    p += nrm * (displacementDistance * h);
+                    p += nrm * (displacementDistance * h + extraOffsetMm);
 
                     outPos.Add(p);
                     outUv.Add(uv);

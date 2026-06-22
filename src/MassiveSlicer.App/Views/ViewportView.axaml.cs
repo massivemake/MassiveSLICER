@@ -2152,6 +2152,28 @@ public partial class ViewportView : UserControl
             }
             if (meshSnapshots.Count == 0) return;
 
+            // Additive stock from the material maps: print the displaced surface (low-poly mesh +
+            // PBR-map detail) inflated by a uniform allowance, so the blank carries the detail and
+            // the mill has consistent material everywhere. Map + distance come from the MILLING panel
+            // (single source of truth); additive only adds the allowance.
+            if (vm.AdditiveSettings?.UseDisplacedStock == true && vm.SubtractiveSettings is { } sub2)
+            {
+                var built = await ComputeDisplacedSurfaceAsync(vm, sub2, extraOffsetMm: (float)vm.AdditiveSettings.StockAllowanceMm);
+                if (built is { } db)
+                {
+                    var tkPos = Array.ConvertAll(db.result.Positions, p => new TkVector3(p.X, p.Y, p.Z));
+                    var tkIdx = Array.ConvertAll(db.result.Indices, i => (uint)i);
+                    meshSnapshots = [(tkPos, tkIdx, TkMatrix4.Identity)];
+                    System.Console.Error.WriteLine(
+                        $"[slice] additive stock from PBR maps: {db.result.VertexCount:N0} verts + " +
+                        $"{vm.AdditiveSettings.StockAllowanceMm:0.#} mm allowance.");
+                }
+                else
+                {
+                    System.Console.Error.WriteLine("[slice] displaced stock requested but unavailable; slicing raw mesh.");
+                }
+            }
+
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(meshSnapshots, method, settings);
@@ -2305,7 +2327,7 @@ public partial class ViewportView : UserControl
     /// model's transform. Returns null (with a logged reason) when the selection can't be displaced.
     /// </summary>
     private async Task<(MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Result result, MeshData source)?>
-        ComputeDisplacedSurfaceAsync(ViewportViewModel vm, SubtractiveSettingsViewModel sub)
+        ComputeDisplacedSurfaceAsync(ViewportViewModel vm, SubtractiveSettingsViewModel sub, float extraOffsetMm = 0f)
     {
         if (_renderer.SelectedNode is not { } selected)
         {
@@ -2350,7 +2372,7 @@ public partial class ViewportView : UserControl
             : System.Linq.Enumerable.Range(0, vcount).ToArray();
 
         var result = await Task.Run(() => MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Build(
-            wpos, wnrm, uv, idx, height, distance, bias: 0f));
+            wpos, wnrm, uv, idx, height, distance, bias: 0f, extraOffsetMm: extraOffsetMm));
 
         if (result.VertexCount == 0)
         {
