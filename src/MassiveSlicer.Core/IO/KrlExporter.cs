@@ -452,17 +452,20 @@ public static class KrlExporter
             foreach (var move in layer.Moves)
             {
                 var to = ToBase(move.To, s);
+                // Multi-axis: orient the spindle to the per-move tool axis (surface normal) when
+                // present; fall back to the layer plane normal (top-down) otherwise.
+                var (a, b, c) = move.Normal != Vector3.Zero ? KukaAbc(move.Normal, s) : (la, lb, lc);
                 if (move.Kind == MoveKind.Mill)
                 {
                     sb.AppendLine($"$VEL.CP = {cutV}");
-                    sb.AppendLine(FormatLin(to, la, lb, lc));
+                    sb.AppendLine(FormatLin(to, a, b, c));
                 }
                 else // Travel: rapid (up/over) or plunge (down)
                 {
                     bool plunging = move.To.Z < move.From.Z - 1e-4f;
                     sb.AppendLine(plunging ? ";plunge" : ";rapid");
                     sb.AppendLine($"$VEL.CP = {(plunging ? plungeV : rapidV)}");
-                    sb.AppendLine(FormatLinExact(to, la, lb, lc));
+                    sb.AppendLine(FormatLinExact(to, a, b, c));
                 }
             }
         }
