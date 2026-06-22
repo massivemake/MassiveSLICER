@@ -27,7 +27,9 @@ public class CellDevTransformSaveTest
             }
             """);
 
-        Directory.SetCurrentDirectory(dir);
+        // NB: do not change the process CWD here — it leaks into other tests. SaveBedDevTransform
+        // works off the absolute path, and mirroring to repo source copies is opt-in (off here),
+        // so this write stays inside the temp dir.
         Assert.True(CellLoader.SaveBedDevTransform(path, 150, 250, 350, out var error), error);
 
         var cell = CellLoader.Load(path);
