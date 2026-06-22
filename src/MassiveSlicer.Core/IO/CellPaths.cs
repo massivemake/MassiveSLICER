@@ -30,6 +30,18 @@ public static class CellPaths
         return AssetPaths.FindCellsDirectory();
     }
 
+    /// <summary>
+    /// When true, a cell write is mirrored to every discovered source/repo copy of that cell
+    /// (a dev convenience so edits from the published build propagate back to the repo source).
+    /// <b>Off by default</b> so ordinary callers — the running app, scripts, and tests — only
+    /// write the primary file and never reach into the repo. This fan-out was corrupting
+    /// <c>lfam3.json</c>: any path containing <c>/assets/cells/</c> (e.g. a test's temp file)
+    /// propagated to the hardcoded repo root and all source trees. Opt in for a dev sync by
+    /// setting <c>MASSIVE_SLICER_MIRROR_CELLS=1</c>.
+    /// </summary>
+    public static bool MirrorToSourceTrees { get; set; }
+        = string.Equals(Environment.GetEnvironmentVariable("MASSIVE_SLICER_MIRROR_CELLS"), "1", StringComparison.Ordinal);
+
     /// <summary>All cell JSON paths that should receive writes for <paramref name="cellPath"/>.</summary>
     public static IReadOnlyList<string> WriteTargetsFor(string cellPath)
     {
@@ -37,7 +49,9 @@ public static class CellPaths
         var rel     = RelativeUnderCells(primary);
         var targets = new List<string> { primary };
 
-        if (rel is null) return targets;
+        // Default: write only the file we were given. Mirroring to repo/source copies is an
+        // explicit dev opt-in — otherwise a temp or build-dir save silently overwrites the repo.
+        if (rel is null || !MirrorToSourceTrees) return targets;
 
         var preferred = PreferredCellsDirectory();
         if (preferred is not null)
