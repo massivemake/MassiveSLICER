@@ -101,6 +101,25 @@ public partial class MainWindow : Window
             await LoadAndAddNodeAsync(path, vm);
         };
 
+        // -- Relief heightmap picker (Subtractive tab) -------------------------
+        vm.RightPanel.Subtractive.BrowseHeightmapRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Open Relief Heightmap",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("Image Files") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tga"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.RightPanel.Subtractive.HeightmapPath = path;
+        };
+
         // -- Workspace open / save (File menu) ---------------------------------
         vm.Toolbar.OpenWorkspaceRequested += async (_, _) =>
         {

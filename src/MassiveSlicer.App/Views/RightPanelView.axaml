@@ -816,8 +816,104 @@
                           Background="{DynamicResource Bg2}"
                           IsVisible="{Binding IsSubtractiveTab}">
                 <StackPanel Margin="0,8">
-                    <TextBlock Text="SUBTRACTIVE" Classes="SectionHeader"/>
-                    <TextBlock Text="Coming soon." Classes="LabelMuted" Margin="12,4"/>
+                    <TextBlock Text="MILLING" Classes="SectionHeader"/>
+                    <TextBlock Text="HSD ES951 spindle finish — carve a relief into the printed blank."
+                               Classes="LabelMuted" Margin="12,0,12,8" TextWrapping="Wrap"/>
+
+                    <!-- Relief heightmap -->
+                    <TextBlock Text="RELIEF HEIGHTMAP" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0" Watermark="grayscale .png / .jpg" FontSize="11"
+                                 Text="{Binding Subtractive.HeightmapPath, Mode=TwoWay}"/>
+                        <Button Grid.Column="1" Content="Browse" Margin="4,0,0,0" FontSize="11"
+                                Command="{Binding Subtractive.BrowseHeightmapCommand}"
+                                ToolTip.Tip="Pick a grayscale relief image (white = high surface)"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
+                              IsChecked="{Binding Subtractive.InvertHeightmap, Mode=TwoWay}"/>
+
+                    <!-- Tool &amp; cutting -->
+                    <TextBlock Text="TOOL &amp; CUTTING" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Tool diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ToolDiameterMm, Mode=TwoWay}"
+                                       Minimum="0.5" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,4" Content="Ball-nose (off = flat end-mill)" FontSize="11"
+                              IsChecked="{Binding Subtractive.BallEnd, Mode=TwoWay}"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Stepover (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepoverMm, Mode=TwoWay}"
+                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Stepdown (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
+                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Finish allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FinishAllowanceMm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="10" Increment="0.1" FormatString="F2" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Feed rate (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FeedRateMmMin, Mode=TwoWay}"
+                                       Minimum="100" Maximum="15000" Increment="100" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Plunge feed (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlungeFeedMmMin, Mode=TwoWay}"
+                                       Minimum="50" Maximum="10000" Increment="50" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Safe / rapid Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.RapidZMm, Mode=TwoWay}"
+                                       Minimum="1" Maximum="500" Increment="1" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Spindle RPM" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.SpindleRpm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="30000" Increment="500" FormatString="F0" FontSize="11"/>
+                    </Grid>
+
+                    <!-- Placement -->
+                    <TextBlock Text="PLACEMENT" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <CheckBox Margin="8,0,8,4" Content="Reference Z from part top" FontSize="11"
+                              IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
+                        <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
+                                       Increment="1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"
+                              IsChecked="{Binding Subtractive.AutoFootprint, Mode=TwoWay}"/>
+
+                    <Button Margin="8,4,8,8"
+                            Content="Generate Mill Toolpath"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Carve the relief into the selected blank (relief milling)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.MillCommand}"/>
+
+                    <Button Margin="8,0,8,4"
+                            Content="Export Mill KRL"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+
+                    <Button Margin="8,0,8,4"
+                            Content="Send to Robot"
+                            Classes="SecondaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Save mill KRL to the cell robot"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
                 </StackPanel>
             </ScrollViewer>
 
@@ -1183,57 +1279,7 @@
                         </StackPanel>
                     </Expander>
 
-                    <!-- Mill-phase toolpath options -->
-                    <Expander Classes="SectionExpander"
-                              Header="MILL TOOLPATH"
-                              IsExpanded="False"
-                              Margin="0,0,0,4"
-                              IsVisible="{Binding $parent[Window].DataContext.Viewport.Lfam3ToolpathShowMillOptions}">
-                        <StackPanel>
-
-                        <TextBlock Text="Spindle finish paths — feed, stepdown, and subtractive KRL."
-                                   Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
-
-                        <Grid Margin="8,0,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Feed rate (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <NumericUpDown Grid.Column="1"
-                                           Value="{Binding Subtractive.FeedRateMmMin, Mode=TwoWay}"
-                                           Minimum="100" Maximum="15000" Increment="100"
-                                           FormatString="F0" FontSize="11"/>
-                        </Grid>
-
-                        <Grid Margin="8,0,8,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Stepdown (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                            <NumericUpDown Grid.Column="1"
-                                           Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
-                                           Minimum="0.1" Maximum="20" Increment="0.1"
-                                           FormatString="F1" FontSize="11"/>
-                        </Grid>
-
-                        <Button Margin="8,0,8,4"
-                                Content="Export Mill KRL"
-                                Classes="PrimaryButton"
-                                HorizontalAlignment="Stretch"
-                                ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
-                                Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
-
-                        <Button Margin="8,0,8,4"
-                                Content="Send to Robot"
-                                Classes="SecondaryButton"
-                                HorizontalAlignment="Stretch"
-                                ToolTip.Tip="Save mill KRL to the cell robot"
-                                Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
-
-                        </StackPanel>
-                    </Expander>
+                    <!-- Mill-phase relief milling lives in the SUBTRACTIVE tab (auto-selected on the Mill phase). -->
 
                     </StackPanel>
                 </StackPanel>

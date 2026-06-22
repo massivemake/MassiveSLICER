@@ -75,8 +75,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Robot = RightPanel.Settings.Robot;
         Viewport.LiveIo.AttachRobot(RightPanel.Settings.Robot);
 
-        // Give the viewport direct access to additive settings for the slice command.
+        // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
+        Viewport.SubtractiveSettings = RightPanel.Subtractive;
 
         // Load persisted material presets and restore the last selection.
         foreach (var preset in MaterialPresetsLoader.Load())

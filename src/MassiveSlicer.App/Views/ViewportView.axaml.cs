@@ -236,6 +236,7 @@ public partial class ViewportView : UserControl
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
             vm.OnSeamGuidesChanged = () => UpdateSeamGuideMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
+            vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
@@ -2180,6 +2181,111 @@ public partial class ViewportView : UserControl
             foreach (var item in sourceItems)
                 item.Visible = false;
 
+            _renderer.Select(null);
+            UpdateFocusOverlay();
+            GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
+    {
+        ToolDiameterMm    = (float)s.ToolDiameterMm,
+        ToolEnd           = s.BallEnd ? MassiveSlicer.Core.Models.ToolEndType.Ball
+                                      : MassiveSlicer.Core.Models.ToolEndType.Flat,
+        StepoverMm        = (float)s.StepoverMm,
+        StepdownMm        = (float)s.StepdownMm,
+        FinishAllowanceMm = (float)s.FinishAllowanceMm,
+        FeedRateMmMin     = (float)s.FeedRateMmMin,
+        PlungeFeedMmMin   = (float)s.PlungeFeedMmMin,
+        RapidZMm          = (float)s.RapidZMm,
+        SpindleRpm        = (float)s.SpindleRpm,
+        MaxDepthMm        = s.MaxDepthMm > 0 ? (float)s.MaxDepthMm : float.PositiveInfinity,
+    };
+
+    /// <summary>Generates a relief-milling toolpath from the subtractive heightmap, referencing
+    /// the selected blank's nominal top face (v1). Carves into the blank; the blank stays visible.</summary>
+    private async Task RunMillAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+        if (string.IsNullOrWhiteSpace(sub.HeightmapPath) || !System.IO.File.Exists(sub.HeightmapPath))
+        {
+            System.Console.Error.WriteLine("[mill] no heightmap selected (set one in the Subtractive tab).");
+            return;
+        }
+
+        vm.IsSlicing = true;
+        try
+        {
+            var selectedNode  = _renderer.SelectedNode;
+            var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
+            var sourceItems   = new List<OutlinerItemViewModel>();
+            foreach (var item in vm.OutlinerItems)
+            {
+                if (selectedNode is null || !item.Node.SelfAndDescendants().Any(n => n == selectedNode)) continue;
+                var snaps = CollectMeshSnapshots(item, requireVisible: true);
+                if (snaps.Count == 0) continue;
+                meshSnapshots.AddRange(snaps);
+                sourceItems.Add(item);
+            }
+            if (meshSnapshots.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] select the blank mesh first.");
+                return;
+            }
+
+            // World-space AABB of the selected blank (for auto reference plane + footprint).
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+            foreach (var (positions, _, world) in meshSnapshots)
+                foreach (var p in positions)
+                {
+                    var w = TransformPoint(p, world);
+                    if (w.X < minX) minX = w.X; if (w.X > maxX) maxX = w.X;
+                    if (w.Y < minY) minY = w.Y; if (w.Y > maxY) maxY = w.Y;
+                    if (w.Z > maxZ) maxZ = w.Z;
+                }
+
+            float refZ = sub.AutoReferenceFromTop ? maxZ : (float)sub.ReferencePlaneZ;
+            float ox   = sub.AutoFootprint ? minX : (float)sub.FootprintOriginX;
+            float oy   = sub.AutoFootprint ? minY : (float)sub.FootprintOriginY;
+            float fw   = sub.AutoFootprint ? (maxX - minX) : (float)sub.FootprintWidthMm;
+            float fl   = sub.AutoFootprint ? (maxY - minY) : (float)sub.FootprintLengthMm;
+
+            var map  = MassiveSlicer.App.Services.ReliefMapLoader.LoadFromImage(
+                sub.HeightmapPath, ox, oy, fw, fl, (float)sub.HeightScaleMm, sub.InvertHeightmap, refZ);
+            var mill = BuildMillSettings(sub);
+
+            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.ReliefMillSlicer.Slice(map, mill));
+            if (toolpath.Layers.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] relief produced no cuts (check height scale / footprint).");
+                return;
+            }
+
+            var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
+            var toolpathNode = new SceneNode
+            {
+                Name = $"Relief Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
+                Selectable = true,
+            };
+            vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
+            vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = toolpath,
+                RawToolpath   = toolpath,
+                Node          = toolpathNode,
+                BeadWidth     = (float)sub.ToolDiameterMm,
+                LayerHeight   = mill.StepdownMm,
+                MaterialColor = MapMaterialColor(null),
+            });
+
+            ApplyToolpathStats(vm, toolpath);
+            // Keep the blank visible — milling carves into it.
             _renderer.Select(null);
             UpdateFocusOverlay();
             GlCanvas.RequestNextFrameRendering();
@@ -4401,6 +4507,40 @@ public partial class ViewportView : UserControl
             wt.M41, wt.M42, wt.M43, wt.M44);
 
         _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        // Relief-milling toolpath: export a spindle program (LIN cuts + rapids), not extrusion.
+        bool isMill = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+        if (isMill && vm.SubtractiveSettings is { } sub)
+        {
+            int spindleIdx = cell.EffectiveTools
+                ?.FirstOrDefault(t => t.Name.Contains("Spindle", StringComparison.OrdinalIgnoreCase))?.KrlIndex ?? 3;
+
+            var millExport = new KrlExportSettings
+            {
+                ProgramName      = Path.GetFileNameWithoutExtension(path),
+                ToolDataIndex    = spindleIdx,
+                BaseDataIndex    = settings.BaseDataIndex,
+                IsMilling        = true,
+                SpindleRpm       = (float)sub.SpindleRpm,
+                CuttingFeedMmMin = (float)sub.FeedRateMmMin,
+                PlungeFeedMmMin  = (float)sub.PlungeFeedMmMin,
+                TravelSpeedMps   = (float)(settings.TravelSpeed / 1000.0),
+                ApproachZMm      = (float)sub.RapidZMm,
+                HomePosition     = settings.SelectedHomeAngles,
+                ApoCvel          = (int)settings.ApoCvel,
+                NodeWorldTransform = sysWt,
+                NodeOrigin       = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
+                RobrootWorldPos  = new System.Numerics.Vector3(
+                    cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z),
+                BaseDataOffset   = new System.Numerics.Vector3(
+                    cell.Bed.BaseData.X, cell.Bed.BaseData.Y, cell.Bed.BaseData.Z),
+                HeaderTemplate   = string.IsNullOrWhiteSpace(sub.HeaderTemplate) ? null : sub.HeaderTemplate,
+                FooterTemplate   = string.IsNullOrWhiteSpace(sub.FooterTemplate) ? null : sub.FooterTemplate,
+            };
+            var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
+            await File.WriteAllTextAsync(path, millKrl);
+            return;
+        }
 
         var selectedPreset = settings.SelectedPreset;
         var postProcess    = settings.KrlPostProcess.ToSettings();

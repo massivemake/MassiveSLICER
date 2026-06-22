@@ -96,7 +96,19 @@ public sealed record KrlExportSettings
     /// <summary>Emit <c>$ANOUT[4] = 0</c> before travel moves instead of a TRIGGER idle pulse.</summary>
     public bool TravelSetAnout4Zero { get; init; } = true;
 
-    /// <summary>Custom header template. Null/empty uses <see cref="KrlExporter.DefaultHeaderTemplate"/>.</summary>
+    // -- Milling (subtractive) --------------------------------------------------
+
+    /// <summary>When true, export a relief-milling program (LIN cuts + rapids, no extruder/temperature).</summary>
+    public bool IsMilling { get; init; }
+    /// <summary>Spindle RPM (informational; used by the mill header template token).</summary>
+    public float SpindleRpm { get; init; } = 12000f;
+    /// <summary>Cutting feed (mm/min) for mill moves.</summary>
+    public float CuttingFeedMmMin { get; init; } = 3000f;
+    /// <summary>Plunge feed (mm/min) for downward mill approaches.</summary>
+    public float PlungeFeedMmMin { get; init; } = 1000f;
+
+    /// <summary>Custom header template. Null/empty uses <see cref="KrlExporter.DefaultHeaderTemplate"/>
+    /// (or <see cref="KrlExporter.DefaultMillHeaderTemplate"/> when <see cref="IsMilling"/>).</summary>
     public string? HeaderTemplate { get; init; }
 
     /// <summary>Custom footer template. Null/empty uses <see cref="KrlExporter.DefaultFooterTemplate"/>.</summary>
@@ -175,6 +187,40 @@ public static class KrlExporter
         END
         """;
 
+    /// <summary>Default milling header — no extruder/temperature. Spindle on/RPM is a placeholder
+    /// the operator wires to the real channel (KUKA 0-10V -> ATV340 VFD).</summary>
+    public const string DefaultMillHeaderTemplate = """
+        &ACCESS RVP
+        DEF {{PROGRAM_NAME}} ()
+
+        ;FOLD INI
+        ;FOLD BASISTECH INI
+        GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+        INTERRUPT ON 3
+        BAS (#INITMOV,0 )
+        ;ENDFOLD (BASISTECH INI)
+        ;ENDFOLD (INI)
+
+        ;FOLD PRESETS
+        PDAT_ACT = {VEL 6,ACC 100,APO_DIST 50}
+        FDAT_ACT = {TOOL_NO {{TOOL_NO}},BASE_NO {{BASE_NO}},IPO_FRAME #BASE}
+        BAS (#PTP_PARAMS,6)
+        $ADVANCE=5
+        $APO.CVEL={{APO_CVEL}}
+        $ACC.CP = 5.0
+        $VEL.CP={{FEED_MPS}}
+        ;ENDFOLD (PRESETS)
+
+        ;FOLD SPINDLE ON -- wire to the real spindle channel (e.g. $ANOUT[n] = 0-10V for {{SPINDLE_RPM}} RPM)
+        ;$ANOUT[n] = <0-10V for {{SPINDLE_RPM}} RPM>
+        ;WAIT SEC 2 ; spindle spin-up
+        ;ENDFOLD
+
+        BAS(#BASE,{{BASE_NO}})
+        BAS(#VEL_PTP,10)
+        {{HOME_PTP}}
+        """;
+
     public static string Export(Toolpath toolpath, KrlExportSettings s)
     {
         var sb   = new StringBuilder(64 * 1024);
@@ -185,6 +231,13 @@ public static class KrlExporter
         var firstEntry = FindFirstExtrude(toolpath);
         if (firstEntry is null)
         {
+            WriteFooter(sb, s);
+            return sb.ToString();
+        }
+
+        if (s.IsMilling)
+        {
+            WriteMillBody(sb, toolpath, s);
             WriteFooter(sb, s);
             return sb.ToString();
         }
@@ -372,8 +425,48 @@ public static class KrlExporter
 
     private static void WriteHeader(StringBuilder sb, string name, KrlExportSettings s)
     {
-        var template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultHeaderTemplate : s.HeaderTemplate!;
+        var fallback = s.IsMilling ? DefaultMillHeaderTemplate : DefaultHeaderTemplate;
+        var template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? fallback : s.HeaderTemplate!;
         AppendRenderedTemplate(sb, RenderHeaderTemplate(template, name, s));
+    }
+
+    /// <summary>Emits a relief-milling body: LIN cuts at the cutting feed, rapids/plunges for
+    /// repositioning. No extruder/temperature/wipe logic. Top-down spindle (layer PlaneNormal).</summary>
+    private static void WriteMillBody(StringBuilder sb, Toolpath toolpath, KrlExportSettings s)
+    {
+        string cutV    = (s.CuttingFeedMmMin / 60000f).ToString("F6", Inv);
+        string plungeV = (s.PlungeFeedMmMin / 60000f).ToString("F6", Inv);
+        string rapidV  = s.TravelSpeedMps.ToString("F6", Inv);
+
+        // Rapid to safe Z above the first cut.
+        var first = FindFirstExtrude(toolpath)!.Value;
+        var (a0, b0, c0) = KukaAbc(first.layer.PlaneNormal, s);
+        var p0 = ToBase(first.move.From, s);
+        sb.AppendLine($"$VEL.CP = {rapidV}");
+        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0));
+        sb.AppendLine();
+
+        foreach (var layer in toolpath.Layers)
+        {
+            var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
+            foreach (var move in layer.Moves)
+            {
+                var to = ToBase(move.To, s);
+                if (move.Kind == MoveKind.Mill)
+                {
+                    sb.AppendLine($"$VEL.CP = {cutV}");
+                    sb.AppendLine(FormatLin(to, la, lb, lc));
+                }
+                else // Travel: rapid (up/over) or plunge (down)
+                {
+                    bool plunging = move.To.Z < move.From.Z - 1e-4f;
+                    sb.AppendLine(plunging ? ";plunge" : ";rapid");
+                    sb.AppendLine($"$VEL.CP = {(plunging ? plungeV : rapidV)}");
+                    sb.AppendLine(FormatLinExact(to, la, lb, lc));
+                }
+            }
+        }
+        sb.AppendLine();
     }
 
     private static void WriteFooter(StringBuilder sb, KrlExportSettings s)
@@ -407,6 +500,8 @@ public static class KrlExporter
             .Replace("{{TEMP3_C}}",       s.Temperature3.ToString("F0", Inv))
             .Replace("{{RPM_IDLE_V}}",    ResolveAnout4IdleText(s))
             .Replace("{{PRINT_SPEED}}",   s.PrintSpeedMps.ToString("F6", Inv))
+            .Replace("{{FEED_MPS}}",      (s.CuttingFeedMmMin / 60000f).ToString("F6", Inv))
+            .Replace("{{SPINDLE_RPM}}",   s.SpindleRpm.ToString("F0", Inv))
             .Replace("{{APO_CVEL}}",      s.ApoCvel.ToString(Inv))
             .Replace("{{HOME_PTP}}",      homePtp);
     }
@@ -415,7 +510,7 @@ public static class KrlExporter
     {
         foreach (var layer in tp.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
                     return (move, layer);
         return null;
     }
