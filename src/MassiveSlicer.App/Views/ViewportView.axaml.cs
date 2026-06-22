@@ -2448,6 +2448,16 @@ public partial class ViewportView : UserControl
             GlCanvas.RequestNextFrameRendering();
             int moves = toolpath.Layers.Sum(l => l.Moves.Count);
             System.Console.Error.WriteLine($"[mill] multi-axis surface pass: {moves:N0} moves.");
+
+            // Fail-rate analysis: how much of the ideal surface the tool over-cuts vs leaves proud.
+            float toolR = (float)sub.ToolDiameterMm / 2f;
+            float tol   = (float)sub.AnalysisToleranceMm;
+            var report  = await Task.Run(() => MassiveSlicer.Core.Slicing.ToolpathSurfaceDeviation.Analyze(
+                result.Positions, toolpath, toolR, tol));
+            string summary = $"Fail {report.FailPct:F1}%  —  gouge {report.GougePct:F1}% (max {report.MaxGougeMm:F2} mm) / " +
+                             $"residual {report.ResidualPct:F1}% (max {report.MaxResidualMm:F2} mm)  @ tol {report.ToleranceMm:F2} mm";
+            sub.MillAnalysisText = summary;
+            System.Console.Error.WriteLine($"[mill] {summary}");
         }
         finally
         {

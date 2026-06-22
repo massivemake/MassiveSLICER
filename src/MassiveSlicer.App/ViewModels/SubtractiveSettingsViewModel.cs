@@ -78,6 +78,15 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
     /// </summary>
     public double DisplacementDistanceMm { get => _displacementDistanceMm; set => SetField(ref _displacementDistanceMm, value); }
 
+    private double _analysisToleranceMm = 0.1;
+    private string _millAnalysisText = string.Empty;
+
+    /// <summary>Tolerance band (mm) for the gouge/residual fail-rate analysis after a multi-axis pass.</summary>
+    public double AnalysisToleranceMm { get => _analysisToleranceMm; set => SetField(ref _analysisToleranceMm, value); }
+
+    /// <summary>Human-readable result of the last multi-axis surface deviation analysis (shown in the panel).</summary>
+    public string MillAnalysisText { get => _millAnalysisText; set => SetField(ref _millAnalysisText, value); }
+
     /// <summary>Use the selected part's top-face Z as the reference plane.</summary>
     public bool   AutoReferenceFromTop { get => _autoReferenceFromTop; set => SetField(ref _autoReferenceFromTop, value); }
     /// <summary>Manual reference plane Z (world mm) when <see cref="AutoReferenceFromTop"/> is false.</summary>
