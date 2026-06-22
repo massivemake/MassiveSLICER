@@ -6,21 +6,33 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.Slicing;
 
 /// <summary>
-/// Generates a multi-axis surface-following finish toolpath over a displaced surface. The mesh
-/// is rastered top-down at the tool stepover; at each contact the ball-nose tip rides the surface
-/// point and the <b>tool axis follows the surface normal</b> (carried on <see cref="ToolpathMove.Normal"/>,
-/// which the KRL exporter turns into per-move A/B/C). For a ball-nose aligned to the normal the tip
-/// coincides with the contact point, so the path points are exactly the surface samples.
+/// Generates a multi-axis surface-following finish toolpath over a displaced surface. The mesh is
+/// rastered along one or more <b>view directions</b>; for each, the ball-nose tip rides the front-most
+/// surface facing that view and the <b>tool axis follows the surface normal</b> (carried on
+/// <see cref="ToolpathMove.Normal"/>, which the KRL exporter turns into per-move A/B/C). For a
+/// ball-nose aligned to the normal the tip coincides with the contact, so path points are exactly the
+/// surface samples.
 /// <para>
-/// v1 drive is a single top-down raster (handles relief / textured detail and tilts the spindle to
-/// stay normal to the surface). Full wrap-around of vertical walls and undercuts needs additional
-/// drive directions and is a later step.
+/// <see cref="Generate"/> is the single top-down drive (relief / textured detail).
+/// <see cref="GenerateMultiAxis"/> adds side drives (top + the four walls by default) so vertical
+/// walls are sampled at full density and surfaces facing outward — including undercuts that some
+/// view can see — get covered, each with the spindle tilted to that face. Per-view approach/retract
+/// runs along the view axis. Collision avoidance for deep undercuts is still future work.
 /// </para>
 /// </summary>
 public static class SurfaceFollowMillGenerator
 {
     private readonly record struct Hit(Vector3 Point, Vector3 Normal);
 
+    /// <summary>Default drive directions: top plus the four side walls (outward = where the tool comes from).</summary>
+    public static readonly IReadOnlyList<Vector3> DefaultViewDirs =
+    [
+        Vector3.UnitZ,
+        Vector3.UnitX, -Vector3.UnitX,
+        Vector3.UnitY, -Vector3.UnitY,
+    ];
+
+    /// <summary>Single top-down (+Z) surface-follow pass.</summary>
     public static Toolpath Generate(
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<Vector3> normals,
@@ -31,10 +43,63 @@ public static class SurfaceFollowMillGenerator
         var tp = new Toolpath();
         if (positions.Count == 0 || indices.Count < 3) return tp;
 
+        var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
+        // Top-down: take the topmost surface regardless of facing (-1 = no facing filter).
+        layer.Moves.AddRange(RasterView(positions, normals, indices, mill, sampleSpacingMm, Vector3.UnitZ, -1f));
+        if (layer.Moves.Count > 0) tp.Layers.Add(layer);
+        return tp;
+    }
+
+    /// <summary>
+    /// Multi-axis wrap-around: one surface-follow pass per view direction (top + walls by default),
+    /// each capturing the faces pointing toward it. All passes share one layer; per-move tool axes
+    /// carry the real orientation.
+    /// </summary>
+    public static Toolpath GenerateMultiAxis(
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector3> normals,
+        IReadOnlyList<int> indices,
+        MillSettings mill,
+        float? sampleSpacingMm = null,
+        IReadOnlyList<Vector3>? viewDirs = null,
+        float facingMin = 0.2f)
+    {
+        var tp = new Toolpath();
+        if (positions.Count == 0 || indices.Count < 3) return tp;
+
+        var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
+        foreach (var v in viewDirs ?? DefaultViewDirs)
+        {
+            var basis = new ViewBasis(v);
+            // Raster in the view's frame (its +Z is the approach axis), then map moves to world.
+            int n = positions.Count;
+            var vp = new Vector3[n];
+            var vn = new Vector3[n];
+            for (int i = 0; i < n; i++) { vp[i] = basis.ToView(positions[i]); vn[i] = basis.ToView(normals[i]); }
+
+            foreach (var m in RasterView(vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, facingMin))
+            {
+                layer.Moves.Add(m with
+                {
+                    From   = basis.ToWorld(m.From),
+                    To     = basis.ToWorld(m.To),
+                    Normal = m.Normal == Vector3.Zero ? Vector3.Zero : basis.ToWorld(m.Normal),
+                });
+            }
+        }
+        if (layer.Moves.Count > 0) tp.Layers.Add(layer);
+        return tp;
+    }
+
+    // Rasters the surface from +Z in the given coordinate space; returns moves in that same space.
+    // facingMin < 0 disables the normal-facing filter (top-down takes the topmost surface either way).
+    private static List<ToolpathMove> RasterView(
+        IReadOnlyList<Vector3> positions, IReadOnlyList<Vector3> normals, IReadOnlyList<int> indices,
+        MillSettings mill, float? sampleSpacingMm, Vector3 up, float facingMin)
+    {
         float stepover = MathF.Max(0.1f, mill.StepoverMm);
         float sample   = MathF.Max(0.05f, sampleSpacingMm ?? stepover);
 
-        // World XY bounds + top Z.
         float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
         foreach (var p in positions)
         {
@@ -44,53 +109,50 @@ public static class SurfaceFollowMillGenerator
         }
         float safeZ = maxZ + MathF.Max(1f, mill.RapidZMm);
 
-        var grid = new XyTriangleGrid(positions, normals, indices, minX, minY, maxX, maxY, stepover);
+        var grid = new XyTriangleGrid(positions, normals, indices, minX, minY, maxX, maxY, stepover, facingMin);
 
-        var layer = new ToolpathLayer(0, maxZ) { PlaneNormal = Vector3.UnitZ };
+        var moves = new List<ToolpathMove>();
         Vector3? cursor = null;
         int rows = Math.Max(1, (int)MathF.Ceiling((maxY - minY) / stepover));
         int cols = Math.Max(1, (int)MathF.Ceiling((maxX - minX) / sample));
 
         for (int r = 0; r <= rows; r++)
         {
-            float y = minY + r * stepover;
-            if (y > maxY) y = maxY;
-
-            // Boustrophedon: reverse X each row.
+            float y = MathF.Min(minY + r * stepover, maxY);
             var rowHits = new List<Hit>();
             for (int c = 0; c <= cols; c++)
             {
                 int cc = (r & 1) == 0 ? c : cols - c;
-                float x = minX + cc * sample;
-                if (x > maxX) x = maxX;
+                float x = MathF.Min(minX + cc * sample, maxX);
                 if (grid.QueryTop(x, y, out var hit)) rowHits.Add(hit);
-                else FlushSegment(layer, rowHits, ref cursor, safeZ);
+                else FlushSegment(moves, rowHits, ref cursor, safeZ);
             }
-            FlushSegment(layer, rowHits, ref cursor, safeZ);
+            FlushSegment(moves, rowHits, ref cursor, safeZ);
         }
-
-        // Final retract.
         if (cursor is { } last)
-            layer.Moves.Add(new ToolpathMove(last, new Vector3(last.X, last.Y, safeZ), MoveKind.Travel) { IsZHop = true });
-
-        if (layer.Moves.Count > 0) tp.Layers.Add(layer);
-        return tp;
+            moves.Add(new ToolpathMove(last, new Vector3(last.X, last.Y, safeZ), MoveKind.Travel) { IsZHop = true });
+        return moves;
     }
 
-    // Emits one continuous contact run as approach + cuts; clears the buffer.
-    private static void FlushSegment(ToolpathLayer layer, List<Hit> hits, ref Vector3? cursor, float safeZ)
+    private static float TopZ(IReadOnlyList<Vector3> positions)
+    {
+        float maxZ = float.MinValue;
+        foreach (var p in positions) if (p.Z > maxZ) maxZ = p.Z;
+        return maxZ;
+    }
+
+    private static void FlushSegment(List<ToolpathMove> moves, List<Hit> hits, ref Vector3? cursor, float safeZ)
     {
         if (hits.Count == 0) return;
 
         var first = hits[0];
-        // Retract the previous run to safe height, then rapid across.
         if (cursor is { } cur)
         {
             var up = new Vector3(cur.X, cur.Y, safeZ);
             if (cur.Z < safeZ - 1e-3f)
-                layer.Moves.Add(new ToolpathMove(cur, up, MoveKind.Travel) { IsZHop = true });
+                moves.Add(new ToolpathMove(cur, up, MoveKind.Travel) { IsZHop = true });
             var over = new Vector3(first.Point.X, first.Point.Y, safeZ);
-            layer.Moves.Add(new ToolpathMove(up, over, MoveKind.Travel));
+            moves.Add(new ToolpathMove(up, over, MoveKind.Travel));
             cursor = over;
         }
         else
@@ -98,17 +160,31 @@ public static class SurfaceFollowMillGenerator
             cursor = new Vector3(first.Point.X, first.Point.Y, safeZ);
         }
 
-        // Descend onto the first contact, then cut along the run.
-        layer.Moves.Add(new ToolpathMove(cursor.Value, first.Point, MoveKind.Travel) { IsZHop = true });
+        moves.Add(new ToolpathMove(cursor.Value, first.Point, MoveKind.Travel) { IsZHop = true });
         var prev = first.Point;
         for (int i = 1; i < hits.Count; i++)
         {
             var h = hits[i];
-            layer.Moves.Add(new ToolpathMove(prev, h.Point, MoveKind.Mill) { Normal = h.Normal });
+            moves.Add(new ToolpathMove(prev, h.Point, MoveKind.Mill) { Normal = h.Normal });
             prev = h.Point;
         }
         cursor = prev;
         hits.Clear();
+    }
+
+    /// <summary>An orthonormal frame whose +Z is the view/approach direction.</summary>
+    private readonly struct ViewBasis
+    {
+        public readonly Vector3 Right, Up, Fwd;
+        public ViewBasis(Vector3 v)
+        {
+            Fwd = v.LengthSquared() > 1e-9f ? Vector3.Normalize(v) : Vector3.UnitZ;
+            var a = MathF.Abs(Fwd.Z) > 0.9f ? Vector3.UnitX : Vector3.UnitZ;
+            Right = Vector3.Normalize(Vector3.Cross(a, Fwd));
+            Up    = Vector3.Cross(Fwd, Right);
+        }
+        public Vector3 ToView(Vector3 p) => new(Vector3.Dot(p, Right), Vector3.Dot(p, Up), Vector3.Dot(p, Fwd));
+        public Vector3 ToWorld(Vector3 p) => p.X * Right + p.Y * Up + p.Z * Fwd;
     }
 
     /// <summary>Uniform XY grid bucketing triangles for fast top-surface (downward ray) queries.</summary>
@@ -117,14 +193,14 @@ public static class SurfaceFollowMillGenerator
         private readonly IReadOnlyList<Vector3> _pos;
         private readonly IReadOnlyList<Vector3> _nrm;
         private readonly IReadOnlyList<int> _idx;
-        private readonly float _minX, _minY, _cell;
+        private readonly float _minX, _minY, _cell, _facingMin;
         private readonly int _w, _h;
         private readonly List<int>[] _cells;
 
         public XyTriangleGrid(IReadOnlyList<Vector3> pos, IReadOnlyList<Vector3> nrm, IReadOnlyList<int> idx,
-                              float minX, float minY, float maxX, float maxY, float cell)
+                              float minX, float minY, float maxX, float maxY, float cell, float facingMin)
         {
-            _pos = pos; _nrm = nrm; _idx = idx; _minX = minX; _minY = minY;
+            _pos = pos; _nrm = nrm; _idx = idx; _minX = minX; _minY = minY; _facingMin = facingMin;
             _cell = MathF.Max(cell, 1e-3f);
             _w = Math.Max(1, (int)MathF.Ceiling((maxX - minX) / _cell));
             _h = Math.Max(1, (int)MathF.Ceiling((maxY - minY) / _cell));
@@ -147,7 +223,7 @@ public static class SurfaceFollowMillGenerator
         private int CellX(float x) => Math.Clamp((int)((x - _minX) / _cell), 0, _w - 1);
         private int CellY(float y) => Math.Clamp((int)((y - _minY) / _cell), 0, _h - 1);
 
-        /// <summary>Highest surface point + interpolated normal directly above/below (x,y), if any.</summary>
+        /// <summary>Highest surface point + interpolated normal above (x,y) whose normal faces the view.</summary>
         public bool QueryTop(float x, float y, out Hit hit)
         {
             hit = default;
@@ -159,7 +235,6 @@ public static class SurfaceFollowMillGenerator
             foreach (int t in bucket)
             {
                 Vector3 a = _pos[_idx[t * 3]], b = _pos[_idx[t * 3 + 1]], c = _pos[_idx[t * 3 + 2]];
-                // 2D barycentric of (x,y) in the triangle's XY projection.
                 float d = (b.Y - c.Y) * (a.X - c.X) + (c.X - b.X) * (a.Y - c.Y);
                 if (MathF.Abs(d) < 1e-9f) continue;
                 float u = ((b.Y - c.Y) * (x - c.X) + (c.X - b.X) * (y - c.Y)) / d;
@@ -169,11 +244,15 @@ public static class SurfaceFollowMillGenerator
 
                 float z = u * a.Z + v * b.Z + w * c.Z;
                 if (z <= bestZ) continue;
-                bestZ = z;
+
                 Vector3 na = _nrm[_idx[t * 3]], nb = _nrm[_idx[t * 3 + 1]], nc = _nrm[_idx[t * 3 + 2]];
-                Vector3 n = u * na + v * nb + w * nc;
-                if (n.LengthSquared() < 1e-12f) n = Vector3.UnitZ;
-                hit = new Hit(new Vector3(x, y, z), Vector3.Normalize(n));
+                Vector3 nrm = u * na + v * nb + w * nc;
+                if (nrm.LengthSquared() < 1e-12f) nrm = Vector3.UnitZ;
+                nrm = Vector3.Normalize(nrm);
+                if (_facingMin >= 0f && nrm.Z < _facingMin) continue;   // face must point toward the view
+
+                bestZ = z;
+                hit = new Hit(new Vector3(x, y, z), nrm);
                 found = true;
             }
             return found;
