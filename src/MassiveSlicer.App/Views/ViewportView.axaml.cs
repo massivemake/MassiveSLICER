@@ -218,6 +218,8 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.LightAzimuth)        or
                     nameof(ViewportViewModel.LightElevation)      or
                     nameof(ViewportViewModel.LightIntensity)      or
+                    nameof(ViewportViewModel.Exposure)            or
+                    nameof(ViewportViewModel.IblIntensity)        or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
                     nameof(ViewportViewModel.ShowSeam)               or
@@ -630,6 +632,8 @@ public partial class ViewportView : UserControl
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
             _renderer.LightIntensity = vm.LightIntensity;
+            _renderer.Exposure       = vm.Exposure;
+            _renderer.IblIntensity   = vm.IblIntensity;
 
             if (_renderer.BackdropPath != vm.ActiveBackdropPath)
             {

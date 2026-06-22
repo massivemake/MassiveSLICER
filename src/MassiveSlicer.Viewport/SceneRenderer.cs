@@ -180,6 +180,22 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Directional light multiplier applied to diffuse and specular (1 = default).</summary>
     public float LightIntensity { get; set; } = 1f;
 
+    private float _exposure = 1f;
+    /// <summary>Final-render exposure multiplier (pre-tonemap). Marks appearance dirty on change.</summary>
+    public float Exposure
+    {
+        get => _exposure;
+        set { if (_exposure != value) { _exposure = value; _shaderAppearanceDirty = true; } }
+    }
+
+    private float _iblIntensity = 1f;
+    /// <summary>Environment / image-based-lighting gain. Marks appearance dirty on change.</summary>
+    public float IblIntensity
+    {
+        get => _iblIntensity;
+        set { if (_iblIntensity != value) { _iblIntensity = value; _shaderAppearanceDirty = true; } }
+    }
+
     private Vector3 ComputeLightDir()
     {
         float az = MathHelper.DegreesToRadians(LightAzimuth);
@@ -1237,6 +1253,8 @@ public sealed class SceneRenderer : IDisposable
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
+            mesh.Exposure         = _exposure;
+            mesh.IblGain          = _iblIntensity;
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
             mesh.HasEnvMap        = hasEnv && n.Selectable;
             // Cell geometry stays on the cheap path for Standard *and* debug modes
