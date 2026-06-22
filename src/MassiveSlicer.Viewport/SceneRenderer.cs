@@ -1250,6 +1250,7 @@ public sealed class SceneRenderer : IDisposable
     {
         bool forceLayerPreview = root.LayerPreview;
         bool debugChannel = IsMaterialDebug(_shaderMode);
+        bool wireframe = _shaderMode == ShaderMode.Wireframe;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
@@ -1257,12 +1258,13 @@ public sealed class SceneRenderer : IDisposable
             mesh.IblGain          = _iblIntensity;
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
             mesh.HasEnvMap        = hasEnv && n.Selectable;
-            // Cell geometry stays on the cheap path for Standard *and* debug modes
-            // (debug channels are meant to inspect imported meshes, not the robot).
-            mesh.FastCellMode     = !n.Selectable && (_shaderMode == ShaderMode.Standard || debugChannel);
+            // Cell geometry stays on the cheap path for Standard + inspect modes
+            // (debug channels / wireframe are meant to inspect imported meshes, not the robot).
+            mesh.FastCellMode     = !n.Selectable && (_shaderMode == ShaderMode.Standard || debugChannel || wireframe);
             mesh.LayerPreviewMode = false;
             mesh.MaterialChannel  = 0;
             mesh.SuppressTextures = false;
+            mesh.WireframeMode    = false;
 
             if (forceLayerPreview)
             {
@@ -1274,6 +1276,14 @@ public sealed class SceneRenderer : IDisposable
                 mesh.LayerZMax           = _layerColorZMax;
                 mesh.LayerBoundaryCount  = _layerBoundaryCount;
                 mesh.Metallic            = 0f;
+                continue;
+            }
+
+            // Flat-shaded + wireframe topology view (inspect imported meshes only).
+            if (wireframe && n.Selectable)
+            {
+                mesh.NormalsMode   = false;
+                mesh.WireframeMode = true;
                 continue;
             }
 

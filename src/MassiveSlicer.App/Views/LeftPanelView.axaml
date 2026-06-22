@@ -406,6 +406,14 @@
                                     Command="{Binding DataContext.Viewport.SetShaderModeCommand,
                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                     CommandParameter="UvChecker"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Wireframe"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Wireframe"
+                                    ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
                         </WrapPanel>
 
                         <!-- Lighting -->

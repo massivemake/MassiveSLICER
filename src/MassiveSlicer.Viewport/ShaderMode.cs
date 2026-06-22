@@ -34,4 +34,6 @@ public enum ShaderMode
     Emission,
     /// <summary>Procedural UV checker (magenta where UVs are missing).</summary>
     UvChecker,
+    /// <summary>Flat (faceted) shading from face normals + a wireframe overlay — inspect topology.</summary>
+    Wireframe,
 }
