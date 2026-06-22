@@ -68,6 +68,16 @@ public static class SurfaceFollowMillGenerator
         if (positions.Count == 0 || indices.Count < 3) return tp;
 
         var layer = new ToolpathLayer(0, TopZ(positions)) { PlaneNormal = Vector3.UnitZ };
+
+        // Coverage dedup: a face seen by several views (e.g. a ~45deg wall the top AND a side both
+        // reach) must be cut once, not once per view. Track world cells (~stepover) claimed by
+        // earlier views; later views skip already-covered cells. A view never blocks itself, so its
+        // own passes stay continuous.
+        var covered = new HashSet<(int, int, int)>();
+        float cell  = MathF.Max(0.1f, mill.StepoverMm);
+        (int, int, int) Cell(Vector3 w) =>
+            ((int)MathF.Floor(w.X / cell), (int)MathF.Floor(w.Y / cell), (int)MathF.Floor(w.Z / cell));
+
         foreach (var v in viewDirs ?? DefaultViewDirs)
         {
             var basis = new ViewBasis(v);
@@ -77,7 +87,16 @@ public static class SurfaceFollowMillGenerator
             var vn = new Vector3[n];
             for (int i = 0; i < n; i++) { vp[i] = basis.ToView(positions[i]); vn[i] = basis.ToView(normals[i]); }
 
-            foreach (var m in RasterView(vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, facingMin))
+            var claimedThisView = new HashSet<(int, int, int)>();
+            bool Claim(Vector3 viewPoint)
+            {
+                var key = Cell(basis.ToWorld(viewPoint));
+                if (covered.Contains(key)) return false;   // an earlier view already cut here
+                claimedThisView.Add(key);
+                return true;
+            }
+
+            foreach (var m in RasterView(vp, vn, indices, mill, sampleSpacingMm, Vector3.UnitZ, facingMin, Claim))
             {
                 layer.Moves.Add(m with
                 {
@@ -86,6 +105,7 @@ public static class SurfaceFollowMillGenerator
                     Normal = m.Normal == Vector3.Zero ? Vector3.Zero : basis.ToWorld(m.Normal),
                 });
             }
+            covered.UnionWith(claimedThisView);   // hand this view's coverage to later views
         }
         if (layer.Moves.Count > 0) tp.Layers.Add(layer);
         return tp;
@@ -95,7 +115,8 @@ public static class SurfaceFollowMillGenerator
     // facingMin < 0 disables the normal-facing filter (top-down takes the topmost surface either way).
     private static List<ToolpathMove> RasterView(
         IReadOnlyList<Vector3> positions, IReadOnlyList<Vector3> normals, IReadOnlyList<int> indices,
-        MillSettings mill, float? sampleSpacingMm, Vector3 up, float facingMin)
+        MillSettings mill, float? sampleSpacingMm, Vector3 up, float facingMin,
+        Func<Vector3, bool>? claim = null)
     {
         float stepover = MathF.Max(0.1f, mill.StepoverMm);
         float sample   = MathF.Max(0.05f, sampleSpacingMm ?? stepover);
@@ -124,8 +145,11 @@ public static class SurfaceFollowMillGenerator
             {
                 int cc = (r & 1) == 0 ? c : cols - c;
                 float x = MathF.Min(minX + cc * sample, maxX);
-                if (grid.QueryTop(x, y, out var hit)) rowHits.Add(hit);
-                else FlushSegment(moves, rowHits, ref cursor, safeZ);
+                // A covered cell (claimed by an earlier view) breaks the run, like a miss.
+                if (grid.QueryTop(x, y, out var hit) && (claim is null || claim(hit.Point)))
+                    rowHits.Add(hit);
+                else
+                    FlushSegment(moves, rowHits, ref cursor, safeZ);
             }
             FlushSegment(moves, rowHits, ref cursor, safeZ);
         }

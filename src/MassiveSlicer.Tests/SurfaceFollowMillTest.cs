@@ -70,6 +70,28 @@ public class SurfaceFollowMillTest(ITestOutputHelper output)
     }
 
     [Fact]
+    public void MultiAxis_DedupsOverlapBetweenViews()
+    {
+        // A 45-deg ramp (z = x), normal faces both +Z and -X, so the top and -X views both reach it.
+        var n = Vector3.Normalize(new Vector3(-1f, 0f, 1f));
+        Vector3[] pos = [new(0, 0, 0), new(20, 0, 20), new(20, 20, 20), new(0, 20, 0)];
+        Vector3[] nrm = [n, n, n, n];
+        int[] idx = [0, 1, 2, 0, 2, 3];
+
+        static int Cuts(Toolpath tp) => tp.Layers.Sum(l => l.Moves.Count(m => m.Kind == MoveKind.Mill));
+
+        var topOnly  = Cuts(SurfaceFollowMillGenerator.GenerateMultiAxis(pos, nrm, idx, Mill(), viewDirs: [Vector3.UnitZ]));
+        var sideOnly = Cuts(SurfaceFollowMillGenerator.GenerateMultiAxis(pos, nrm, idx, Mill(), viewDirs: [-Vector3.UnitX]));
+        var combined = Cuts(SurfaceFollowMillGenerator.GenerateMultiAxis(pos, nrm, idx, Mill(), viewDirs: [Vector3.UnitZ, -Vector3.UnitX]));
+        output.WriteLine($"top={topOnly} side={sideOnly} combined(deduped)={combined}");
+
+        Assert.True(topOnly > 0 && sideOnly > 0, "both views should independently reach the ramp");
+        // Dedup: the combined pass cuts the shared face once, not top+side twice.
+        Assert.True(combined < topOnly + sideOnly, "overlap between views should be deduped");
+        Assert.True(combined >= topOnly, "combined must still cover at least what the top view did");
+    }
+
+    [Fact]
     public void FlatPlane_ToolAxisIsVertical()
     {
         Vector3[] pos = [new(0, 0, 2), new(30, 0, 2), new(30, 30, 2), new(0, 30, 2)];
