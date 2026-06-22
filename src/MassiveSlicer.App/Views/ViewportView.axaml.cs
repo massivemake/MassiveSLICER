@@ -238,6 +238,7 @@ public partial class ViewportView : UserControl
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
+            vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
             vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
@@ -2298,28 +2299,25 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Builds the displaced surface for the selected model (low-poly mesh pushed along its
-    /// normals by a PBR-map height field) and adds it to the scene as a preview mesh — the
-    /// detailed geometry a multi-axis mill will follow. Works in world space so the displacement
-    /// distance is true mm regardless of the model's transform.
+    /// Builds the world-space displaced surface for the selected model (low-poly mesh pushed along
+    /// its normals by a PBR-map height field) — the detailed geometry both the preview and the
+    /// multi-axis mill use. World space, so the displacement distance is true mm regardless of the
+    /// model's transform. Returns null (with a logged reason) when the selection can't be displaced.
     /// </summary>
-    private async Task RunPreviewDisplacedAsync(ViewportViewModel vm)
+    private async Task<(MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Result result, MeshData source)?>
+        ComputeDisplacedSurfaceAsync(ViewportViewModel vm, SubtractiveSettingsViewModel sub)
     {
-        if (vm.IsSlicing) return;
-        var sub = vm.SubtractiveSettings;
-        if (sub is null) return;
-
         if (_renderer.SelectedNode is not { } selected)
         {
             System.Console.Error.WriteLine("[displace] select a model first.");
-            return;
+            return null;
         }
         var meshNode = selected.SelfAndDescendants()
             .FirstOrDefault(n => n.Mesh?.PickingData is { Uvs: not null });
         if (meshNode?.Mesh?.PickingData is not { } mesh || mesh.Uvs is null)
         {
             System.Console.Error.WriteLine("[displace] selected model has no UVs — cannot sample its maps.");
-            return;
+            return null;
         }
 
         var height = MassiveSlicer.App.Services.PbrHeightFieldFactory.FromMaterial(
@@ -2330,38 +2328,51 @@ public partial class ViewportView : UserControl
         {
             System.Console.Error.WriteLine(
                 "[displace] no displacement/height image supplied and no normal map on this model.");
-            return;
+            return null;
         }
+
+        var world = meshNode.WorldTransform;
+        float distance = (float)sub.DisplacementDistanceMm;
+        int vcount = mesh.Positions.Length;
+
+        // Lift to world space so the displacement distance is true mm.
+        var wpos = new NVec3[vcount];
+        var wnrm = new NVec3[vcount];
+        var uv   = new System.Numerics.Vector2[vcount];
+        for (int i = 0; i < vcount; i++)
+        {
+            wpos[i] = TransformPoint(mesh.Positions[i], world);
+            wnrm[i] = TransformNormalWorld(mesh.Normals[i], world);
+            uv[i]   = new System.Numerics.Vector2(mesh.Uvs[i].X, mesh.Uvs[i].Y);
+        }
+        int[] idx = mesh.Indices is { } mi
+            ? Array.ConvertAll(mi, u => (int)u)
+            : System.Linq.Enumerable.Range(0, vcount).ToArray();
+
+        var result = await Task.Run(() => MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Build(
+            wpos, wnrm, uv, idx, height, distance, bias: 0f));
+
+        if (result.VertexCount == 0)
+        {
+            System.Console.Error.WriteLine("[displace] produced no geometry.");
+            return null;
+        }
+        return (result, mesh);
+    }
+
+    /// <summary>Builds the displaced surface and adds it to the scene as a textured preview mesh.</summary>
+    private async Task RunPreviewDisplacedAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
 
         vm.IsSlicing = true;
         try
         {
-            var world = meshNode.WorldTransform;
+            if (await ComputeDisplacedSurfaceAsync(vm, sub) is not { } built) return;
+            var (result, mesh) = built;
             float distance = (float)sub.DisplacementDistanceMm;
-            int vcount = mesh.Positions.Length;
-
-            // Lift to world space so the displacement distance is true mm.
-            var wpos = new NVec3[vcount];
-            var wnrm = new NVec3[vcount];
-            var uv   = new System.Numerics.Vector2[vcount];
-            for (int i = 0; i < vcount; i++)
-            {
-                wpos[i] = TransformPoint(mesh.Positions[i], world);
-                wnrm[i] = TransformNormalWorld(mesh.Normals[i], world);
-                uv[i]   = new System.Numerics.Vector2(mesh.Uvs[i].X, mesh.Uvs[i].Y);
-            }
-            int[] idx = mesh.Indices is { } mi
-                ? Array.ConvertAll(mi, u => (int)u)
-                : System.Linq.Enumerable.Range(0, vcount).ToArray();
-
-            var result = await Task.Run(() => MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Build(
-                wpos, wnrm, uv, idx, height, distance, bias: 0f));
-
-            if (result.VertexCount == 0)
-            {
-                System.Console.Error.WriteLine("[displace] produced no geometry.");
-                return;
-            }
 
             var tkPos = Array.ConvertAll(result.Positions, p => new TkVector3(p.X, p.Y, p.Z));
             var tkNrm = Array.ConvertAll(result.Normals,   p => new TkVector3(p.X, p.Y, p.Z));
@@ -2384,6 +2395,59 @@ public partial class ViewportView : UserControl
             System.Console.Error.WriteLine(
                 $"[displace] {result.VertexCount:N0} verts, {result.TriangleCount:N0} tris @ {distance:0.#} mm.");
             GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>
+    /// Generates a multi-axis surface-following finish toolpath over the displaced surface
+    /// (tool axis follows the surface normal) and registers it as a toolpath node.
+    /// </summary>
+    private async Task RunMultiAxisMillAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+
+        vm.IsSlicing = true;
+        try
+        {
+            if (await ComputeDisplacedSurfaceAsync(vm, sub) is not { } built) return;
+            var result = built.result;
+            var mill   = BuildMillSettings(sub);
+
+            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.Generate(
+                result.Positions, result.Normals, result.Indices, mill));
+            if (toolpath.Layers.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] multi-axis pass produced no cuts.");
+                return;
+            }
+
+            var toolpathNode = new SceneNode
+            {
+                Name = $"Multi-Axis Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
+                Selectable = true,
+            };
+            vm.RegisterToolpathInOutliner(toolpathNode, null);
+            vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = toolpath,
+                RawToolpath   = toolpath,
+                Node          = toolpathNode,
+                BeadWidth     = (float)sub.ToolDiameterMm,
+                LayerHeight   = mill.StepdownMm,
+                MaterialColor = MapMaterialColor(null),
+            });
+            ApplyToolpathStats(vm, toolpath);
+            _renderer.Select(null);
+            UpdateFocusOverlay();
+            GlCanvas.RequestNextFrameRendering();
+            int moves = toolpath.Layers.Sum(l => l.Moves.Count);
+            System.Console.Error.WriteLine($"[mill] multi-axis surface pass: {moves:N0} moves.");
         }
         finally
         {
