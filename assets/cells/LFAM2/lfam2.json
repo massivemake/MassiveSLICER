@@ -162,6 +162,8 @@
   "bridgeIp": "192.168.0.152",
   "bridgePort": 7000,
   "extBridgePort": 8765,
+  "millBridgePort": 8765,
+  "hasMilling": false,
   "view": {
     "azimuth": -39.000046,
     "elevation": 8,

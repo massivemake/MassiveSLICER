@@ -299,12 +299,12 @@
   "millBridgePort": 8765,
   "hasMilling": false,
   "view": {
-    "azimuth": -43.800022,
-    "elevation": 8,
-    "radius": 3419.4116,
-    "targetX": 1749.5077,
-    "targetY": 45.24054,
-    "targetZ": 1631.6459
+    "azimuth": -25.000021,
+    "elevation": 11.200004,
+    "radius": 2113.1416,
+    "targetX": 1792.6797,
+    "targetY": -342.684,
+    "targetZ": 1555.2152
   },
   "bedScan": {
     "scanPose": [

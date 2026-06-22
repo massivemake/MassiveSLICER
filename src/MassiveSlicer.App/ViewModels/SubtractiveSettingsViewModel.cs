@@ -1,49 +1,95 @@
+using System;
+using MassiveSlicer.Commands;
 using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
 
 /// <summary>
-/// Parameters for subtractive (milling/routing) slicing, including the
-/// editable KRL post-processor header and footer templates.
+/// Parameters for subtractive (relief milling) toolpaths: tool + cutting params, the relief
+/// heightmap and its placement, and the editable KRL post-processor header/footer templates.
+/// Spindle on/RPM control lives in the templates (KUKA 0-10V → ATV340 VFD), not hardcoded.
 /// </summary>
 public sealed class SubtractiveSettingsViewModel : ViewModelBase
 {
-    private double _feedRateMmMin = 3000;
+    public SubtractiveSettingsViewModel()
+    {
+        BrowseHeightmapCommand = new RelayCommand(() => BrowseHeightmapRequested?.Invoke(this, EventArgs.Empty));
+    }
+
+    // -- Tool & cutting --------------------------------------------------------
+
+    private double _toolDiameterMm = 6;
+    private bool   _ballEnd = true;
+    private double _stepoverMm = 3;
     private double _stepdownMm = 2;
+    private double _finishAllowanceMm = 0.3;
+    private double _feedRateMmMin = 3000;
+    private double _plungeFeedMmMin = 1000;
+    private double _rapidZMm = 50;
+    private double _spindleRpm = 12000;
+    private double _maxDepthMm = 0;   // 0 = unlimited
+
+    /// <summary>Cutter diameter (mm); used for the anti-gouge inverse offset.</summary>
+    public double ToolDiameterMm { get => _toolDiameterMm; set => SetField(ref _toolDiameterMm, value); }
+    /// <summary>True = ball-nose (rounded), false = flat end-mill.</summary>
+    public bool   BallEnd        { get => _ballEnd; set => SetField(ref _ballEnd, value); }
+    /// <summary>Finish raster spacing (mm) — sets toolpath fidelity, not image resolution.</summary>
+    public double StepoverMm     { get => _stepoverMm; set => SetField(ref _stepoverMm, value); }
+    /// <summary>Axial stepdown per roughing pass (mm).</summary>
+    public double StepdownMm     { get => _stepdownMm; set => SetField(ref _stepdownMm, value); }
+    /// <summary>Stock left above the final surface during roughing (mm).</summary>
+    public double FinishAllowanceMm { get => _finishAllowanceMm; set => SetField(ref _finishAllowanceMm, value); }
+    /// <summary>Cutting feed (mm/min).</summary>
+    public double FeedRateMmMin  { get => _feedRateMmMin; set => SetField(ref _feedRateMmMin, value); }
+    /// <summary>Plunge feed (mm/min).</summary>
+    public double PlungeFeedMmMin { get => _plungeFeedMmMin; set => SetField(ref _plungeFeedMmMin, value); }
+    /// <summary>Safe retract height above the reference plane for rapids (mm).</summary>
+    public double RapidZMm       { get => _rapidZMm; set => SetField(ref _rapidZMm, value); }
+    /// <summary>Spindle RPM (informational / for the header template).</summary>
+    public double SpindleRpm     { get => _spindleRpm; set => SetField(ref _spindleRpm, value); }
+    /// <summary>Hard depth limit below the reference plane (mm); 0 = unlimited.</summary>
+    public double MaxDepthMm     { get => _maxDepthMm; set => SetField(ref _maxDepthMm, value); }
+
+    // -- Relief heightmap ------------------------------------------------------
+
+    private string _heightmapPath = string.Empty;
+    private double _heightScaleMm = 5;
+    private bool   _invertHeightmap;
+    private bool   _autoReferenceFromTop = true;
+    private double _referencePlaneZ;
+    private bool   _autoFootprint = true;
+    private double _footprintOriginX, _footprintOriginY, _footprintWidthMm = 100, _footprintLengthMm = 100;
+
+    /// <summary>Path to the grayscale relief image (PNG/JPG). White = high surface.</summary>
+    public string HeightmapPath  { get => _heightmapPath; set => SetField(ref _heightmapPath, value); }
+    /// <summary>Relief depth between black and white (mm).</summary>
+    public double HeightScaleMm  { get => _heightScaleMm; set => SetField(ref _heightScaleMm, value); }
+    /// <summary>Flip black/white.</summary>
+    public bool   InvertHeightmap { get => _invertHeightmap; set => SetField(ref _invertHeightmap, value); }
+
+    /// <summary>Use the selected part's top-face Z as the reference plane.</summary>
+    public bool   AutoReferenceFromTop { get => _autoReferenceFromTop; set => SetField(ref _autoReferenceFromTop, value); }
+    /// <summary>Manual reference plane Z (world mm) when <see cref="AutoReferenceFromTop"/> is false.</summary>
+    public double ReferencePlaneZ { get => _referencePlaneZ; set => SetField(ref _referencePlaneZ, value); }
+
+    /// <summary>Map the relief onto the selected part's XY bounding box.</summary>
+    public bool   AutoFootprint  { get => _autoFootprint; set => SetField(ref _autoFootprint, value); }
+    public double FootprintOriginX { get => _footprintOriginX; set => SetField(ref _footprintOriginX, value); }
+    public double FootprintOriginY { get => _footprintOriginY; set => SetField(ref _footprintOriginY, value); }
+    public double FootprintWidthMm { get => _footprintWidthMm; set => SetField(ref _footprintWidthMm, value); }
+    public double FootprintLengthMm { get => _footprintLengthMm; set => SetField(ref _footprintLengthMm, value); }
+
+    /// <summary>Opens the heightmap file picker (handled by the window).</summary>
+    public RelayCommand BrowseHeightmapCommand { get; }
+    public event EventHandler? BrowseHeightmapRequested;
+
+    // -- KRL post-processor templates ------------------------------------------
+
     private string _headerTemplate = string.Empty;
-
-    /// <summary>Spindle feed rate for mill toolpaths (mm/min).</summary>
-    public double FeedRateMmMin
-    {
-        get => _feedRateMmMin;
-        set => SetField(ref _feedRateMmMin, value);
-    }
-
-    /// <summary>Axial stepdown per mill pass (mm).</summary>
-    public double StepdownMm
-    {
-        get => _stepdownMm;
-        set => SetField(ref _stepdownMm, value);
-    }
-
-    /// <summary>
-    /// Editable KRL program header. Supports template variables such as
-    /// <c>{PROGNAME}</c>, <c>{TOOL_NO}</c>, <c>{DATE}</c>, etc.
-    /// </summary>
-    public string HeaderTemplate
-    {
-        get => _headerTemplate;
-        set => SetField(ref _headerTemplate, value);
-    }
-
     private string _footerTemplate = string.Empty;
 
-    /// <summary>
-    /// Editable KRL program footer. Applied after all generated move statements.
-    /// </summary>
-    public string FooterTemplate
-    {
-        get => _footerTemplate;
-        set => SetField(ref _footerTemplate, value);
-    }
+    /// <summary>Editable KRL program header (spindle on/RPM lives here). Supports {PROGNAME}, {TOOL_NO}, {DATE}, etc.</summary>
+    public string HeaderTemplate { get => _headerTemplate; set => SetField(ref _headerTemplate, value); }
+    /// <summary>Editable KRL program footer (spindle off lives here).</summary>
+    public string FooterTemplate { get => _footerTemplate; set => SetField(ref _footerTemplate, value); }
 }

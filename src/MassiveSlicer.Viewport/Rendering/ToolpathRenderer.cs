@@ -87,6 +87,7 @@ public sealed class ToolpathRenderer : IDisposable
     private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
 
     private Vector3 _extrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _millColor        = new(0.95f, 0.6f,  0.1f);
     private Vector3 _travelColor      = new(0.85f, 0.18f, 0.18f);
     private Vector3 _wipeColor        = new(1.0f,  0.53f, 0.0f);
     private Vector3 _retractionColor  = new(0.61f, 0.15f, 0.69f);
@@ -177,7 +178,7 @@ public sealed class ToolpathRenderer : IDisposable
         int extrudeCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill) extrudeCount++;
 
         var extData = new float[extrudeCount * 2 * 6];
         int ei = 0, mi = 0;
@@ -192,11 +193,13 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
                 {
                     Vector3 color;
                     if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
                         color = UnreachableColor;
+                    else if (move.Kind == MoveKind.Mill)
+                        color = _millColor;
                     else if (move.IsWipe)
                         color = _wipeColor;
                     else
@@ -319,7 +322,7 @@ public sealed class ToolpathRenderer : IDisposable
         int travelCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind != MoveKind.Extrude) travelCount++;
+                if (move.Kind == MoveKind.Travel) travelCount++;
 
         var trData = new float[travelCount * 2 * 6];
         int ti = 0;
@@ -332,7 +335,7 @@ public sealed class ToolpathRenderer : IDisposable
 
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind != MoveKind.Extrude)
+                if (move.Kind == MoveKind.Travel)
                 {
                     var color = move.IsZHop ? _retractionColor : _travelColor;
                     WriteTr(move.From, color);

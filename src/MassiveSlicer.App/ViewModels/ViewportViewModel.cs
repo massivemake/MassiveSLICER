@@ -1589,6 +1589,10 @@ public sealed class ViewportViewModel : ViewModelBase
             execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasMeshSelected);
 
+        // Relief milling: guard inside RunMillAsync (no canExecute predicate to avoid
+        // threading RaiseCanExecuteChanged through every selection-change site).
+        MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
+
         UpdateSliceCommand = new RelayCommand(
             execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && IsToolpathSelected && (CanUpdateSlice?.Invoke() ?? false));
@@ -1905,6 +1909,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public AdditiveSettingsViewModel? AdditiveSettings { get; set; }
 
+    /// <summary>Subtractive (relief milling) settings, wired from the right panel.</summary>
+    public SubtractiveSettingsViewModel? SubtractiveSettings { get; set; }
+
     // -- Toolpath stats --------------------------------------------------------
 
     private bool _hasToolpathStats;
@@ -1947,6 +1954,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// computation on a background thread.
     /// </summary>
     internal Func<Task>? OnSliceRequested { get; set; }
+
+    /// <summary>Callback registered by the viewport code-behind to generate a relief-milling toolpath.</summary>
+    internal Func<Task>? OnMillRequested { get; set; }
 
     /// <summary>Re-slices the source mesh at its current transform and replaces the selected toolpath.</summary>
     internal Func<Task>? OnUpdateSliceRequested { get; set; }
@@ -2003,6 +2013,9 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
+
+    /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
+    public RelayCommand MillCommand { get; }
 
     /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
     public RelayCommand UpdateSliceCommand { get; }
