@@ -50,6 +50,16 @@ internal static class CellSceneCache
         foreach (var node in src.EnvironmentNodes)
             env.Add(SceneNodeClone.DeepClone(node));
 
+        // The rotary-bed pivot ("RotaryBed_Top") is a descendant of one of the EnvironmentNodes
+        // (the "RotaryBed" root), which we just cloned into `env`. It MUST be the SAME instance that
+        // lives in the cloned graph — otherwise rotating it on E1 sync spins a detached orphan and
+        // the visible top never turns. Resolve it inside `env` instead of cloning it separately.
+        SceneNode? rotaryPivot = src.RotaryBedPivot is null
+            ? null
+            : env.SelectMany(n => n.SelfAndDescendants())
+                 .FirstOrDefault(d => d.Name == src.RotaryBedPivot.Name)
+              ?? SceneNodeClone.DeepClone(src.RotaryBedPivot);
+
         CellEnvironmentBuilder.CellMultiToolSet? multi = null;
         if (src.MultiTools is { } mt)
         {
@@ -78,7 +88,7 @@ internal static class CellSceneCache
             CloneOpt(src.ToolHolder),
             src.FirstTool,
             env,
-            CloneOpt(src.RotaryBedPivot),
+            rotaryPivot,
             multi,
             CloneOpt(src.FlangeAttachment));
     }
