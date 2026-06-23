@@ -1,3 +1,4 @@
+using System;
 using System.Linq;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
@@ -45,5 +46,36 @@ public class RotaryPivotCloneTest(ITestOutputHelper output)
         orphan.LocalTransform = Matrix4.CreateRotationZ(MathHelper.Pi);              // 180deg
         var afterOrphan = topInClone.WorldTransform.Row3.Xyz;
         Assert.True((afterOrphan - afterPivot).Length < 0.01f, "orphan pivot must NOT move the cloned top");
+    }
+
+    [Fact]
+    public void PivotSpinsAboutWorldVertical_DespiteTiltedParentFrame()
+    {
+        // Rotary root is tilted -90deg about X (matches lfam3 baseAbc C=-90 that stands the GLB up).
+        var top   = new SceneNode { Name = "top", LocalTransform = Matrix4.CreateTranslation(10, 0, 0) };
+        var pivot = new SceneNode { Name = "RotaryBed_Top" };
+        pivot.AddChild(top);
+        var root  = new SceneNode { Name = "RotaryBed", LocalTransform = Matrix4.CreateRotationX(-MathHelper.PiOver2) };
+        root.AddChild(pivot);
+
+        var before = top.WorldTransform.Row3.Xyz;   // (10, 0, 0), level
+
+        // The FIX: spin about the local axis that maps to world +Z under the tilted parent.
+        var parentWorld = pivot.Parent!.WorldTransform;
+        var axisLocal = Vector3.Normalize(Vector3.TransformNormal(Vector3.UnitZ, parentWorld.Inverted()));
+        pivot.LocalTransform = Matrix4.CreateFromAxisAngle(axisLocal, MathHelper.PiOver2);
+        var fixedPos = top.WorldTransform.Row3.Xyz;
+
+        // The OLD bug: a plain local-Z rotation under the tilt tips the top out of the level plane.
+        pivot.LocalTransform = Matrix4.CreateRotationZ(MathHelper.PiOver2);
+        var buggyPos = top.WorldTransform.Row3.Xyz;
+
+        output.WriteLine($"before={before} fixed={fixedPos} buggy={buggyPos}");
+
+        // Fix: stays level (world Z unchanged) and rotates within the horizontal plane.
+        Assert.True(MathF.Abs(fixedPos.Z - before.Z) < 0.01f, $"fix should keep the top level, Z={fixedPos.Z}");
+        Assert.True(new Vector2(fixedPos.X - before.X, fixedPos.Y - before.Y).Length > 1f, "fix should rotate in XY");
+        // Old behavior tips it out of plane (large Z change) — the upside-down symptom.
+        Assert.True(MathF.Abs(buggyPos.Z - before.Z) > 1f, $"local-Z under tilt should tip the top, Z={buggyPos.Z}");
     }
 }
