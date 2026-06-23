@@ -807,7 +807,14 @@ public partial class ViewportView : UserControl
                 if (_rotaryBedPivot is not null && vm.Robot is { } rbE1)
                 {
                     float e1Rad = (float)(_bedRotationSign * rbE1.E1 * Math.PI / 180.0);
-                    _rotaryBedPivot.LocalTransform = Matrix4.CreateRotationZ(e1Rad);
+                    // E1 spins the turntable about the bed's WORLD-vertical axis. The pivot lives
+                    // inside the rotary root's tilted frame (baseAbc, e.g. C=-90 to stand the GLB
+                    // up), so a local-Z rotation would tip the top over. Rotate about the local
+                    // axis that maps to world +Z under the parent's orientation.
+                    var parentWorld = _rotaryBedPivot.Parent?.WorldTransform ?? Matrix4.Identity;
+                    var axisLocal = Vector3.TransformNormal(Vector3.UnitZ, parentWorld.Inverted());
+                    axisLocal = axisLocal.LengthSquared > 1e-12f ? Vector3.Normalize(axisLocal) : Vector3.UnitZ;
+                    _rotaryBedPivot.LocalTransform = Matrix4.CreateFromAxisAngle(axisLocal, e1Rad);
                 }
 
                 if (a1 != _lastSyncA1 || a2 != _lastSyncA2 || a3 != _lastSyncA3 ||
