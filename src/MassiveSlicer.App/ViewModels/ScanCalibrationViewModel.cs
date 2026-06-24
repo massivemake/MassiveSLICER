@@ -16,6 +16,7 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     private bool   _isCalibrating;
     private string _calibrateStatus = "";
     private bool   _hasResult;
+    private bool   _applied;
     private double _resultX, _resultY, _resultZ;
     private double _resultA, _resultB, _resultC;
     private double _residualRot, _residualTrans;
@@ -25,15 +26,18 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
         AddPoseCommand    = new RelayCommand(async () => await CaptureAsync(), () => !_isCapturing && !_isCalibrating);
         ClearPosesCommand = new RelayCommand(ClearPoses, () => _poseCount > 0 && !_isCapturing && !_isCalibrating);
         CalibrateCommand  = new RelayCommand(async () => await CalibrateAsync(), () => _poseCount >= 3 && !_isCapturing && !_isCalibrating);
-        ApplyToTcpCommand = new RelayCommand(ApplyToTcp, () => _hasResult);
+        ApplyToTcpCommand = new RelayCommand(ApplyToTcp, () => _hasResult && !_applied);
+        AutoCalibrateCommand = new RelayCommand(
+            async () => { if (OnAutoCalibrateRequested is { } f) await f(); }, () => !_isCapturing && !_isCalibrating);
     }
 
     // -- Commands -------------------------------------------------------------
 
-    public RelayCommand AddPoseCommand    { get; }
-    public RelayCommand ClearPosesCommand { get; }
-    public RelayCommand CalibrateCommand  { get; }
-    public RelayCommand ApplyToTcpCommand { get; }
+    public RelayCommand AddPoseCommand       { get; }
+    public RelayCommand ClearPosesCommand    { get; }
+    public RelayCommand CalibrateCommand     { get; }
+    public RelayCommand ApplyToTcpCommand    { get; }
+    public RelayCommand AutoCalibrateCommand { get; }
 
     // -- Callbacks (wired by MainWindowViewModel) ----------------------------
 
@@ -42,6 +46,12 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
 
     /// <summary>Called when the user clicks "Apply to TCP". Args: x, y, z, a, b, c (mm / °).</summary>
     internal Action<double, double, double, double, double, double>? OnApplyCalibration { get; set; }
+
+    /// <summary>Runs the automated pose sweep (deploy SCAN_TOOL_CAL, handshake, scan ×N, calibrate). Wired by MainWindowViewModel.</summary>
+    internal Func<Task>? OnAutoCalibrateRequested { get; set; }
+
+    /// <summary>Console logger for success/diagnostic feedback (wired by MainWindowViewModel).</summary>
+    internal Action<string>? Log { get; set; }
 
     // -- Observable state -----------------------------------------------------
 
@@ -107,6 +117,21 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
         }
     }
 
+    /// <summary>True once the result is written to the TCP — grays out Apply as success feedback.</summary>
+    public bool IsApplied
+    {
+        get => _applied;
+        private set
+        {
+            if (!SetField(ref _applied, value)) return;
+            ApplyToTcpCommand.RaiseCanExecuteChanged();
+            OnPropertyChanged(nameof(ApplyButtonLabel));
+        }
+    }
+
+    /// <summary>Apply button caption — flips to a success tick once written to the TCP.</summary>
+    public string ApplyButtonLabel => _applied ? "APPLIED ✓" : "APPLY TO TCP";
+
     public double ResultX { get => _resultX; private set => SetField(ref _resultX, value); }
     public double ResultY { get => _resultY; private set => SetField(ref _resultY, value); }
     public double ResultZ { get => _resultZ; private set => SetField(ref _resultZ, value); }
@@ -133,6 +158,7 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
 
         PoseCount = ZividScanService.CalibrationPoseCount;
         CaptureStatus = result.Status;
+        IsApplied = false;
         IsCapturing = false;
     }
 
@@ -141,6 +167,7 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
         ZividScanService.ClearCalibrationPoses();
         PoseCount = 0;
         HasResult = false;
+        IsApplied = false;
         CaptureStatus = "";
         CalibrateStatus = "";
     }
@@ -162,6 +189,7 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
             ResultC = Math.Round(result.TcpC, 3);
             ResidualRot   = Math.Round(result.AvgRotResidualDeg,   3);
             ResidualTrans = Math.Round(result.AvgTransResidualMm,  3);
+            IsApplied = false;   // fresh result — enable Apply (auto-applied by the sweep)
             HasResult = true;
             CalibrateStatus = $"Done — rot residual {ResidualRot:F3}°, trans {ResidualTrans:F3} mm";
         }
@@ -175,14 +203,44 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
 
     private void ApplyToTcp()
     {
-        if (!_hasResult) return;
+        if (!_hasResult || _applied) return;
         OnApplyCalibration?.Invoke(_resultX, _resultY, _resultZ, _resultA, _resultB, _resultC);
+        IsApplied = true;
+        CalibrateStatus = $"Applied to TCP ✓  ({_resultX:F1}, {_resultY:F1}, {_resultZ:F1}) mm / " +
+                          $"A{_resultA:F2} B{_resultB:F2} C{_resultC:F2}";
+        Log?.Invoke($"[scancal] Applied to TCP: ({_resultX:F1}, {_resultY:F1}, {_resultZ:F1}) mm, " +
+                    $"A{_resultA:F2} B{_resultB:F2} C{_resultC:F2}; residual rot {_residualRot:F3}°, " +
+                    $"trans {_residualTrans:F3} mm — TCP updated.");
     }
+
+    // -- Hooks for the automated sweep (MainWindowViewModel.RunAutoScanToolCalibration) --------
+
+    /// <summary>Sets the calibrate status line (used by the automated sweep orchestration).</summary>
+    internal void SetStatus(string s) => CalibrateStatus = s;
+
+    /// <summary>Clears poses/result (used by the automated sweep orchestration).</summary>
+    internal void ClearForAuto() => ClearPoses();
+
+    /// <summary>Captures one hand-eye pose at the current flange; returns true if a pose was added.</summary>
+    internal async Task<bool> CapturePoseAutoAsync()
+    {
+        int before = ZividScanService.CalibrationPoseCount;
+        await CaptureAsync();
+        return ZividScanService.CalibrationPoseCount > before;
+    }
+
+    /// <summary>Runs the hand-eye fit over the captured poses (used by the automated sweep).</summary>
+    internal Task ComputeCalibrationAsync() => CalibrateAsync();
+
+    /// <summary>Applies the computed result to the TCP (used by the automated sweep).</summary>
+    internal void ApplyResult() => ApplyToTcp();
 
     private void RaiseAllCanExecuteChanged()
     {
         AddPoseCommand.RaiseCanExecuteChanged();
         ClearPosesCommand.RaiseCanExecuteChanged();
         CalibrateCommand.RaiseCanExecuteChanged();
+        ApplyToTcpCommand.RaiseCanExecuteChanged();
+        AutoCalibrateCommand.RaiseCanExecuteChanged();
     }
 }
