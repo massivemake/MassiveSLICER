@@ -236,13 +236,19 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     /// <summary>Clears poses/result (used by the automated sweep orchestration).</summary>
     internal void ClearForAuto() => ClearPoses();
 
-    /// <summary>Captures one hand-eye pose at the current flange; returns true if a pose was added.</summary>
+    /// <summary>Captures one hand-eye pose at the current flange; returns true if a pose was added
+    /// (i.e. the calibration board was fully detected — the card is in frame). A false return means
+    /// the card was partially or fully out of frame; <see cref="LastCaptureStatus"/> says which.</summary>
     internal async Task<bool> CapturePoseAutoAsync()
     {
         int before = ZividScanService.CalibrationPoseCount;
         await CaptureAsync();
         return ZividScanService.CalibrationPoseCount > before;
     }
+
+    /// <summary>The board-detection status string from the most recent <see cref="CapturePoseAutoAsync"/>
+    /// (e.g. "Board not detected: …") — used by the sweep to log why a pose was rejected.</summary>
+    internal string LastCaptureStatus => CaptureStatus;
 
     /// <summary>Runs the hand-eye fit over the captured poses (used by the automated sweep).</summary>
     internal Task ComputeCalibrationAsync() => CalibrateAsync();

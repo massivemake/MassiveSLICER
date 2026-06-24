@@ -629,13 +629,15 @@ public sealed class MainWindowViewModel : ViewModelBase
             "/R1/Program/SCAN_TOOL_CAL",
             "/R1/PROGRAM/SCAN_TOOL_CAL",
         ];
-        const int target = 9;   // must match the pose count in SCAN_TOOL_CAL.src
-        int captured = 0;
+        const int target = 9;          // must match the pose count in SCAN_TOOL_CAL.src
+        const int maxRetriesPerPose = 3;   // re-present at half tilt each time the card is out of frame
+        int captured = 0, skipped = 0;
         robot.PauseStreaming();
         try
         {
             await robot.SetFlagAsync(1, false);
             await robot.SetFlagAsync(2, false);
+            await robot.SetFlagAsync(3, false);
 
             C3BridgeClient.ProgramResult sel = default, run = default, start = default;
             string? startedPath = null;
@@ -668,37 +670,76 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log($"[scancal] Started {startedPath} via C3 program-run.");
             }
 
-            for (int n = 0; n < target; n++)
+            bool sweepDone = false;
+            for (int n = 0; n < target && !sweepDone; n++)
             {
-                bool atStop = false, done = false;
-                int pollMax = n == 0 ? 1800 : 600;   // ~360 s for a manual first start, then ~120 s/pose
-                for (int poll = 0; poll < pollMax; poll++)
+                int retriesLeft = maxRetriesPerPose;
+                bool poseSettled = false;
+                while (!poseSettled)
                 {
-                    if (await robot.ReadFlagAsync(2)) { done = true; break; }
-                    if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
-                    await Task.Delay(200);
+                    // Wait for the robot to (re-)present this pose, or for the sweep to finish.
+                    bool atStop = false, done = false;
+                    // Allow a long wait only for the very first pose (manual pendant start); retries
+                    // are a short PTP, so they get the per-pose budget.
+                    int pollMax = (n == 0 && retriesLeft == maxRetriesPerPose) ? 1800 : 600;
+                    for (int poll = 0; poll < pollMax; poll++)
+                    {
+                        if (await robot.ReadFlagAsync(2)) { done = true; break; }
+                        if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
+                        await Task.Delay(200);
+                    }
+                    if (done) { sweepDone = true; break; }
+                    if (!atStop)
+                    {
+                        scanCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target} poses).");
+                        sweepDone = true;
+                        break;
+                    }
+
+                    // Drive the viewport FK to the robot's actual pose so the flange frame the hand-eye
+                    // capture reads is current (streaming is paused during the sweep), then capture.
+                    var axes = await robot.ReadAxesAsync();
+                    robot.A1 = Math.Round(axes[0], 2); robot.A2 = Math.Round(axes[1], 2); robot.A3 = Math.Round(axes[2], 2);
+                    robot.A4 = Math.Round(axes[3], 2); robot.A5 = Math.Round(axes[4], 2); robot.A6 = Math.Round(axes[5], 2);
+                    robot.E1 = Math.Round(axes[6], 2);
+                    await Task.Delay(400);   // let the FK settle before reading the flange
+
+                    // CapturePoseAutoAsync returns true only when the full calibration board is
+                    // detected — i.e. the card is in frame. A false return = partially/fully out of frame.
+                    bool inFrame = await scanCal.CapturePoseAutoAsync();
+                    if (inFrame)
+                    {
+                        captured++;
+                        scanCal.SetStatus($"Pose {n + 1}/{target}: card in frame — captured ({captured} good, E1 {axes[6]:F0}°)…");
+                        await robot.SetFlagAsync(3, false);   // accept — no retry
+                        await robot.SetFlagAsync(1, false);   // release to the next pose
+                        poseSettled = true;
+                    }
+                    else if (retriesLeft > 0)
+                    {
+                        retriesLeft--;
+                        Console.Log($"[scancal] Pose {n + 1}: card out of frame ({scanCal.LastCaptureStatus}); " +
+                                    $"re-presenting at reduced tilt ({retriesLeft} retr{(retriesLeft == 1 ? "y" : "ies")} left).");
+                        scanCal.SetStatus($"Pose {n + 1}/{target}: card out of frame — re-aiming at a gentler angle…");
+                        // Order matters: set the retry flag BEFORE releasing, so the robot sees it the
+                        // instant it wakes from WAIT FOR ($FLAG[1]==FALSE).
+                        await robot.SetFlagAsync(3, true);    // robot re-presents this pose, tilt halved
+                        await robot.SetFlagAsync(1, false);   // release; robot re-moves and re-raises $FLAG[1]
+                        // stay in the while loop — poll for $FLAG[1] again at the same pose index
+                    }
+                    else
+                    {
+                        skipped++;
+                        Console.Log($"[scancal] Pose {n + 1}: card still out of frame after {maxRetriesPerPose} retries — skipping.");
+                        scanCal.SetStatus($"Pose {n + 1}/{target}: skipped (card never fully in frame).");
+                        await robot.SetFlagAsync(3, false);   // give up — advance
+                        await robot.SetFlagAsync(1, false);
+                        poseSettled = true;
+                    }
                 }
-                if (done) break;
-                if (!atStop)
-                {
-                    scanCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target} poses).");
-                    break;
-                }
-
-                // Drive the viewport FK to the robot's actual pose so the flange frame the hand-eye
-                // capture reads is current (streaming is paused during the sweep), then capture.
-                var axes = await robot.ReadAxesAsync();
-                robot.A1 = Math.Round(axes[0], 2); robot.A2 = Math.Round(axes[1], 2); robot.A3 = Math.Round(axes[2], 2);
-                robot.A4 = Math.Round(axes[3], 2); robot.A5 = Math.Round(axes[4], 2); robot.A6 = Math.Round(axes[5], 2);
-                robot.E1 = Math.Round(axes[6], 2);
-                await Task.Delay(400);   // let the FK settle before reading the flange
-
-                bool ok = await scanCal.CapturePoseAutoAsync();
-                if (ok) captured++;
-                scanCal.SetStatus($"Captured {captured}/{target} poses (E1 {axes[6]:F0}°)…");
-
-                await robot.SetFlagAsync(1, false);   // release the robot to the next pose
             }
+            if (skipped > 0)
+                Console.Log($"[scancal] Sweep complete: {captured} poses in frame, {skipped} skipped (card out of frame after retries).");
         }
         catch (Exception ex)
         {

@@ -3,15 +3,28 @@
 &PARAM EDITMASK = *
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF SCAN_TOOL_CAL ( )
-; 3D scan-tool (hand-eye) calibration sweep. Mirrors BED_SCAN_CAL's $FLAG handshake.
+; 3D scan-tool (hand-eye) calibration sweep with closed-loop in-frame retry.
 ; Jog the scanner to a good view of the calibration card in the bed centre, then run this.
-; It nutates the WRIST (A4/A5/A6) about that starting pose to give the host diverse views of
-; the card. Wrist-only deltas keep the card in the field of view and minimise travel/collision.
-; Host (MassiveSlicer): waits for $FLAG[1]=TRUE at each pose, captures a scan, then sets
-; $FLAG[1]=FALSE to release. $FLAG[2]=TRUE signals the sweep is finished. 9 poses.
+; It nutates the WRIST (A4/A5/A6) about that starting pose to give diverse views of the card.
+;
+; Handshake with the host (MassiveSlicer):
+;   $FLAG[1]=TRUE  : robot in position, waiting for the host to capture a scan
+;   $FLAG[1]=FALSE : host releases the robot (set by the host after each capture)
+;   $FLAG[2]=TRUE  : sweep finished (set by the robot at the end)
+;   $FLAG[3]=TRUE  : host wants THIS pose re-presented at a reduced tilt because the
+;                    calibration card was partially / fully out of frame.
+; When the host releases with $FLAG[3]=TRUE, the robot halves this pose's tilt toward the
+; centred (home) view and presents it again; otherwise it advances to the next pose.
+; Base deltas are deliberately modest so the card usually stays in the field of view; the
+; per-pose retry recovers the poses that still clip the frame.
 
 DECL E6AXIS home
 DECL E6AXIS p
+DECL INT i
+DECL REAL s
+DECL REAL dA4[9]
+DECL REAL dA5[9]
+DECL REAL dA6[9]
 
 ;FOLD INI
   ;FOLD BASISTECH INI
@@ -37,81 +50,60 @@ $TOOL = TOOL_DATA[5]
 
 $FLAG[1] = FALSE
 $FLAG[2] = FALSE
+$FLAG[3] = FALSE
 
 home = $AXIS_ACT        ; operator's starting pose, scanner aimed at the card
 
-; -- Pose 1: home -------------------------------------------------------------
-p = home
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
+; Wrist-only nutation deltas (deg). Modest magnitudes keep the card in the FOV; the host
+; can still request a gentler per-pose retry via $FLAG[3] when a view clips the frame.
+dA4[1] = 0.0
+dA5[1] = 0.0
+dA6[1] = 0.0
+dA4[2] = 0.0
+dA5[2] = 8.0
+dA6[2] = 0.0
+dA4[3] = 0.0
+dA5[3] = -8.0
+dA6[3] = 0.0
+dA4[4] = 8.0
+dA5[4] = 0.0
+dA6[4] = 0.0
+dA4[5] = -8.0
+dA5[5] = 0.0
+dA6[5] = 0.0
+dA4[6] = 0.0
+dA5[6] = 0.0
+dA6[6] = 15.0
+dA4[7] = 0.0
+dA5[7] = 0.0
+dA6[7] = -15.0
+dA4[8] = 7.0
+dA5[8] = 7.0
+dA6[8] = 0.0
+dA4[9] = -7.0
+dA5[9] = -7.0
+dA6[9] = 0.0
 
-; -- Pose 2: tilt A5 +15 ------------------------------------------------------
-p = home
-p.A5 = home.A5 + 15.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 3: tilt A5 -15 ------------------------------------------------------
-p = home
-p.A5 = home.A5 - 15.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 4: tilt A4 +15 ------------------------------------------------------
-p = home
-p.A4 = home.A4 + 15.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 5: tilt A4 -15 ------------------------------------------------------
-p = home
-p.A4 = home.A4 - 15.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 6: roll A6 +25 ------------------------------------------------------
-p = home
-p.A6 = home.A6 + 25.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 7: roll A6 -25 ------------------------------------------------------
-p = home
-p.A6 = home.A6 - 25.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 8: A4 +12 / A5 +12 --------------------------------------------------
-p = home
-p.A4 = home.A4 + 12.0
-p.A5 = home.A5 + 12.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
-
-; -- Pose 9: A4 -12 / A5 -12 --------------------------------------------------
-p = home
-p.A4 = home.A4 - 12.0
-p.A5 = home.A5 - 12.0
-PTP p
-WAIT SEC 0.5
-$FLAG[1] = TRUE
-WAIT FOR ($FLAG[1] == FALSE)
+FOR i = 1 TO 9
+  s = 1.0
+  ; present this pose; the host may ask (via $FLAG[3]) for it again at reduced tilt
+  LOOP
+    p = home
+    p.A4 = home.A4 + dA4[i] * s
+    p.A5 = home.A5 + dA5[i] * s
+    p.A6 = home.A6 + dA6[i] * s
+    PTP p
+    WAIT SEC 0.5
+    $FLAG[1] = TRUE
+    WAIT FOR ($FLAG[1] == FALSE)
+    IF $FLAG[3] == TRUE THEN
+      $FLAG[3] = FALSE
+      s = s * 0.5        ; card was out of frame — tilt half as far toward the centred view
+    ELSE
+      EXIT               ; host accepted (or gave up) — advance to the next pose
+    ENDIF
+  ENDLOOP
+ENDFOR
 
 ; -- done: return home --------------------------------------------------------
 $FLAG[2] = TRUE
