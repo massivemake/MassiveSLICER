@@ -658,7 +658,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log($"[scancal] C3 auto-start unavailable (select={C3ErrorName(sel.ErrorCode)}, " +
                             $"run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}); " +
                             "waiting for a manual pendant start.");
-                scanCal.SetStatus("Couldn't auto-start. Aim the scanner at the card, then run SCAN_TOOL_CAL on the pendant (AUTO, drives on) — scanning begins at the first pose and the robot is released automatically.");
+                scanCal.SetStatus("Couldn't auto-start (this controller has no remote program-select). On the pendant: Navigator → R1\\Program → select SCAN_TOOL_CAL (it's newly deployed — refresh if needed), then press Start (AUTO, drives on). Scanning begins at the first pose; the robot is released automatically.");
             }
             else
             {
