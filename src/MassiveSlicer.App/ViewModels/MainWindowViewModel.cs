@@ -61,6 +61,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Initialises the ViewModel and wires child ViewModels.</summary>
     public MainWindowViewModel()
     {
+        // Persist/restore collapsible-panel (Expander) open state across sessions via prefs.json.
+        MassiveSlicer.App.Behaviors.PersistExpander.Store = AppPreferences;
+
         Preferences = new PreferencesViewModel(AppPreferences, () =>
         {
             SyncViewportFromPrefs();

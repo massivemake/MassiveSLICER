@@ -183,4 +183,12 @@ public sealed class AppPreferences
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }
 
+    // ── UI layout state ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Open/closed state of collapsible panels, keyed by a stable panel id (e.g. "bed-settings").
+    /// Restored on next launch so expanders stay how the user left them. Written by the
+    /// <c>PersistExpander</c> attached behaviour.
+    /// </summary>
+    public Dictionary<string, bool> ExpandedPanels { get; set; } = [];
 }
