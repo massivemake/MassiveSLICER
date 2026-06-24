@@ -36,6 +36,7 @@ public partial class ViewportView : UserControl
     private Matrix4                _toolCorrectionMatrix = Matrix4.Identity;
     private CellEnvironmentBuilder.CellMultiToolSet? _multiTools;
     private SceneNode?             _rotaryBedPivot;
+    private SceneNode?             _rotaryBedRoot;   // "RotaryBed" env root — relocated when the bed is recentred
     private bool                   _multiToolFlangeParented;
     private bool                   _lastOutlinerLayerPreview;
     private const float InteractionScale = 0.55f;
@@ -415,9 +416,22 @@ public partial class ViewportView : UserControl
                 {
                     vm2.NotifyRenderNeeded();
                     if (vm2.ActiveCellPath is { } path)
+                    {
                         MassiveSlicer.Core.IO.CellLoader.SaveBedCenter(
                             path, (float)x, (float)y, (float)z,
                             dia > 0 ? (float)dia : (float?)null, (float)sign);
+
+                        // On a rotary cell (LFAM 3), keep the turntable mesh centred on the new bed
+                        // origin too. By cell design robroot + basePos == bed.origin, so the matching
+                        // basePos is (centre − robroot); persist it, preserving the baseAbc tilt.
+                        if (vm2.ActiveCell?.RotaryBed is { } rbCfg)
+                        {
+                            var rw = vm2.ActiveCell.Robot.WorldPosition;
+                            float[] basePos = [ (float)x - rw.X, (float)y - rw.Y, (float)z - rw.Z ];
+                            MassiveSlicer.Core.IO.CellLoader.SaveRotaryBedTransform(
+                                path, basePos, rbCfg.BaseAbc, out _);
+                        }
+                    }
                 }
             };
             robot.OnTcpOffsetEdited = (x, y, z, a, b, c) =>
@@ -1028,6 +1042,19 @@ public partial class ViewportView : UserControl
         // Centre-derived corner keeps a rectangular grid centred; ignored for circular beds.
         var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
         _renderer.SetBedBoundary(_bedBaseMarker, corner, _bedWidth, _bedDepth, new Vector3(x, y, z), diameter);
+
+        // Keep the rotary-bed mesh centred on the same point as the circular origin grid. By cell
+        // design the rotary root's world position equals bed.origin (robroot + basePos == origin), so
+        // recentring the grid must move the turntable with it. Replace the root's translation (Row3)
+        // with the new centre while preserving its baseAbc tilt (the rotation in Rows 0-2). The E1
+        // spin re-derives its world-vertical axis from the parent next frame (_lastSyncE1 reset below).
+        if (_rotaryBedRoot is not null)
+        {
+            var lt = _rotaryBedRoot.LocalTransform;
+            lt.Row3 = new Vector4(x, y, z, 1f);
+            _rotaryBedRoot.LocalTransform = lt;
+        }
+
         _lastSyncE1 = double.NaN;   // re-apply E1 rotation (mesh + boundary) about the new pivot next frame
     }
 
@@ -1109,6 +1136,7 @@ public partial class ViewportView : UserControl
         _currentToolNode            = null;
         _multiTools                 = null;
         _rotaryBedPivot             = null;
+        _rotaryBedRoot              = null;
         _multiToolFlangeParented    = false;
         _renderer.TcpFrameMatrix    = null;
         _renderer.FlangeFrameMatrix = null;
@@ -1205,7 +1233,10 @@ public partial class ViewportView : UserControl
         {
             _renderer.SceneRoot.AddChild(env);
             if (env.Name == "RotaryBed")
+            {
+                _rotaryBedRoot = env;   // so bed recentring can relocate the turntable to match
                 UploadVisiblePendingMeshes(env);
+            }
             else
                 EnqueueCellGpuUpload(env);
         }
