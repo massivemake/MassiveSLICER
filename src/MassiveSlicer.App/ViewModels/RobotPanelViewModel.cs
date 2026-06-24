@@ -475,6 +475,35 @@ public sealed class RobotPanelViewModel : ViewModelBase
         _suppressTcpCallback = false;
     }
 
+    /// <summary>Selects the cell tool that maps to the given KRL TOOL_DATA index (e.g. the
+    /// calibrated scanner at index 6), mounting it and loading its TCP. Returns false if no
+    /// tool in the active cell uses that index.</summary>
+    public bool SelectToolByKrlIndex(int krlIndex)
+    {
+        for (int i = 0; i < _toolLibrary.Count; i++)
+        {
+            if (_toolLibrary[i].KrlIndex == krlIndex)
+            {
+                SelectedToolIndex = i;   // syncs KrlToolIndex, mounts the tool, loads its TCP
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Pushes a TCP offset through the live edit path: updates the IK/render TCP and
+    /// persists it to the currently selected tool in the cell JSON (same as a manual TCP edit).</summary>
+    public void ApplyTcpOffset(double x, double y, double z, double a, double b, double c)
+    {
+        // Set the backing fields with the save callback suppressed, then fire it once so the
+        // viewport rebuilds and saves a single time (not six times, once per field).
+        _suppressTcpCallback = true;
+        EditTcpX = x; EditTcpY = y; EditTcpZ = z;
+        EditTcpA = a; EditTcpB = b; EditTcpC = c;
+        _suppressTcpCallback = false;
+        FireTcpEdited();
+    }
+
     // -- KRL frame dropdowns ---------------------------------------------------
 
     private readonly List<int> _krlToolIndices = [];
