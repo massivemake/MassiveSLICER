@@ -597,6 +597,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             scanCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
             return;
         }
+        if (scanCal.IsAutoRunning)
+        {
+            Console.Log("[scancal] Auto calibration already running — ignoring re-click.");
+            return;
+        }
+        scanCal.SetAutoRunning(true);
+        try   // outer: always clear the sweep-in-progress flag, however we exit
+        {
 
         try
         {
@@ -708,6 +716,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         else
         {
             Console.Log($"[scancal] Ended with {captured} poses (need >=3) — nothing computed.");
+        }
+        }
+        finally
+        {
+            scanCal.SetAutoRunning(false);
         }
     }
 
