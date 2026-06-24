@@ -233,6 +233,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log($"[bedcal] Applied bed centre ({x:F1}, {y:F1}, {z:F1}), rotation {(sign < 0 ? "CW" : "CCW")}.");
         };
         bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
+        bedCal.Log = Console.Log;
 
         // Swap the displayed end-effector to match the active sidebar tab (non-LFAM 3).
         // LFAM 3 workflow phase buttons own tool selection (print / scan / mill).
@@ -567,7 +568,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         if (captured >= 3)
+        {
             bedCal.Compute();
+            if (bedCal.HasResult) bedCal.Apply();   // auto-apply the sweep result to the cell (no extra click)
+            else Console.Log($"[bedcal] Sweep captured {captured} samples but the fit failed — not applied.");
+        }
+        else
+        {
+            Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
+        }
     }
 
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>

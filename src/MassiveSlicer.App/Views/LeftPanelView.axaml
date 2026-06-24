@@ -773,7 +773,8 @@
                                    Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.RotationLabel,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
 
-                        <Button Content="APPLY TO CELL"
+                        <Button Content="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ApplyButtonLabel,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ApplyCommand,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,4,8,4"
