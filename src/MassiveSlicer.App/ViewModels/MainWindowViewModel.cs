@@ -710,7 +710,29 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (captured >= 3)
         {
             await scanCal.ComputeCalibrationAsync();
-            if (scanCal.HasResult) scanCal.ApplyResult();   // auto-apply the hand-eye result to the TCP
+            if (scanCal.HasResult)
+            {
+                // Calibrated with the uncalibrated working tool (#5); SAVE the computed camera TCP to
+                // the calibrated Tool #6 (krlIndex 6), not the working tool used for the sweep.
+                const int calibratedToolKrlIndex = 6;
+                if (Viewport.ActiveCellPath is { } cellPath)
+                {
+                    CellLoader.SaveToolTcp(cellPath, calibratedToolKrlIndex,
+                        (float)scanCal.ResultX, (float)scanCal.ResultY, (float)scanCal.ResultZ,
+                        (float)scanCal.ResultA, (float)scanCal.ResultB, (float)scanCal.ResultC);
+                    MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);   // next cell load picks up the new tool-6 TCP
+                    scanCal.MarkApplied($"Calibrated ✓ — saved to Tool #{calibratedToolKrlIndex}.");
+                    Console.Log($"[scancal] Saved calibrated TCP to Tool #{calibratedToolKrlIndex}: " +
+                                $"({scanCal.ResultX:F2}, {scanCal.ResultY:F2}, {scanCal.ResultZ:F2}) mm / " +
+                                $"A{scanCal.ResultA:F3} B{scanCal.ResultB:F3} C{scanCal.ResultC:F3} " +
+                                $"(rot residual {scanCal.ResidualRot:F3}°, trans {scanCal.ResidualTrans:F3} mm). " +
+                                "Reselect/reload tool 6 to use it.");
+                }
+                else
+                {
+                    Console.Log("[scancal] Computed result but no active cell path — TCP not saved.");
+                }
+            }
             else Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
         }
         else

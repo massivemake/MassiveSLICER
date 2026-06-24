@@ -29,9 +29,11 @@ PDAT_ACT = PDEFAULT
 BAS (#PTP_DAT )
 BAS (#VEL_PTP,15 )      ; gentle 15% PTP for calibration moves
 
-; 3D scanner is mounted as TOOL_DATA[6] — make it the active tool for the sweep.
-$ACT_TOOL = 6
-$TOOL = TOOL_DATA[6]
+; Calibrate with the UNCALIBRATED scan tool TOOL_DATA[5]; the computed result is saved as the
+; calibrated TOOL_DATA[6] by the host. (Hand-eye uses the flange, so the active tool doesn't
+; affect the sweep — this just keeps the controller on the working scan tool.)
+$ACT_TOOL = 5
+$TOOL = TOOL_DATA[5]
 
 $FLAG[1] = FALSE
 $FLAG[2] = FALSE
