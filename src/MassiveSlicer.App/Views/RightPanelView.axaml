@@ -693,6 +693,14 @@
                                 <TextBlock Text="{Binding Scan.Calibration.PoseCountLabel}"
                                            Classes="LabelMuted" Margin="8,4,8,2" FontWeight="SemiBold"/>
 
+                                <!-- Automated pose sweep -->
+                                <Button Content="AUTO-CALIBRATE SCAN TOOL"
+                                        Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,2,8,2"
+                                        Command="{Binding Scan.Calibration.AutoCalibrateCommand}"
+                                        ToolTip.Tip="Place the calibration card in the bed centre and aim the scanner at it. Runs SCAN_TOOL_CAL (or start it on the pendant): the robot nutates the wrist through 9 views, the app scans at each, then computes and applies the hand-eye result."/>
+                                <TextBlock Text="Auto: card in the bed centre, scanner aimed at it, robot synced + in AUTO with drives on. Or collect poses manually below."
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+
                                 <!-- Add Pose / Clear All -->
                                 <Grid Margin="8,4,8,4">
                                     <Grid.ColumnDefinitions>
@@ -809,7 +817,7 @@
                                     </Grid>
 
                                     <!-- Apply to TCP -->
-                                    <Button Content="Apply to TCP"
+                                    <Button Content="{Binding Scan.Calibration.ApplyButtonLabel}"
                                             Classes="PrimaryButton" HorizontalAlignment="Stretch"
                                             Margin="8,4,8,8"
                                             Command="{Binding Scan.Calibration.ApplyToTcpCommand}"

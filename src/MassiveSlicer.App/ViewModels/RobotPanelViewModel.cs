@@ -248,6 +248,19 @@ public sealed class RobotPanelViewModel : ViewModelBase
         return dest;
     }
 
+    /// <summary>Copies the bundled SCAN_TOOL_CAL.src (3D scan-tool hand-eye sweep) to the controller share.</summary>
+    public string DeployScanToolProgram()
+    {
+        const string fileName = "SCAN_TOOL_CAL.src";
+        var src = ResolveBundledKrlPath(fileName)
+            ?? throw new System.IO.FileNotFoundException(
+                $"Bundled KRL not found ({fileName}). Rebuild the app or copy it to assets/krl/.");
+        var folder = $@"\\{_bridgeIp}\krc\ROBOTER\KRC\R1\Program";
+        var dest = System.IO.Path.Combine(folder, fileName);
+        System.IO.File.Copy(src, dest, overwrite: true);
+        return dest;
+    }
+
     /// <summary>Locates a file under <c>assets/krl/</c> from the publish dir or repo working tree.</summary>
     internal static string? ResolveBundledKrlPath(string fileName)
     {

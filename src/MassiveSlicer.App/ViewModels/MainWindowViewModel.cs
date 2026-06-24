@@ -206,6 +206,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             r.EditTcpB = b;
             r.EditTcpC = c;
         };
+        calib.OnAutoCalibrateRequested = RunAutoScanToolCalibration;
+        calib.Log = Console.Log;
 
         // Wire rotary-bed (E1) calibration: capture the board centroid in world via the
         // (fixed) scanner camera pose, read live E1, and persist the fitted centre to the cell.
@@ -576,6 +578,136 @@ public sealed class MainWindowViewModel : ViewModelBase
         else
         {
             Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
+        }
+    }
+
+    /// <summary>
+    /// Automated 3D scan-tool (hand-eye) calibration: deploy + run SCAN_TOOL_CAL (or fall back to a
+    /// manual pendant start), then at each pose read the robot axes, capture a scan of the calibration
+    /// card, release the robot ($FLAG[1]), and finally run the hand-eye fit and apply it to the TCP.
+    /// Mirrors <see cref="RunAutoBedCalibration"/>; the robot motion lives in the KRL pose sweep.
+    /// </summary>
+    private async Task RunAutoScanToolCalibration()
+    {
+        var robot   = RightPanel.Settings.Robot;
+        var scanCal = RightPanel.Scan.Calibration;
+
+        if (!robot.IsConnected)
+        {
+            scanCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
+            return;
+        }
+
+        try
+        {
+            var dest = robot.DeployScanToolProgram();
+            Console.Log($"[scancal] Deployed KRL → {dest}");
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[scancal] KRL deploy skipped: {ex.Message}");   // may already be on the controller
+        }
+
+        scanCal.ClearForAuto();
+        scanCal.SetStatus("Aim the scanner at the card, then starting SCAN_TOOL_CAL (AUTO, drives on)…");
+
+        string[] programPaths =
+        [
+            "/R1/SCAN_TOOL_CAL",
+            "SCAN_TOOL_CAL",
+            "/R1/Program/SCAN_TOOL_CAL",
+            "/R1/PROGRAM/SCAN_TOOL_CAL",
+        ];
+        const int target = 9;   // must match the pose count in SCAN_TOOL_CAL.src
+        int captured = 0;
+        robot.PauseStreaming();
+        try
+        {
+            await robot.SetFlagAsync(1, false);
+            await robot.SetFlagAsync(2, false);
+
+            C3BridgeClient.ProgramResult sel = default, run = default, start = default;
+            string? startedPath = null;
+            foreach (var programName in programPaths)
+            {
+                sel = await robot.SelectProgramAsync(programName);
+                Console.Log($"[scancal] Select {programName}: {C3ErrorName(sel.ErrorCode)} (success={sel.Success}).");
+                if (!sel.Success) continue;
+
+                run = await robot.RunProgramAsync(programName);
+                Console.Log($"[scancal] Run {programName}: {C3ErrorName(run.ErrorCode)} (success={run.Success}).");
+                if (run.Success) { startedPath = programName; break; }
+
+                start = await robot.ProgramControlAsync(2);
+                Console.Log($"[scancal] Start after select {programName}: {C3ErrorName(start.ErrorCode)} (success={start.Success}).");
+                if (start.Success) { startedPath = programName; break; }
+            }
+
+            if (startedPath is null)
+            {
+                // As with bed-cal: variable read/write works even when C3 program-start doesn't.
+                // Fall back to a manual pendant start and still drive the capture/clear handshake.
+                Console.Log($"[scancal] C3 auto-start unavailable (select={C3ErrorName(sel.ErrorCode)}, " +
+                            $"run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}); " +
+                            "waiting for a manual pendant start.");
+                scanCal.SetStatus("Couldn't auto-start. Aim the scanner at the card, then run SCAN_TOOL_CAL on the pendant (AUTO, drives on) — scanning begins at the first pose and the robot is released automatically.");
+            }
+            else
+            {
+                Console.Log($"[scancal] Started {startedPath} via C3 program-run.");
+            }
+
+            for (int n = 0; n < target; n++)
+            {
+                bool atStop = false, done = false;
+                int pollMax = n == 0 ? 1800 : 600;   // ~360 s for a manual first start, then ~120 s/pose
+                for (int poll = 0; poll < pollMax; poll++)
+                {
+                    if (await robot.ReadFlagAsync(2)) { done = true; break; }
+                    if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
+                    await Task.Delay(200);
+                }
+                if (done) break;
+                if (!atStop)
+                {
+                    scanCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target} poses).");
+                    break;
+                }
+
+                // Drive the viewport FK to the robot's actual pose so the flange frame the hand-eye
+                // capture reads is current (streaming is paused during the sweep), then capture.
+                var axes = await robot.ReadAxesAsync();
+                robot.A1 = Math.Round(axes[0], 2); robot.A2 = Math.Round(axes[1], 2); robot.A3 = Math.Round(axes[2], 2);
+                robot.A4 = Math.Round(axes[3], 2); robot.A5 = Math.Round(axes[4], 2); robot.A6 = Math.Round(axes[5], 2);
+                robot.E1 = Math.Round(axes[6], 2);
+                await Task.Delay(400);   // let the FK settle before reading the flange
+
+                bool ok = await scanCal.CapturePoseAutoAsync();
+                if (ok) captured++;
+                scanCal.SetStatus($"Captured {captured}/{target} poses (E1 {axes[6]:F0}°)…");
+
+                await robot.SetFlagAsync(1, false);   // release the robot to the next pose
+            }
+        }
+        catch (Exception ex)
+        {
+            scanCal.SetStatus($"Auto scan-cal error: {ex.Message}");
+            Console.Log($"[scancal] ERROR: {ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            robot.ResumeStreaming();
+        }
+
+        if (captured >= 3)
+        {
+            await scanCal.ComputeCalibrationAsync();
+            if (scanCal.HasResult) scanCal.ApplyResult();   // auto-apply the hand-eye result to the TCP
+            else Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
+        }
+        else
+        {
+            Console.Log($"[scancal] Ended with {captured} poses (need >=3) — nothing computed.");
         }
     }
 
