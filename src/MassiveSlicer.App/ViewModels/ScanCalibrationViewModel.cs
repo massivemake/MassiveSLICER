@@ -250,6 +250,13 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     /// <summary>Applies the computed result to the TCP (used by the automated sweep).</summary>
     internal void ApplyResult() => ApplyToTcp();
 
+    /// <summary>Marks the result applied + sets a status (used when the sweep saves to a specific tool).</summary>
+    internal void MarkApplied(string status)
+    {
+        IsApplied = true;
+        CalibrateStatus = status;
+    }
+
     private void RaiseAllCanExecuteChanged()
     {
         AddPoseCommand.RaiseCanExecuteChanged();
