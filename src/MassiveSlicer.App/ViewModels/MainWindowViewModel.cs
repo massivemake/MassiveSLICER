@@ -511,22 +511,30 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             if (startedPath is null)
             {
-                var last = start.ErrorCode != 0 ? start : run.ErrorCode != 0 ? run : sel;
-                var hint = last.ErrorCode == 7
-                    ? "ErrorNotImplemented — port 7000 is KUKAVARPROXY only; install/start the C3 Bridge Interface Server on the KRC."
-                    : last.ErrorCode == 0
-                        ? "ErrorGeneral — program won't compile, wrong path, or robot not in AUTO with drives on. On the pendant open BED_SCAN_CAL (DEF name), compile, then retry."
-                        : "Check console for select/run/start codes.";
-                bedCal.SetStatus($"Could not start BED_SCAN_CAL — select={C3ErrorName(sel.ErrorCode)}, run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}. {hint}");
-                return;
+                // This controller does variable read/write (sync + the $FLAG handshake work) but not
+                // C3 program select/start (E_FAIL), and the .src deploy is blocked by share creds.
+                // Don't give up: fall back to a MANUAL start — the operator runs BED_SCAN_CAL on the
+                // pendant and we still drive the capture/clear handshake here (which only needs the
+                // working variable read/write). Previously we returned here, so the loop never ran and
+                // nothing ever cleared $FLAG[1].
+                Console.Log($"[bedcal] C3 auto-start unavailable (select={C3ErrorName(sel.ErrorCode)}, " +
+                            $"run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}); " +
+                            "waiting for a manual pendant start.");
+                bedCal.SetStatus("Couldn't auto-start. Run BED_SCAN_CAL on the pendant now (AUTO, drives on) — capture begins at the first stop and the robot is released automatically.");
             }
-            Console.Log($"[bedcal] Started {startedPath} via C3 program-run.");
+            else
+            {
+                Console.Log($"[bedcal] Started {startedPath} via C3 program-run.");
+            }
 
             for (int n = 0; n < target; n++)
             {
-                // Wait for the robot to reach a stop ($FLAG[1]) or finish ($FLAG[2]); ~120 s/stop.
+                // Wait for the robot to reach a stop ($FLAG[1]) or finish ($FLAG[2]).
+                // Allow extra time on the first stop so the operator can start the program on the
+                // pendant when C3 auto-start wasn't available (~360 s); ~120 s/stop afterwards.
                 bool atStop = false, done = false;
-                for (int poll = 0; poll < 600; poll++)
+                int pollMax = n == 0 ? 1800 : 600;
+                for (int poll = 0; poll < pollMax; poll++)
                 {
                     if (await robot.ReadFlagAsync(2)) { done = true; break; }
                     if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
