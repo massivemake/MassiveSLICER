@@ -17,18 +17,20 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     private string _calibrateStatus = "";
     private bool   _hasResult;
     private bool   _applied;
+    private bool   _isAutoRunning;
     private double _resultX, _resultY, _resultZ;
     private double _resultA, _resultB, _resultC;
     private double _residualRot, _residualTrans;
 
     public ScanCalibrationViewModel()
     {
-        AddPoseCommand    = new RelayCommand(async () => await CaptureAsync(), () => !_isCapturing && !_isCalibrating);
-        ClearPosesCommand = new RelayCommand(ClearPoses, () => _poseCount > 0 && !_isCapturing && !_isCalibrating);
-        CalibrateCommand  = new RelayCommand(async () => await CalibrateAsync(), () => _poseCount >= 3 && !_isCapturing && !_isCalibrating);
+        AddPoseCommand    = new RelayCommand(async () => await CaptureAsync(), () => !_isCapturing && !_isCalibrating && !_isAutoRunning);
+        ClearPosesCommand = new RelayCommand(ClearPoses, () => _poseCount > 0 && !_isCapturing && !_isCalibrating && !_isAutoRunning);
+        CalibrateCommand  = new RelayCommand(async () => await CalibrateAsync(), () => _poseCount >= 3 && !_isCapturing && !_isCalibrating && !_isAutoRunning);
         ApplyToTcpCommand = new RelayCommand(ApplyToTcp, () => _hasResult && !_applied);
         AutoCalibrateCommand = new RelayCommand(
-            async () => { if (OnAutoCalibrateRequested is { } f) await f(); }, () => !_isCapturing && !_isCalibrating);
+            async () => { if (OnAutoCalibrateRequested is { } f) await f(); },
+            () => !_isCapturing && !_isCalibrating && !_isAutoRunning);
     }
 
     // -- Commands -------------------------------------------------------------
@@ -214,6 +216,19 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     }
 
     // -- Hooks for the automated sweep (MainWindowViewModel.RunAutoScanToolCalibration) --------
+
+    /// <summary>True while the automated sweep is running — gates the buttons so a re-click can't
+    /// launch a second concurrent run (the C3 bridge allows only one operation in flight).</summary>
+    public bool IsAutoRunning => _isAutoRunning;
+
+    /// <summary>Sets the sweep-in-progress flag and refreshes command states.</summary>
+    internal void SetAutoRunning(bool running)
+    {
+        if (_isAutoRunning == running) return;
+        _isAutoRunning = running;
+        OnPropertyChanged(nameof(IsAutoRunning));
+        RaiseAllCanExecuteChanged();
+    }
 
     /// <summary>Sets the calibrate status line (used by the automated sweep orchestration).</summary>
     internal void SetStatus(string s) => CalibrateStatus = s;
