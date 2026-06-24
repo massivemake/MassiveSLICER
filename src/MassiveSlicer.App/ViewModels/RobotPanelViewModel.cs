@@ -233,6 +233,20 @@ public sealed class RobotPanelViewModel : ViewModelBase
         => _sync.ProgramControlAsync(command, interpreter, ct);
 
     /// <summary>
+    /// Writes a KUKA <c>BASE_DATA[index]</c> FRAME on the controller (X/Y/Z mm, A/B/C deg ZYX-Euler)
+    /// and returns the controller's echoed value. Used to push a rotary-bed calibration back to the
+    /// robot so coordinated motion matches the model. Requires a live C3 connection.
+    /// </summary>
+    public Task<string> WriteBaseDataAsync(int index,
+        double x, double y, double z, double a, double b, double c, CancellationToken ct = default)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        string frame = string.Format(inv,
+            "{{X {0:F3}, Y {1:F3}, Z {2:F3}, A {3:F4}, B {4:F4}, C {5:F4}}}", x, y, z, a, b, c);
+        return _sync.WriteVarAsync($"BASE_DATA[{index}]", frame, ct);
+    }
+
+    /// <summary>
     /// Copies the bundled bed-calibration KRL to the controller's program folder over SMB.
     /// Returns the destination path. Throws on copy failure (share unreachable / permissions).
     /// </summary>

@@ -8,7 +8,7 @@ public sealed class RotaryBedResult
     public required bool Success { get; init; }
     public string? Error { get; init; }
 
-    /// <summary>Rotary axis location in world / ROBROOT (mm). X/Y = circle centre, Z = mean sample height.</summary>
+    /// <summary>Rotary axis centre in world / ROBROOT (mm) — the 3-D circle centre.</summary>
     public float CenterX { get; init; }
     public float CenterY { get; init; }
     public float CenterZ { get; init; }
@@ -19,10 +19,29 @@ public sealed class RotaryBedResult
     /// <summary>RMS of the radial fit error (mm). Lower is better; large values flag a slipped marker or arm motion.</summary>
     public float RmsResidualMm { get; init; }
 
-    /// <summary>Max−min sample Z (mm). A near-vertical axis on a flat bed keeps this small; large values flag axis tilt.</summary>
+    /// <summary>Max−min sample Z (mm). Diagnostic only now that the axis tilt is solved (see <see cref="AxisTiltDeg"/>).</summary>
     public float ZSpreadMm { get; init; }
 
     public int SampleCount { get; init; }
+
+    // -- Axis orientation (3-D fit) -------------------------------------------
+
+    /// <summary>Unit rotary-axis direction in world (mm frame), oriented to point up (+Z).</summary>
+    public float AxisX { get; init; }
+    public float AxisY { get; init; }
+    public float AxisZ { get; init; }
+
+    /// <summary>Angle between the fitted axis and world +Z (degrees). 0 = perfectly vertical.</summary>
+    public float AxisTiltDeg { get; init; }
+
+    /// <summary>
+    /// KUKA ZYX-Euler orientation (degrees) of a base frame whose Z is the rotary axis and whose
+    /// X is world-X projected into the table plane — i.e. A/B/C describe the axis tilt only, so a
+    /// perfectly vertical axis yields (0, 0, 0). Suitable for BASE_DATA of the rotary workpiece base.
+    /// </summary>
+    public float BaseA { get; init; }
+    public float BaseB { get; init; }
+    public float BaseC { get; init; }
 
     // -- Rotation direction ---------------------------------------------------
 
@@ -40,76 +59,138 @@ public sealed class RotaryBedResult
 }
 
 /// <summary>
-/// Fits the rotary print-bed (E1) rotation axis from a set of world-space points,
-/// each the detected position of a marker fixed to the bed at a different E1 angle.
-/// With the robot arm held still, the marker sweeps a circle about the (near-vertical)
-/// bed axis: the circle centre gives the bed centre X/Y and the mean height gives Z.
-/// Assumes a near-vertical axis (true for this turntable); <see cref="RotaryBedResult.ZSpreadMm"/>
-/// surfaces any tilt so a bad assumption is visible rather than silent.
+/// Fits the rotary print-bed (E1) rotation axis from a set of world-space points, each the detected
+/// position of a marker fixed to the bed at a different E1 angle. With the robot arm held still the
+/// marker sweeps a circle in the plane perpendicular to the bed axis. A full 3-D circle fit recovers
+/// the circle centre (bed centre X/Y/Z) <em>and</em> the plane normal (the rotary axis), so real
+/// mounting tilt is captured — not assumed away — and a KUKA base orientation (A/B/C) can be derived.
 /// </summary>
 public static class RotaryBedCalibration
 {
-    /// <param name="samples">(E1 angle°, world-space marker point mm). The angle is recorded for
-    /// diagnostics/outlier review; the geometric fit itself does not require it.</param>
+    /// <param name="samples">(E1 angle°, world-space marker point mm). The angle drives the rotation
+    /// direction fit; the geometric circle fit itself does not require it.</param>
     public static RotaryBedResult Fit(IReadOnlyList<(double AngleDeg, Vector3 World)> samples)
     {
         if (samples.Count < 3)
             return new RotaryBedResult { Success = false, Error = $"Need at least 3 samples (have {samples.Count})." };
 
-        // Algebraic (Kåsa) circle fit in the XY plane: x²+y² + D·x + E·y + F = 0.
-        // Normal equations minimise Σ(D·xi + E·yi + F + (xi²+yi²))².
-        double sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0;
-        double sxz = 0, syz = 0, szz = 0;   // z := xi²+yi²
-        double sz = 0, zmin = double.MaxValue, zmax = double.MinValue;
+        int n = samples.Count;
+
+        // -- Centroid + Z spread -------------------------------------------------
+        Vector3 g = Vector3.Zero;
+        double zmin = double.MaxValue, zmax = double.MinValue;
         foreach (var (_, p) in samples)
         {
-            double x = p.X, y = p.Y, q = x * x + y * y;
-            sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y;
-            sxz += x * q; syz += y * q; szz += q;
-            sz += p.Z;
+            g += p;
             if (p.Z < zmin) zmin = p.Z;
             if (p.Z > zmax) zmax = p.Z;
         }
-        int n = samples.Count;
+        g /= n;
 
-        // [sxx sxy sx][D]   [-sxz]
-        // [sxy syy sy][E] = [-syz]
-        // [sx  sy  n ][F]   [-szz]
-        double[,] a = { { sxx, sxy, sx }, { sxy, syy, sy }, { sx, sy, n } };
-        double[]  b = { -sxz, -syz, -szz };
-        if (!Solve3(a, b, out var sol))
-            return new RotaryBedResult { Success = false, Error = "Degenerate samples (collinear or marker on-centre — give it a larger radius)." };
+        // -- Plane fit: smallest-eigenvector of the sample covariance = axis normal ----
+        double cxx = 0, cxy = 0, cxz = 0, cyy = 0, cyz = 0, czz = 0;
+        foreach (var (_, p) in samples)
+        {
+            var d = p - g;
+            cxx += d.X * d.X; cxy += d.X * d.Y; cxz += d.X * d.Z;
+            cyy += d.Y * d.Y; cyz += d.Y * d.Z; czz += d.Z * d.Z;
+        }
+        double[,] cov = { { cxx, cxy, cxz }, { cxy, cyy, cyz }, { cxz, cyz, czz } };
+        if (!SmallestEigenvector(cov, out var normal))
+            return new RotaryBedResult { Success = false, Error = "Degenerate samples (collinear or coincident)." };
+        if (normal.Z < 0) normal = -normal;   // orient up so tilt reads as a small angle from +Z
 
-        double cx = -sol[0] / 2.0, cy = -sol[1] / 2.0;
-        double r2 = cx * cx + cy * cy - sol[2];
+        // -- In-plane basis, project, 2-D circle fit (Kåsa) ----------------------
+        Vector3 seed = MathF.Abs(normal.X) < 0.9f ? new Vector3(1, 0, 0) : new Vector3(0, 1, 0);
+        Vector3 u = Vector3.Normalize(seed - Vector3.Dot(seed, normal) * normal);
+        Vector3 v = Vector3.Cross(normal, u);
+
+        double sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0, saq = 0, sbq = 0, sqq = 0;
+        var ab = new (double a, double b)[n];
+        for (int i = 0; i < n; i++)
+        {
+            var d = samples[i].World - g;
+            double a = Vector3.Dot(d, u), b = Vector3.Dot(d, v), q = a * a + b * b;
+            ab[i] = (a, b);
+            sa += a; sb += b; saa += a * a; sbb += b * b; sab += a * b;
+            saq += a * q; sbq += b * q; sqq += q;
+        }
+        double[,] m = { { saa, sab, sa }, { sab, sbb, sb }, { sa, sb, n } };
+        double[]  rhs = { -saq, -sbq, -sqq };
+        if (!Solve3(m, rhs, out var sol))
+            return new RotaryBedResult { Success = false, Error = "Degenerate samples (marker on-centre — give it a larger radius)." };
+
+        double ca = -sol[0] / 2.0, cb = -sol[1] / 2.0;
+        double r2 = ca * ca + cb * cb - sol[2];
         if (r2 <= 0)
             return new RotaryBedResult { Success = false, Error = "Circle fit produced a non-positive radius." };
         double r = Math.Sqrt(r2);
 
+        Vector3 center = g + (float)ca * u + (float)cb * v;
+
         double sse = 0;
-        foreach (var (_, p) in samples)
+        for (int i = 0; i < n; i++)
         {
-            double d = Math.Sqrt((p.X - cx) * (p.X - cx) + (p.Y - cy) * (p.Y - cy)) - r;
+            double d = Math.Sqrt((ab[i].a - ca) * (ab[i].a - ca) + (ab[i].b - cb) * (ab[i].b - cb)) - r;
             sse += d * d;
         }
 
-        var rot = FitRotation(samples, cx, cy);
+        // -- Base orientation: Z = axis, X = world-X projected into the plane ----
+        Vector3 bx = new Vector3(1, 0, 0) - Vector3.Dot(new Vector3(1, 0, 0), normal) * normal;
+        if (bx.LengthSquared() < 1e-9f) bx = new Vector3(0, 1, 0) - Vector3.Dot(new Vector3(0, 1, 0), normal) * normal;
+        bx = Vector3.Normalize(bx);
+        Vector3 by = Vector3.Cross(normal, bx);
+        var (baseA, baseB, baseC) = FrameToKukaAbc(bx, by, normal);
+
+        float tilt = (float)(Math.Acos(Math.Clamp(normal.Z, -1f, 1f)) * 180.0 / Math.PI);
+
+        var rot = FitRotation(samples, center.X, center.Y);
 
         return new RotaryBedResult
         {
             Success             = true,
-            CenterX             = (float)cx,
-            CenterY             = (float)cy,
-            CenterZ             = (float)(sz / n),
+            CenterX             = center.X,
+            CenterY             = center.Y,
+            CenterZ             = center.Z,
             Radius              = (float)r,
             RmsResidualMm       = (float)Math.Sqrt(sse / n),
             ZSpreadMm           = (float)(zmax - zmin),
             SampleCount         = n,
+            AxisX               = normal.X,
+            AxisY               = normal.Y,
+            AxisZ               = normal.Z,
+            AxisTiltDeg         = tilt,
+            BaseA               = baseA,
+            BaseB               = baseB,
+            BaseC               = baseC,
             RotationResolved    = rot.Resolved,
             RotationSign        = rot.Sign,
             MeasuredDegPerE1    = rot.DegPerE1,
             RotationResidualDeg = rot.ResidualDeg,
         };
+    }
+
+    /// <summary>
+    /// KUKA ZYX-Euler (A about Z, B about Y, C about X; degrees) for a frame whose axes (expressed in
+    /// the reference frame) are the columns x, y, z. R = Rz(A)·Ry(B)·Rx(C). Same extraction the KRL
+    /// exporter uses for tool poses, factored for a general frame.
+    /// </summary>
+    public static (float A, float B, float C) FrameToKukaAbc(Vector3 x, Vector3 y, Vector3 z)
+    {
+        const float R2D = 180f / MathF.PI;
+        float bRad = MathF.Atan2(-x.Z, MathF.Sqrt(x.X * x.X + x.Y * x.Y));
+        float aRad, cRad;
+        if (MathF.Abs(MathF.Abs(bRad) - MathF.PI / 2f) < 0.05f)   // gimbal lock near B = ±90°
+        {
+            aRad = MathF.Atan2(-y.X, y.Y);
+            cRad = 0f;
+        }
+        else
+        {
+            aRad = MathF.Atan2(x.Y, x.X);
+            cRad = MathF.Atan2(y.Z, z.Z);
+        }
+        return (aRad * R2D, bRad * R2D, cRad * R2D);
     }
 
     /// <summary>
@@ -124,7 +205,6 @@ public static class RotaryBedCalibration
         if (ord.Count < 2 || ord[^1].AngleDeg - ord[0].AngleDeg < 5.0)
             return (false, 0f, 0f, 0f);
 
-        // Unwrap φ over the E1-sorted sequence so it accumulates monotonically.
         var xs = new double[ord.Count];
         var ys = new double[ord.Count];
         double unwrapped = 0, prev = 0;
@@ -140,23 +220,23 @@ public static class RotaryBedCalibration
                 unwrapped += d;
             }
             prev = phi;
-            xs[i] = ord[i].AngleDeg * Math.PI / 180.0;   // E1 in rad
+            xs[i] = ord[i].AngleDeg * Math.PI / 180.0;
             ys[i] = unwrapped;
         }
 
-        int    m  = ord.Count;
+        int    mm = ord.Count;
         double sx = xs.Sum(), sy = ys.Sum();
         double sxx = 0, sxy = 0;
-        for (int i = 0; i < m; i++) { sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i]; }
-        double denom = m * sxx - sx * sx;
+        for (int i = 0; i < mm; i++) { sxx += xs[i] * xs[i]; sxy += xs[i] * ys[i]; }
+        double denom = mm * sxx - sx * sx;
         if (Math.Abs(denom) < 1e-9) return (false, 0f, 0f, 0f);
 
-        double slope = (m * sxy - sx * sy) / denom;     // rad/rad = deg/deg
-        double b     = (sy - slope * sx) / m;
+        double slope = (mm * sxy - sx * sy) / denom;
+        double bb    = (sy - slope * sx) / mm;
 
         double sse = 0;
-        for (int i = 0; i < m; i++) { double e = ys[i] - (slope * xs[i] + b); sse += e * e; }
-        double residualDeg = Math.Sqrt(sse / m) * 180.0 / Math.PI;
+        for (int i = 0; i < mm; i++) { double e = ys[i] - (slope * xs[i] + bb); sse += e * e; }
+        double residualDeg = Math.Sqrt(sse / mm) * 180.0 / Math.PI;
 
         return (true, slope >= 0 ? 1f : -1f, (float)slope, (float)residualDeg);
     }
@@ -189,6 +269,55 @@ public static class RotaryBedCalibration
             for (int c = r + 1; c < 3; c++) s -= a[r, c] * x[c];
             x[r] = s / a[r, r];
         }
+        return true;
+    }
+
+    /// <summary>Unit eigenvector of the smallest eigenvalue of a symmetric 3×3 matrix (Jacobi).</summary>
+    private static bool SmallestEigenvector(double[,] a, out Vector3 vec)
+    {
+        vec = Vector3.UnitZ;
+        // Jacobi eigenvalue iteration on a symmetric 3×3.
+        double[,] m = (double[,])a.Clone();
+        double[,] v = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
+        for (int sweep = 0; sweep < 50; sweep++)
+        {
+            // largest off-diagonal
+            int p = 0, q = 1; double max = Math.Abs(m[0, 1]);
+            if (Math.Abs(m[0, 2]) > max) { max = Math.Abs(m[0, 2]); p = 0; q = 2; }
+            if (Math.Abs(m[1, 2]) > max) { max = Math.Abs(m[1, 2]); p = 1; q = 2; }
+            if (max < 1e-12) break;
+
+            double app = m[p, p], aqq = m[q, q], apq = m[p, q];
+            double phi = 0.5 * Math.Atan2(2 * apq, aqq - app);
+            double c = Math.Cos(phi), s = Math.Sin(phi);
+            // rotate m
+            for (int k = 0; k < 3; k++)
+            {
+                double mkp = m[k, p], mkq = m[k, q];
+                m[k, p] = c * mkp - s * mkq;
+                m[k, q] = s * mkp + c * mkq;
+            }
+            for (int k = 0; k < 3; k++)
+            {
+                double mpk = m[p, k], mqk = m[q, k];
+                m[p, k] = c * mpk - s * mqk;
+                m[q, k] = s * mpk + c * mqk;
+            }
+            // accumulate eigenvectors
+            for (int k = 0; k < 3; k++)
+            {
+                double vkp = v[k, p], vkq = v[k, q];
+                v[k, p] = c * vkp - s * vkq;
+                v[k, q] = s * vkp + c * vkq;
+            }
+        }
+        // smallest eigenvalue is on the diagonal
+        int idx = 0; double best = m[0, 0];
+        if (m[1, 1] < best) { best = m[1, 1]; idx = 1; }
+        if (m[2, 2] < best) { best = m[2, 2]; idx = 2; }
+        var e = new Vector3((float)v[0, idx], (float)v[1, idx], (float)v[2, idx]);
+        if (e.LengthSquared() < 1e-12f) return false;
+        vec = Vector3.Normalize(e);
         return true;
     }
 }
