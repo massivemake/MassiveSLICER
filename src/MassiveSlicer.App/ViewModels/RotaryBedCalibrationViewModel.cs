@@ -18,6 +18,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     private bool   _isBusy;
     private string _status = "";
     private bool   _hasResult;
+    private bool   _applied;
     private double _centerX, _centerY, _centerZ, _radius, _residual, _zSpread;
     private double _rotationSign, _rotationDegPerE1, _rotationResidual;
     private bool   _rotationResolved;
@@ -27,7 +28,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         AddSampleCommand     = new RelayCommand(async () => await AddSampleAsync(), () => !_isBusy);
         ClearCommand         = new RelayCommand(Clear,   () => _samples.Count > 0 && !_isBusy);
         ComputeCommand       = new RelayCommand(Compute, () => _samples.Count >= 3 && !_isBusy);
-        ApplyCommand         = new RelayCommand(Apply,   () => _hasResult && !_isBusy);
+        ApplyCommand         = new RelayCommand(Apply,   () => _hasResult && !_isBusy && !_applied);
         AutoCalibrateCommand = new RelayCommand(
             async () => { if (OnAutoCalibrateRequested is { } f) await f(); }, () => !_isBusy);
     }
@@ -50,6 +51,9 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
 
     /// <summary>Apply the measured bed centre (world / ROBROOT mm) and E1 rotation sign.</summary>
     internal Action<float, float, float, float>? OnApplyCenter { get; set; }
+
+    /// <summary>Console logger (wired by MainWindowViewModel) for success/diagnostic feedback.</summary>
+    internal Action<string>? Log { get; set; }
 
     /// <summary>Runs the automated E1-sweep capture (deploy KRL, handshake, scan ×10, compute). Wired by MainWindowViewModel.</summary>
     internal Func<Task>? OnAutoCalibrateRequested { get; set; }
@@ -78,6 +82,21 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         get => _hasResult;
         private set { if (SetField(ref _hasResult, value)) ApplyCommand.RaiseCanExecuteChanged(); }
     }
+
+    /// <summary>True once the current result has been written to the cell — grays out Apply as success feedback.</summary>
+    public bool IsApplied
+    {
+        get => _applied;
+        private set
+        {
+            if (!SetField(ref _applied, value)) return;
+            ApplyCommand.RaiseCanExecuteChanged();
+            OnPropertyChanged(nameof(ApplyButtonLabel));
+        }
+    }
+
+    /// <summary>Apply button caption — flips to a success tick once written to the cell.</summary>
+    public string ApplyButtonLabel => _applied ? "APPLIED ✓" : "APPLY TO CELL";
 
     public double CenterX  { get => _centerX;  private set => SetField(ref _centerX,  value); }
     public double CenterY  { get => _centerY;  private set => SetField(ref _centerY,  value); }
@@ -132,6 +151,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         _samples.Add((e1, world));
 
         HasResult = false;
+        IsApplied = false;
         OnPropertyChanged(nameof(SampleCount));
         OnPropertyChanged(nameof(SampleCountLabel));
         RaiseAllCanExecuteChanged();
@@ -143,6 +163,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     {
         _samples.Clear();
         HasResult = false;
+        IsApplied = false;
         Status = "";
         OnPropertyChanged(nameof(SampleCount));
         OnPropertyChanged(nameof(SampleCountLabel));
@@ -173,16 +194,24 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         RotationResidual = Math.Round(res.RotationResidualDeg, 2);
 
         HasResult = true;
+        IsApplied = false;   // fresh result — enable Apply (auto-applied by the sweep, manual otherwise)
         Status = $"Centre ({CenterX:F1}, {CenterY:F1}, {CenterZ:F1}) — R {Radius:F0} mm, residual {Residual:F2} mm. {RotationLabel}";
     }
 
-    private void Apply()
+    /// <summary>
+    /// Writes the fitted centre + rotation to the cell and marks the result applied (grays the
+    /// button as success feedback). Public so the automated sweep can apply without a button click.
+    /// </summary>
+    public void Apply()
     {
-        if (!_hasResult) return;
+        if (!_hasResult || _applied) return;
         // Fall back to the original CW (−1) direction if E1 spread was too small to resolve.
         float sign = _rotationResolved ? (float)_rotationSign : -1f;
         OnApplyCenter?.Invoke((float)_centerX, (float)_centerY, (float)_centerZ, sign);
-        Status = $"Applied centre ({_centerX:F1}, {_centerY:F1}, {_centerZ:F1}) mm, rotation {(sign < 0 ? "CW" : "CCW")}.";
+        IsApplied = true;
+        Status = $"Applied to cell ✓  centre ({_centerX:F1}, {_centerY:F1}, {_centerZ:F1}) mm, rotation {(sign < 0 ? "CW" : "CCW")}.";
+        Log?.Invoke($"[bedcal] Applied to cell: centre ({_centerX:F1}, {_centerY:F1}, {_centerZ:F1}) mm, " +
+                    $"R {_radius:F0} mm, residual {_residual:F2} mm, rotation {(sign < 0 ? "CW" : "CCW")} — cell updated.");
     }
 
     private void RaiseAllCanExecuteChanged()

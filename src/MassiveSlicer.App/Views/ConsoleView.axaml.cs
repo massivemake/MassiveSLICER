@@ -24,7 +24,10 @@ public partial class ConsoleView : UserControl
     }
 
     private void OnHistoryChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        => HistoryScroll?.ScrollToEnd();
+        // Defer to after the new item is measured/laid out — calling ScrollToEnd synchronously here
+        // scrolls to the OLD end, leaving the just-added line below the fold / under the input box.
+        => Avalonia.Threading.Dispatcher.UIThread.Post(
+               () => HistoryScroll?.ScrollToEnd(), Avalonia.Threading.DispatcherPriority.Background);
 
     private void OnInputKeyDown(object? sender, KeyEventArgs e)
     {

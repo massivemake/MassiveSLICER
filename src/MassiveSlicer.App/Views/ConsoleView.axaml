@@ -36,7 +36,7 @@
                       x:Name="HistoryScroll"
                       VerticalScrollBarVisibility="Auto"
                       Background="{DynamicResource Bg1}"
-                      Padding="8,4">
+                      Padding="8,4,8,10">
             <ItemsControl ItemsSource="{Binding History}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ConsoleHistoryEntry">
