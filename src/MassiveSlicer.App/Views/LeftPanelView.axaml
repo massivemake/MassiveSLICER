@@ -650,6 +650,10 @@
                                 HorizontalAlignment="Stretch"
                                 Margin="8,4,8,8"/>
 
+                        <!-- All bed settings (manual adjust + calibration) grouped, collapsed by default. -->
+                        <Expander Classes="SectionExpander" Header="BED SETTINGS" IsExpanded="False" Margin="0,4,0,0">
+                          <StackPanel>
+
                         <!-- Rotary bed manual adjust (rotary cells only) -->
                         <StackPanel IsVisible="{Binding DataContext.RightPanel.Settings.Robot.IsRotaryBed,
                                                 RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
@@ -785,6 +789,8 @@
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                                    FontSize="11" Margin="8,2,8,8"/>
+                          </StackPanel>
+                        </Expander>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="HOME POSITIONS" Classes="SectionHeader"/>
