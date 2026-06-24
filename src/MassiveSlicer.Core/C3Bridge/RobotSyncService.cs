@@ -113,6 +113,16 @@ public sealed class RobotSyncService : IDisposable
     public Task SetBoolAsync(string name, bool value, CancellationToken ct = default)
         => _client.WriteAsync(name, value ? "TRUE" : "FALSE", 2000, ct);
 
+    /// <summary>Writes a KRL variable by name (any type) and returns the controller's echoed value.
+    /// For a FRAME such as <c>BASE_DATA[2]</c> pass an aggregate value, e.g.
+    /// <c>{X 100.0, Y 0.0, Z 0.0, A 0.0, B 0.0, C 0.0}</c>.</summary>
+    public Task<string> WriteVarAsync(string name, string value, CancellationToken ct = default)
+        => _client.WriteAsync(name, value, 2000, ct);
+
+    /// <summary>Reads a KRL variable by name and returns the raw controller value.</summary>
+    public Task<string> ReadVarAsync(string name, CancellationToken ct = default)
+        => _client.ReadAsync(name, 2000, ct);
+
     /// <summary>
     /// Selects and starts a KRL program by name via the C3 Bridge program-control command
     /// (no dispatcher needed). Streaming must be paused. e.g. "/R1/Program/BED_SCAN_CAL".

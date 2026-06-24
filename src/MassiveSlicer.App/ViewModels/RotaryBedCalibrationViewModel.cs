@@ -20,6 +20,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     private bool   _hasResult;
     private bool   _applied;
     private double _centerX, _centerY, _centerZ, _radius, _residual, _zSpread;
+    private double _baseA, _baseB, _baseC, _axisTiltDeg;
     private double _rotationSign, _rotationDegPerE1, _rotationResidual;
     private bool   _rotationResolved;
 
@@ -105,6 +106,16 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     public double Residual { get => _residual; private set => SetField(ref _residual, value); }
     public double ZSpread  { get => _zSpread;  private set => SetField(ref _zSpread,  value); }
 
+    /// <summary>KUKA ZYX-Euler orientation (deg) of the rotary base frame (axis tilt only). Written to BASE_DATA.</summary>
+    public double BaseA       { get => _baseA;       private set => SetField(ref _baseA,       value); }
+    public double BaseB       { get => _baseB;       private set => SetField(ref _baseB,       value); }
+    public double BaseC       { get => _baseC;       private set { if (SetField(ref _baseC, value)) OnPropertyChanged(nameof(OrientationLabel)); } }
+    public double AxisTiltDeg { get => _axisTiltDeg; private set { if (SetField(ref _axisTiltDeg, value)) OnPropertyChanged(nameof(OrientationLabel)); } }
+
+    /// <summary>Human-readable axis orientation, e.g. "Axis tilt 0.89° — A 0.00 B 0.89 C 0.00".</summary>
+    public string OrientationLabel =>
+        $"Axis tilt {_axisTiltDeg:F2}° — A {_baseA:F2} B {_baseB:F2} C {_baseC:F2}";
+
     public bool   RotationResolved { get => _rotationResolved; private set { if (SetField(ref _rotationResolved, value)) OnPropertyChanged(nameof(RotationLabel)); } }
     public double RotationSign     { get => _rotationSign;     private set => SetField(ref _rotationSign, value); }
     public double RotationDegPerE1 { get => _rotationDegPerE1; private set { if (SetField(ref _rotationDegPerE1, value)) OnPropertyChanged(nameof(RotationLabel)); } }
@@ -188,6 +199,11 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         Residual = Math.Round(res.RmsResidualMm, 2);
         ZSpread  = Math.Round(res.ZSpreadMm, 2);
 
+        BaseA       = Math.Round(res.BaseA, 3);
+        BaseB       = Math.Round(res.BaseB, 3);
+        BaseC       = Math.Round(res.BaseC, 3);
+        AxisTiltDeg = Math.Round(res.AxisTiltDeg, 3);
+
         RotationResolved = res.RotationResolved;
         RotationSign     = res.RotationSign;
         RotationDegPerE1 = Math.Round(res.MeasuredDegPerE1, 3);
@@ -195,7 +211,8 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
 
         HasResult = true;
         IsApplied = false;   // fresh result — enable Apply (auto-applied by the sweep, manual otherwise)
-        Status = $"Centre ({CenterX:F1}, {CenterY:F1}, {CenterZ:F1}) — R {Radius:F0} mm, residual {Residual:F2} mm. {RotationLabel}";
+        Status = $"Centre ({CenterX:F1}, {CenterY:F1}, {CenterZ:F1}) — R {Radius:F0} mm, residual {Residual:F2} mm. " +
+                 $"{OrientationLabel}. {RotationLabel}";
     }
 
     /// <summary>

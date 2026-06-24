@@ -236,6 +236,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             // Route through the live bed-edit path: updates the scene immediately AND persists.
             robot.ApplyBedCalibration(x, y, z, sign);
             Console.Log($"[bedcal] Applied bed centre ({x:F1}, {y:F1}, {z:F1}), rotation {(sign < 0 ? "CW" : "CCW")}.");
+            // Also push the calibrated rotary base back to the controller (live), so coordinated
+            // motion matches the model — not just the app's cell. Fire-and-forget with logging.
+            _ = WriteRotaryBaseToControllerAsync(x, y, z);
         };
         bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
         bedCal.Log = Console.Log;
@@ -439,6 +442,55 @@ public sealed class MainWindowViewModel : ViewModelBase
         10 => "Answer too long",
         _  => $"code {code}",
     };
+
+    /// <summary>
+    /// Pushes the calibrated rotary base (centre + fitted axis orientation A/B/C) to the controller's
+    /// <c>BASE_DATA[rotary]</c> frame so coordinated motion matches the model — not just the app's cell.
+    /// Position is the bed centre relative to ROBROOT (BASE_DATA is $WORLD/$ROBROOT-relative). No-op
+    /// (logged) when the robot isn't connected or the cell has no rotary base. Fire-and-forget.
+    /// </summary>
+    private async System.Threading.Tasks.Task WriteRotaryBaseToControllerAsync(float cx, float cy, float cz)
+    {
+        var robot  = RightPanel.Settings.Robot;
+        var bedCal = robot.BedCalibration;
+
+        if (!robot.IsConnected)
+        {
+            Console.Log("[bedcal] Robot not connected — BASE_DATA not written (calibration saved to the cell only).");
+            return;
+        }
+        if (Viewport.ActiveCell is not { } cell)
+        {
+            Console.Log("[bedcal] No active cell — BASE_DATA not written.");
+            return;
+        }
+
+        KrlBaseEntry? rotary = null;
+        foreach (var bse in cell.KrlBases)
+            if (bse.Name.IndexOf("Rotary", System.StringComparison.OrdinalIgnoreCase) >= 0) { rotary = bse; break; }
+        if (rotary is null)
+        {
+            Console.Log("[bedcal] Cell has no 'Base Rotary' entry — BASE_DATA not written.");
+            return;
+        }
+
+        // BASE_DATA is $WORLD/$ROBROOT-relative; our centre is in world/ROBROOT mm, so subtract robroot.
+        var rw = cell.Robot.WorldPosition;
+        double bx = cx - rw.X, by = cy - rw.Y, bz = cz - rw.Z;
+        double a = bedCal.BaseA, b = bedCal.BaseB, c = bedCal.BaseC;
+
+        try
+        {
+            var echo = await robot.WriteBaseDataAsync(rotary.Index, bx, by, bz, a, b, c);
+            Console.Log($"[bedcal] Wrote BASE_DATA[{rotary.Index}] ('{rotary.Name}') = " +
+                        $"(X {bx:F2}, Y {by:F2}, Z {bz:F2}, A {a:F3}, B {b:F3}, C {c:F3}) → controller. " +
+                        $"Echo: {echo?.Trim()}");
+        }
+        catch (System.Exception ex)
+        {
+            Console.Log($"[bedcal] BASE_DATA[{rotary.Index}] write FAILED: {ex.Message} (calibration is still saved to the cell).");
+        }
+    }
 
     private async Task RunAutoBedCalibration()
     {
