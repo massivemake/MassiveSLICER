@@ -90,6 +90,10 @@ Z-up right-hand everywhere: X forward, Y left, Z up. OpenGL camera uses Z-up fro
 - **D-H** — Denavit-Hartenberg FK/IK for KR120
 - **Slicing** — Planar, angled, geodesic/surface modes
 
+### KUKA controller GOTCHA — R1 program recognition needs a controller restart
+
+Any KRL program **created, edited, or deleted in the controller's `R1\Program` folder** (e.g. deploying `BED_SCAN_CAL.src` / `SCAN_TOOL_CAL.src` to `\\<bridgeIp>\krc\ROBOTER\KRC\R1\Program\` over SMB) is **NOT recognized by the KRC until the KUKA is restarted** (control-PC reboot / KSS restart). Until then the file is on disk but the Navigator/selection won't see the new/changed version — so a freshly deployed program won't appear or run on the pendant. This (plus C3 remote-select being unavailable here — KUKAVARPROXY only, no C3 Bridge Interface Server → `Select … E_FAIL`) is why an auto-deployed calibration program "doesn't load to the HMI." Workflow: deploy → **restart the KUKA** → then on the pendant Navigator → `R1\Program` → Select the program → Start. Related: [[relief-milling]], rotary/scan calibration handshake.
+
 ### Not ported from JS prototype
 
 Three.js rendering, `kinematics.js` IK, `c3bridge.js`, and `main.js` global state — all rewritten in C# with MVVM + proper Z-up.
