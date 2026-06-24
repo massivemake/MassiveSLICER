@@ -753,28 +753,49 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (captured >= 3)
         {
+            // Run the hand-eye fit automatically — no manual "Calibrate" click needed.
+            scanCal.SetStatus($"Computing hand-eye calibration from {captured} poses…");
             await scanCal.ComputeCalibrationAsync();
             if (scanCal.HasResult)
             {
-                // Calibrated with the uncalibrated working tool (#5); SAVE the computed camera TCP to
-                // the calibrated Tool #6 (krlIndex 6), not the working tool used for the sweep.
+                // Calibrated with the uncalibrated working tool (#5); the computed camera TCP belongs
+                // to the calibrated scanner Tool #6. Save AND apply it live so it takes effect with no
+                // manual reselect/reload — select tool 6, then push the TCP through the normal edit path
+                // (updates the IK/render TCP and writes it to the cell JSON for tool 6).
                 const int calibratedToolKrlIndex = 6;
+                double x = scanCal.ResultX, y = scanCal.ResultY, z = scanCal.ResultZ;
+                double a = scanCal.ResultA, b = scanCal.ResultB, c = scanCal.ResultC;
+
+                bool wentLive = false;
+                Avalonia.Threading.Dispatcher.UIThread.Invoke(() =>
+                {
+                    if (robot.SelectToolByKrlIndex(calibratedToolKrlIndex))
+                    {
+                        robot.ApplyTcpOffset(x, y, z, a, b, c);   // live TCP + saves to tool 6 via OnTcpOffsetEdited
+                        wentLive = true;
+                    }
+                });
+
                 if (Viewport.ActiveCellPath is { } cellPath)
                 {
+                    // Durable save regardless of the live path (covers a cell whose tool list lacks #6).
                     CellLoader.SaveToolTcp(cellPath, calibratedToolKrlIndex,
-                        (float)scanCal.ResultX, (float)scanCal.ResultY, (float)scanCal.ResultZ,
-                        (float)scanCal.ResultA, (float)scanCal.ResultB, (float)scanCal.ResultC);
-                    MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);   // next cell load picks up the new tool-6 TCP
-                    scanCal.MarkApplied($"Calibrated ✓ — saved to Tool #{calibratedToolKrlIndex}.");
-                    Console.Log($"[scancal] Saved calibrated TCP to Tool #{calibratedToolKrlIndex}: " +
-                                $"({scanCal.ResultX:F2}, {scanCal.ResultY:F2}, {scanCal.ResultZ:F2}) mm / " +
-                                $"A{scanCal.ResultA:F3} B{scanCal.ResultB:F3} C{scanCal.ResultC:F3} " +
-                                $"(rot residual {scanCal.ResidualRot:F3}°, trans {scanCal.ResidualTrans:F3} mm). " +
-                                "Reselect/reload tool 6 to use it.");
+                        (float)x, (float)y, (float)z, (float)a, (float)b, (float)c);
+                    MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);   // cached clones pick up the new tool-6 TCP
+
+                    string howApplied = wentLive
+                        ? $"Calibrated ✓ — applied to Tool #{calibratedToolKrlIndex} (now live) and saved."
+                        : $"Calibrated ✓ — saved to Tool #{calibratedToolKrlIndex} (select tool {calibratedToolKrlIndex} to use it).";
+                    scanCal.MarkApplied(howApplied);
+                    Console.Log($"[scancal] {(wentLive ? "Applied + saved" : "Saved")} calibrated TCP to Tool #{calibratedToolKrlIndex}: " +
+                                $"({x:F2}, {y:F2}, {z:F2}) mm / A{a:F3} B{b:F3} C{c:F3} " +
+                                $"(rot residual {scanCal.ResidualRot:F3}°, trans {scanCal.ResidualTrans:F3} mm)." +
+                                (wentLive ? " Live now." : " Tool 6 not found in this cell — reselect to use."));
                 }
                 else
                 {
-                    Console.Log("[scancal] Computed result but no active cell path — TCP not saved.");
+                    Console.Log("[scancal] Computed result but no active cell path — TCP not saved to disk" +
+                                (wentLive ? " (applied live for this session only)." : "."));
                 }
             }
             else Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
