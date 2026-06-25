@@ -2094,6 +2094,28 @@ public sealed class ViewportViewModel : ViewModelBase
         OutlinerItems.Add(_rotaryGroupItem);
     }
 
+    private OutlinerItemViewModel? _robotGroupItem;
+
+    /// <summary>
+    /// Exposes the robot as a selectable outliner group "Robot Root" with "Robot Pedestal" and
+    /// "Robot Arm" as direct children, each backed by the real scene node (so selection + visibility
+    /// work). Not deletable. The outliner renders one level of children, so Pedestal/Arm are siblings
+    /// under Root rather than further nested. Call on cell swap (UI thread); pass null root to clear.
+    /// </summary>
+    internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
+    {
+        if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        if (root is null) return;
+
+        _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root");
+        OutlinerItems.Add(_robotGroupItem);
+
+        if (pedestal is not null)
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal"));
+        if (arm is not null)
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm"));
+    }
+
     /// <summary>
     /// Adds a scan result. On a rotary cell it nests under the rotary group and is parented to the
     /// E1 pivot in the scene (so it tracks the turntable and stays registered to prior scans);
