@@ -1226,7 +1226,15 @@ public partial class ViewportView : UserControl
         {
             _renderer.SceneRoot.AddChild(robot);
             UploadVisiblePendingMeshes(robot);
+
+            // Expose the robot as a selectable outliner group: Root → Pedestal → Arm.
+            var robotRoot = robot;
+            var pedestal  = robot.FindDescendant("KR_120_R2700-2_BASE");
+            var arm       = robot.FindDescendant("joint_1");
+            Dispatcher.UIThread.Post(() => vm.SetRobotGroup(robotRoot, pedestal, arm));
         }
+        else
+            Dispatcher.UIThread.Post(() => vm.SetRobotGroup(null, null, null));
         EnqueueCellGpuUpload(swap.BoosterNode);
         EnqueueCellGpuUpload(swap.BedNode);
 
