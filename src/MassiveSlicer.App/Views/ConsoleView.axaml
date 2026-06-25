@@ -8,7 +8,7 @@
              VerticalAlignment="Stretch">
 
     <UserControl.Styles>
-        <Style Selector="TextBlock.error">
+        <Style Selector="SelectableTextBlock.error">
             <Setter Property="Foreground" Value="#ff6b6b"/>
         </Style>
     </UserControl.Styles>
@@ -40,9 +40,10 @@
             <ItemsControl ItemsSource="{Binding History}">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ConsoleHistoryEntry">
-                        <TextBlock Text="{Binding DisplayLine}"
+                        <SelectableTextBlock Text="{Binding DisplayLine}"
                                    TextWrapping="Wrap"
                                    Margin="0,0,0,2"
+                                   FontFamily="Consolas,Courier New,monospace"
                                    Classes.error="{Binding IsError}"/>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
