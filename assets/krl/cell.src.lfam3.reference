@@ -56,7 +56,7 @@ DEF  CELL ( )
   ;ENDFOLD (AUTOEXT INI)
   MS_LASTSEQ=MS_SEQ ; ignore any stale motion command at startup
   LOOP
-    ; ── Remote program triggers via c3bridge (GUI) ───────────
+    ; -- Remote program triggers via c3bridge (GUI) -----------
     IF bRunScanPick==TRUE THEN
       bRunScanPick = FALSE
       Scanner_Pick ( )
@@ -67,7 +67,7 @@ DEF  CELL ( )
       Scanner_Deposit ( )
       CONTINUE
     ENDIF
-    ; ─────────────────────────────────────────────────────────
+    ; ---------------------------------------------------------
     ; -- MassiveSlicer motion command (app writes MS_* then bumps MS_SEQ) --
     IF MS_SEQ<>MS_LASTSEQ THEN
       MS_BUSY=TRUE
