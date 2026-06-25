@@ -251,21 +251,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public Task<bool> GoHomeAsync(int vel = 20, int timeoutMs = 60000, CancellationToken ct = default)
         => _sync.GoHomeAsync(vel, timeoutMs, ct);
 
-    /// <summary>Stop the MASSIVE_SERVER loop (CMD 99).</summary>
-    public Task StopCommandServerAsync(CancellationToken ct = default) => _sync.StopCommandServerAsync(ct);
-
-    /// <summary>Copies the bundled MASSIVE_SERVER.src to the controller's program folder over SMB.</summary>
-    public string DeployServerProgram()
-    {
-        const string fileName = "MASSIVE_SERVER.src";
-        var src = ResolveBundledKrlPath(fileName)
-            ?? throw new System.IO.FileNotFoundException(
-                $"Bundled KRL not found ({fileName}). Rebuild the app or copy it to assets/krl/.");
-        var folder = $@"\\{_bridgeIp}\krc\ROBOTER\KRC\R1\Program";
-        var dest = System.IO.Path.Combine(folder, fileName);
-        System.IO.File.Copy(src, dest, overwrite: true);
-        return dest;
-    }
+    // Motion handling is integrated into the controller's CELL.SRC loop (the existing dispatcher),
+    // so there is no separate server program to deploy or stop.
 
     /// <summary>
     /// Writes a KUKA <c>BASE_DATA[index]</c> FRAME on the controller (X/Y/Z mm, A/B/C deg ZYX-Euler)

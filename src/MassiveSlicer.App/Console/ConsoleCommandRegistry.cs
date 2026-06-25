@@ -245,13 +245,6 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
-            Name = "srv-deploy",
-            Description = "Copy MASSIVE_SERVER.src to the controller (then restart + select it)",
-            Execute = (ctx, _) => ctx.Main.DeployMotionServer(),
-        });
-
-        Register(new ConsoleCommandDefinition
-        {
             Name = "move-pose",
             Aliases = ["move-ptp"],
             Description = "PTP the tool to a Cartesian pose via MASSIVE_SERVER",
@@ -277,13 +270,6 @@ public sealed class ConsoleCommandRegistry
                 int vel = int.TryParse(args.Trim(), out var v) ? v : 20;
                 _ = ctx.Main.MoveServerHomeAsync(vel);
             },
-        });
-
-        Register(new ConsoleCommandDefinition
-        {
-            Name = "srv-stop",
-            Description = "Stop the MASSIVE_SERVER motion loop (CMD 99)",
-            Execute = (ctx, args) => { _ = ctx.Main.StopMotionServerAsync(); },
         });
 
         Register(new ConsoleCommandDefinition

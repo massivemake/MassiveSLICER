@@ -1,0 +1,139 @@
+&ACCESS  RVP
+&COMMENT HANDLER on external automatic
+DEF  CELL ( )
+  ;EXT EXAMPLE1 ( )
+  ;EXT EXAMPLE2 ( )
+  ;EXT EXAMPLE3 ( )
+  
+  ;FOLD INIT
+  DECL CHAR DMY[3]
+  DECL INT ret
+  DECL INT CONTID
+  DECL INT MS_LASTSEQ
+  DECL E6POS MS_MSP
+  DMY[]="---"
+  ;ENDFOLD (INIT)
+  ;FOLD BASISTECH INI
+  GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+  INTERRUPT ON 3 
+  BAS (#INITMOV,0 )
+  ;ENDFOLD (BASISTECH INI)
+  ;FOLD CHECK HOME
+  $H_POS=XHOME
+  IF $MODE_OP==#EXT AND CHECK_HOME==TRUE THEN
+    P00 (#CHK_HOME,#PGNO_GET,DMY[],0 ) ;Testing Home-Position
+  ENDIF
+  ;ENDFOLD (CHECK HOME)
+  ;FOLD PTP HOME  Vel= 100 % DEFAULT
+  $H_POS=XHOME
+  PDAT_ACT=PDEFAULT
+  BAS (#PTP_DAT )
+  FDAT_ACT=FHOME
+  BAS (#FRAMES )
+  BAS (#VEL_PTP,100 )
+  PTP  XHOME
+  ;ENDFOLD
+
+  ;FOLD RSI EIDOS AUTO-START
+  ; Start RSI streaming to Eidos before entering external auto loop
+  BAS(#TOOL,6)
+  BAS(#BASE,0)
+  PTP $POS_ACT
+  ret = RSI_CREATE("Heron_EidosPack_0",CONTID,TRUE)
+  IF (ret <> RSIOK) THEN
+    ; RSI failed - log but continue so external auto still works
+    $LOOP_MSG[]="RSI CREATE FAILED"
+  ELSE
+    ret = RSI_ON(#RELATIVE)
+    IF (ret <> RSIOK) THEN
+      $LOOP_MSG[]="RSI ON FAILED"
+    ENDIF
+  ENDIF
+  ;ENDFOLD (RSI EIDOS AUTO-START)
+
+  ;FOLD AUTOEXT INI
+  ; P00 (#INIT_EXT,#PGNO_GET,DMY[],0 ) ; Disabled: only needed for EXT+PLC fieldbus
+  ;ENDFOLD (AUTOEXT INI)
+  MS_LASTSEQ=MS_SEQ ; ignore any stale motion command at startup
+  LOOP
+    ; ── Remote program triggers via c3bridge (GUI) ───────────
+    IF bRunScanPick==TRUE THEN
+      bRunScanPick = FALSE
+      Scanner_Pick ( )
+      CONTINUE
+    ENDIF
+    IF bRunScanDeposit==TRUE THEN
+      bRunScanDeposit = FALSE
+      Scanner_Deposit ( )
+      CONTINUE
+    ENDIF
+    ; ─────────────────────────────────────────────────────────
+    ; -- MassiveSlicer motion command (app writes MS_* then bumps MS_SEQ) --
+    IF MS_SEQ<>MS_LASTSEQ THEN
+      MS_BUSY=TRUE
+      MS_STAT=1
+      $ACT_TOOL=MS_TOOL
+      $TOOL=TOOL_DATA[MS_TOOL]
+      IF MS_BASE<=0 THEN
+        $BASE=$NULLFRAME
+      ELSE
+        $BASE=BASE_DATA[MS_BASE]
+      ENDIF
+      IF MS_VEL<1 THEN
+        MS_VEL=1
+      ENDIF
+      IF MS_VEL>100 THEN
+        MS_VEL=100
+      ENDIF
+      BAS(#VEL_PTP,MS_VEL)
+      $VEL.CP=MS_VEL/100.0
+      SWITCH MS_CMD
+      CASE 1 ; PTP to Cartesian pose (keep current status/turn)
+        MS_MSP=MS_POSE
+        MS_MSP.S=$POS_ACT.S
+        MS_MSP.T=$POS_ACT.T
+        PTP MS_MSP
+      CASE 2 ; LIN to Cartesian pose
+        LIN MS_POSE
+      CASE 3 ; PTP to joint target
+        PTP MS_AXIS
+      CASE 4 ; HOME
+        PTP XHOME
+      DEFAULT
+        MS_STAT=3
+      ENDSWITCH
+      WAIT SEC 0.1 ; advance-run stop so the ACK means motion finished
+      MS_LASTSEQ=MS_SEQ
+      MS_ACK=MS_SEQ
+      IF MS_STAT<>3 THEN
+        MS_STAT=2
+      ENDIF
+      MS_BUSY=FALSE
+      CONTINUE
+    ENDIF
+    IF $MODE_OP==#EXT THEN
+      P00 (#EXT_PGNO,#PGNO_GET,DMY[],0 )
+      SWITCH  PGNO ; Select with Programnumber
+      CASE 1
+        P00 (#EXT_PGNO,#PGNO_ACKN,DMY[],0 ) ; Reset Progr.No.-Request
+        ;EXAMPLE1 ( ) ; Call User-Program
+      CASE 2
+        P00 (#EXT_PGNO,#PGNO_ACKN,DMY[],0 ) ; Reset Progr.No.-Request
+        ;EXAMPLE2 ( ) ; Call User-Program
+      CASE 3
+        P00 (#EXT_PGNO,#PGNO_ACKN,DMY[],0 ) ; Reset Progr.No.-Request
+        ;EXAMPLE3 ( ) ; Call User-Program
+      CASE 4
+        P00 (#EXT_PGNO,#PGNO_ACKN,DMY[],0 ) ; Reset Progr.No.-Request
+        Scanner_Pick ( )
+      CASE 5
+        P00 (#EXT_PGNO,#PGNO_ACKN,DMY[],0 ) ; Reset Progr.No.-Request
+        Scanner_Deposit ( )
+      DEFAULT
+        P00 (#EXT_PGNO,#PGNO_FAULT,DMY[],0 )
+      ENDSWITCH
+    ELSE
+      WAIT SEC 0.05 ; AUT mode: poll BOOLs at 20 Hz, no EXT interface needed
+    ENDIF
+  ENDLOOP
+END

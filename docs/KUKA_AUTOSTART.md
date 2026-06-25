@@ -1,73 +1,64 @@
-# KUKA boot auto-start + variable-driven motion (MASSIVE_SERVER)
+# KUKA boot auto-start + variable-driven motion (CELL.SRC integration)
 
-Goal: power on the machine → the robot is ready and the app drives all motion over the network,
-with **no pendant/HMI steps per session** and **no `.src` edits or reboots to change motion**.
+Goal: power on the machine → the app drives all motion over the network, with **no separate
+program to start** and **no `.src` edits/reboots to change motion**.
 
-This is done with a small permanent KRL **motion command server** (`MASSIVE_SERVER.src`) that the
-app drives by writing variables over KUKAVARPROXY (port 7000) — the same channel already used for
-sync, the `$FLAG` handshake, and `BASE_DATA` writes. After it's running, the bed scan, calibration
-sweeps, jogging, etc. are all host-side command sequences.
+## How it works (this controller)
+LFAM 3's `R1\cell.src` is **already a boot-running dispatcher loop**: it auto-starts RSI and polls
+GUI-set globals (`bRunScanPick`, `bRunScanDeposit`) to run programs — set a variable over
+KUKAVARPROXY, the loop runs the work. We use the **same pattern** for motion: the motion handler is
+**integrated into that loop**, gated on the `MS_*` globals. So motion runs whenever `cell.src` runs
+— exactly when your scanner triggers do, with no extra start.
 
-## Pieces
-| File | Role |
-|---|---|
-| `assets/krl/MASSIVE_SERVER.src` | The dispatcher loop. Reads `MS_*` globals, executes moves, acks. |
-| `$config.dat` (controller) | Declares the `MS_*` globals (below). One-time edit + reboot. |
-| `assets/krl/CELL.SRC.template` | Optional: makes the server run at boot (Automatic External). |
-| App: `RobotSyncService` / `RobotPanelViewModel` | `SendPoseAsync`, `SendAxesAsync`, `GoHomeAsync`, … |
-| Console: `srv-deploy`, `move-pose`, `move-lin`, `move-home`, `srv-stop` | Drive/test it. |
+The app writes the target + params, then **bumps `MS_SEQ`**; the loop runs the command and writes
+`MS_SEQ` back to `MS_ACK`; the host waits for `MS_ACK == MS_SEQ`.
 
-## Variable protocol (`MS_*`)
-Host writes the target + params, then **bumps `MS_SEQ`**; the server runs the command and writes
-`MS_SEQ` back to `MS_ACK`. The host waits for `MS_ACK == MS_SEQ`.
-
+## Variable protocol (`MS_*`, declared in `$config.dat`)
 ```
-DECL GLOBAL INT    MS_SEQ  = 0     ; host increments to issue a new command
-DECL GLOBAL INT    MS_ACK  = 0     ; server echoes the finished seq
-DECL GLOBAL INT    MS_CMD  = 0     ; 1=PTP pose, 2=LIN pose, 3=PTP axes, 4=home, 99=stop
-DECL GLOBAL INT    MS_VEL  = 20    ; speed % (1..100)
-DECL GLOBAL INT    MS_TOOL = 6     ; TOOL_DATA index
-DECL GLOBAL INT    MS_BASE = 1     ; BASE_DATA index (<=0 => $NULLFRAME)
-DECL GLOBAL INT    MS_STAT = 0     ; 0=idle 1=busy 2=done 3=bad-cmd
-DECL GLOBAL BOOL   MS_BUSY = FALSE
-DECL GLOBAL E6POS  MS_POSE         ; Cartesian target (X..C; S/T taken from current pose)
-DECL GLOBAL E6AXIS MS_AXIS         ; joint target (A1..A6, E1)
+DECL INT    MS_SEQ=0    ; host increments to issue a new command
+DECL INT    MS_ACK=0    ; loop echoes the finished seq (host waits MS_ACK==MS_SEQ)
+DECL INT    MS_CMD=0    ; 1=PTP pose, 2=LIN pose, 3=PTP axes, 4=home
+DECL INT    MS_VEL=20   ; speed % (1..100)
+DECL INT    MS_TOOL=6   ; TOOL_DATA index
+DECL INT    MS_BASE=1   ; BASE_DATA index (<=0 => $NULLFRAME)
+DECL INT    MS_STAT=0   ; 0=idle 1=busy 2=done 3=bad-cmd
+DECL BOOL   MS_BUSY=FALSE
+DECL E6POS  MS_POSE     ; Cartesian target (X..C; S/T taken from current pose)
+DECL E6AXIS MS_AXIS     ; joint target (A1..A6, E1)
 ```
 
-## One-time commissioning
-1. **Declare the globals.** Add the `MS_*` block above to the controller's `$config.dat`
-   (`…\KRC\R1\System\$config.dat`, in a USER GLOBALS section). **Restart the controller once** so
-   the globals are registered (this is the only required reboot).
-2. **Deploy the server.** In the app console: `srv-deploy` (copies `MASSIVE_SERVER.src` to
-   `\\<ip>\krc\ROBOTER\KRC\R1\Program`). Because it's a new program, **restart the KUKA** so the
-   Navigator sees it.
-3. **Run it.** Either:
-   - **Manual:** on the pendant, select `MASSIVE_SERVER`, set AUT, drives on, Start. It now loops.
-   - **Boot auto-start (no pendant per session):** configure **Automatic External** and set
-     `CELL.SRC` to call `MASSIVE_SERVER` (see `CELL.SRC.template`). With the mode left in **AUT EXT**
-     and the safety circuit satisfied, the server runs on every boot.
-4. **From the app:** Sync → the app calls `InitCommandServerAsync` and can issue moves.
+## What's installed on LFAM 3 (192.168.0.153)
+- `$config.dat` — `MS_*` globals added in USER GLOBALS (backup: `$config.massbak.dat`).
+- `cell.src` — the `MS_SEQ` motion branch added to the dispatcher loop (backup: `cell.massbak.src`).
+- Repo reference of the integrated file: `assets/krl/cell.src.lfam3.reference`.
 
-## Daily use (once commissioned)
-- Power on. (Auto-External: server already running. Manual: select+start once.)
-- In the app: **Sync** the robot, then drive motion — console `move-pose`/`move-lin`/`move-home`,
-  or any feature that calls `SendPoseAsync`/`SendAxesAsync`. No file edits, no reboots.
+**One reboot is required** after the `$config.dat` change so the new globals register. After that:
+no reboots, no file reloads, no program selection to change motion.
 
-## Console commands
+## Boot auto-start — the honest boundary
+Motion now runs wherever `cell.src` runs. Whether `cell.src` itself comes up with **zero pendant
+interaction** depends on hardware/safety, not software:
+- **Operating-mode keyswitch (T1/T2/AUT/EXT):** physical. Leave it where your scanner workflow
+  already runs (it polls in both AUT and EXT). Software can't change the key.
+- **Drives-on + safety circuit:** must be satisfied for AUTO. In EXT an external start brings
+  `cell.src` up automatically; in AUT it's started once after boot.
+- **Bottom line:** the motion server adds **no** start step of its own — it inherits `cell.src`'s
+  boot behavior. If your `bRunScanPick` works after a plain boot today, so does motion.
+
+## Driving / testing it (app console — robot synced, T1 first)
 ```
-srv-deploy                         copy MASSIVE_SERVER.src to the controller
-move-pose <x> <y> <z> [a b c] [v%] PTP the tool to a Cartesian pose (mm, deg)
-move-lin  <x> <y> <z> [a b c] [v%] LIN to a Cartesian pose
-move-home [v%]                     go to HOME
-srv-stop                           stop the server loop (CMD 99)
+move-pose <x> <y> <z> [a b c] [vel%]   PTP the tool to a Cartesian pose (mm, deg)
+move-lin  <x> <y> <z> [a b c] [vel%]   LIN to a Cartesian pose
+move-home [vel%]                       go to HOME (XHOME)
 ```
-(`move-pose x y z v%` with 4 numbers treats the 4th as velocity.)
+(`move-pose x y z v%` with 4 numbers treats the 4th as velocity.) In code:
+`RobotPanelViewModel.SendPoseAsync / SendAxesAsync / GoHomeAsync`.
 
-## Safety — the hard boundary (hardware, not software)
-- **Operating-mode keyswitch (T1/T2/AUT/EXT):** physical on the pendant. Boot-and-go needs it left
-  in **AUT EXT**. Software cannot change it.
-- **Safety circuit** (operator-safety gate, E-stop, external enable): must be satisfied for drives-on
-  in AUTO. The app can *request* drives-on via Auto-External but cannot override a tripped input.
-- The server executes whatever Cartesian/joint target the app sends. It clamps **speed** (1–100%)
-  and keeps the current status/turn, but it does **not** validate that a target is collision-free —
-  the host must send safe targets, and **first moves should be checked in T1**.
+## Applying to LFAM 1 / LFAM 2
+When those controllers are online: add the same `MS_*` block to their `$config.dat`, and add the
+identical `MS_SEQ` branch into their `cell.src` loop (each controller's `cell.src` is its own file —
+don't overwrite; insert the branch). Back up both first. Then one reboot.
+
+## Safety
+The loop executes whatever target the app sends — speed is clamped (1–100%) and the current
+status/turn is kept, but **targets are not collision-checked**. Verify first moves in **T1**.
