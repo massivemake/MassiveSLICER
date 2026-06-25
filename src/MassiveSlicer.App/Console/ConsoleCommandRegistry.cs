@@ -245,6 +245,49 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "srv-deploy",
+            Description = "Copy MASSIVE_SERVER.src to the controller (then restart + select it)",
+            Execute = (ctx, _) => ctx.Main.DeployMotionServer(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-pose",
+            Aliases = ["move-ptp"],
+            Description = "PTP the tool to a Cartesian pose via MASSIVE_SERVER",
+            Usage = "move-pose <x> <y> <z> [a b c] [vel%]",
+            Execute = (ctx, args) => RunServerMove(ctx, args, linear: false),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-lin",
+            Description = "LIN the tool to a Cartesian pose via MASSIVE_SERVER",
+            Usage = "move-lin <x> <y> <z> [a b c] [vel%]",
+            Execute = (ctx, args) => RunServerMove(ctx, args, linear: true),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-home",
+            Description = "Send the robot HOME via MASSIVE_SERVER",
+            Usage = "move-home [vel%]",
+            Execute = (ctx, args) =>
+            {
+                int vel = int.TryParse(args.Trim(), out var v) ? v : 20;
+                _ = ctx.Main.MoveServerHomeAsync(vel);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "srv-stop",
+            Description = "Stop the MASSIVE_SERVER motion loop (CMD 99)",
+            Execute = (ctx, args) => { _ = ctx.Main.StopMotionServerAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "bed-orient",
             Aliases = ["bed-orientation"],
             Description = "Set the rotary bed orientation offset (deg about its vertical axis) and reload",
@@ -288,6 +331,21 @@ public sealed class ConsoleCommandRegistry
                 ctx.Main.Viewport.OnDevCellReloadRequested?.Invoke(path);
             },
         });
+    }
+
+    // Parses "x y z [a b c] [vel]" and fires a MASSIVE_SERVER Cartesian move.
+    private static void RunServerMove(ConsoleCommandContext ctx, string args, bool linear)
+    {
+        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double D(int i, double def) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : def;
+        if (p.Length < 3) { ctx.LogError("usage: move-pose <x> <y> <z> [a b c] [vel%]"); return; }
+        double x = D(0, 0), y = D(1, 0), z = D(2, 0);
+        double a = D(3, 0), b = D(4, 0), c = D(5, 0);
+        int vel = p.Length >= 7 ? (int)D(6, 20) : (p.Length == 4 ? (int)D(3, 20) : 20);
+        // If only x y z [vel] given (4 tokens), the 4th is velocity, not A.
+        if (p.Length == 4) { a = 0; b = 0; c = 0; }
+        _ = ctx.Main.MoveServerPoseAsync(linear, x, y, z, a, b, c, vel);
     }
 
     public bool TryExecute(string line, ConsoleCommandContext ctx)

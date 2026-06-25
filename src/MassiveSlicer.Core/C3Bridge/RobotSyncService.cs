@@ -123,6 +123,73 @@ public sealed class RobotSyncService : IDisposable
     public Task<string> ReadVarAsync(string name, CancellationToken ct = default)
         => _client.ReadAsync(name, 2000, ct);
 
+    // ── MassiveSlicer motion command server (MASSIVE_SERVER.src) ───────────────
+    // Drives motion by writing the MS_* globals over KUKAVARPROXY: set the target + params, then
+    // bump MS_SEQ; the server runs it and echoes MS_SEQ to MS_ACK. No .src edits / reboots needed.
+    private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+    private int _msSeq = -1;
+
+    /// <summary>Syncs the host command counter to the server's last ack (call after connect).</summary>
+    public async Task<int> InitCommandServerAsync(CancellationToken ct = default)
+    {
+        var s = await _client.ReadAsync("MS_ACK", 2000, ct);
+        _msSeq = int.TryParse(s.Trim(), System.Globalization.NumberStyles.Integer, Inv, out var a) ? a : 0;
+        return _msSeq;
+    }
+
+    /// <summary>PTP (linear=false) or LIN (linear=true) the scanner/tool to a Cartesian pose (mm, deg).
+    /// Returns true when the server acks completion, false on timeout.</summary>
+    public Task<bool> SendPoseAsync(bool linear, double x, double y, double z, double a, double b, double c,
+        int vel, int tool, int baseIndex, int timeoutMs = 60000, CancellationToken ct = default)
+    {
+        string pose = $"{{X {F(x)}, Y {F(y)}, Z {F(z)}, A {F(a)}, B {F(b)}, C {F(c)}}}";
+        return SendCommandAsync(linear ? 2 : 1, ("MS_POSE", pose), vel, tool, baseIndex, timeoutMs, ct);
+    }
+
+    /// <summary>PTP to a joint target (A1..A6, E1 in KRL degrees).</summary>
+    public Task<bool> SendAxesAsync(double a1, double a2, double a3, double a4, double a5, double a6, double e1,
+        int vel, int timeoutMs = 60000, CancellationToken ct = default)
+    {
+        string ax = $"{{A1 {F(a1)}, A2 {F(a2)}, A3 {F(a3)}, A4 {F(a4)}, A5 {F(a5)}, A6 {F(a6)}, E1 {F(e1)}}}";
+        return SendCommandAsync(3, ("MS_AXIS", ax), vel, 0, 0, timeoutMs, ct);
+    }
+
+    /// <summary>Move to the controller's HOME position.</summary>
+    public Task<bool> GoHomeAsync(int vel = 20, int timeoutMs = 60000, CancellationToken ct = default)
+        => SendCommandAsync(4, null, vel, 0, 0, timeoutMs, ct);
+
+    /// <summary>Tells the server loop to exit (CMD 99). Fire-and-forget.</summary>
+    public Task StopCommandServerAsync(CancellationToken ct = default)
+        => SendCommandAsync(99, null, 1, 0, 0, 5000, ct);
+
+    private static string F(double v) => v.ToString("F3", Inv);
+
+    private async Task<bool> SendCommandAsync(int cmd, (string Name, string Value)? target,
+        int vel, int tool, int baseIndex, int timeoutMs, CancellationToken ct)
+    {
+        if (_msSeq < 0) await InitCommandServerAsync(ct);
+
+        await _client.WriteAsync("MS_VEL", Math.Clamp(vel, 1, 100).ToString(Inv), 2000, ct);
+        if (tool > 0)        await _client.WriteAsync("MS_TOOL", tool.ToString(Inv), 2000, ct);
+        await _client.WriteAsync("MS_BASE", baseIndex.ToString(Inv), 2000, ct);
+        if (target is { } t) await _client.WriteAsync(t.Name, t.Value, 2000, ct);
+        await _client.WriteAsync("MS_CMD", cmd.ToString(Inv), 2000, ct);
+
+        int seq = ++_msSeq;
+        await _client.WriteAsync("MS_SEQ", seq.ToString(Inv), 2000, ct);   // trigger
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            ct.ThrowIfCancellationRequested();
+            var s = await _client.ReadAsync("MS_ACK", 2000, ct);
+            if (int.TryParse(s.Trim(), System.Globalization.NumberStyles.Integer, Inv, out var ack) && ack == seq)
+                return true;
+            await Task.Delay(50, ct);
+        }
+        return false;
+    }
+
     /// <summary>
     /// Selects and starts a KRL program by name via the C3 Bridge program-control command
     /// (no dispatcher needed). Streaming must be paused. e.g. "/R1/Program/BED_SCAN_CAL".

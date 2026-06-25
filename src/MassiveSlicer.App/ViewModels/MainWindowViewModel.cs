@@ -1019,6 +1019,65 @@ public sealed class MainWindowViewModel : ViewModelBase
         return $"Bed orientation offset = {deg:F3}° — reloading cell.";
     }
 
+    // ── MASSIVE_SERVER motion command server (deploy + drive from the app) ─────
+
+    /// <summary>Copies MASSIVE_SERVER.src to the controller. Restart + select it (or use CELL.SRC autostart).</summary>
+    public void DeployMotionServer()
+    {
+        try
+        {
+            var dest = RightPanel.Settings.Robot.DeployServerProgram();
+            Console.Log($"[srv] Deployed → {dest}. Restart the KUKA, then select/start MASSIVE_SERVER " +
+                        "(or wire CELL.SRC for boot auto-start — see docs/KUKA_AUTOSTART.md).");
+        }
+        catch (Exception ex) { Console.LogError($"[srv] Deploy failed: {ex.Message}"); }
+    }
+
+    /// <summary>Sends a Cartesian move (PTP or LIN) to the running MASSIVE_SERVER and logs the result.</summary>
+    public async Task MoveServerPoseAsync(bool linear, double x, double y, double z, double a, double b, double c, int vel)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected — Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            await robot.InitCommandServerAsync();
+            Console.Log($"[srv] {(linear ? "LIN" : "PTP")} → ({x:F1}, {y:F1}, {z:F1}) A{a:F1} B{b:F1} C{c:F1} @ {vel}% …");
+            bool ok = await robot.SendPoseAsync(linear, x, y, z, a, b, c, vel, robot.KrlToolIndex, robot.KrlBaseIndex);
+            Console.Log(ok ? "[srv] Move acknowledged." : "[srv] Move timed out — is MASSIVE_SERVER running on the controller?");
+        }
+        catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Sends the robot to its HOME position via MASSIVE_SERVER.</summary>
+    public async Task MoveServerHomeAsync(int vel)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected — Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            await robot.InitCommandServerAsync();
+            Console.Log($"[srv] HOME @ {vel}% …");
+            bool ok = await robot.GoHomeAsync(vel);
+            Console.Log(ok ? "[srv] At HOME." : "[srv] Home timed out — is MASSIVE_SERVER running?");
+        }
+        catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Stops the MASSIVE_SERVER loop (CMD 99).</summary>
+    public async Task StopMotionServerAsync()
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected."); return; }
+        robot.PauseStreaming();
+        try { await robot.StopCommandServerAsync(); Console.Log("[srv] Sent stop (CMD 99)."); }
+        catch (Exception ex) { Console.LogError($"[srv] {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {

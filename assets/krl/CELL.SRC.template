@@ -1,0 +1,46 @@
+&ACCESS RVP
+&REL 1
+&PARAM EDITMASK = *
+&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
+DEF CELL ( )
+; ============================================================================
+;  TEMPLATE — do NOT blindly overwrite your controller's existing CELL.SRC.
+;  CELL.SRC is the program the KRC runs automatically in AUTOMATIC EXTERNAL mode
+;  (i.e. at boot, once Auto-External is configured). To get MassiveSlicer's motion
+;  server running at boot with no pendant steps, CELL.SRC must end up calling
+;  MASSIVE_SERVER. Two ways:
+;
+;   (A) Minimal (this template): after the standard init + external start handshake,
+;       just call MASSIVE_SERVER() and let it loop forever. Use this if you don't run
+;       any other Auto-External programs.
+;
+;   (B) Keep your existing P00/PGNO dispatch and add MASSIVE_SERVER as one CASE
+;       (e.g. PGNO = 1 -> MASSIVE_SERVER). Use this if a PLC already drives CELL.SRC.
+;
+;  Either way: Auto-External still needs the start signals satisfied (drives on,
+;  $MOVE_ENABLE, ext start, safety circuit). See docs/KUKA_AUTOSTART.md.
+; ============================================================================
+
+DECL CHAR DMY[3]
+DMY[] = "   "
+
+;FOLD INI
+  ;FOLD BASISTECH INI
+    GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+    INTERRUPT ON 3
+    BAS (#INITMOV,0 )
+  ;ENDFOLD (BASISTECH INI)
+
+  ;FOLD AUTOEXT INI
+    BAS (#INITMOV,0 )
+  ;ENDFOLD (AUTOEXT INI)
+;ENDFOLD (INI)
+
+; --- (A) Minimal boot auto-start: run the MassiveSlicer motion server forever ---
+; MASSIVE_SERVER loops on its own; if it ever returns (CMD 99), park and idle.
+LOOP
+  MASSIVE_SERVER ( )
+  WAIT SEC 0.2
+ENDLOOP
+
+END
