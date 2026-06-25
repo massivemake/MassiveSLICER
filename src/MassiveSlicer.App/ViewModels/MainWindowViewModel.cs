@@ -552,6 +552,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         ];
         const int target = 10;
         int captured = 0;
+        // Surface clouds (world mm) + E1 per pose — used after the centre fit to estimate the
+        // constant rotational phase (bed mesh vs reality) from the hole pattern, in one shot.
+        var phaseClouds = new List<(double E1, float[] World)>();
         robot.PauseStreaming();
         try
         {
@@ -618,9 +621,29 @@ public sealed class MainWindowViewModel : ViewModelBase
 
                 var axes = await robot.ReadAxesAsync();
                 robot.E1 = Math.Round(axes[6], 2);
-                await bedCal.AddSampleAsync();          // scans + records (E1, world point)
+                await bedCal.AddSampleAsync();          // board centroid → (E1, world point) for the circle fit
                 captured++;
                 bedCal.SetStatus($"Captured {captured}/{target} (E1 {axes[6]:F0}°)…");
+
+                // Also grab a full surface cloud (bed top + holes) for the rotation-phase estimate,
+                // lifted to world via the same fixed camera pose the centroid fit uses.
+                try
+                {
+                    if (bedCal.GetCameraToWorld?.Invoke() is { } camW)
+                    {
+                        var sres = await Task.Run(() => ZividScanService.Capture(null, null, null));
+                        var src  = sres.PointsXYZ;
+                        var world = new float[src.Length];
+                        for (int i = 0; i + 2 < src.Length; i += 3)
+                        {
+                            var wv = System.Numerics.Vector3.Transform(
+                                new System.Numerics.Vector3(src[i], src[i + 1], src[i + 2]), camW);
+                            world[i] = wv.X; world[i + 1] = wv.Y; world[i + 2] = wv.Z;
+                        }
+                        phaseClouds.Add((axes[6], world));
+                    }
+                }
+                catch (Exception ex) { Console.Log($"[bedcal] surface capture skipped at E1 {axes[6]:F0}°: {ex.Message}"); }
 
                 await robot.SetFlagAsync(1, false);     // release the robot to the next stop
             }
@@ -638,13 +661,80 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (captured >= 3)
         {
             bedCal.Compute();
-            if (bedCal.HasResult) bedCal.Apply();   // auto-apply the sweep result to the cell (no extra click)
+            if (bedCal.HasResult)
+            {
+                bedCal.Apply();   // centre + rotation sign → cell (no extra click)
+                // One-shot: also estimate and apply the constant rotational phase (geometry-vs-reality)
+                // from the hole pattern in the captured surface scans.
+                if (phaseClouds.Count >= 2)
+                    await EstimateAndApplyBedPhaseAsync(phaseClouds, bedCal);
+                else
+                    Console.Log("[bedcal] Too few surface scans for the rotation-phase estimate — centre/sign applied only.");
+            }
             else Console.Log($"[bedcal] Sweep captured {captured} samples but the fit failed — not applied.");
         }
         else
         {
             Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
         }
+    }
+
+    /// <summary>
+    /// Estimates the rotary bed's constant orientation phase (model vs reality) from the surface scans
+    /// captured during the sweep — by un-rotating each to E1=0 about the fitted centre and fitting the
+    /// hole-lattice angle (<see cref="RotaryPhaseEstimator"/>) — and applies it as the bed orientation
+    /// offset. Assumes the model bed's holes are world-axis-aligned (true for LFAM 3, measured +0.01°);
+    /// the scan grid's deviation from world is the offset. Bounded to ±5° (~1in) as a sanity gate.
+    /// </summary>
+    private async Task EstimateAndApplyBedPhaseAsync(List<(double E1, float[] World)> clouds, RotaryBedCalibrationViewModel bedCal)
+    {
+        double cx = bedCal.CenterX, cy = bedCal.CenterY;
+        double sign = bedCal.RotationSign != 0 ? bedCal.RotationSign : -1;
+
+        // Dominant top-plane Z (the dense flat bed top) via a coarse pooled histogram.
+        double zmin = double.MaxValue, zmax = double.MinValue;
+        foreach (var (_, w) in clouds)
+            for (int i = 2; i < w.Length; i += 3)
+                if (!float.IsNaN(w[i])) { if (w[i] < zmin) zmin = w[i]; if (w[i] > zmax) zmax = w[i]; }
+        if (zmax <= zmin) { Console.Log("[bedcal] Rotation phase: no surface points captured."); return; }
+        const int bins = 200; var hist = new int[bins]; double bw = (zmax - zmin) / bins;
+        foreach (var (_, w) in clouds)
+            for (int i = 2; i < w.Length; i += 3)
+                if (!float.IsNaN(w[i])) { int b = (int)((w[i] - zmin) / bw); hist[Math.Clamp(b, 0, bins - 1)]++; }
+        int pk = 0; for (int b = 1; b < bins; b++) if (hist[b] > hist[pk]) pk = b;
+        double ztop = zmin + (pk + 0.5) * bw;
+
+        // Un-rotate each cloud to E1=0 about the centre, keep the top band, project to plan.
+        var plan = new List<(double, double)>();
+        const double r2d = Math.PI / 180.0;
+        foreach (var (e1, w) in clouds)
+        {
+            double ang = sign * e1 * r2d, ca = Math.Cos(-ang), sa = Math.Sin(-ang);
+            for (int i = 0; i + 2 < w.Length; i += 3)
+            {
+                float x = w[i], y = w[i + 1], z = w[i + 2];
+                if (float.IsNaN(x) || z < ztop - 30 || z > ztop + 8) continue;
+                double dx = x - cx, dy = y - cy;
+                if (dx * dx + dy * dy > 880 * 880) continue;
+                plan.Add((ca * dx - sa * dy, sa * dx + ca * dy));
+            }
+        }
+
+        var scanAngle = RotaryPhaseEstimator.HoleLatticeAngleDeg(plan, out int hc);
+        if (scanAngle is null || double.IsNaN(scanAngle.Value))
+        {
+            Console.Log($"[bedcal] Rotation phase: hole pattern not detected ({hc} holes, {plan.Count} pts) — orientation offset unchanged.");
+            return;
+        }
+        double phase = scanAngle.Value;   // model holes are world-aligned, so scan deviation = offset
+        if (Math.Abs(phase) > 5.0)
+        {
+            Console.Log($"[bedcal] Rotation phase {phase:F2}° exceeds the ±5° (~1in) sanity bound — NOT applied (holes {hc}). Re-scan with more bed coverage.");
+            return;
+        }
+        Console.Log($"[bedcal] Rotation phase: bed grid {phase:+0.000;-0.000}° from model ({hc} holes, {plan.Count} pts).");
+        Console.Log($"[bedcal] {SetBedOrientationOffset((float)phase)}");
+        await Task.CompletedTask;
     }
 
     /// <summary>
