@@ -3,7 +3,10 @@
 &PARAM EDITMASK = *
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF BED_SCAN_CAL ( )
-; v5 — full-bed coverage sweep for auto bed leveling.
+; v6 — full-bed coverage sweep for auto bed leveling.
+; !! After deploying, RESTART THE KUKA and re-select BED_SCAN_CAL on the pendant — the controller
+;    keeps running the previous version of a R1\Program file until it restarts. (If you still see an
+;    E1-only spin with no arm/TCP moves, the old version is still loaded.)
 ; At each E1 step the scanner samples an INNER radius (Y -240) and an OUTER radius (Y -750) over
 ; the bed, then E1 rotates and we sample again at the outer radius; this loops to cover the whole
 ; turntable, then a final CENTRE scan (Y 0). Cartesian targets keep the parked orientation +
@@ -37,6 +40,13 @@ $ADVANCE = 3
 
 BAS (#BASE,1)
 $BASE = EK(MACHINE_DEF[2].ROOT,MACHINE_DEF[2].MECH_TYPE,BASE_DATA[1]:{X 0, Y 0, Z 0, A 0, B 0, C 0})
+
+; Active TCP for the Cartesian moves below — must be the SCANNER tool so X/Y/Z target the scanner.
+; (v4 never set this because it only did joint E1 moves; Cartesian motion REQUIRES an active $TOOL,
+; otherwise the move can't be planned and the KRC reports "Start/Continue not possible".)
+; Adjust the index if your scanner TCP is on a different TOOL_DATA slot.
+$ACT_TOOL = 6
+$TOOL = TOOL_DATA[6]
 
 $VEL_EXTAX[1] = 20
 PDAT_ACT = PDEFAULT
