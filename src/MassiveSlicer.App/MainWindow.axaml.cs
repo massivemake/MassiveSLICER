@@ -175,7 +175,7 @@ public partial class MainWindow : Window
             var path = files[0].TryGetLocalPath();
             if (path is null) return;
 
-            vm.Console.Log($"[krl] Import selected: {System.IO.Path.GetFileName(path)} (parser not yet implemented).");
+            vm.ImportKrlToolpath(path);
         };
     }
 
