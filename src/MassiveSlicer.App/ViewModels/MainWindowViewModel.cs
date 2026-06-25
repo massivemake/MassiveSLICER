@@ -737,13 +737,17 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log($"[bedcal] Rotation phase: hole pattern not detected ({hc} holes, {plan.Count} pts) — orientation offset unchanged.");
             return;
         }
-        double phase = scanAngle.Value;   // model holes are world-aligned, so scan deviation = offset
+        // Model holes are world-aligned, so the scan grid's deviation is the misalignment. Apply the
+        // NEGATIVE to rotate the bed mesh onto the scans (sign confirmed on-robot — the hole patterns
+        // align this way; applying +deviation rotated the wrong direction).
+        double measured = scanAngle.Value;
+        double phase = -measured;
         if (Math.Abs(phase) > 5.0)
         {
             Console.Log($"[bedcal] Rotation phase {phase:F2}° exceeds the ±5° (~1in) sanity bound — NOT applied (holes {hc}). Re-scan with more bed coverage.");
             return;
         }
-        Console.Log($"[bedcal] Rotation phase: bed grid {phase:+0.000;-0.000}° from model ({hc} holes, {plan.Count} pts).");
+        Console.Log($"[bedcal] Rotation phase: bed grid measured {measured:+0.000;-0.000}° from model → applying offset {phase:+0.000;-0.000}° ({hc} holes, {plan.Count} pts).");
         Console.Log($"[bedcal] {SetBedOrientationOffset((float)phase)}");
         await Task.CompletedTask;
     }
