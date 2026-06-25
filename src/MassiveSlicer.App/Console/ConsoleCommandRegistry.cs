@@ -274,6 +274,14 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "pos",
+            Aliases = ["where", "tcp", "pose"],
+            Description = "Print the live robot TCP pose + a ready-to-paste move-pose line",
+            Execute = (ctx, _) => ctx.Main.LogCurrentPose(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "bed-orient",
             Aliases = ["bed-orientation"],
             Description = "Set the rotary bed orientation offset (deg about its vertical axis) and reload",
