@@ -13,6 +13,7 @@ public partial class MainWindow : Window
 {
     private CancellationTokenSource? _cellLoadCts;
     private int _cellLoadGeneration;
+    private MassiveSlicer.App.Console.LocalControlBridge? _controlBridge;
 
     public MainWindow()
     {
@@ -23,6 +24,20 @@ public partial class MainWindow : Window
     private void OnLoaded(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
     {
         if (DataContext is not MainWindowViewModel vm) return;
+
+        // -- Local control bridge (external tooling reads console / sends commands) --
+        if (_controlBridge is null)
+        {
+            try
+            {
+                _controlBridge = new MassiveSlicer.App.Console.LocalControlBridge(vm);
+                int port = _controlBridge.Start();
+                vm.Console.Log(port > 0
+                    ? $"[bridge] control API on http://127.0.0.1:{port}  — GET /status, GET /console?n=N, POST /command"
+                    : "[bridge] control API failed to start (ports busy).");
+            }
+            catch (Exception ex) { vm.Console.LogError($"[bridge] {ex.Message}"); }
+        }
 
         // -- Right panel column toggle -----------------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
