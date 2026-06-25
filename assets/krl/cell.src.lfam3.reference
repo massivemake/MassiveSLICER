@@ -7,8 +7,6 @@ DEF  CELL ( )
 
   ;FOLD INIT
   DECL CHAR DMY[3]
-  DECL INT ret
-  DECL INT CONTID
   DECL INT MS_LASTSEQ
   DECL E6POS MS_MSP
   DMY[]="---"
@@ -33,23 +31,6 @@ DEF  CELL ( )
   BAS (#VEL_PTP,100 )
   PTP  XHOME
   ;ENDFOLD
-
-  ;FOLD RSI EIDOS AUTO-START
-  ; Start RSI streaming to Eidos before entering external auto loop
-  BAS(#TOOL,6)
-  BAS(#BASE,0)
-  PTP $POS_ACT
-  ret = RSI_CREATE("Heron_EidosPack_0",CONTID,TRUE)
-  IF (ret <> RSIOK) THEN
-    ; RSI failed - log but continue so external auto still works
-    $LOOP_MSG[]="RSI CREATE FAILED"
-  ELSE
-    ret = RSI_ON(#RELATIVE)
-    IF (ret <> RSIOK) THEN
-      $LOOP_MSG[]="RSI ON FAILED"
-    ENDIF
-  ENDIF
-  ;ENDFOLD (RSI EIDOS AUTO-START)
 
   ;FOLD AUTOEXT INI
   ; P00 (#INIT_EXT,#PGNO_GET,DMY[],0 ) ; Disabled: only needed for EXT+PLC fieldbus
