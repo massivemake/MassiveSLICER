@@ -229,6 +229,30 @@ public static class CellLoader
         }
     }
 
+    /// <summary>Sets the rotary bed's constant orientation offset (degrees about its vertical axis).</summary>
+    public static bool SaveRotaryOrientation(string cellPath, float deg, out string? error)
+    {
+        error = null;
+        try
+        {
+            var cell = Load(cellPath);
+            if (cell.RotaryBed is not { } rb)
+            {
+                error = "cell has no rotary bed";
+                return false;
+            }
+            return TryWrite(cellPath, c => c with
+            {
+                RotaryBed = rb with { OrientationOffsetDeg = deg },
+            }, out error);
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
     public static bool SaveToolDock(string cellPath, string toolName, ToolDockCellConfig dock,
         out string? error)
         => TryWrite(cellPath, cell => cell with
