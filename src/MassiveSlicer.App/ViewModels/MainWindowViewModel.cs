@@ -404,7 +404,15 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log("[scan] No robot pose available — placed scan on bed centre unregistered.");
             }
 
-            Viewport.AddUserNode(node);
+            // Stash the registered scan's capture-time WORLD points + E1 for the rotary diagnostic
+            // export (offline calibration solve). Do it now — node.LocalTransform is still the clean
+            // camera→world pose, before AddScanNode reparents it under the E1 pivot.
+            if (cameraPose is not null && node.PendingMesh is { } stashMesh)
+                Viewport.StashScanDiag(name, (float)robot.E1, stashMesh.Positions, node.LocalTransform);
+
+            // On a rotary cell the scan nests under the turntable group and tracks E1 (so multiple
+            // scans at different E1 angles stay registered to one another); else attaches to the root.
+            Viewport.AddScanNode(node);
             if (Viewport.IsPrePrintScanRegistrationPhase)
                 Viewport.RegisterArmatureScanMesh(node);
             var saved = result.SavedZdfPath is { } p
@@ -475,8 +483,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
 
         // BASE_DATA is $WORLD/$ROBROOT-relative; our centre is in world/ROBROOT mm, so subtract robroot.
+        // X/Y follow the calibrated axis centre; Z keeps the modeled rotary base height (the axis-centre
+        // fit doesn't measure table height — writing the fit's Z would drop the base).
         var rw = cell.Robot.WorldPosition;
-        double bx = cx - rw.X, by = cy - rw.Y, bz = cz - rw.Z;
+        double bz = cell.RotaryBed is { } rbZ && rbZ.BasePos.Length > 2 ? rbZ.BasePos[2] : cz - rw.Z;
+        double bx = cx - rw.X, by = cy - rw.Y;
         double a = bedCal.BaseA, b = bedCal.BaseB, c = bedCal.BaseC;
 
         try
@@ -861,6 +872,31 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             scanCal.SetAutoRunning(false);
         }
+    }
+
+    /// <summary>
+    /// Exports the rotary scans stashed this session (world points + capture E1) plus the rotary
+    /// rotation centre/sign to a <c>diag/</c> folder under the scan output directory, for offline
+    /// calibration analysis. Returns a summary line.
+    /// </summary>
+    public string ExportScanDiagnostics()
+    {
+        if (Viewport.ScanDiagCount == 0)
+            return "No scans stashed this session — run registered scans around the bed first.";
+
+        var robot = RightPanel.Settings.Robot;
+        float sign = (float)robot.BedRotationSign;
+        OpenTK.Mathematics.Vector3 center = OpenTK.Mathematics.Vector3.Zero;
+        if (Viewport.ActiveCell is { RotaryBed: { } rb } cell && rb.BasePos.Length >= 3)
+        {
+            var rw = cell.Robot.WorldPosition;
+            center = new OpenTK.Mathematics.Vector3(rw.X + rb.BasePos[0], rw.Y + rb.BasePos[1], rw.Z + rb.BasePos[2]);
+        }
+
+        var diagDir = System.IO.Path.Combine(RightPanel.Scan.OutputDirectory, "diag");
+        var summary = Viewport.ExportScanDiag(diagDir, center, sign);
+        Console.Log($"[diag] Exported {summary} (centre {center.X:F1}, {center.Y:F1}, {center.Z:F1}; sign {sign:F0}).");
+        return summary;
     }
 
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
