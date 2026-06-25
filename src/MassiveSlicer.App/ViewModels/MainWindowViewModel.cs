@@ -1070,6 +1070,50 @@ public sealed class MainWindowViewModel : ViewModelBase
             robot.TcpX, robot.TcpY, robot.TcpZ, robot.TcpA, robot.TcpB, robot.TcpC));
     }
 
+    /// <summary>Switches to a cell whose display name matches <paramref name="name"/>
+    /// (e.g. "LFAM 3" / "lfam3"). For the console / control bridge. Call on the UI thread.</summary>
+    public string SwitchCellByName(string name)
+    {
+        name = (name ?? string.Empty).Trim();
+        if (name.Length == 0) return "[cell] usage: cell <name>";
+
+        var names = LeftPanel.CellNames;
+        int idx = -1;
+        for (int i = 0; i < names.Count; i++)
+            if (names[i].Contains(name, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        if (idx < 0) // retry ignoring spaces, so "lfam3" matches "LFAM 3"
+        {
+            string norm = name.Replace(" ", "");
+            for (int i = 0; i < names.Count; i++)
+                if (names[i].Replace(" ", "").Contains(norm, StringComparison.OrdinalIgnoreCase)) { idx = i; break; }
+        }
+        if (idx < 0)
+            return $"[cell] no cell matching '{name}'. Available: {string.Join(", ", names)}";
+        if (LeftPanel.SelectedCellIndex == idx)
+            return $"[cell] already on {names[idx]}.";
+
+        LeftPanel.SelectedCellIndex = idx; // fires the async cell load
+        return $"[cell] switching to {names[idx]}…";
+    }
+
+    /// <summary>Syncs (connects) the robot over C3Bridge if not already connected.</summary>
+    public string SyncRobot()
+    {
+        var r = RightPanel.Settings.Robot;
+        if (r.IsConnected) return "[sync] already synced.";
+        r.ConnectCommand.Execute(null); // ToggleConnect → connect (async)
+        return "[sync] connecting…";
+    }
+
+    /// <summary>Desyncs (disconnects) the robot if connected.</summary>
+    public string DesyncRobot()
+    {
+        var r = RightPanel.Settings.Robot;
+        if (!r.IsConnected) return "[sync] already desynced.";
+        r.Desync();
+        return "[sync] desynced.";
+    }
+
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
