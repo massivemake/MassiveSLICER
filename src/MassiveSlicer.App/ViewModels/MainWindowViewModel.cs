@@ -1055,6 +1055,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally { robot.ResumeStreaming(); }
     }
 
+    /// <summary>Logs the live robot TCP pose ($POS_ACT) plus a ready-to-paste move-pose line
+    /// (current pose, in the active tool/base frame — copy it, change one axis, send it).</summary>
+    public void LogCurrentPose()
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[pos] Robot not connected — Sync first."); return; }
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        Console.Log(string.Format(inv,
+            "[pos] X={0:F1} Y={1:F1} Z={2:F1} A={3:F3} B={4:F3} C={5:F3}  (tool #{6}, base #{7})",
+            robot.TcpX, robot.TcpY, robot.TcpZ, robot.TcpA, robot.TcpB, robot.TcpC,
+            robot.KrlToolIndex, robot.KrlBaseIndex));
+        Console.Log(string.Format(inv, "move-pose {0:F1} {1:F1} {2:F1} {3:F3} {4:F3} {5:F3} 20",
+            robot.TcpX, robot.TcpY, robot.TcpZ, robot.TcpA, robot.TcpB, robot.TcpC));
+    }
+
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
