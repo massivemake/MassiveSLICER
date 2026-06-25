@@ -10,9 +10,10 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 {
     private readonly Action _notifyRender;
     private readonly Action? _onHide;
+    private readonly string? _displayName;
 
     public SceneNode Node { get; }
-    public string Name => Node.Name;
+    public string Name => _displayName ?? Node.Name;
     public ICommand DeleteCommand { get; }
     public ICommand ToggleVisibleCommand { get; }
 
@@ -44,11 +45,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasChildren));
     }
 
-    internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete, Action? onHide = null)
+    internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete, Action? onHide = null, string? displayName = null)
     {
         Node          = node;
         _notifyRender = notifyRender;
         _onHide       = onHide;
+        _displayName  = displayName;
         DeleteCommand        = new RelayCommand(() => onDelete(this));
         ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
     }

@@ -2070,6 +2070,118 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>Scans waiting to be parented under the rotary-bed E1 pivot on the GL thread.</summary>
+    public ConcurrentQueue<SceneNode> PendingRotaryNodes { get; } = new();
+
+    private OutlinerItemViewModel? _rotaryGroupItem;
+    private SceneNode? _rotaryPivotForScans;
+
+    /// <summary>True when the active cell has a rotary bed, so scans should ride the turntable.</summary>
+    public bool HasRotaryBed => _rotaryPivotForScans is not null;
+
+    /// <summary>
+    /// Exposes the rotary bed as a top-level outliner group that scans nest under. The group is backed
+    /// by the E1 pivot node, so anything parented to it (in the scene graph) rotates with the table.
+    /// Call on cell swap (UI thread); pass null pivot to clear (non-rotary cell).
+    /// </summary>
+    internal void SetRotaryBedGroup(SceneNode? pivot, string displayName)
+    {
+        _rotaryPivotForScans = pivot;
+        if (_rotaryGroupItem is not null) { OutlinerItems.Remove(_rotaryGroupItem); _rotaryGroupItem = null; }
+        if (pivot is null) return;
+        // The group itself isn't deletable; visibility toggling falls through to the pivot node.
+        _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName);
+        OutlinerItems.Add(_rotaryGroupItem);
+    }
+
+    /// <summary>
+    /// Adds a scan result. On a rotary cell it nests under the rotary group and is parented to the
+    /// E1 pivot in the scene (so it tracks the turntable and stays registered to prior scans);
+    /// otherwise it falls back to <see cref="AddUserNode"/> (attached to the scene root).
+    /// Must be called on the UI thread.
+    /// </summary>
+    public void AddScanNode(SceneNode node)
+    {
+        if (_rotaryPivotForScans is null || _rotaryGroupItem is null)
+        {
+            AddUserNode(node);
+            return;
+        }
+
+        PendingRotaryNodes.Enqueue(node);
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        {
+            _rotaryGroupItem?.RemoveChild(child);
+            PendingRemoveNodes.Enqueue(child.Node);
+            NotifyRenderNeeded();
+        }, () => OnNodeHidden?.Invoke(node));
+        _rotaryGroupItem.AddChild(item);
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    // ── Rotary scan diagnostics ───────────────────────────────────────────────
+    // Stash each registered scan's capture-time WORLD points + E1 so we can export them and solve
+    // the true rotary model (axis tilt / deg-per-E1 / phase / centre) offline against the scans.
+    private readonly List<(string Name, float E1, float[] WorldXyz)> _scanDiag = [];
+
+    /// <summary>Number of scans stashed for the diagnostic export.</summary>
+    public int ScanDiagCount => _scanDiag.Count;
+
+    /// <summary>
+    /// Records a scan's points (mesh/camera frame) mapped to WORLD via <paramref name="worldPose"/>,
+    /// plus its capture E1. Decimated to keep the export light. Call at capture time, before the node
+    /// is reparented under the E1 pivot (so the pose is the clean camera→world transform).
+    /// </summary>
+    public void StashScanDiag(string name, float e1, IReadOnlyList<Vector3> camPoints, Matrix4 worldPose)
+    {
+        if (camPoints is null || camPoints.Count == 0) return;
+        const int target = 8000;
+        int step = Math.Max(1, camPoints.Count / target);
+        var xyz = new List<float>(target * 3);
+        for (int i = 0; i < camPoints.Count; i += step)
+        {
+            var p = camPoints[i];
+            float wx = p.X * worldPose.M11 + p.Y * worldPose.M21 + p.Z * worldPose.M31 + worldPose.M41;
+            float wy = p.X * worldPose.M12 + p.Y * worldPose.M22 + p.Z * worldPose.M32 + worldPose.M42;
+            float wz = p.X * worldPose.M13 + p.Y * worldPose.M23 + p.Z * worldPose.M33 + worldPose.M43;
+            if (float.IsNaN(wx) || float.IsNaN(wy) || float.IsNaN(wz)) continue;
+            xyz.Add(wx); xyz.Add(wy); xyz.Add(wz);
+        }
+        _scanDiag.Add((name, e1, xyz.ToArray()));
+    }
+
+    /// <summary>
+    /// Writes the stashed scans (one .xyz of world points each) + a manifest (per-scan E1, the rotary
+    /// rotation centre, and sign) to <paramref name="dir"/> for offline calibration analysis.
+    /// </summary>
+    public string ExportScanDiag(string dir, Vector3 center, float sign)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        Directory.CreateDirectory(dir);
+        var man = new System.Text.StringBuilder();
+        man.Append("{\n");
+        man.Append($"  \"rotaryCenter\": [{center.X.ToString("F4", inv)}, {center.Y.ToString("F4", inv)}, {center.Z.ToString("F4", inv)}],\n");
+        man.Append($"  \"rotationSign\": {sign.ToString("F0", inv)},\n");
+        man.Append("  \"scans\": [\n");
+        for (int s = 0; s < _scanDiag.Count; s++)
+        {
+            var (name, e1, xyz) = _scanDiag[s];
+            var safe = new string([.. name.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')]);
+            var file = $"{s:D2}_{safe}.xyz";
+            var sb = new System.Text.StringBuilder(xyz.Length * 8);
+            for (int i = 0; i + 2 < xyz.Length; i += 3)
+                sb.Append(xyz[i].ToString("F2", inv)).Append(' ')
+                  .Append(xyz[i + 1].ToString("F2", inv)).Append(' ')
+                  .Append(xyz[i + 2].ToString("F2", inv)).Append('\n');
+            File.WriteAllText(Path.Combine(dir, file), sb.ToString());
+            man.Append($"    {{ \"file\": \"{file}\", \"e1\": {e1.ToString("F4", inv)}, \"points\": {xyz.Length / 3} }}{(s < _scanDiag.Count - 1 ? "," : "")}\n");
+        }
+        man.Append("  ]\n}\n");
+        File.WriteAllText(Path.Combine(dir, "manifest.json"), man.ToString());
+        return $"{_scanDiag.Count} scans → {dir}";
+    }
+
     /// <summary>
     /// Registers an already-uploaded scene node in the outliner and queues it for
     /// attachment to the scene root on the GL thread.

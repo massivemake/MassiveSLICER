@@ -421,13 +421,14 @@ public partial class ViewportView : UserControl
                             path, (float)x, (float)y, (float)z,
                             dia > 0 ? (float)dia : (float?)null, (float)sign);
 
-                        // On a rotary cell (LFAM 3), keep the turntable mesh centred on the new bed
-                        // origin too. By cell design robroot + basePos == bed.origin, so the matching
-                        // basePos is (centre − robroot); persist it, preserving the baseAbc tilt.
+                        // On a rotary cell (LFAM 3), follow the calibrated axis centre in X/Y only.
+                        // Preserve the existing basePos.z — the table HEIGHT is a fixed model property,
+                        // not something the axis-centre fit measures (writing the fit's Z drops the bed).
                         if (vm2.ActiveCell?.RotaryBed is { } rbCfg)
                         {
                             var rw = vm2.ActiveCell.Robot.WorldPosition;
-                            float[] basePos = [ (float)x - rw.X, (float)y - rw.Y, (float)z - rw.Z ];
+                            float keepZ = rbCfg.BasePos.Length > 2 ? rbCfg.BasePos[2] : (float)z - rw.Z;
+                            float[] basePos = [ (float)x - rw.X, (float)y - rw.Y, keepZ ];
                             MassiveSlicer.Core.IO.CellLoader.SaveRotaryBedTransform(
                                 path, basePos, rbCfg.BaseAbc, out _);
                         }
@@ -681,7 +682,8 @@ public partial class ViewportView : UserControl
                 _singularityByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 GpuMeshCache.ReleaseSubtree(removing);
-                _renderer.SceneRoot.RemoveChild(removing);
+                // Detach from the node's actual parent — scans live under the rotary pivot, not SceneRoot.
+                (removing.Parent ?? _renderer.SceneRoot).RemoveChild(removing);
                 if (_renderer.SelectedNode is not null &&
                     removing.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
                     _renderer.Select(null);
@@ -698,6 +700,26 @@ public partial class ViewportView : UserControl
                         vm.ActiveCell?.Robot.Joints ?? []);
 
                 _renderer.Select(incoming);
+                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+            }
+
+            // Scans destined for the rotary turntable: parent under the E1 pivot so they rotate with
+            // the bed. Their LocalTransform is the capture-time WORLD pose; convert it to pivot-local
+            // (World = Local * ParentWorld ⇒ Local = World * ParentWorld⁻¹) so the world pose is
+            // preserved at the current E1 and every later E1 change rotates the scan with the table.
+            while (vm.PendingRotaryNodes.TryDequeue(out var scan))
+            {
+                if (_rotaryBedPivot is { } pivot)
+                {
+                    scan.LocalTransform = scan.LocalTransform * pivot.WorldTransform.Inverted();
+                    pivot.AddChild(scan);
+                }
+                else
+                    _renderer.SceneRoot.AddChild(scan);   // fallback: no pivot this cell
+
+                UploadPendingMeshes(scan);
+                _renderer.InvalidateShaderAppearance();
+                _renderer.Select(scan);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
@@ -1043,15 +1065,15 @@ public partial class ViewportView : UserControl
         var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
         _renderer.SetBedBoundary(_bedBaseMarker, corner, _bedWidth, _bedDepth, new Vector3(x, y, z), diameter);
 
-        // Keep the rotary-bed mesh centred on the same point as the circular origin grid. By cell
-        // design the rotary root's world position equals bed.origin (robroot + basePos == origin), so
-        // recentring the grid must move the turntable with it. Replace the root's translation (Row3)
-        // with the new centre while preserving its baseAbc tilt (the rotation in Rows 0-2). The E1
-        // spin re-derives its world-vertical axis from the parent next frame (_lastSyncE1 reset below).
+        // Recentre the rotary-bed mesh in X/Y onto the calibrated axis, but PRESERVE its Z. The bed
+        // calibration measures where the rotary AXIS is (X/Y centre) and its rotation — it does not
+        // measure the table HEIGHT, which is a fixed property of the physical assembly / model. So
+        // only the in-plane translation follows the grid; the existing Z (and the baseAbc tilt in
+        // Rows 0-2) are kept, otherwise applying a calibration drops the turntable to the fit's Z.
         if (_rotaryBedRoot is not null)
         {
             var lt = _rotaryBedRoot.LocalTransform;
-            lt.Row3 = new Vector4(x, y, z, 1f);
+            lt.Row3 = new Vector4(x, y, lt.Row3.Z, 1f);   // X/Y → axis centre; Z unchanged
             _rotaryBedRoot.LocalTransform = lt;
         }
 
@@ -1240,6 +1262,11 @@ public partial class ViewportView : UserControl
             else
                 EnqueueCellGpuUpload(env);
         }
+
+        // Expose the rotary bed as an outliner group that scans nest under (so they ride E1).
+        var rotaryPivot = _rotaryBedPivot;
+        Dispatcher.UIThread.Post(() =>
+            vm.SetRotaryBedGroup(rotaryPivot, "KP1-MB2000 HW-2 Rotary Bed"));
 
         if (_fkController?.FlangeNode is { } flange)
         {

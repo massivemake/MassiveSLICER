@@ -245,6 +245,14 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "diag-scans",
+            Aliases = ["export-scans", "diag scans"],
+            Description = "Export this session's rotary scans (world XYZ + E1) for offline calibration analysis",
+            Execute = (ctx, _) => ctx.Log($"[diag] {ctx.Main.ExportScanDiagnostics()}"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "reload-cell",
             Aliases = ["reload cell", "refresh-cell"],
             Description = "Invalidate cache and reload the active cell scene",
