@@ -232,6 +232,41 @@ public sealed class RobotPanelViewModel : ViewModelBase
     public Task<C3BridgeClient.ProgramResult> ProgramControlAsync(byte command, ushort interpreter = 1, CancellationToken ct = default)
         => _sync.ProgramControlAsync(command, interpreter, ct);
 
+    // -- MASSIVE_SERVER motion command server (variable-driven; no .src reloads) ----------------
+
+    /// <summary>Syncs the host command counter to the server's last ack (call once after connect).</summary>
+    public Task<int> InitCommandServerAsync(CancellationToken ct = default) => _sync.InitCommandServerAsync(ct);
+
+    /// <summary>PTP/LIN the tool to a Cartesian pose via MASSIVE_SERVER (returns true on ack).</summary>
+    public Task<bool> SendPoseAsync(bool linear, double x, double y, double z, double a, double b, double c,
+        int vel, int tool, int baseIndex, int timeoutMs = 60000, CancellationToken ct = default)
+        => _sync.SendPoseAsync(linear, x, y, z, a, b, c, vel, tool, baseIndex, timeoutMs, ct);
+
+    /// <summary>PTP to a joint target (A1..A6, E1, KRL deg) via MASSIVE_SERVER.</summary>
+    public Task<bool> SendAxesAsync(double a1, double a2, double a3, double a4, double a5, double a6, double e1,
+        int vel, int timeoutMs = 60000, CancellationToken ct = default)
+        => _sync.SendAxesAsync(a1, a2, a3, a4, a5, a6, e1, vel, timeoutMs, ct);
+
+    /// <summary>Move to the controller HOME via MASSIVE_SERVER.</summary>
+    public Task<bool> GoHomeAsync(int vel = 20, int timeoutMs = 60000, CancellationToken ct = default)
+        => _sync.GoHomeAsync(vel, timeoutMs, ct);
+
+    /// <summary>Stop the MASSIVE_SERVER loop (CMD 99).</summary>
+    public Task StopCommandServerAsync(CancellationToken ct = default) => _sync.StopCommandServerAsync(ct);
+
+    /// <summary>Copies the bundled MASSIVE_SERVER.src to the controller's program folder over SMB.</summary>
+    public string DeployServerProgram()
+    {
+        const string fileName = "MASSIVE_SERVER.src";
+        var src = ResolveBundledKrlPath(fileName)
+            ?? throw new System.IO.FileNotFoundException(
+                $"Bundled KRL not found ({fileName}). Rebuild the app or copy it to assets/krl/.");
+        var folder = $@"\\{_bridgeIp}\krc\ROBOTER\KRC\R1\Program";
+        var dest = System.IO.Path.Combine(folder, fileName);
+        System.IO.File.Copy(src, dest, overwrite: true);
+        return dest;
+    }
+
     /// <summary>
     /// Writes a KUKA <c>BASE_DATA[index]</c> FRAME on the controller (X/Y/Z mm, A/B/C deg ZYX-Euler)
     /// and returns the controller's echoed value. Used to push a rotary-bed calibration back to the
