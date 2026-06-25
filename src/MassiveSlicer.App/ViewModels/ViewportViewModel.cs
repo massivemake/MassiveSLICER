@@ -2202,6 +2202,26 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>
+    /// Adds an imported KRL toolpath as a top-level, scrubbable outliner node (same pipeline as a
+    /// sliced/generated toolpath, so the timeline scrubber works on it). Must be called on the UI thread.
+    /// </summary>
+    public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f)
+    {
+        var node = new SceneNode { Name = name, Selectable = true };
+        RegisterToolpathInOutliner(node, null);
+        PendingToolpath.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath      = tp,
+            RawToolpath   = tp,
+            Node          = node,
+            BeadWidth     = beadWidth,
+            LayerHeight   = 3f,
+            MaterialColor = new System.Numerics.Vector3(0.10f, 0.45f, 0.90f),
+        });
+        NotifyRenderNeeded();
+    }
+
     private OutlinerItemViewModel RegisterOutlinerItem(SceneNode node)
     {
         var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node));

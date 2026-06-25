@@ -1030,6 +1030,53 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Imports a model file into the scene and logs material diagnostics.</summary>
+    /// <summary>
+    /// Imports a KUKA KRL (.src) program's Cartesian motion as a scrubbable toolpath in the outliner.
+    /// Positions are placed in world space using the active cell's robroot + base offset (inverse of
+    /// the exporter). Logs success/failure to the console.
+    /// </summary>
+    public bool ImportKrlToolpath(string path)
+    {
+        try
+        {
+            path = System.IO.Path.GetFullPath(path);
+            if (!System.IO.File.Exists(path))
+            {
+                Console.LogError($"[krl] File not found: {path}");
+                return false;
+            }
+
+            var text = System.IO.File.ReadAllText(path);
+            var off  = System.Numerics.Vector3.Zero;
+            if (Viewport.ActiveCell is { } cell)
+                off = new System.Numerics.Vector3(
+                    cell.Robot.WorldPosition.X + cell.Bed.BaseData.X,
+                    cell.Robot.WorldPosition.Y + cell.Bed.BaseData.Y,
+                    cell.Robot.WorldPosition.Z + cell.Bed.BaseData.Z);
+            else
+                Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
+
+            var tp = KrlToolpathParser.Parse(text, off, out int moves);
+            if (moves == 0)
+            {
+                Console.LogError($"[krl] No Cartesian LIN/PTP moves found in {System.IO.Path.GetFileName(path)} — " +
+                                 "nothing to display (joint-only programs like calibration sweeps aren't toolpaths).");
+                return false;
+            }
+
+            var name = $"KRL: {System.IO.Path.GetFileNameWithoutExtension(path)}";
+            Viewport.AddImportedToolpath(tp, name);
+            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} → \"{name}\". " +
+                        "Select it in the outliner to scrub the toolpath.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[krl] Failed to import {System.IO.Path.GetFileName(path)}: {ex.Message}");
+            return false;
+        }
+    }
+
     public bool ImportModelFromPath(string path)
     {
         path = System.IO.Path.GetFullPath(path);
