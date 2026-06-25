@@ -350,6 +350,14 @@ public sealed record RotaryBedCellConfig
     public float[] BasePos { get; init; } = [0f, 0f, 0f];
     public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
     public float E1Sign { get; init; } = 1f;
+
+    /// <summary>
+    /// Constant rotation (degrees) of the whole bed assembly about its vertical axis through the
+    /// centre, applied on top of <see cref="BaseAbc"/>. Corrects a fixed phase between the idealised
+    /// model orientation and how the table is physically mounted (measured from registered scans).
+    /// Future scans auto-compensate (they're placed by world pose); the mesh rotates to match them.
+    /// </summary>
+    public float OrientationOffsetDeg { get; init; } = 0f;
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>

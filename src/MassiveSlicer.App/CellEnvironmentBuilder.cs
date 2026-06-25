@@ -80,6 +80,19 @@ internal static class CellEnvironmentBuilder
                                             ba.Length > 1 ? ba[1] : 0f,
                                             ba.Length > 2 ? ba[2] : 0f)
                           * Matrix4.CreateTranslation(world);
+
+        // Constant orientation offset: spin the whole assembly about its WORLD-vertical axis through
+        // the centre by OrientationOffsetDeg. Post-multiplying by the world-space about-centre rotation
+        // leaves the placement (Row3 = centre) unchanged and only rotates Rows 0-2, so the bed-recentre
+        // path (which rewrites Row3) preserves it. Corrects the measured model-vs-physical phase.
+        if (MathF.Abs(rb.OrientationOffsetDeg) > 1e-4f)
+        {
+            float th = rb.OrientationOffsetDeg * MathF.PI / 180f;
+            var aboutCentre = Matrix4.CreateTranslation(-world)
+                            * Matrix4.CreateRotationZ(th)
+                            * Matrix4.CreateTranslation(world);
+            root.LocalTransform = root.LocalTransform * aboutCentre;
+        }
     }
 
     public static BuiltEnvironment Build(CellConfig cell)

@@ -245,6 +245,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "bed-orient",
+            Aliases = ["bed-orientation"],
+            Description = "Set the rotary bed orientation offset (deg about its vertical axis) and reload",
+            Usage = "bed-orient <deg>",
+            Execute = (ctx, args) =>
+            {
+                if (!float.TryParse(args.Trim(), System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                {
+                    ctx.LogError("usage: bed-orient <deg>   e.g.  bed-orient -0.93");
+                    return;
+                }
+                ctx.Log($"[bed] {ctx.Main.SetBedOrientationOffset(deg)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "diag-scans",
             Aliases = ["export-scans", "diag scans"],
             Description = "Export this session's rotary scans (world XYZ + E1) for offline calibration analysis",

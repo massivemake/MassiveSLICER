@@ -899,6 +899,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         return summary;
     }
 
+    /// <summary>
+    /// Sets the rotary bed's constant orientation offset (degrees about its vertical axis) in the
+    /// active cell, then reloads so the bed mesh rotates to match. Persists to the cell JSON.
+    /// </summary>
+    public string SetBedOrientationOffset(float deg)
+    {
+        if (Viewport.ActiveCellPath is not { } path)
+            return "No active cell.";
+        if (!CellLoader.SaveRotaryOrientation(path, deg, out var err))
+            return $"Failed: {err}";
+        MassiveSlicer.App.CellSceneCache.Invalidate(path);
+        Viewport.OnDevCellReloadRequested?.Invoke(path);
+        return $"Bed orientation offset = {deg:F3}° — reloading cell.";
+    }
+
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
