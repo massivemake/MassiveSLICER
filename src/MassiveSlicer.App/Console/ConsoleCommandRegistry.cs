@@ -282,6 +282,35 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "cell",
+            Aliases = ["switch-cell"],
+            Description = "Switch to a robot cell by name (e.g. cell LFAM 3)",
+            Usage = "cell <name>",
+            Execute = (ctx, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: cell <name>   e.g.  cell LFAM 3"); return; }
+                ctx.Log(ctx.Main.SwitchCellByName(args));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "sync",
+            Aliases = ["connect", "sync-robot"],
+            Description = "Sync (connect) the robot over C3Bridge",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.SyncRobot()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "desync",
+            Aliases = ["disconnect", "desync-robot"],
+            Description = "Desync (disconnect) the robot",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.DesyncRobot()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "bed-orient",
             Aliases = ["bed-orientation"],
             Description = "Set the rotary bed orientation offset (deg about its vertical axis) and reload",
