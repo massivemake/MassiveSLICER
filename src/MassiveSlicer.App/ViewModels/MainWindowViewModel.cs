@@ -550,7 +550,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             "/R1/Program/BED_SCAN_CAL",
             "/R1/PROGRAM/BED_SCAN_CAL",
         ];
-        const int target = 10;
+        const int maxStops = 64;   // safety cap — the SRC ends the sweep via $FLAG[2] (v5 pattern is ~28 stops)
         int captured = 0;
         // Surface clouds (world mm) + E1 per pose — used after the centre fit to estimate the
         // constant rotational phase (bed mesh vs reality) from the hole pattern, in one shot.
@@ -599,14 +599,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log($"[bedcal] Started {startedPath} via C3 program-run.");
             }
 
-            for (int n = 0; n < target; n++)
+            for (int n = 0; n < maxStops; n++)
             {
                 // Wait for the robot to reach a stop ($FLAG[1]) or finish ($FLAG[2]).
                 // Allow extra time on the first stop so the operator can start the program on the
                 // pendant when C3 auto-start wasn't available (~360 s); ~120 s/stop afterwards.
                 bool atStop = false, done = false;
                 int pollMax = n == 0 ? 1800 : 600;
-                Console.Log($"[bedcal] Position {n + 1}/{target} — waiting for the bed to stop…");
+                Console.Log($"[bedcal] Stop {n + 1} — waiting for the robot to settle…");
                 for (int poll = 0; poll < pollMax; poll++)
                 {
                     if (await robot.ReadFlagAsync(2)) { done = true; break; }
@@ -616,18 +616,18 @@ public sealed class MainWindowViewModel : ViewModelBase
                 if (done) { Console.Log("[bedcal] Robot signalled sweep complete."); break; }
                 if (!atStop)
                 {
-                    bedCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target}).");
-                    Console.Log($"[bedcal] Timed out waiting for the bed at position {n + 1}/{target} (captured {captured}).");
+                    bedCal.SetStatus($"Timed out waiting for the robot (captured {captured}).");
+                    Console.Log($"[bedcal] Timed out waiting for the robot at stop {n + 1} (captured {captured}).");
                     break;
                 }
 
                 var axes = await robot.ReadAxesAsync();
                 robot.E1 = Math.Round(axes[6], 2);
-                Console.Log($"[bedcal] In position {n + 1}/{target} (E1 {axes[6]:F1}°) — scanning…");
+                Console.Log($"[bedcal] At stop {n + 1} (E1 {axes[6]:F1}°) — scanning…");
                 await bedCal.AddSampleAsync();          // board centroid → (E1, world point) for the circle fit
                 captured++;
-                bedCal.SetStatus($"Captured {captured}/{target} (E1 {axes[6]:F0}°)…");
-                Console.Log($"[bedcal] Board captured ({captured}/{target}).");
+                bedCal.SetStatus($"Captured {captured} (E1 {axes[6]:F0}°)…");
+                Console.Log($"[bedcal] Board capture done (stop {captured}).");
 
                 // Also grab a full surface cloud (bed top + holes) for the rotation-phase estimate,
                 // lifted to world via the same fixed camera pose the centroid fit uses.
@@ -652,7 +652,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 }
                 catch (Exception ex) { Console.Log($"[bedcal] surface capture skipped at E1 {axes[6]:F0}°: {ex.Message}"); }
 
-                if (n < target - 1) Console.Log("[bedcal] Rotating bed to the next position…");
+                Console.Log("[bedcal] Released — moving to the next position…");
                 await robot.SetFlagAsync(1, false);     // release the robot to the next stop
             }
         }

@@ -3,11 +3,25 @@
 &PARAM EDITMASK = *
 &PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
 DEF BED_SCAN_CAL ( )
-; v4 — E1-only sweep. No $ACC_AXIS / $ACC_EXTAX assignments (those caused
-; "ACC value invalid"). E1 acc comes from PDEFAULT via BAS(#PTP_DAT).
-; Line 23 should read: $VEL_EXTAX[1] = 20
+; v5 — full-bed coverage sweep for auto bed leveling.
+; At each E1 step the scanner samples an INNER radius (Y -240) and an OUTER radius (Y -750) over
+; the bed, then E1 rotates and we sample again at the outer radius; this loops to cover the whole
+; turntable, then a final CENTRE scan (Y 0). Cartesian targets keep the parked orientation +
+; status/turn (so the scanner stays aimed at the bed); E1 moves as the external axis.
+;
+; Host handshake (MassiveSlicer): at each stop the robot sets $FLAG[1]=TRUE and waits; the host
+; captures a board + surface scan and clears $FLAG[1]=FALSE to release. $FLAG[2]=TRUE ends the sweep.
+; The host loops until $FLAG[2] (no fixed stop count), so STEPS below can change freely.
+;
+; !! VERIFY IN T1 (manual, reduced speed) BEFORE AUTO !!
+;   - Confirm X/Y/Z below land where you expect ($BASE here = the external-kinematic root base,
+;     same as the proven v4 program). Adjust the values or $BASE if they don't.
+;   - Confirm the parked orientation aims the scanner at the bed and every move is collision-free.
 
 DECL INT    i
+DECL INT    steps
+DECL REAL   e1deg
+DECL POS    spos
 DECL E6AXIS apos
 
 ;FOLD INI
@@ -32,17 +46,56 @@ BAS (#VEL_PTP,20 )
 $FLAG[1] = FALSE
 $FLAG[2] = FALSE
 
-apos = $AXIS_ACT
+steps = 9                 ; E1 increments (9 x 40 deg = 360 deg coverage)
+e1deg = -180.0
 
-FOR i = 0 TO 9
-  apos.E1 = -180.0 + i * 40.0
+; Park E1 at the start angle, then snapshot the Cartesian pose so every move keeps the scan
+; orientation + status/turn; only X/Y/Z change below.
+apos = $AXIS_ACT
+apos.E1 = e1deg
+PTP apos
+spos = $POS_ACT
+
+FOR i = 1 TO steps
+  ; --- inner radius -------------------------------------------------------
+  spos.X = 2000.0
+  spos.Y = -240.0
+  spos.Z = 500.0
+  PTP spos
+  WAIT SEC 0.4
+  $FLAG[1] = TRUE
+  WAIT FOR ($FLAG[1] == FALSE)
+
+  ; --- outer radius -------------------------------------------------------
+  spos.Y = -750.0
+  PTP spos
+  WAIT SEC 0.4
+  $FLAG[1] = TRUE
+  WAIT FOR ($FLAG[1] == FALSE)
+
+  ; --- rotate the bed, scan again (still at the outer radius) --------------
+  e1deg = e1deg + 40.0
+  apos = $AXIS_ACT
+  apos.E1 = e1deg
   PTP apos
-  WAIT SEC 0.5
+  WAIT SEC 0.4
   $FLAG[1] = TRUE
   WAIT FOR ($FLAG[1] == FALSE)
 ENDFOR
 
+; --- final centre scan ----------------------------------------------------
+spos = $POS_ACT
+spos.X = 2000.0
+spos.Y = 0.0
+spos.Z = 500.0
+PTP spos
+WAIT SEC 0.4
+$FLAG[1] = TRUE
+WAIT FOR ($FLAG[1] == FALSE)
+
+; --- done: bed back to 0 --------------------------------------------------
 $FLAG[2] = TRUE
+apos = $AXIS_ACT
 apos.E1 = 0.0
 PTP apos
 END
