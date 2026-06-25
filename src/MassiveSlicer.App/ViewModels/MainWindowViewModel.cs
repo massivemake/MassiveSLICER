@@ -606,24 +606,28 @@ public sealed class MainWindowViewModel : ViewModelBase
                 // pendant when C3 auto-start wasn't available (~360 s); ~120 s/stop afterwards.
                 bool atStop = false, done = false;
                 int pollMax = n == 0 ? 1800 : 600;
+                Console.Log($"[bedcal] Position {n + 1}/{target} — waiting for the bed to stop…");
                 for (int poll = 0; poll < pollMax; poll++)
                 {
                     if (await robot.ReadFlagAsync(2)) { done = true; break; }
                     if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
                     await Task.Delay(200);
                 }
-                if (done) break;
+                if (done) { Console.Log("[bedcal] Robot signalled sweep complete."); break; }
                 if (!atStop)
                 {
                     bedCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target}).");
+                    Console.Log($"[bedcal] Timed out waiting for the bed at position {n + 1}/{target} (captured {captured}).");
                     break;
                 }
 
                 var axes = await robot.ReadAxesAsync();
                 robot.E1 = Math.Round(axes[6], 2);
+                Console.Log($"[bedcal] In position {n + 1}/{target} (E1 {axes[6]:F1}°) — scanning…");
                 await bedCal.AddSampleAsync();          // board centroid → (E1, world point) for the circle fit
                 captured++;
                 bedCal.SetStatus($"Captured {captured}/{target} (E1 {axes[6]:F0}°)…");
+                Console.Log($"[bedcal] Board captured ({captured}/{target}).");
 
                 // Also grab a full surface cloud (bed top + holes) for the rotation-phase estimate,
                 // lifted to world via the same fixed camera pose the centroid fit uses.
@@ -634,17 +638,21 @@ public sealed class MainWindowViewModel : ViewModelBase
                         var sres = await Task.Run(() => ZividScanService.Capture(null, null, null));
                         var src  = sres.PointsXYZ;
                         var world = new float[src.Length];
+                        int valid = 0;
                         for (int i = 0; i + 2 < src.Length; i += 3)
                         {
                             var wv = System.Numerics.Vector3.Transform(
                                 new System.Numerics.Vector3(src[i], src[i + 1], src[i + 2]), camW);
                             world[i] = wv.X; world[i + 1] = wv.Y; world[i + 2] = wv.Z;
+                            if (!float.IsNaN(wv.X)) valid++;
                         }
                         phaseClouds.Add((axes[6], world));
+                        Console.Log($"[bedcal] Surface scan complete ({valid:N0} pts).");
                     }
                 }
                 catch (Exception ex) { Console.Log($"[bedcal] surface capture skipped at E1 {axes[6]:F0}°: {ex.Message}"); }
 
+                if (n < target - 1) Console.Log("[bedcal] Rotating bed to the next position…");
                 await robot.SetFlagAsync(1, false);     // release the robot to the next stop
             }
         }
@@ -660,10 +668,13 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (captured >= 3)
         {
+            Console.Log($"[bedcal] Sweep complete — {captured} board samples, {phaseClouds.Count} surface scans. Fitting the rotary axis…");
             bedCal.Compute();
             if (bedCal.HasResult)
             {
+                Console.Log($"[bedcal] Centre ({bedCal.CenterX:F1}, {bedCal.CenterY:F1}, {bedCal.CenterZ:F1}) mm, R {bedCal.Radius:F0} mm, residual {bedCal.Residual:F2} mm, rotation {(bedCal.RotationSign < 0 ? "CW" : "CCW")}.");
                 bedCal.Apply();   // centre + rotation sign → cell (no extra click)
+                Console.Log("[bedcal] Centre + rotation sign applied. Estimating rotation phase from the hole pattern…");
                 // One-shot: also estimate and apply the constant rotational phase (geometry-vs-reality)
                 // from the hole pattern in the captured surface scans.
                 if (phaseClouds.Count >= 2)
