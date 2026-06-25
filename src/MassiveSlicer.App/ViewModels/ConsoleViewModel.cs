@@ -65,6 +65,28 @@ public sealed class ConsoleViewModel : ViewModelBase
 
     public void LogError(string message) => AppendHistory(new ConsoleHistoryEntry(message, isError: true));
 
+    /// <summary>Runs a command line as if typed into the console. Call on the UI thread
+    /// (used by <see cref="MassiveSlicer.App.Console.LocalControlBridge"/>).</summary>
+    public void ExecuteLine(string line)
+    {
+        line = (line ?? string.Empty).Trim();
+        if (line.Length == 0)
+            return;
+
+        History.Add(new ConsoleHistoryEntry(line, isCommand: true));
+        if (_context is null)
+        {
+            LogError("Console commands are not wired yet.");
+            return;
+        }
+
+        _registry.TryExecute(line, _context);
+    }
+
+    /// <summary>Snapshot of the last <paramref name="last"/> history entries (call on the UI thread).</summary>
+    public IReadOnlyList<ConsoleHistoryEntry> SnapshotHistory(int last)
+        => last <= 0 || last >= History.Count ? History.ToList() : History.Skip(History.Count - last).ToList();
+
     public void ClearHistory()
     {
         if (Dispatcher.UIThread.CheckAccess())
