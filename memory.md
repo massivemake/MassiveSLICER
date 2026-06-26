@@ -114,8 +114,9 @@ dotnet format
 | What | Path |
 |------|------|
 | Repo | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
-| GitHub | https://github.com/MattWhite3194/MassiveSlicer |
-| Milestone tag (2026-06-25) | `milestone/krl-import-viewport-polish-2026-06-25` on branch `feature/print-scan-mill` @ `409e2e8` |
+| GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
+| GitHub (mirror) | https://github.com/MattWhite3194/MassiveSlicer |
+| Milestone tag (2026-06-25) | `milestone/krl-import-viewport-polish-2026-06-25` @ `409e2e8` on `master`/`main` |
 | Publish (only) | `%LOCALAPPDATA%\MassiveSlicer\build` |
 | Cell JSON (canonical) | Repo `assets\cells\` — dev saves mirror here via `CellPaths` |
 | Test GLB | `assets\test\crystal_stone_rock.glb` |
