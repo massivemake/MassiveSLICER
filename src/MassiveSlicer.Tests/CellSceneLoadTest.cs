@@ -49,6 +49,8 @@ public class CellSceneLoadTest(ITestOutputHelper output)
         Assert.NotNull(payload.BoosterNode);
         Assert.Contains("LFAM1Robot", cell.Robot.ModelPath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("LFAM1RobotRail", cell.BoosterFrame!.ModelPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("lfam1_bed", cell.Bed.ModelPath!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(payload.BedNode);
         Assert.True(meshes > 0);
     }
 

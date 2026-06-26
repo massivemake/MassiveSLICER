@@ -90,7 +90,7 @@
     "defaultToolheadC": 0
   },
   "bed": {
-    "modelPath": "assets/cells/LFAM2/lfam2_bed.glb",
+    "modelPath": "assets/cells/LFAM1/lfam1_bed.glb",
     "origin": {
       "x": 1433.829,
       "y": -1377.359,
