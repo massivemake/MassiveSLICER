@@ -9,6 +9,7 @@ using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -982,6 +983,16 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Sets <see cref="ActiveShaderMode"/> from a string enum name (e.g. "Clay").</summary>
     public RelayCommand<string> SetShaderModeCommand { get; }
+
+    /// <summary>Global PBR layer toggles, overlay compositing, and optional factor overrides.</summary>
+    public PbrMaterialSettings PbrMaterial { get; } = new();
+
+    /// <summary>Raises change notification after in-place <see cref="PbrMaterial"/> mutation (bridge/MCP).</summary>
+    public void NotifyPbrMaterialChanged()
+    {
+        OnPropertyChanged(nameof(PbrMaterial));
+        NotifyRenderNeeded();
+    }
 
     // -- Gizmo mode (synced to renderer via OnRender) -------------------------
 
@@ -1985,6 +1996,15 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Selects a scene node when the user clicks it in the outliner.</summary>
     internal Action<SceneNode>? OnOutlinerSelectRequested { get; set; }
 
+    /// <summary>
+    /// Set by nested <c>OutlinerItemView</c> row clicks so the parent ListBox
+    /// <c>SelectionChanged</c> handler does not overwrite the child selection.
+    /// </summary>
+    internal bool SuppressNextOutlinerListBoxSelection { get; set; }
+
+    /// <summary>Returns the viewport's currently selected scene node (wired by the GL view).</summary>
+    internal Func<SceneNode?>? GetSelectedSceneNode { get; set; }
+
     /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
     internal Action<SceneNode>? OnNodeHidden { get; set; }
 
@@ -2075,6 +2095,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private OutlinerItemViewModel? _rotaryGroupItem;
     private SceneNode? _rotaryPivotForScans;
+    private readonly List<OutlinerItemViewModel> _cellEnvOutlinerItems = [];
 
     /// <summary>True when the active cell has a rotary bed, so scans should ride the turntable.</summary>
     public bool HasRotaryBed => _rotaryPivotForScans is not null;
@@ -2090,8 +2111,23 @@ public sealed class ViewportViewModel : ViewModelBase
         if (_rotaryGroupItem is not null) { OutlinerItems.Remove(_rotaryGroupItem); _rotaryGroupItem = null; }
         if (pivot is null) return;
         // The group itself isn't deletable; visibility toggling falls through to the pivot node.
-        _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName);
+        _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
         OutlinerItems.Add(_rotaryGroupItem);
+    }
+
+    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).</summary>
+    internal void SetCellEnvironmentOutliner(IEnumerable<(SceneNode Node, string DisplayName)> entries)
+    {
+        foreach (var item in _cellEnvOutlinerItems)
+            OutlinerItems.Remove(item);
+        _cellEnvOutlinerItems.Clear();
+
+        foreach (var (node, displayName) in entries)
+        {
+            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+            OutlinerItems.Add(item);
+            _cellEnvOutlinerItems.Add(item);
+        }
     }
 
     private OutlinerItemViewModel? _robotGroupItem;
@@ -2107,30 +2143,116 @@ public sealed class ViewportViewModel : ViewModelBase
         if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
         if (root is null) return;
 
-        _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root");
+        _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root", canDelete: false);
         OutlinerItems.Add(_robotGroupItem);
 
         if (pedestal is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal"));
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false));
         if (arm is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm"));
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false));
     }
 
     /// <summary>
-    /// Adds a scan result. On a rotary cell it nests under the rotary group and is parented to the
-    /// E1 pivot in the scene (so it tracks the turntable and stays registered to prior scans);
-    /// otherwise it falls back to <see cref="AddUserNode"/> (attached to the scene root).
+    /// Adds a scan result. Outliner: nested under the active print object (selected import, or the
+    /// sole model on the bed). Scene: on a rotary cell, parented to the E1 pivot so it tracks E1.
     /// Must be called on the UI thread.
     /// </summary>
     public void AddScanNode(SceneNode node)
     {
+        var parentObject = ResolveScanParentOutlinerItem();
+        EnqueueRotarySceneNode(node);
+
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        {
+            parentObject?.RemoveChild(child);
+            PendingRemoveNodes.Enqueue(child.Node);
+            NotifyRenderNeeded();
+        }, () => OnNodeHidden?.Invoke(node));
+
+        if (parentObject is not null)
+            parentObject.AddChild(item);
+        else if (_rotaryGroupItem is not null)
+            _rotaryGroupItem.AddChild(item);
+        else
+            OutlinerItems.Add(item);
+
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    private void EnqueueRotarySceneNode(SceneNode node)
+    {
+        if (_rotaryPivotForScans is null)
+            PendingNodes.Enqueue(node);
+        else
+            PendingRotaryNodes.Enqueue(node);
+    }
+
+    /// <summary>
+    /// Picks the active print object — selected user import, else the sole model on the bed.
+    /// Used for scan nesting, adaptive layer preview, and slice targeting.
+    /// </summary>
+    internal OutlinerItemViewModel? ResolveActivePrintObjectItem()
+    {
+        if (GetSelectedSceneNode?.Invoke() is { } selected)
+        {
+            var selectedItem = FindUserMeshOutlinerItem(selected);
+            if (selectedItem is not null) return selectedItem;
+        }
+
+        var models = EnumerateUserModelItems().Where(i => i.Visible).ToList();
+        return models.Count == 1 ? models[0] : null;
+    }
+
+    internal OutlinerItemViewModel? ResolveScanParentOutlinerItem() => ResolveActivePrintObjectItem();
+
+    /// <summary>
+    /// Outliner parent for imported/sliced toolpaths: active print object when present,
+    /// otherwise the rotary-bed group (so KRL imports don't land at the top level).
+    /// </summary>
+    internal OutlinerItemViewModel? ResolveToolpathParentOutlinerItem()
+        => ResolveActivePrintObjectItem() ?? _rotaryGroupItem;
+
+    /// <summary>
+    /// Clears layer-preview shading from cell groups and user objects, then enables it on the active print object.
+    /// </summary>
+    internal void SyncLayerPreviewFlags(bool enabled)
+    {
+        foreach (var item in OutlinerItems)
+            ClearLayerPreviewOnOutlinerItem(item);
+
+        if (enabled && ResolveActivePrintObjectItem() is { } target)
+            target.Node.LayerPreview = true;
+    }
+
+    private static void ClearLayerPreviewOnOutlinerItem(OutlinerItemViewModel item)
+    {
+        item.Node.LayerPreview = false;
+        foreach (var child in item.Children)
+            ClearLayerPreviewOnOutlinerItem(child);
+    }
+
+    /// <summary>
+    /// Adds imported user geometry. On a rotary cell it nests under the rotary group and is parented
+    /// to the E1 pivot (so bed rotation is reflected in <see cref="SceneNode.WorldTransform"/> for
+    /// toolpath generation); otherwise it falls back to <see cref="AddUserNode"/>.
+    /// Must be called on the UI thread.
+    /// </summary>
+    public void AddImportNode(SceneNode node) => AddRotaryBedChildNode(node);
+
+    private void AddRotaryBedChildNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
+    {
+        EnqueueRotarySceneNode(node);
+
         if (_rotaryPivotForScans is null || _rotaryGroupItem is null)
         {
-            AddUserNode(node);
+            var rootItem = RegisterOutlinerItem(node);
+            AdoptToolpaths(adoptToolpathsFrom, rootItem);
+            SliceCommand.RaiseCanExecuteChanged();
+            NotifyRenderNeeded();
             return;
         }
 
-        PendingRotaryNodes.Enqueue(node);
         var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
         {
             _rotaryGroupItem?.RemoveChild(child);
@@ -2138,8 +2260,51 @@ public sealed class ViewportViewModel : ViewModelBase
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(node));
         _rotaryGroupItem.AddChild(item);
+        AdoptToolpaths(adoptToolpathsFrom, item);
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
+    }
+
+    private static void AdoptToolpaths(OutlinerItemViewModel? from, OutlinerItemViewModel to)
+    {
+        if (from is null) return;
+        foreach (var child in from.Children.ToList())
+        {
+            from.RemoveChild(child);
+            to.AddChild(child);
+        }
+    }
+
+    /// <summary>Yields outliner entries for user-imported models (top-level or nested under the rotary group).</summary>
+    internal IEnumerable<OutlinerItemViewModel> EnumerateUserModelItems()
+    {
+        foreach (var item in OutlinerItems)
+        {
+            if (item == _rotaryGroupItem)
+            {
+                foreach (var child in item.Children)
+                    yield return child;
+                continue;
+            }
+            if (item == _robotGroupItem) continue;
+            if (_cellEnvOutlinerItems.Contains(item)) continue;
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Returns the user-model outliner item that owns <paramref name="node"/> (import, scan, etc.),
+    /// not the rotary-bed group whose scene subtree also contains the turntable mesh.
+    /// </summary>
+    internal OutlinerItemViewModel? FindUserMeshOutlinerItem(SceneNode? node)
+    {
+        if (node is null) return null;
+        foreach (var item in EnumerateUserModelItems())
+        {
+            if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
+                return item;
+        }
+        return null;
     }
 
     // ── Rotary scan diagnostics ───────────────────────────────────────────────
@@ -2172,6 +2337,19 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         _scanDiag.Add((name, e1, xyz.ToArray()));
     }
+
+    /// <summary>
+    /// Records already-transformed world XYZ (e.g. from <see cref="ScanPointCloudTransform.ToWorld"/>).
+    /// Decimated for export size.
+    /// </summary>
+    public void StashScanDiagWorld(string name, float e1, float[] worldXyz)
+    {
+        if (worldXyz is null || worldXyz.Length < 3) return;
+        _scanDiag.Add((name, e1, ScanPointCloudTransform.Decimate(worldXyz)));
+    }
+
+    /// <summary>Clears stashed diagnostic scans (e.g. before a new bed-cal run).</summary>
+    public void ClearScanDiag() => _scanDiag.Clear();
 
     /// <summary>
     /// Writes the stashed scans (one .xyz of world points each) + a manifest (per-scan E1, the rotary
@@ -2209,29 +2387,16 @@ public sealed class ViewportViewModel : ViewModelBase
     /// attachment to the scene root on the GL thread.
     /// </summary>
     internal void AttachUserNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
-    {
-        PendingNodes.Enqueue(node);
-        var item = RegisterOutlinerItem(node);
-        if (adoptToolpathsFrom is not null)
-        {
-            foreach (var child in adoptToolpathsFrom.Children.ToList())
-            {
-                adoptToolpathsFrom.RemoveChild(child);
-                item.AddChild(child);
-            }
-        }
-        SliceCommand.RaiseCanExecuteChanged();
-        NotifyRenderNeeded();
-    }
+        => AddRotaryBedChildNode(node, adoptToolpathsFrom);
 
     /// <summary>
-    /// Adds an imported KRL toolpath as a top-level, scrubbable outliner node (same pipeline as a
-    /// sliced/generated toolpath, so the timeline scrubber works on it). Must be called on the UI thread.
+    /// Adds an imported KRL toolpath as a scrubbable outliner node under the active print object
+    /// or rotary-bed group (same nesting as slice-generated toolpaths). Must be called on the UI thread.
     /// </summary>
     public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f)
     {
         var node = new SceneNode { Name = name, Selectable = true };
-        RegisterToolpathInOutliner(node, null);
+        RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem());
         PendingToolpath.Enqueue(new PendingToolpathEntry
         {
             Toolpath      = tp,
@@ -2255,21 +2420,49 @@ public sealed class ViewportViewModel : ViewModelBase
     internal OutlinerItemViewModel? FindOutlinerItem(SceneNode node)
     {
         foreach (var item in OutlinerItems)
-            if (item.Node == node) return item;
-        return null;
-    }
-
-    /// <summary>Returns the outliner item for a toolpath node (top-level or child).</summary>
-    internal OutlinerItemViewModel? FindToolpathOutlinerItem(SceneNode node)
-    {
-        foreach (var item in OutlinerItems)
         {
-            if (item.Node == node) return item;
-            foreach (var child in item.Children)
-                if (child.Node == node) return child;
+            var found = FindOutlinerItemInSubtree(item, node);
+            if (found is not null) return found;
         }
         return null;
     }
+
+    private static OutlinerItemViewModel? FindOutlinerItemInSubtree(OutlinerItemViewModel item, SceneNode node)
+    {
+        if (item.Node == node) return item;
+        foreach (var child in item.Children)
+        {
+            if (child.Node == node) return child;
+            var deeper = FindOutlinerItemInSubtree(child, node);
+            if (deeper is not null) return deeper;
+        }
+        return null;
+    }
+
+    private OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
+    {
+        foreach (var root in OutlinerItems)
+        {
+            var parent = FindParentInSubtree(root, item);
+            if (parent is not null) return parent;
+        }
+        return null;
+    }
+
+    private static OutlinerItemViewModel? FindParentInSubtree(OutlinerItemViewModel root, OutlinerItemViewModel target)
+    {
+        foreach (var child in root.Children)
+        {
+            if (ReferenceEquals(child, target)) return root;
+            var deeper = FindParentInSubtree(child, target);
+            if (deeper is not null) return deeper;
+        }
+        return null;
+    }
+
+    /// <summary>Returns the outliner item for a toolpath node (any depth).</summary>
+    internal OutlinerItemViewModel? FindToolpathOutlinerItem(SceneNode node)
+        => FindOutlinerItem(node);
 
     /// <summary>
     /// Creates a new toolpath outliner item as a child of <paramref name="parentItem"/>
@@ -2301,33 +2494,34 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public void RequestDeleteNode(SceneNode node)
     {
-        foreach (var item in OutlinerItems)
+        if (FindOutlinerItem(node) is not { } item) return;
+        if (item == _rotaryGroupItem || item == _robotGroupItem) return;
+
+        if (FindParentOutlinerItem(item) is { } parent)
         {
-            // Check direct match (top-level mesh or its sub-nodes)
-            if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
-            {
-                RemoveUserNode(item);
-                return;
-            }
-            // Check child toolpath nodes
-            var child = item.Children.FirstOrDefault(c => c.Node == node);
-            if (child is not null)
-            {
-                item.RemoveChild(child);
-                PendingRemoveNodes.Enqueue(child.Node);
-                NotifyRenderNeeded();
-                return;
-            }
+            parent.RemoveChild(item);
+            QueueOutlinerSubtreeForRemoval(item);
+            ClearArmatureScanMeshIfRemoved(item.Node);
+            NotifyRenderNeeded();
+            return;
         }
+
+        RemoveUserNode(item);
+    }
+
+    private void QueueOutlinerSubtreeForRemoval(OutlinerItemViewModel item)
+    {
+        foreach (var child in item.Children)
+            QueueOutlinerSubtreeForRemoval(child);
+        PendingRemoveNodes.Enqueue(item.Node);
     }
 
     private void RemoveUserNode(OutlinerItemViewModel item)
     {
         OutlinerItems.Remove(item);
         ClearArmatureScanMeshIfRemoved(item.Node);
-        // Queue child toolpath nodes for cleanup before the parent
-        foreach (var child in item.Children)
-            PendingRemoveNodes.Enqueue(child.Node);
+        foreach (var child in item.Children.ToList())
+            QueueOutlinerSubtreeForRemoval(child);
         PendingRemoveNodes.Enqueue(item.Node);
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
@@ -2337,8 +2531,23 @@ public sealed class ViewportViewModel : ViewModelBase
     public void ClearUserScene()
     {
         foreach (var item in OutlinerItems.ToList())
+        {
+            if (item == _rotaryGroupItem || item == _robotGroupItem) continue;
             RemoveUserNode(item);
+        }
+
+        if (_rotaryGroupItem is not null)
+        {
+            foreach (var child in _rotaryGroupItem.Children.ToList())
+            {
+                _rotaryGroupItem.RemoveChild(child);
+                QueueOutlinerSubtreeForRemoval(child);
+            }
+        }
+
         _armatureScanNode = null;
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
     }
 
 }

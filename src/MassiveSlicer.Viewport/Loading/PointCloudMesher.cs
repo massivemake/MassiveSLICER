@@ -72,7 +72,7 @@ public static class PointCloudMesher
         var mesh = new MeshData(verts, normals, indices.ToArray(), name,
                                 baseColor: new Vector4(0.62f, 0.78f, 0.92f, 1f),
                                 roughness: 0.9f);
-        return new SceneNode { Name = name, PendingMesh = mesh };
+        return new SceneNode { Name = name, PendingMesh = mesh, Selectable = true, PickTier = PickTier.Content };
     }
 
     private static void TryAddTriangle(Vector3[] verts, List<uint> indices,

@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Scanning;
 
 namespace MassiveSlicer.Core.IO;
 
@@ -178,19 +179,86 @@ public static class CellLoader
     /// </summary>
     public static void SaveToolTcp(string cellPath, int krlIndex,
         float x, float y, float z, float a, float b, float c)
+        => TrySaveToolTcp(cellPath, krlIndex, x, y, z, a, b, c, out _);
+
+    /// <summary>
+    /// Persists learned scan-cal wrist deltas into <c>bedScan.scanCalWristDeltas</c>.
+    /// </summary>
+    public static bool TrySaveScanCalWristDeltas(string cellPath,
+        IReadOnlyList<ScanToolCalSweep.WristDelta> deltas, out string? error)
     {
+        error = null;
+        if (deltas.Count != ScanToolCalSweep.PoseCount)
+        {
+            error = $"expected {ScanToolCalSweep.PoseCount} wrist deltas, got {deltas.Count}";
+            return false;
+        }
+
         try
         {
-            var cell         = Load(cellPath);
+            var cell = Load(cellPath);
+            var bedScan = cell.BedScan ?? new BedScanConfig();
+            var configs = deltas
+                .Select(d => new ScanCalWristDeltaConfig { A4 = (float)d.A4, A5 = (float)d.A5, A6 = (float)d.A6 })
+                .ToArray();
+            var updated = cell with { BedScan = bedScan with { ScanCalWristDeltas = configs } };
+            File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Writes tcpX/Y/Z and tcpA/B/C for the tool with <paramref name="krlIndex"/> into the cell JSON.
+    /// When <paramref name="mirrorSensorOrigin"/> is true, also updates sensorOrigin* to match (scanner tools).
+    /// Returns false when the file cannot be written or no tool matches.
+    /// </summary>
+    public static bool TrySaveToolTcp(string cellPath, int krlIndex,
+        float x, float y, float z, float a, float b, float c, out string? error,
+        bool mirrorSensorOrigin = false)
+    {
+        error = null;
+        try
+        {
+            var cell = Load(cellPath);
+            bool found = false;
             var updatedTools = cell.Tools
-                .Select(t => t.KrlIndex == krlIndex
-                    ? t with { TcpX = x, TcpY = y, TcpZ = z, TcpA = a, TcpB = b, TcpC = c }
-                    : t)
+                .Select(t =>
+                {
+                    if (t.KrlIndex != krlIndex) return t;
+                    found = true;
+                    var updated = t with { TcpX = x, TcpY = y, TcpZ = z, TcpA = a, TcpB = b, TcpC = c };
+                    if (mirrorSensorOrigin)
+                    {
+                        updated = updated with
+                        {
+                            SensorOriginX = x, SensorOriginY = y, SensorOriginZ = z,
+                            SensorOriginA = a, SensorOriginB = b, SensorOriginC = c,
+                        };
+                    }
+                    return updated;
+                })
                 .ToList();
+
+            if (!found)
+            {
+                error = $"no tool with krlIndex {krlIndex} in {Path.GetFileName(cellPath)}";
+                return false;
+            }
+
             var updated = cell with { Tools = updatedTools };
             File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));
+            return true;
         }
-        catch { /* non-fatal */ }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
     }
 
     public static bool SaveStandTransform(string cellPath, string standId,
@@ -261,6 +329,72 @@ public static class CellLoader
                 .Select(t => t.Name == toolName ? t with { Dock = dock } : t)
                 .ToList(),
         }, out error);
+
+    /// <summary>Returns a waypoint by name (case-insensitive), or null if not found.</summary>
+    public static CellWaypointConfig? FindWaypoint(CellConfig cell, string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return null;
+        return cell.Waypoints.FirstOrDefault(w =>
+            w.Name.Equals(name.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>Returns the first waypoint carrying <paramref name="tag"/> (case-insensitive).</summary>
+    public static CellWaypointConfig? FindWaypointByTag(CellConfig cell, string tag)
+    {
+        if (string.IsNullOrWhiteSpace(tag)) return null;
+        var key = tag.Trim();
+        return cell.Waypoints.FirstOrDefault(w =>
+            w.Tags.Any(t => t.Equals(key, StringComparison.OrdinalIgnoreCase)));
+    }
+
+    /// <summary>Inserts or replaces a named waypoint in the cell JSON.</summary>
+    public static bool SaveWaypoint(string cellPath, CellWaypointConfig waypoint, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(waypoint.Name))
+        {
+            error = "waypoint name is required";
+            return false;
+        }
+
+        var key = waypoint.Name.Trim();
+        return TryWrite(cellPath, cell =>
+        {
+            var list = cell.Waypoints.ToList();
+            int idx = list.FindIndex(w => w.Name.Equals(key, StringComparison.OrdinalIgnoreCase));
+            if (idx >= 0)
+                list[idx] = waypoint with { Name = key };
+            else
+                list.Add(waypoint with { Name = key });
+            return cell with { Waypoints = list };
+        }, out error);
+    }
+
+    /// <summary>Removes a waypoint by name. Returns false if the name was not found.</summary>
+    public static bool RemoveWaypoint(string cellPath, string name, out string? error)
+    {
+        error = null;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            error = "waypoint name is required";
+            return false;
+        }
+
+        var key = name.Trim();
+        var cell = Load(cellPath);
+        if (FindWaypoint(cell, key) is null)
+        {
+            error = $"waypoint '{key}' not found";
+            return false;
+        }
+
+        return TryWrite(cellPath, c => c with
+        {
+            Waypoints = c.Waypoints
+                .Where(w => !w.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
+                .ToList(),
+        }, out error);
+    }
 
     /// <summary>
     /// Persists dev-mode bed moves. Shifts <c>origin</c> + <c>gridOrigin</c> on LFAM 3,

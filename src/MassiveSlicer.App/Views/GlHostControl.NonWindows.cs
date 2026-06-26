@@ -38,6 +38,9 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
     /// <inheritdoc cref="GlHostControl.InteractionRenderScale"/>
     public float InteractionRenderScale { get; set; } = 1f;
 
+    /// <inheritdoc cref="GlHostControl.CaptureScreenshotPngAsync"/>
+    public Task<byte[]?> CaptureScreenshotPngAsync(int timeoutMs = 5000) => Task.FromResult<byte[]?>(null);
+
     // -- Output FBO (what SceneRenderer composites into) -----------------------
 
     private int _outputFbo, _outputColorTex, _outputDepthRbo;

@@ -39,6 +39,7 @@ public partial class ViewportView : UserControl
     private SceneNode?             _rotaryBedRoot;   // "RotaryBed" env root — relocated when the bed is recentred
     private bool                   _multiToolFlangeParented;
     private bool                   _lastOutlinerLayerPreview;
+    private SceneNode?             _lastLayerPreviewTargetNode;
     private const float InteractionScale = 0.55f;
     private readonly Queue<SceneNode> _cellGpuUploadQueue = new();
     private bool _cellGpuUploadPending;
@@ -195,6 +196,9 @@ public partial class ViewportView : UserControl
     private bool _glRenderWired;
     private bool _vmGlWired;
 
+    /// <summary>Captures the current 3D viewport as PNG bytes (GL color buffer).</summary>
+    public Task<byte[]?> CaptureScreenshotAsync() => GlCanvas.CaptureScreenshotPngAsync();
+
     private void WireGlCanvas()
     {
         if (!_glRenderWired)
@@ -221,6 +225,7 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.LightIntensity)      or
                     nameof(ViewportViewModel.Exposure)            or
                     nameof(ViewportViewModel.IblIntensity)        or
+                    nameof(ViewportViewModel.PbrMaterial)         or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
                     nameof(ViewportViewModel.ShowSeam)               or
@@ -254,6 +259,7 @@ public partial class ViewportView : UserControl
                 UpdateFocusOverlay();
                 GlCanvas.RequestNextFrameRendering();
             };
+            vm.GetSelectedSceneNode = () => _renderer.SelectedNode;
             vm.OnNodeHidden           = node =>
             {
                 if (_renderer.SelectedNode is { } sel && node.SelfAndDescendants().Any(n => n == sel))
@@ -434,6 +440,15 @@ public partial class ViewportView : UserControl
                         }
                     }
                 }
+            };
+            robot.OnBedOrientationEdited = deg =>
+            {
+                if (DataContext is not ViewportViewModel vm2 || vm2.ActiveCellPath is not { } path)
+                    return;
+                if (!MassiveSlicer.Core.IO.CellLoader.SaveRotaryOrientation(path, (float)deg, out _))
+                    return;
+                MassiveSlicer.App.CellSceneCache.Invalidate(path);
+                vm2.OnDevCellReloadRequested?.Invoke(path);
             };
             robot.OnTcpOffsetEdited = (x, y, z, a, b, c) =>
             {
@@ -637,21 +652,22 @@ public partial class ViewportView : UserControl
             _renderer.ShaderMode         = vm.ActiveShaderMode;
             _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
             bool layerPreview = vm.AdditiveSettings?.ShowLayerPreview ?? false;
-            if (layerPreview != _lastOutlinerLayerPreview)
+            var layerTarget = layerPreview ? vm.ResolveActivePrintObjectItem()?.Node : null;
+            if (layerPreview != _lastOutlinerLayerPreview || layerTarget != _lastLayerPreviewTargetNode)
             {
-                _lastOutlinerLayerPreview = layerPreview;
-                foreach (var item in vm.OutlinerItems)
-                {
-                    if (!_renderer.IsToolpathNode(item.Node))
-                        item.Node.LayerPreview = layerPreview;
-                }
+                _lastOutlinerLayerPreview    = layerPreview;
+                _lastLayerPreviewTargetNode  = layerTarget;
+                vm.SyncLayerPreviewFlags(layerPreview);
                 _renderer.InvalidateShaderAppearance();
+                if (layerPreview && layerTarget is not null)
+                    _ = ComputeLayerPreviewAsync(vm);
             }
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
             _renderer.LightIntensity = vm.LightIntensity;
             _renderer.Exposure       = vm.Exposure;
             _renderer.IblIntensity   = vm.IblIntensity;
+            _renderer.SyncPbrMaterial(vm.PbrMaterial);
 
             if (_renderer.BackdropPath != vm.ActiveBackdropPath)
             {
@@ -703,23 +719,25 @@ public partial class ViewportView : UserControl
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
-            // Scans destined for the rotary turntable: parent under the E1 pivot so they rotate with
-            // the bed. Their LocalTransform is the capture-time WORLD pose; convert it to pivot-local
+            // Scans and imports destined for the rotary turntable: parent under the E1 pivot so they
+            // rotate with the bed. Their LocalTransform is a WORLD pose; convert it to pivot-local
             // (World = Local * ParentWorld ⇒ Local = World * ParentWorld⁻¹) so the world pose is
-            // preserved at the current E1 and every later E1 change rotates the scan with the table.
-            while (vm.PendingRotaryNodes.TryDequeue(out var scan))
+            // preserved at the current E1 and every later E1 change rotates the content with the table.
+            while (vm.PendingRotaryNodes.TryDequeue(out var rotaryChild))
             {
+                rotaryChild.Selectable = true;
+                rotaryChild.PickTier   = PickTier.Content;
                 if (_rotaryBedPivot is { } pivot)
                 {
-                    scan.LocalTransform = scan.LocalTransform * pivot.WorldTransform.Inverted();
-                    pivot.AddChild(scan);
+                    rotaryChild.LocalTransform = rotaryChild.LocalTransform * pivot.WorldTransform.Inverted();
+                    pivot.AddChild(rotaryChild);
                 }
                 else
-                    _renderer.SceneRoot.AddChild(scan);   // fallback: no pivot this cell
+                    _renderer.SceneRoot.AddChild(rotaryChild);   // fallback: no pivot this cell
 
-                UploadPendingMeshes(scan);
+                UploadPendingMeshes(rotaryChild);
                 _renderer.InvalidateShaderAppearance();
-                _renderer.Select(scan);
+                _renderer.Select(rotaryChild);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
@@ -997,14 +1015,12 @@ public partial class ViewportView : UserControl
         // Flange-frame vector → world.
         Vector3 ToWorld(float x, float y, float z) => x * fx + y * fy + z * fz;
 
-        // Sensor origin is the optical centre; use it for scan registration when available.
-        // Falls back to live TCP offset (_tcpOffsetLocal) so edits in the TCP OFFSET panel
-        // take effect immediately without a cell reload.
-        float ox = tool.HasSensorOrigin ? tool.SensorOriginX!.Value : _tcpOffsetLocal.X;
-        float oy = tool.HasSensorOrigin ? tool.SensorOriginY!.Value : _tcpOffsetLocal.Y;
-        float oz = tool.HasSensorOrigin ? tool.SensorOriginZ!.Value : _tcpOffsetLocal.Z;
-        // Always use the live A/B/C from the TCP OFFSET panel — _tcpOrientationABC is updated
-        // by OnTcpOffsetEdited and all tool-load paths, so it always reflects the current edit.
+        // Hand-eye calibration writes the full camera-in-flange transform as the live TCP
+        // (_tcpOffsetLocal + _tcpOrientationABC). Use that unified frame for scan registration —
+        // do NOT mix static sensorOrigin XYZ (legacy TOOL_DATA[5] optical centre) with calibrated ABC.
+        float ox = _tcpOffsetLocal.X;
+        float oy = _tcpOffsetLocal.Y;
+        float oz = _tcpOffsetLocal.Z;
         float oA = _tcpOrientationABC.X;
         float oB = _tcpOrientationABC.Y;
         float oC = _tcpOrientationABC.Z;
@@ -1178,8 +1194,11 @@ public partial class ViewportView : UserControl
             {
                 vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
                 var bed = swapCellForPost.Bed;
+                float orient = swapCellForPost.RotaryBed?.OrientationOffsetDeg
+                               ?? RotaryBedCellConfig.DefaultOrientationOffsetDeg;
                 vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
-                                      bed.Diameter ?? 0f, bed.RotationSign ?? -1f, bed.Diameter is > 0f);
+                                      bed.Diameter ?? 0f, bed.RotationSign ?? -1f, orient,
+                                      bed.Diameter is > 0f);
             }
         });
         var b          = swap.Config.Bed;
@@ -1273,8 +1292,20 @@ public partial class ViewportView : UserControl
 
         // Expose the rotary bed as an outliner group that scans nest under (so they ride E1).
         var rotaryPivot = _rotaryBedPivot;
+        var cellEnvOutliner = new List<(SceneNode Node, string DisplayName)>();
+        foreach (var env in swap.EnvironmentNodes)
+        {
+            if (env.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand")
+                cellEnvOutliner.Add((env, env.Name));
+        }
+        if (swap.BedNode is { } bedNode)
+            cellEnvOutliner.Add((bedNode, "Print Bed"));
+
         Dispatcher.UIThread.Post(() =>
-            vm.SetRotaryBedGroup(rotaryPivot, "KP1-MB2000 HW-2 Rotary Bed"));
+        {
+            vm.SetCellEnvironmentOutliner(cellEnvOutliner);
+            vm.SetRotaryBedGroup(rotaryPivot, "KP1-MB2000 HW-2 Rotary Bed");
+        });
 
         if (_fkController?.FlangeNode is { } flange)
         {
@@ -1981,7 +2012,7 @@ public partial class ViewportView : UserControl
         foreach (var file in files)
         {
             var node = ImportHelper.LoadAndPlace(file, place ? vm.ActiveCell : null);
-            if (node is not null) vm.AddUserNode(node);
+            if (node is not null) vm.AddImportNode(node);
         }
     }
 
@@ -1992,13 +2023,13 @@ public partial class ViewportView : UserControl
         if (_renderer.SelectedNode is not { } selected) return null;
         if (!_renderer.IsToolpathNode(selected)) return null;
 
-        foreach (var item in vm.OutlinerItems)
+        foreach (var meshItem in vm.EnumerateUserModelItems())
         {
-            foreach (var child in item.Children)
+            foreach (var child in meshItem.Children)
             {
                 if (child.Node != selected) continue;
-                if (!CollectMeshSnapshots(item, requireVisible: false).Any()) return null;
-                return (item, child);
+                if (!CollectMeshSnapshots(meshItem, requireVisible: false).Any()) return null;
+                return (meshItem, child);
             }
         }
         return null;
@@ -2011,6 +2042,7 @@ public partial class ViewportView : UserControl
         var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
         foreach (var node in item.Node.SelfAndDescendants())
         {
+            if (node.PickTier == PickTier.Environment) continue;
             if (node.Mesh?.PickingData is not { } md) continue;
             meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
         }
@@ -2212,17 +2244,10 @@ public partial class ViewportView : UserControl
 
         try
         {
-            var selectedNode  = _renderer.SelectedNode;
-            var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
-            var sourceItems   = new List<OutlinerItemViewModel>();
-            foreach (var item in vm.OutlinerItems)
-            {
-                if (selectedNode is null || !item.Node.SelfAndDescendants().Any(n => n == selectedNode)) continue;
-                var snaps = CollectMeshSnapshots(item, requireVisible: true);
-                if (snaps.Count == 0) continue;
-                meshSnapshots.AddRange(snaps);
-                sourceItems.Add(item);
-            }
+            var selectedNode = _renderer.SelectedNode;
+            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem) return;
+
+            var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
             if (meshSnapshots.Count == 0) return;
 
             // Additive stock from the material maps: print the displaced surface (low-poly mesh +
@@ -2251,14 +2276,13 @@ public partial class ViewportView : UserControl
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(meshSnapshots, method, settings);
 
-            var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
             var toolpathName = method switch
             {
                 SliceMethod.Angled => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
                 _                  => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
             };
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
-            vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
                 && asp.SelectedPresetIndex < asp.MaterialPresets.Count
@@ -2275,8 +2299,7 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, smoothedToolpath);
 
-            foreach (var item in sourceItems)
-                item.Visible = false;
+            sourceItem.Visible = false;
 
             _renderer.Select(null);
             UpdateFocusOverlay();
@@ -2319,17 +2342,14 @@ public partial class ViewportView : UserControl
         vm.IsSlicing = true;
         try
         {
-            var selectedNode  = _renderer.SelectedNode;
-            var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
-            var sourceItems   = new List<OutlinerItemViewModel>();
-            foreach (var item in vm.OutlinerItems)
+            var selectedNode = _renderer.SelectedNode;
+            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
             {
-                if (selectedNode is null || !item.Node.SelfAndDescendants().Any(n => n == selectedNode)) continue;
-                var snaps = CollectMeshSnapshots(item, requireVisible: true);
-                if (snaps.Count == 0) continue;
-                meshSnapshots.AddRange(snaps);
-                sourceItems.Add(item);
+                System.Console.Error.WriteLine("[mill] select the blank mesh first.");
+                return;
             }
+
+            var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
             if (meshSnapshots.Count == 0)
             {
                 System.Console.Error.WriteLine("[mill] select the blank mesh first.");
@@ -2364,13 +2384,12 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
             var toolpathNode = new SceneNode
             {
                 Name = $"Relief Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
                 Selectable = true,
             };
-            vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             vm.PendingToolpath.Enqueue(new PendingToolpathEntry
             {
                 Toolpath      = toolpath,
@@ -2486,7 +2505,7 @@ public partial class ViewportView : UserControl
                 LocalTransform = TkMatrix4.Identity,
                 Selectable     = true,
             };
-            vm.AddUserNode(previewNode);
+            vm.AddImportNode(previewNode);
             System.Console.Error.WriteLine(
                 $"[displace] {result.VertexCount:N0} verts, {result.TriangleCount:N0} tris @ {distance:0.#} mm.");
             GlCanvas.RequestNextFrameRendering();
@@ -2636,18 +2655,9 @@ public partial class ViewportView : UserControl
     private async Task ComputeLayerPreviewAsync(ViewportViewModel vm)
     {
         if (vm.AdditiveSettings is not { ShowLayerPreview: true } s) return;
+        if (vm.ResolveActivePrintObjectItem() is not { } sourceItem) return;
 
-        // Snapshot mesh data on the UI thread.
-        var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
-        foreach (var item in vm.OutlinerItems)
-        {
-            if (!item.Visible || _renderer.IsToolpathNode(item.Node)) continue;
-            foreach (var node in item.Node.SelfAndDescendants())
-            {
-                if (node.Mesh?.PickingData is not { } md) continue;
-                meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
-            }
-        }
+        var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
         if (meshSnapshots.Count == 0) return;
 
         float layerH   = (float)s.LayerHeight;
@@ -3591,7 +3601,8 @@ public partial class ViewportView : UserControl
         vm.UpdateSliceCommand?.RaiseCanExecuteChanged();
         vm.IsDevObjectSelected = isDevNode;
         vm.DevSelectedLabel    = isDevNode && selected is not null ? DevLabel(selected) : "";
-        vm.HasMeshSelected     = selected is not null && !isToolpath && !isToolNode && !isDevNode;
+        vm.HasMeshSelected     = selected is not null && !isToolpath && !isToolNode && !isDevNode
+                                 && vm.FindUserMeshOutlinerItem(selected) is not null;
         vm.CanUngroup         = selected is not null && !isToolpath && !isToolNode && selected.Children.Count > 0;
         vm.CanExplode         = selected is not null && !isToolpath && !isToolNode && HasExplodableMeshes(selected);
         vm.CanMeshCleanup     = selected is not null && !isToolpath && !isToolNode && HasCleanableMeshes(selected);
@@ -3955,7 +3966,7 @@ public partial class ViewportView : UserControl
             var curSegs = new List<(NVec3, NVec3)>();
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (prevSegs is { Count: > 0 })
                     {

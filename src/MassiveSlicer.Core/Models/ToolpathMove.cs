@@ -4,6 +4,16 @@ namespace MassiveSlicer.Core.Models;
 
 public enum MoveKind { Extrude, Travel, Mill }
 
+/// <summary>Shared predicates for how move kinds are rendered, picked, and scrubbed.</summary>
+public static class ToolpathMoveKinds
+{
+    /// <summary>Visible cut/extrusion line segments (slicer extrude + imported KRL LIN).</summary>
+    public static bool IsCutSegment(MoveKind kind) => kind is MoveKind.Extrude or MoveKind.Mill;
+
+    /// <summary>Rapid positioning segments (slicer travel + imported KRL PTP).</summary>
+    public static bool IsTravelSegment(MoveKind kind) => kind is MoveKind.Travel;
+}
+
 /// <summary>A single move segment in a toolpath -- from one point to another with a deposition intent.</summary>
 public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
 {

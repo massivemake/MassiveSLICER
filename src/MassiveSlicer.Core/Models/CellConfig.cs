@@ -88,6 +88,12 @@ public sealed record CellConfig
     /// <see langword="null"/> means this cell has no rotary bed — the auto-scan UI is hidden.
     /// </summary>
     public BedScanConfig? BedScan { get; init; }
+
+    /// <summary>
+    /// Named robot poses for calibration and setup workflows (3D scan cal, bed cal, etc.).
+    /// Stored in the cell JSON; recalled via <c>waypoint go &lt;name&gt;</c> or programmatically.
+    /// </summary>
+    public IReadOnlyList<CellWaypointConfig> Waypoints { get; init; } = [];
 }
 
 /// <summary>A saved orbit-camera pose (spherical, Z-up). Persisted per cell.</summary>
@@ -245,6 +251,30 @@ public sealed record BedCellConfig
 
     /// <summary>When true the flat bed mesh is omitted (rotary bed replaces it).</summary>
     public bool Hidden { get; init; }
+
+    /// <summary>LFAM 3-style circular turntable (imports centre on <see cref="Origin"/>).</summary>
+    [JsonIgnore]
+    public bool IsRotaryPrintBed => Diameter is > 0;
+
+    /// <summary>
+    /// World-space centre of the surface where user imports should land.
+    /// Rotary: turntable axis centre (<see cref="Origin"/>). Rectangular: print-area centre.
+    /// </summary>
+    public Float3 ImportSurfaceCenter(Float3 robrootWorld)
+    {
+        if (IsRotaryPrintBed)
+            return Origin;
+
+        var corner = VisualGridCorner(robrootWorld);
+        return new Float3(
+            corner.X + Width / 2f,
+            corner.Y + Depth / 2f,
+            corner.Z);
+    }
+
+    /// <summary>Half-diameter usable for imports on a rotary bed; null on rectangular cells.</summary>
+    [JsonIgnore]
+    public float? ImportSurfaceRadiusMm => Diameter is > 0 ? Diameter * 0.5f : null;
 }
 
 public sealed record BoosterFrameCellConfig
@@ -351,13 +381,16 @@ public sealed record RotaryBedCellConfig
     public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
     public float E1Sign { get; init; } = 1f;
 
+    /// <summary>LFAM 3 validated factory default when omitted from cell JSON.</summary>
+    public const float DefaultOrientationOffsetDeg = -0.97f;
+
     /// <summary>
     /// Constant rotation (degrees) of the whole bed assembly about its vertical axis through the
     /// centre, applied on top of <see cref="BaseAbc"/>. Corrects a fixed phase between the idealised
     /// model orientation and how the table is physically mounted (measured from registered scans).
     /// Future scans auto-compensate (they're placed by world pose); the mesh rotates to match them.
     /// </summary>
-    public float OrientationOffsetDeg { get; init; } = 0f;
+    public float OrientationOffsetDeg { get; init; } = DefaultOrientationOffsetDeg;
 }
 
 /// <summary>A named KUKA BASE_DATA entry exposed for dropdowns and KRL export.</summary>
@@ -392,4 +425,60 @@ public sealed record BedScanConfig
     /// Default 8 gives 45° per step.
     /// </summary>
     public int ScanSteps { get; init; } = 8;
+
+    /// <summary>
+    /// TCP Y offsets (mm, active base) for multi-vantage auto bed cal relative to the
+    /// <c>bed-cal</c> waypoint. Each entry runs a full E1 sweep before the next offset.
+    /// Default: centre (0) then −300 mm Y (outer ring).
+    /// </summary>
+    public float[] BedCalVantageOffsetsY { get; init; } = [0f, -300f];
+
+    /// <summary>
+    /// Wrist nutation deltas (deg, A4/A5/A6) for each auto scan-cal pose. When omitted,
+    /// <see cref="Scanning.ScanToolCalSweep"/> factory defaults are used. After a run where
+    /// a pose needed a gentler angle to keep the calibration card in frame, the successful
+    /// deltas are written here so the next calibration starts closer.
+    /// </summary>
+    public ScanCalWristDeltaConfig[]? ScanCalWristDeltas { get; init; }
+}
+
+/// <summary>One wrist-only delta for scan-tool hand-eye calibration (degrees).</summary>
+public sealed record ScanCalWristDeltaConfig
+{
+    public float A4 { get; init; }
+    public float A5 { get; init; }
+    public float A6 { get; init; }
+}
+
+/// <summary>
+/// A reusable named robot pose for a cell. Captures both Cartesian TCP and joint angles so
+/// calibration workflows can prefer joint-space moves when Cartesian paths hit soft limits.
+/// </summary>
+public sealed record CellWaypointConfig
+{
+    /// <summary>Stable id for console / code lookup (e.g. <c>scanner-down-bed</c>).</summary>
+    public required string Name { get; init; }
+
+    /// <summary>Human-readable note shown in <c>waypoint list</c>.</summary>
+    public string? Description { get; init; }
+
+    /// <summary>Workflow tags — e.g. <c>scan-cal</c>, <c>bed-cal</c>.</summary>
+    public IReadOnlyList<string> Tags { get; init; } = [];
+
+    public float TcpX { get; init; }
+    public float TcpY { get; init; }
+    public float TcpZ { get; init; }
+    public float TcpA { get; init; }
+    public float TcpB { get; init; }
+    public float TcpC { get; init; }
+
+    /// <summary>A1–A6 in KRL degrees; optional 7th element is E1.</summary>
+    public float[]? Joints { get; init; }
+
+    public int Tool { get; init; } = 6;
+    public int Base { get; init; } = 0;
+    public int VelocityPct { get; init; } = 20;
+
+    /// <summary>When true, recall uses MS_AXIS (joint PTP) instead of Cartesian MS_POSE.</summary>
+    public bool PreferJoints { get; init; }
 }

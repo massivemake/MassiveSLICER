@@ -1,4 +1,5 @@
-﻿using System.Runtime.InteropServices;
+﻿using System.IO;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using Avalonia;
 using Avalonia.Controls;
@@ -67,6 +68,8 @@ internal sealed class GlHostControl : UserControl, IDisposable
 
     private readonly Image _image = new() { Stretch = Stretch.Fill };
     private WriteableBitmap? _bitmap;
+    private int _screenshotPending;
+    private TaskCompletionSource<byte[]?>? _screenshotTcs;
 
     // -- WGL context (hidden 1×1 HWND) -----------------------------------------
 
@@ -123,6 +126,22 @@ internal sealed class GlHostControl : UserControl, IDisposable
     /// Lower values cut GPU fill + readback cost on Windows.
     /// </summary>
     public float InteractionRenderScale { get; set; } = 1f;
+
+    /// <summary>
+    /// Renders one fresh frame and returns the viewport as PNG bytes (RGBA readback from the GL FBO).
+    /// Safe to call from any thread; marshals completion on the UI thread.
+    /// </summary>
+    public async Task<byte[]?> CaptureScreenshotPngAsync(int timeoutMs = 5000)
+    {
+        var tcs = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _screenshotTcs = tcs;
+        Interlocked.Exchange(ref _screenshotPending, 1);
+        RequestNextFrameRendering();
+
+        using var cts = new CancellationTokenSource(timeoutMs);
+        await using var _ = cts.Token.Register(() => tcs.TrySetResult(null));
+        return await tcs.Task.ConfigureAwait(false);
+    }
 
     // -- Avalonia lifecycle ----------------------------------------------------
 
@@ -356,6 +375,18 @@ internal sealed class GlHostControl : UserControl, IDisposable
         using var fb = _bitmap.Lock();
         Marshal.Copy(staging, 0, fb.Address, staging.Length);
         _image.InvalidateVisual();
+
+        if (Interlocked.Exchange(ref _screenshotPending, 0) == 1 && _screenshotTcs is { } shot)
+        {
+            _screenshotTcs = null;
+            try
+            {
+                using var ms = new MemoryStream();
+                _bitmap.Save(ms);
+                shot.TrySetResult(ms.ToArray());
+            }
+            catch { shot.TrySetResult(null); }
+        }
     }
 
     // -- Output FBO + PBO lifecycle --------------------------------------------

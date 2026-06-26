@@ -10,6 +10,7 @@ public static class SceneNodeClone
             Name           = src.Name,
             SourceFilePath = src.SourceFilePath,
             Selectable     = src.Selectable,
+            PickTier       = src.PickTier,
             CullFaces      = src.CullFaces,
             Overlay        = src.Overlay,
             Visible        = src.Visible,

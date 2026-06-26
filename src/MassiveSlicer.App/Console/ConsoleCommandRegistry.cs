@@ -1,4 +1,5 @@
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.App.Console;
 
@@ -272,12 +273,44 @@ public sealed class ConsoleCommandRegistry
             },
         });
 
+        RegisterRelativeMove("move-up", ["up"], "Up (+Z)", dzMm: +1);
+        RegisterRelativeMove("move-down", ["down"], "Down (−Z)", dzMm: -1);
+        RegisterRelativeMove("move-forward", ["forward", "fwd"], "Forward (+X)", dxMm: +1);
+        RegisterRelativeMove("move-back", ["back", "backward", "bwd"], "Back (−X)", dxMm: -1);
+        RegisterRelativeMove("move-right", ["right"], "Right (+Y)", dyMm: +1);
+        RegisterRelativeMove("move-left", ["left"], "Left (−Y)", dyMm: -1);
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move",
+            Description = "Relative jog: move <up|down|forward|back|right|left> [distance] [vel%]",
+            Usage = "move up 1'   move forward 12in 15   move down 100mm",
+            Execute = (ctx, args) => RunRelativeMovePhrase(ctx, args),
+        });
+
         Register(new ConsoleCommandDefinition
         {
             Name = "pos",
             Aliases = ["where", "tcp", "pose"],
             Description = "Print the live robot TCP pose + a ready-to-paste move-pose line",
-            Execute = (ctx, _) => ctx.Main.LogCurrentPose(),
+            Execute = (ctx, _) => { ctx.Main.LogCurrentPoseAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "joints",
+            Aliases = ["axis", "axes", "readjoints"],
+            Description = "Print $AXIS_ACT (A1–A6, E1) + move-joints line for joint-space planning",
+            Execute = (ctx, _) => { ctx.Main.LogCurrentJointsAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-joints",
+            Aliases = ["movejoints", "jmove"],
+            Description = "PTP to a joint target via MS_AXIS (use when move-pose hits soft limits)",
+            Usage = "move-joints <a1> <a2> <a3> <a4> <a5> <a6> [e1] [vel%] [tool] [base]",
+            Execute = (ctx, args) => RunServerJoints(ctx, args),
         });
 
         Register(new ConsoleCommandDefinition
@@ -311,16 +344,64 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
-            Name = "bed-orient",
-            Aliases = ["bed-orientation"],
-            Description = "Set the rotary bed orientation offset (deg about its vertical axis) and reload",
-            Usage = "bed-orient <deg>",
+            Name = "set-frame",
+            Aliases = ["frame", "setframe"],
+            Description = "Apply tool/base on controller without moving (MS_CMD=5)",
+            Usage = "set-frame [tool] [base]   default: app LFAM tool/base",
             Execute = (ctx, args) =>
             {
-                if (!float.TryParse(args.Trim(), System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                int tool = p.Length > 0 && int.TryParse(p[0], System.Globalization.NumberStyles.Integer, inv, out var t)
+                    ? t : ctx.Main.RightPanel.Settings.Robot.KrlToolIndex;
+                int baseIdx = p.Length > 1 && int.TryParse(p[1], System.Globalization.NumberStyles.Integer, inv, out var b)
+                    ? b : ctx.Main.RightPanel.Settings.Robot.KrlBaseIndex;
+                ctx.Main.SetServerFrameAsync(tool, baseIdx);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scan-pick",
+            Aliases = ["scanner-pick", "pick-scanner"],
+            Description = "Run Scanner_Pick via CELL (bRunScanPick BOOL trigger)",
+            Execute = (ctx, _) => { ctx.Main.TriggerScanPickAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "readvar",
+            Aliases = ["var", "getvar"],
+            Description = "Read one or more KRL variables over C3Bridge",
+            Usage = "readvar MS_SEQ MS_ACK MS_CMD MS_STAT MS_BUSY",
+            Execute = (ctx, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args))
                 {
-                    ctx.LogError("usage: bed-orient <deg>   e.g.  bed-orient -0.93");
+                    ctx.LogError("usage: readvar <name> [name ...]   e.g.  readvar MS_SEQ MS_ACK");
+                    return;
+                }
+                _ = ctx.Main.ReadKrlVarsAsync(args);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "bed-orient",
+            Aliases = ["bed-orientation"],
+            Description = "Manual rotary bed orientation offset (deg) — normally set automatically by bed-cal; reloads cell",
+            Usage = "bed-orient [deg]   (default −0.97)",
+            Execute = (ctx, args) =>
+            {
+                // Allow "bed-orient -0.97" or accidental "bed-orient =-0.97"; bare command → default.
+                var arg = args.Trim().TrimStart('=');
+                float deg;
+                if (string.IsNullOrWhiteSpace(arg))
+                    deg = RotaryBedCellConfig.DefaultOrientationOffsetDeg;
+                else if (!float.TryParse(arg, System.Globalization.NumberStyles.Float,
+                             System.Globalization.CultureInfo.InvariantCulture, out deg))
+                {
+                    ctx.LogError($"usage: bed-orient [deg]   e.g.  bed-orient   bed-orient {RotaryBedCellConfig.DefaultOrientationOffsetDeg:F2}");
                     return;
                 }
                 ctx.Log($"[bed] {ctx.Main.SetBedOrientationOffset(deg)}");
@@ -329,10 +410,80 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "scan",
+            Aliases = ["capture", "zivid"],
+            Description = "Capture a Zivid scan — CPU world points stashed for diag export; optional viewport mesh",
+            Usage = "scan [cpu-only] [save]",
+            Execute = (ctx, args) =>
+            {
+                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                bool cpuOnly = p.Any(x => x.Equals("cpu-only", StringComparison.OrdinalIgnoreCase)
+                                       || x.Equals("cpu", StringComparison.OrdinalIgnoreCase));
+                bool save = p.Any(x => x.Equals("save", StringComparison.OrdinalIgnoreCase)
+                                    || x.Equals("disk", StringComparison.OrdinalIgnoreCase));
+                _ = ctx.Main.RunConsoleScanAsync(addToViewport: !cpuOnly, saveToDisk: save);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-e1",
+            Aliases = ["e1", "rotate-bed"],
+            Description = "Rotate external axis E1 while holding A1–A6 (MS_AXIS)",
+            Usage = "move-e1 <deg> [vel%]",
+            Execute = (ctx, args) =>
+            {
+                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (p.Length < 1 || !double.TryParse(p[0], System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                {
+                    ctx.LogError("usage: move-e1 <deg> [vel%]   e.g.  move-e1 -90  20");
+                    return;
+                }
+                int vel = p.Length >= 2 && int.TryParse(p[1], out var v) ? v : 20;
+                _ = ctx.Main.MoveE1Async(deg, vel);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "bed-cal",
+            Aliases = ["bedcal", "auto-bed-cal", "run-bed-cal"],
+            Description = "Run Auto Bed Calibration (waypoint → CELL MS_AXIS E1 sweep → fit → BASE_DATA)",
+            Execute = (ctx, _) => ctx.Main.StartBedCalibration(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scan-cal",
+            Aliases = ["scancal", "auto-scan-cal", "run-scan-cal"],
+            Description = "Run Auto 3D Scan (hand-eye) Calibration (waypoint → CELL MS_AXIS wrist sweep → fit → tool #6)",
+            Execute = (ctx, _) => ctx.Main.StartScanCalibration(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "diag-scans",
-            Aliases = ["export-scans", "diag scans"],
-            Description = "Export this session's rotary scans (world XYZ + E1) for offline calibration analysis",
+            Aliases = ["export-scans", "diag scans", "export-scan"],
+            Description = "Export stashed scan world points (from scan / bed-cal) to scan output/diag/",
             Execute = (ctx, _) => ctx.Log($"[diag] {ctx.Main.ExportScanDiagnostics()}"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "screenshot",
+            Aliases = ["viewport-shot", "capture-viewport"],
+            Description = "Save a PNG of the full app window to %LOCALAPPDATA%/MassiveSlicer/screenshots/",
+            Execute = (ctx, _) =>
+            {
+                ctx.Main.SaveViewportScreenshotAsync().ContinueWith(t =>
+                {
+                    if (t.IsCompletedSuccessfully)
+                        ctx.Log($"[screenshot] {t.Result}");
+                    else
+                        ctx.LogError("[screenshot] capture failed.");
+                }, TaskScheduler.FromCurrentSynchronizationContext());
+            },
         });
 
         Register(new ConsoleCommandDefinition
@@ -354,21 +505,179 @@ public sealed class ConsoleCommandRegistry
                 ctx.Main.Viewport.OnDevCellReloadRequested?.Invoke(path);
             },
         });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "waypoint",
+            Aliases = ["wp", "goto"],
+            Description = "List, recall, or save reusable cell waypoints (scan/bed cal, etc.)",
+            Usage = "waypoint list | waypoint go <name> [vel%] | waypoint save <name>",
+            Execute = (ctx, args) => RunWaypoint(ctx, args),
+        });
     }
 
-    // Parses "x y z [a b c] [vel]" and fires a MASSIVE_SERVER Cartesian move.
+    private static void RunWaypoint(ConsoleCommandContext ctx, string args)
+    {
+        var parts = (args ?? string.Empty).Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
+        {
+            ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name>");
+            return;
+        }
+
+        var sub = parts[0].ToLowerInvariant();
+        switch (sub)
+        {
+            case "list" or "ls":
+                ctx.Main.LogWaypoints();
+                break;
+            case "go" or "move" or "to":
+                if (parts.Length < 2)
+                {
+                    ctx.LogError("usage: waypoint go <name> [vel%]");
+                    return;
+                }
+                int vel = -1;
+                if (parts.Length >= 3 && int.TryParse(parts[2], out var v))
+                    vel = v;
+                _ = ctx.Main.GoToWaypointAsync(parts[1], vel);
+                break;
+            case "save" or "add" or "store":
+                if (parts.Length < 2)
+                {
+                    ctx.LogError("usage: waypoint save <name>");
+                    return;
+                }
+                _ = ctx.Main.SaveWaypointFromRobotAsync(parts[1]);
+                break;
+            default:
+                // Shorthand: `waypoint scanner-down-bed` → go
+                if (int.TryParse(parts[^1], out var velOnly) && parts.Length >= 2)
+                {
+                    _ = ctx.Main.GoToWaypointAsync(parts[0], velOnly);
+                }
+                else
+                {
+                    _ = ctx.Main.GoToWaypointAsync(parts[0]);
+                }
+                break;
+        }
+    }
+
+    private void RegisterRelativeMove(string name, string[] aliases, string description,
+        double dxMm = 0, double dyMm = 0, double dzMm = 0)
+    {
+        Register(new ConsoleCommandDefinition
+        {
+            Name = name,
+            Aliases = aliases,
+            Description = $"{description} — distance in ', in, mm (default 1')",
+            Usage = $"{name} [1' | 12in | 100mm] [vel%]",
+            Execute = (ctx, args) => RunRelativeMove(ctx, args, dxMm, dyMm, dzMm),
+        });
+    }
+
+    private static void RunRelativeMove(ConsoleCommandContext ctx, string args, double dxSign, double dySign, double dzSign)
+    {
+        var (distText, vel) = ConsoleDistanceParser.SplitDistanceAndVel(args);
+        if (!ConsoleDistanceParser.TryParseToMm(distText, out var mm))
+        {
+            ctx.LogError($"usage: distance like 1'  12in  100mm  (got '{args.Trim()}')");
+            return;
+        }
+        _ = ctx.Main.MoveRelativeAsync(dxSign * mm, dySign * mm, dzSign * mm, vel);
+    }
+
+    private static void RunRelativeMovePhrase(ConsoleCommandContext ctx, string args)
+    {
+        args = (args ?? string.Empty).Trim();
+        if (args.Length == 0)
+        {
+            ctx.LogError("usage: move <up|down|forward|back|right|left> [1' | 12in | 100mm] [vel%]");
+            return;
+        }
+
+        var parts = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        string dir = parts[0].ToLowerInvariant();
+        string rest = parts.Length > 1 ? string.Join(' ', parts[1..]) : string.Empty;
+
+        (double dx, double dy, double dz) = dir switch
+        {
+            "up" => (0, 0, +1),
+            "down" => (0, 0, -1),
+            "forward" or "fwd" => (+1, 0, 0),
+            "back" or "backward" or "bwd" => (-1, 0, 0),
+            "right" => (0, +1, 0),
+            "left" => (0, -1, 0),
+            _ => (0, 0, 0),
+        };
+
+        if (dx == 0 && dy == 0 && dz == 0)
+        {
+            ctx.LogError($"unknown direction '{parts[0]}' — use up down forward back right left");
+            return;
+        }
+
+        RunRelativeMove(ctx, rest, dx, dy, dz);
+    }
+
+    // Parses "x y z [a b c] [vel%] [tool] [base]" and fires a MS_* Cartesian move.
     private static void RunServerMove(ConsoleCommandContext ctx, string args, bool linear)
     {
         var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         double D(int i, double def) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : def;
-        if (p.Length < 3) { ctx.LogError("usage: move-pose <x> <y> <z> [a b c] [vel%]"); return; }
+        if (p.Length < 3) { ctx.LogError("usage: move-pose <x> <y> <z> [a b c] [vel%] [tool] [base]"); return; }
+
+        int end = p.Length;
+        int tool = -1, baseIdx = -1;
+        if (end >= 5
+            && int.TryParse(p[end - 1], System.Globalization.NumberStyles.Integer, inv, out var b)
+            && int.TryParse(p[end - 2], System.Globalization.NumberStyles.Integer, inv, out var t))
+        {
+            baseIdx = b;
+            tool = t;
+            end -= 2;
+        }
+
         double x = D(0, 0), y = D(1, 0), z = D(2, 0);
-        double a = D(3, 0), b = D(4, 0), c = D(5, 0);
-        int vel = p.Length >= 7 ? (int)D(6, 20) : (p.Length == 4 ? (int)D(3, 20) : 20);
-        // If only x y z [vel] given (4 tokens), the 4th is velocity, not A.
-        if (p.Length == 4) { a = 0; b = 0; c = 0; }
-        _ = ctx.Main.MoveServerPoseAsync(linear, x, y, z, a, b, c, vel);
+        double a = 0, bAng = 0, c = 0;
+        int vel = 20;
+        if (end == 4)
+        {
+            vel = (int)D(3, 20);
+        }
+        else if (end >= 6)
+        {
+            a = D(3, 0); bAng = D(4, 0); c = D(5, 0);
+            if (end >= 7) vel = (int)D(6, 20);
+        }
+
+        _ = ctx.Main.MoveServerPoseAsync(linear, x, y, z, a, bAng, c, vel, tool, baseIdx);
+    }
+
+    private static void RunServerJoints(ConsoleCommandContext ctx, string args)
+    {
+        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        double D(int i) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : 0;
+        if (p.Length < 6) { ctx.LogError("usage: move-joints <a1>..<a6> [e1] [vel%] [tool] [base]"); return; }
+
+        int end = p.Length;
+        int tool = -1, baseIdx = -1;
+        if (end >= 8
+            && int.TryParse(p[end - 1], System.Globalization.NumberStyles.Integer, inv, out var b)
+            && int.TryParse(p[end - 2], System.Globalization.NumberStyles.Integer, inv, out var t))
+        {
+            baseIdx = b; tool = t; end -= 2;
+        }
+
+        double e1 = 0;
+        int vel = 20;
+        if (end == 7) vel = (int)D(6);
+        else if (end == 8) { e1 = D(6); vel = (int)D(7); }
+
+        ctx.Main.MoveServerJointsAsync(D(0), D(1), D(2), D(3), D(4), D(5), e1, vel, tool, baseIdx);
     }
 
     public bool TryExecute(string line, ConsoleCommandContext ctx)

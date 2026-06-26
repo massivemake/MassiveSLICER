@@ -16,6 +16,7 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     private readonly List<(double Angle, Vector3 World)> _samples = new();
 
     private bool   _isBusy;
+    private bool   _autoRunning;
     private string _status = "";
     private bool   _hasResult;
     private bool   _applied;
@@ -31,7 +32,8 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         ComputeCommand       = new RelayCommand(Compute, () => _samples.Count >= 3 && !_isBusy);
         ApplyCommand         = new RelayCommand(Apply,   () => _hasResult && !_isBusy && !_applied);
         AutoCalibrateCommand = new RelayCommand(
-            async () => { if (OnAutoCalibrateRequested is { } f) await f(); }, () => !_isBusy);
+            async () => { if (OnAutoCalibrateRequested is { } f) await f(); },
+            () => !_isBusy && !_autoRunning);
     }
 
     // -- Commands -------------------------------------------------------------
@@ -127,6 +129,18 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
         : $"Rotation: {(_rotationSign < 0 ? "CW" : "CCW")} ({_rotationDegPerE1:+0.00;-0.00}°/°, residual {_rotationResidual:F2}°)";
 
     // -- Implementation -------------------------------------------------------
+
+    /// <summary>True while the automated CELL sweep is in progress.</summary>
+    public bool IsAutoRunning => _autoRunning;
+
+    /// <summary>Sets the sweep-in-progress flag (gates AUTO CALIBRATE re-entry).</summary>
+    internal void SetAutoRunning(bool running)
+    {
+        if (_autoRunning == running) return;
+        _autoRunning = running;
+        OnPropertyChanged(nameof(IsAutoRunning));
+        RaiseAllCanExecuteChanged();
+    }
 
     /// <summary>Sets the status line (used by the automated sweep orchestration).</summary>
     internal void SetStatus(string s) => Status = s;

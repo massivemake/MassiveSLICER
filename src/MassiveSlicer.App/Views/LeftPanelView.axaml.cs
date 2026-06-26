@@ -18,6 +18,12 @@ public partial class LeftPanelView : UserControl
     private void OnOutlinerSelectionChanged(object? sender, SelectionChangedEventArgs e)
     {
         if (e.AddedItems.Count == 0 || e.AddedItems[0] is not OutlinerItemViewModel item) return;
+        if (TopLevel.GetTopLevel(this) is Window { DataContext: MainWindowViewModel mvm }
+            && mvm.Viewport.SuppressNextOutlinerListBoxSelection)
+        {
+            mvm.Viewport.SuppressNextOutlinerListBoxSelection = false;
+            return;
+        }
         RequestViewportSelect(item.Node);
     }
 
@@ -25,6 +31,8 @@ public partial class LeftPanelView : UserControl
     {
         if (e.GetCurrentPoint(sender as Control).Properties.IsLeftButtonPressed != true) return;
         if (sender is not Control { DataContext: OutlinerItemViewModel item }) return;
+        if (TopLevel.GetTopLevel(this) is Window { DataContext: MainWindowViewModel mvm })
+            mvm.Viewport.SuppressNextOutlinerListBoxSelection = true;
         RequestViewportSelect(item.Node);
         e.Handled = true;
     }

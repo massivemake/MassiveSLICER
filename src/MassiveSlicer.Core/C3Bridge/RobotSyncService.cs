@@ -129,11 +129,11 @@ public sealed class RobotSyncService : IDisposable
     private static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
     private int _msSeq = -1;
 
-    /// <summary>Syncs the host command counter to the server's last ack (call after connect).</summary>
+    /// <summary>Syncs the host command counter to the controller's current MS_SEQ (call after connect).</summary>
     public async Task<int> InitCommandServerAsync(CancellationToken ct = default)
     {
-        var s = await _client.ReadAsync("MS_ACK", 2000, ct);
-        _msSeq = int.TryParse(s.Trim(), System.Globalization.NumberStyles.Integer, Inv, out var a) ? a : 0;
+        var s = await _client.ReadAsync("MS_SEQ", 2000, ct);
+        _msSeq = int.TryParse(s.Trim(), System.Globalization.NumberStyles.Integer, Inv, out var seq) ? seq : 0;
         return _msSeq;
     }
 
@@ -148,15 +148,19 @@ public sealed class RobotSyncService : IDisposable
 
     /// <summary>PTP to a joint target (A1..A6, E1 in KRL degrees).</summary>
     public Task<bool> SendAxesAsync(double a1, double a2, double a3, double a4, double a5, double a6, double e1,
-        int vel, int timeoutMs = 60000, CancellationToken ct = default)
+        int vel, int tool = 0, int baseIndex = 0, int timeoutMs = 60000, CancellationToken ct = default)
     {
         string ax = $"{{A1 {F(a1)}, A2 {F(a2)}, A3 {F(a3)}, A4 {F(a4)}, A5 {F(a5)}, A6 {F(a6)}, E1 {F(e1)}}}";
-        return SendCommandAsync(3, ("MS_AXIS", ax), vel, 0, 0, timeoutMs, ct);
+        return SendCommandAsync(3, ("MS_AXIS", ax), vel, tool, baseIndex, timeoutMs, ct);
     }
 
     /// <summary>Move to the controller's HOME position.</summary>
     public Task<bool> GoHomeAsync(int vel = 20, int timeoutMs = 60000, CancellationToken ct = default)
         => SendCommandAsync(4, null, vel, 0, 0, timeoutMs, ct);
+
+    /// <summary>Applies tool/base on the controller without moving (MS_CMD=5).</summary>
+    public Task<bool> SetFrameAsync(int tool, int baseIndex, int timeoutMs = 10000, CancellationToken ct = default)
+        => SendCommandAsync(5, null, 1, tool, baseIndex, timeoutMs, ct);
 
     /// <summary>Tells the server loop to exit (CMD 99). Fire-and-forget.</summary>
     public Task StopCommandServerAsync(CancellationToken ct = default)

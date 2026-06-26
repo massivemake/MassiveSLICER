@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
@@ -13,6 +13,9 @@ namespace MassiveSlicer.App;
 internal static class ImportHelper
 {
     private static readonly HashSet<string> SupportedExtensions = [".glb", ".gltf", ".stl", ".obj", ".3mf"];
+
+    /// <summary>Fraction of rotary radius used when scaling oversized imports to fit the table.</summary>
+    private const float RotaryFitMargin = 0.96f;
 
     internal static bool IsSupported(string path)
         => SupportedExtensions.Contains(Path.GetExtension(path).ToLowerInvariant());
@@ -63,23 +66,53 @@ internal static class ImportHelper
     }
 
     /// <summary>
-    /// Translates <paramref name="node"/> so its bounding-box centre XY aligns with
-    /// the bed centre and its bounding-box min-Z sits on the bed surface.
+    /// Translates <paramref name="node"/> so its bounding-box centre XY aligns with the
+    /// cell's import surface centre and its bounding-box min-Z sits on that surface.
+    /// LFAM 3 (rotary): centres on <c>bed.origin</c> and scales down to fit the table diameter.
+    /// LFAM 2 (rectangular): centres on the print-bed grid footprint.
     /// No-op if no geometry is found or no active cell is loaded.
     /// </summary>
     internal static void PlaceOnBed(SceneNode node, CellConfig? activeCell)
     {
+        if (activeCell?.Bed is not { } bed) return;
+
+        var surface = bed.ImportSurfaceCenter(activeCell.Robot.WorldPosition);
+        var bedCenter = new Vector3(surface.X, surface.Y, surface.Z);
+
+        if (bed.ImportSurfaceRadiusMm is { } radius)
+            ScaleToFitWithinRadius(node, radius * RotaryFitMargin);
+
         var (min, max) = ComputeSubtreeAabb(node);
         if (min.X > max.X) return;
 
-        var bedCenter = GetBedCenter(activeCell);
-        var center    = (min + max) * 0.5f;
+        var center = (min + max) * 0.5f;
 
         var lt = node.LocalTransform;
         lt.M41 += bedCenter.X - center.X;
         lt.M42 += bedCenter.Y - center.Y;
         lt.M43 += bedCenter.Z - min.Z;
         node.LocalTransform = lt;
+    }
+
+    /// <summary>Uniformly scales <paramref name="node"/> so its XY footprint fits in a circle.</summary>
+    private static void ScaleToFitWithinRadius(SceneNode node, float maxRadius)
+    {
+        var (min, max) = ComputeSubtreeAabb(node);
+        if (min.X > max.X) return;
+
+        var c = (min + max) * 0.5f;
+        float half = MathF.Max(
+            MathF.Max(max.X - c.X, c.X - min.X),
+            MathF.Max(max.Y - c.Y, c.Y - min.Y));
+        if (half <= maxRadius) return;
+
+        float s = maxRadius / half;
+        var pre = node.LocalTransform;
+        node.LocalTransform =
+            Matrix4.CreateTranslation(c) *
+            Matrix4.CreateScale(s) *
+            Matrix4.CreateTranslation(-c) *
+            pre;
     }
 
     /// <summary>
@@ -148,17 +181,5 @@ internal static class ImportHelper
         }
 
         return (min, max);
-    }
-
-    // -- Bed helpers -----------------------------------------------------------
-
-    private static Vector3 GetBedCenter(CellConfig? cell)
-    {
-        if (cell?.Bed is not { } bed) return Vector3.Zero;
-        var corner = bed.VisualGridCorner(cell.Robot.WorldPosition);
-        return new Vector3(
-            corner.X + bed.Width  / 2f,
-            corner.Y + bed.Depth  / 2f,
-            corner.Z);
     }
 }

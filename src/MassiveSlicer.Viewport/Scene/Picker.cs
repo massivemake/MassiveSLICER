@@ -20,12 +20,13 @@ public static class Picker
     public static SceneNode? Pick(Ray worldRay, SceneNode root, out float hitDistance)
     {
         hitDistance = float.MaxValue;
+        PickTier bestTier = PickTier.Environment;
         SceneNode? closest = null;
 
         foreach (var node in root.SelfAndDescendants())
         {
             if (node.Mesh?.PickingData is not { } mesh) continue;
-            if (!IsPickable(node, root)) continue;
+            if (FindSelectableRoot(node) is not { } selectable) continue;
 
             Matrix4.Invert(node.WorldTransform, out var invWorld);
             var lo = TransformPoint(worldRay.Origin,    invWorld);
@@ -36,8 +37,12 @@ public static class Picker
             if (!RayHitsAabb(lo, ld, bMin, bMax)) continue;
 
             // t in local space == t in world space (direction pre-scaled by invWorld)
-            if (Intersect(mesh, lo, ld, out float t) && t < hitDistance)
+            if (!Intersect(mesh, lo, ld, out float t)) continue;
+
+            var tier = selectable.PickTier;
+            if (tier < bestTier || (tier == bestTier && t < hitDistance))
             {
+                bestTier    = tier;
                 hitDistance = t;
                 closest     = node;
             }
@@ -46,34 +51,25 @@ public static class Picker
         return closest;
     }
 
-    // Returns true when the nearest SceneRoot-child ancestor of node is selectable and visible.
-    private static bool IsPickable(SceneNode node, SceneNode sceneRoot)
-    {
-        var current = node;
-        while (current is not null)
-        {
-            if (!current.Visible) return false;
-            if (current.Parent == sceneRoot) return current.Selectable;
-            current = current.Parent;
-        }
-        return false;
-    }
-
     /// <summary>
-    /// Walks the parent chain of <paramref name="node"/> to find the direct child of
-    /// <paramref name="sceneRoot"/> -- the logical selectable object in the outliner.
+    /// Returns the nearest visible, selectable ancestor starting at <paramref name="node"/> — so scans
+    /// nested under the rotary bed win over the bed root, and mesh leaves win over cell wrappers.
     /// </summary>
-    public static SceneNode? FindSelectableRoot(SceneNode node, SceneNode sceneRoot)
+    public static SceneNode? FindSelectableRoot(SceneNode node)
     {
         var current = node;
         while (current is not null)
         {
-            if (current.Parent == sceneRoot)
-                return current.Selectable ? current : null;
+            if (!current.Visible) return null;
+            if (current.Selectable) return current;
             current = current.Parent;
         }
         return null;
     }
+
+    /// <summary>Maps a mesh hit to the selectable object shown in the outliner.</summary>
+    public static SceneNode? FindSelectableRoot(SceneNode node, SceneNode sceneRoot)
+        => FindSelectableRoot(node);
 
     // -- Ray-AABB slab test ----------------------------------------------------
 
@@ -172,10 +168,12 @@ public static class Picker
         SceneNode? closest     = null;
         Vector3   closestNormal = Vector3.UnitZ;
 
+        PickTier bestTier = PickTier.Environment;
+
         foreach (var node in root.SelfAndDescendants())
         {
             if (node.Mesh?.PickingData is not { } mesh) continue;
-            if (!IsPickable(node, root)) continue;
+            if (FindSelectableRoot(node) is not { } selectable) continue;
 
             Matrix4.Invert(node.WorldTransform, out var invWorld);
             var lo = TransformPoint(worldRay.Origin,    invWorld);
@@ -184,8 +182,12 @@ public static class Picker
             var (bMin, bMax) = mesh.LocalBounds;
             if (!RayHitsAabb(lo, ld, bMin, bMax)) continue;
 
-            if (IntersectFace(mesh, lo, ld, out float t, out Vector3 localNormal) && t < hitDistance)
+            if (!IntersectFace(mesh, lo, ld, out float t, out Vector3 localNormal)) continue;
+
+            var tier = selectable.PickTier;
+            if (tier < bestTier || (tier == bestTier && t < hitDistance))
             {
+                bestTier      = tier;
                 hitDistance   = t;
                 closest       = node;
                 closestNormal = TransformDir(localNormal, node.WorldTransform);

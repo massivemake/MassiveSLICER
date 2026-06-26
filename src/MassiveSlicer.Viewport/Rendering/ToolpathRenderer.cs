@@ -250,8 +250,8 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude) ei += 2;
-                else                               ti += 2;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) ei += 2;
+                else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
                 fi++;
                 _extrudeVertexCumulative[fi] = ei;
                 _travelVertexCumulative[fi]  = ti;
@@ -275,7 +275,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<int>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = new List<int>(); contourFlatIndices.Add(cur); }
                     cur.Add(flatIdx);
@@ -418,17 +418,22 @@ public sealed class ToolpathRenderer : IDisposable
         _beadWidth       = beadWidth;
         _beadLayerHeight = layerHeight;
 
-        int extrudeCount = 0;
+        int cutCount = 0;
         foreach (var layer in toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
-        if (extrudeCount == 0) return;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
+        // Travel-only paths have no bead geometry — still build prefix sums for scrubbing.
+        if (cutCount == 0)
+        {
+            BuildBeadVertexCumulative();
+            return;
+        }
 
         float hw = beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
         // 4 side quads + 2 caps = 12 tris = 36 verts per segment (upper bound)
-        var data = new float[extrudeCount * 36 * 6];
+        var data = new float[cutCount * 36 * 6];
         int di = 0;
 
         void WV(NVec3 p, NVec3 n)
@@ -456,7 +461,7 @@ public sealed class ToolpathRenderer : IDisposable
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
-        // Group consecutive extrude moves within each layer into contours.
+        // Group consecutive cut moves (extrude + imported KRL LIN) into contours.
         // Each contour stores its half-height so adaptive layers use the correct bead size.
         // Caps are only emitted at contour start/end; interior junctions get blended normals.
         var contours = new List<(List<ToolpathMove> moves, float hh)>();
@@ -467,7 +472,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<ToolpathMove>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add(move);
@@ -598,13 +603,13 @@ public sealed class ToolpathRenderer : IDisposable
         float hw = _beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
-        int extrudeCount = 0;
+        int cutCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
-        if (extrudeCount == 0) return [];
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
+        if (cutCount == 0) return [];
 
-        var data = new float[extrudeCount * 36 * 6];
+        var data = new float[cutCount * 36 * 6];
         int di = 0;
 
         void WV(NVec3 p, NVec3 c)
@@ -623,7 +628,7 @@ public sealed class ToolpathRenderer : IDisposable
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
-        // Group consecutive extrude moves into contours, tracking flat move indices and layer height.
+        // Group consecutive cut moves into contours, tracking flat move indices and layer height.
         var contours = new List<(List<(ToolpathMove move, int flatIdx)> moves, float hh)>();
         int flatIdx = 0;
         foreach (var layer in _toolpath.Layers)
@@ -633,7 +638,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<(ToolpathMove, int)>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add((move, flatIdx));
@@ -709,7 +714,8 @@ public sealed class ToolpathRenderer : IDisposable
     {
         if (scrubIndex >= _totalMoveCount || _totalMoveCount == 0) return totalCount;
         if (scrubIndex <= 0) return 0;
-        return cumulative[scrubIndex];
+        if ((uint)scrubIndex >= (uint)cumulative.Length) return totalCount;
+        return Math.Min(cumulative[scrubIndex], totalCount);
     }
 
     public void Draw(Matrix4 mvp, bool selected = false,
