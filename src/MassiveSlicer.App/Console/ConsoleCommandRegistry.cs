@@ -490,7 +490,7 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "reload-cell",
             Aliases = ["reload cell", "refresh-cell"],
-            Description = "Invalidate cache and reload the active cell scene",
+            Description = "Invalidate cell + GLB caches and reload the active cell scene",
             Execute = (ctx, _) =>
             {
                 var path = ctx.Main.Viewport.ActiveCellPath;
@@ -500,8 +500,8 @@ public sealed class ConsoleCommandRegistry
                     return;
                 }
 
-                CellSceneCache.Invalidate(path);
-                ctx.Log($"[cell] reloading {Path.GetFileNameWithoutExtension(path)}…");
+                int assets = CellSceneCache.Invalidate(path);
+                ctx.Log($"[cell] reloading {Path.GetFileNameWithoutExtension(path)} ({assets} mesh asset(s) refreshed)…");
                 ctx.Main.Viewport.OnDevCellReloadRequested?.Invoke(path);
             },
         });

@@ -75,6 +75,17 @@ public static class AssetPaths
         var normalized = relativePath.Replace('\\', '/');
         var variants   = new List<string> { normalized };
 
+        // Prefer the live repo / NAS cells tree before publish copies beside the .exe.
+        if (normalized.StartsWith("assets/cells/", StringComparison.OrdinalIgnoreCase))
+        {
+            var preferred = CellPaths.PreferredCellsDirectory();
+            if (preferred is not null)
+            {
+                var rel = normalized["assets/cells/".Length..];
+                yield return Path.GetFullPath(Path.Combine(preferred, rel));
+            }
+        }
+
         // LFAM3 ships Toolheads/ on disk; JSON may say ToolHeads/.
         if (normalized.Contains("ToolHeads/", StringComparison.OrdinalIgnoreCase))
             variants.Add(normalized.Replace("ToolHeads/", "Toolheads/", StringComparison.OrdinalIgnoreCase));

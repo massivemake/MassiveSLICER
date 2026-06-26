@@ -22,6 +22,30 @@ public static class GltfLoader
 {
     private static readonly Dictionary<string, (long MtimeUtcTicks, SceneNode Template)> _graphCache = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Clears parsed scene-graph cache entries. Pass null to clear all.</summary>
+    public static void Invalidate(string? path = null)
+    {
+        if (path is null)
+        {
+            _graphCache.Clear();
+            return;
+        }
+
+        _graphCache.Remove(Path.GetFullPath(path));
+    }
+
+    /// <summary>
+    /// Forces the next <see cref="Load"/> to re-read disk — graph cache plus UNC/meshopt
+    /// local caches used during parsing.
+    /// </summary>
+    public static void InvalidateAsset(string path)
+    {
+        var full = Path.GetFullPath(path);
+        Invalidate(full);
+        AssetLocalCache.Invalidate(full);
+        GlbMeshoptDecoder.Invalidate(full);
+    }
+
     // Converts GLTF Y-up metres -> scene Z-up millimetres.
     // Row-vector: v' = v * GltfToScene
     //   new.x =  1000 * old.x
