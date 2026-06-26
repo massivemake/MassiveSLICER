@@ -1,11 +1,11 @@
 {
   "name": "LFAM 1",
   "robot": {
-    "modelPath": "assets/cells/LFAM2/LFAM2Robot.glb",
+    "modelPath": "assets/cells/LFAM1/LFAM1Robot.glb",
     "worldPosition": {
       "x": 0,
       "y": 0,
-      "z": 1000
+      "z": 0
     },
     "joints": [
       {

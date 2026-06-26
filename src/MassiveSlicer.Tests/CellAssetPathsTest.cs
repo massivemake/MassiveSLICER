@@ -16,7 +16,7 @@ public class CellAssetPathsTest
         var paths = CellAssetPaths.AllModelPaths(cell).ToList();
 
         Assert.Contains(paths, p => p.Contains("LFAM1RobotRail", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(paths, p => p.Contains("LFAM2Robot", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(paths, p => p.Contains("LFAM1Robot", StringComparison.OrdinalIgnoreCase));
         Assert.True(paths.Count >= 3);
     }
 
