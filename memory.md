@@ -1,6 +1,6 @@
 # MassiveSLICER V2 — Project Memory
 
-Last updated: 2026-06-25 (milestone — KRL import + viewport polish)
+Last updated: 2026-06-26 (merged `feature/print-scan-mill` → `main`; canonical repo: massivemake/MassiveSLICER)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
