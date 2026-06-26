@@ -30,4 +30,52 @@ public class CellLoaderTest
         Assert.Equal(-1480.959f, grid.Y, 2);
         Assert.True(bed.HasVisualShift);
     }
+
+    [Fact]
+    public void Lfam1_bed_and_tool_match_controller_config_dat()
+    {
+        var path = ResolveCellJson("LFAM1", "lfam1.json");
+        if (path is null) return;
+
+        var cell = CellLoader.Load(path);
+        var bed  = cell.Bed;
+        var tool = cell.EffectiveTools.Single(t => t.KrlIndex == 1);
+
+        Assert.Null(bed.VisualOffset);
+        Assert.Equal(1496.36047f, bed.BaseData.X, 3);
+        Assert.Equal(-577.892273f, bed.BaseData.Y, 3);
+        Assert.Equal(278f, bed.BaseData.Z, 2);
+        Assert.Equal(278f, bed.Origin.Z, 2);
+
+        Assert.Equal(901.2f, tool.TcpX, 2);
+        Assert.Equal(-165f, tool.TcpY, 2);
+        Assert.Equal(249.99f, tool.TcpZ, 2);
+
+        Assert.Contains(cell.KrlBases, b => b.Name == "massiveb1" && b.Index == 1);
+    }
+
+    private static string? ResolveCellJson(string folder, string file)
+    {
+        string[] candidates =
+        [
+            Path.Combine(AppContext.BaseDirectory, "assets", "cells", folder, file),
+            Path.Combine(FindRepoRoot() ?? "", "assets", "cells", folder, file),
+        ];
+
+        return candidates.FirstOrDefault(File.Exists);
+    }
+
+    private static string? FindRepoRoot()
+    {
+        var dir = AppContext.BaseDirectory;
+        for (int i = 0; i < 8; i++)
+        {
+            if (Directory.Exists(Path.Combine(dir, "assets", "cells")))
+                return dir;
+            dir = Directory.GetParent(dir)?.FullName ?? "";
+            if (string.IsNullOrEmpty(dir)) break;
+        }
+
+        return null;
+    }
 }

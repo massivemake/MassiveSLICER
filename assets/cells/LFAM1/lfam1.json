@@ -92,21 +92,16 @@
   "bed": {
     "modelPath": "assets/cells/LFAM1/lfam1_bed.glb",
     "origin": {
-      "x": 1433.829,
-      "y": -1377.359,
-      "z": 130
+      "x": 1496.36047,
+      "y": -577.892273,
+      "z": 278
     },
     "width": 1200,
     "depth": 800,
-    "visualOffset": {
-      "x": -127.8,
-      "y": -103.6,
-      "z": 0
-    },
     "baseData": {
-      "x": 1433.829,
-      "y": -1377.359,
-      "z": -870
+      "x": 1496.36047,
+      "y": -577.892273,
+      "z": 278
     },
     "hidden": false
   },
@@ -123,9 +118,9 @@
     {
       "name": "HF Extruder",
       "modelPath": "assets/cells/LFAM2/ToolHeads/hv_extruder.glb",
-      "tcpX": 677.94,
-      "tcpY": -163.2,
-      "tcpZ": 314.32,
+      "tcpX": 901.2,
+      "tcpY": -165,
+      "tcpZ": 249.99,
       "tcpA": 0,
       "tcpB": 0,
       "tcpC": 0,
@@ -134,7 +129,13 @@
       "default": true
     }
   ],
-  "krlBases": [],
+  "krlBases": [
+    {
+      "name": "massiveb1",
+      "index": 1
+    }
+  ],
+  "krcRoot": "\\\\192.168.0.151\\krc\\ROBOTER\\KRC\\R1",
   "bridgeIp": "192.168.0.151",
   "bridgePort": 7000,
   "extIp": "192.168.0.195",
@@ -144,10 +145,10 @@
   "view": {
     "azimuth": -39,
     "elevation": 8,
-    "radius": 3480,
-    "targetX": 2171,
-    "targetY": 217,
-    "targetZ": 1231
+    "radius": 2200,
+    "targetX": 2096.36,
+    "targetY": -177.89,
+    "targetZ": 278
   },
   "waypoints": []
 }
