@@ -77,6 +77,12 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>True when the active cell's bed is a circular rotary turntable (shows the ROTARY BED panel).</summary>
     public bool IsRotaryBed { get => _isRotaryBed; private set => SetField(ref _isRotaryBed, value); }
 
+    private bool _isRobotRail;
+    /// <summary>True when E1 drives a linear rail (mm) rather than a rotary bed (deg).</summary>
+    public bool IsRobotRail { get => _isRobotRail; private set => SetField(ref _isRobotRail, value); }
+
+    public string E1UnitLabel => IsRobotRail ? "mm" : "°";
+
     /// <summary>Rotary-bed centre X in world/ROBROOT mm (rotation axis + grid datum). Editable.</summary>
     public double BedCenterX { get => _bedCenterX; set { if (SetField(ref _bedCenterX, value)) FireBedEdited(); } }
     /// <summary>Rotary-bed centre Y in world/ROBROOT mm. Editable.</summary>
@@ -140,6 +146,23 @@ public sealed class RobotPanelViewModel : ViewModelBase
         OnPropertyChanged(nameof(BedOrientationOffsetDeg));
         IsRotaryBed     = isRotary;
         _suppressBedCallback = false;
+    }
+
+    /// <summary>Loads E1 limits/units from the active cell rail config.</summary>
+    public void ConfigureRail(RobotRailCellConfig? rail)
+    {
+        IsRobotRail = rail is not null;
+        OnPropertyChanged(nameof(E1UnitLabel));
+        if (rail is { } r)
+        {
+            MinE1 = r.MinMm;
+            MaxE1 = r.MaxMm;
+        }
+        else if (!IsRotaryBed)
+        {
+            MinE1 = -360;
+            MaxE1 = 360;
+        }
     }
 
     /// <summary>

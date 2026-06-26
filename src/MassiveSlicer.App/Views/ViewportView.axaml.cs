@@ -149,6 +149,11 @@ public partial class ViewportView : UserControl
     // Dev mode: editable cell environment nodes (bed, rotary bed, stands, docks).
     private readonly Dictionary<SceneNode, (string Kind, string? Id)> _devNodeKinds = new();
 
+    // LFAM 1 rail (E1 mm): robot base wrapper + home pose for carriage translation.
+    private SceneNode?            _robotBaseNode;
+    private RobotRailCellConfig?  _robotRail;
+    private Vector3               _robotHomePos;
+
     // Rotary bed (E1): the bed mesh wrapper node + its centre, so E1 can spin it about the vertical axis.
     private SceneNode? _bedNode;
     private Vector3    _bedOriginLocal;
@@ -1011,25 +1016,36 @@ public partial class ViewportView : UserControl
                 RebuildBed(pend.X, pend.Y, pend.Z, pend.Diameter, pend.Sign);
             }
 
-            // Rotate the rotary bed (mesh + print-grid overlay) about the vertical axis
-            // through its centre to match E1. Sign comes from rotation calibration.
             if (vm.Robot is { } e1Robot && e1Robot.E1 != _lastSyncE1)
             {
                 _lastSyncE1 = e1Robot.E1;
-                float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
-                var c = _bedOriginLocal;
 
-                if (_bedNode is not null)
-                    _bedNode.LocalTransform =
+                // LFAM 1 rail: E1 is linear travel in mm — slide the robot along the configured axis.
+                if (_robotRail is { } rail && _robotBaseNode is not null)
+                {
+                    var off = rail.SceneOffsetMm(e1Robot.E1);
+                    _robotBaseNode.LocalTransform = Matrix4.CreateTranslation(
+                        _robotHomePos.X + off.X,
+                        _robotHomePos.Y + off.Y,
+                        _robotHomePos.Z + off.Z);
+                }
+
+                // LFAM 3 rotary: spin the turntable about the vertical axis through its centre.
+                if (_rotaryBedPivot is not null)
+                {
+                    float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
+                    var c = _bedOriginLocal;
+
+                    if (_bedNode is not null)
+                        _bedNode.LocalTransform =
+                            Matrix4.CreateRotationZ(e1Rad) *
+                            Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+
+                    _renderer.BedBoundaryModel =
+                        Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
                         Matrix4.CreateRotationZ(e1Rad) *
                         Matrix4.CreateTranslation(c.X, c.Y, c.Z);
-
-                // Boundary geometry is in absolute world coords, so rotate about the centre:
-                // translate centre→origin, rotate, translate back.
-                _renderer.BedBoundaryModel =
-                    Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
-                    Matrix4.CreateRotationZ(e1Rad) *
-                    Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+                }
             }
         }
 
@@ -1299,6 +1315,8 @@ public partial class ViewportView : UserControl
         _multiTools                 = null;
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
+        _robotBaseNode              = null;
+        _robotRail                  = null;
         _multiToolFlangeParented    = false;
         _lfamInfrastructureNodes.Clear();
         _renderer.TcpFrameMatrix    = null;
@@ -1324,6 +1342,7 @@ public partial class ViewportView : UserControl
                 vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
                                       bed.Diameter ?? 0f, bed.RotationSign ?? -1f, orient,
                                       bed.Diameter is > 0f);
+                vm.Robot.ConfigureRail(swapCellForPost.RobotRail);
             }
         });
         var b          = swap.Config.Bed;
@@ -1364,10 +1383,13 @@ public partial class ViewportView : UserControl
 
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
+        _robotHomePos      = _robrootWorldPos;
+        _robotRail         = swap.Config.RobotRail;
         _flangeDisplayRoll = swap.Config.Robot.FlangeDisplayRoll * MathF.PI / 180f;
 
         if (swap.RobotBaseNode is { } robot)
         {
+            _robotBaseNode = robot;
             _renderer.SceneRoot.AddChild(robot);
             UploadVisiblePendingMeshes(robot);
 

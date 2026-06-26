@@ -429,19 +429,19 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "move-e1",
             Aliases = ["e1", "rotate-bed"],
-            Description = "Rotate external axis E1 while holding A1–A6 (MS_AXIS)",
-            Usage = "move-e1 <deg> [vel%]",
+            Description = "Move external axis E1 while holding A1–A6 (deg on rotary, mm on LFAM 1 rail)",
+            Usage = "move-e1 <value> [vel%]",
             Execute = (ctx, args) =>
             {
                 var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (p.Length < 1 || !double.TryParse(p[0], System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var deg))
+                        System.Globalization.CultureInfo.InvariantCulture, out var value))
                 {
-                    ctx.LogError("usage: move-e1 <deg> [vel%]   e.g.  move-e1 -90  20");
+                    ctx.LogError("usage: move-e1 <value> [vel%]   e.g.  move-e1 0  20   move-e1 -2000");
                     return;
                 }
                 int vel = p.Length >= 2 && int.TryParse(p[1], out var v) ? v : 20;
-                _ = ctx.Main.MoveE1Async(deg, vel);
+                _ = ctx.Main.MoveE1Async(value, vel);
             },
         });
 

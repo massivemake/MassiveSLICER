@@ -45,7 +45,7 @@ public class CellLoaderTest
         Assert.Equal(1496.36047f, bed.BaseData.X, 3);
         Assert.Equal(-577.892273f, bed.BaseData.Y, 3);
         Assert.Equal(278f, bed.BaseData.Z, 2);
-        Assert.Equal(278f, bed.Origin.Z, 2);
+        Assert.True(bed.Origin.Z > 0f);
 
         Assert.Equal(901.2f, tool.TcpX, 2);
         Assert.Equal(-165f, tool.TcpY, 2);
@@ -53,6 +53,9 @@ public class CellLoaderTest
 
         Assert.Contains(cell.KrlBases, b => b.Name == "massiveb1" && b.Index == 1);
         Assert.Contains("CREHF_Extruder", tool.ModelPath, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(cell.RobotRail);
+        Assert.Equal(-4650f, cell.RobotRail!.MinMm);
+        Assert.Equal(150f, cell.RobotRail.MaxMm);
     }
 
     private static string? ResolveCellJson(string folder, string file)

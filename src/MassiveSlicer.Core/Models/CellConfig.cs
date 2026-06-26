@@ -32,6 +32,9 @@ public sealed record CellConfig
     /// <summary>Rotary positioner bed (LFAM 3). Null = flat bed only.</summary>
     public RotaryBedCellConfig? RotaryBed { get; init; }
 
+    /// <summary>Linear rail (LFAM 1 E1). Null = no rail translation in the viewport.</summary>
+    public RobotRailCellConfig? RobotRail { get; init; }
+
     /// <summary>Named list of available tool configurations.</summary>
     public IReadOnlyList<ToolCellConfig> Tools { get; init; } = [];
 
@@ -370,6 +373,35 @@ public sealed record StandCellConfig
 
     /// <summary>Seed rotation in radians (XYZ order).</summary>
     public float[] Rotation { get; init; } = [0f, 0f, 0f];
+}
+
+/// <summary>LFAM 1 KL4000S linear rail driven by KUKA E1 (mm, not degrees).</summary>
+public sealed record RobotRailCellConfig
+{
+    /// <summary>World axis the carriage travels along: X, Y, or Z.</summary>
+    public string Axis { get; init; } = "Y";
+
+    /// <summary>Minimum E1 position in mm (KUKA soft limit).</summary>
+    public float MinMm { get; init; } = -4650f;
+
+    /// <summary>Maximum E1 position in mm (KUKA soft limit).</summary>
+    public float MaxMm { get; init; } = 150f;
+
+    /// <summary>Sign mapping KUKA E1 mm to scene translation along <see cref="Axis"/>.</summary>
+    public float E1Sign { get; init; } = 1f;
+
+    /// <summary>Scene-space translation (mm) for a live E1 reading.</summary>
+    public Float3 SceneOffsetMm(double e1Mm)
+    {
+        float d = (float)(E1Sign * e1Mm);
+        return Axis.ToUpperInvariant() switch
+        {
+            "X" => new Float3(d, 0f, 0f),
+            "Y" => new Float3(0f, d, 0f),
+            "Z" => new Float3(0f, 0f, d),
+            _   => new Float3(0f, d, 0f),
+        };
+    }
 }
 
 /// <summary>LFAM 3 rotary positioner: fixed bottom + E1-driven top section.</summary>

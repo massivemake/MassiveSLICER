@@ -1081,24 +1081,25 @@ public sealed class MainWindowViewModel : ViewModelBase
         }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
-    /// <summary>Rotates E1 to <paramref name="e1Deg"/> while holding A1â€“A6 at current values.</summary>
-    public async Task MoveE1Async(double e1Deg, int vel = 20)
+    /// <summary>Moves E1 (deg on rotary cells, mm on rail cells) while holding A1â€“A6.</summary>
+    public async Task MoveE1Async(double e1Value, int vel = 20)
     {
         var robot = RightPanel.Settings.Robot;
         if (!robot.IsConnected) { Console.LogError("[e1] Robot not connected â€” Sync first."); return; }
+        string unit = robot.IsRobotRail ? "mm" : "Â°";
         robot.PauseStreaming();
         try
         {
             var axes = await robot.ReadAxesAsync();
-            Console.Log($"[e1] PTP E1 â†’ {e1Deg:F1}Â° (holding A1â€“A6) @ {vel}% â€¦");
+            Console.Log($"[e1] PTP E1 â†’ {e1Value:F1}{unit} (holding A1â€“A6) @ {vel}% â€¦");
             await robot.InitCommandServerAsync();
             bool ok = await robot.SendAxesAsync(
-                axes[0], axes[1], axes[2], axes[3], axes[4], axes[5], e1Deg, vel,
+                axes[0], axes[1], axes[2], axes[3], axes[4], axes[5], e1Value, vel,
                 robot.KrlToolIndex, robot.KrlBaseIndex);
             if (ok)
             {
-                robot.E1 = Math.Round(e1Deg, 2);
-                Console.Log($"[e1] At E1={e1Deg:F1}Â°.");
+                robot.E1 = Math.Round(e1Value, 2);
+                Console.Log($"[e1] At E1={e1Value:F1}{unit}.");
             }
             else
                 Console.LogError("[e1] Move timed out.");
