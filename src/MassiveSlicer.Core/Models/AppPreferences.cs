@@ -148,6 +148,14 @@ public sealed class AppPreferences
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
 
+    /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
+    public string CurvedBoundarySource { get; set; } = "Auto";
+
+    public double CurvedAutoDetectBandMm { get; set; } = 2.0;
+    public bool CurvedEnableRegionSplit { get; set; } = true;
+    public List<int> CurvedBoundaryLowVertices { get; set; } = [];
+    public List<int> CurvedBoundaryHighVertices { get; set; } = [];
+
     /// <summary>KUKA TOOL_DATA index (1–16).</summary>
     public int ToolDataIndex { get; set; } = 1;
 
@@ -162,6 +170,9 @@ public sealed class AppPreferences
 
     /// <summary>Toolhead C angle in degrees.</summary>
     public double ToolheadC { get; set; } = 0.0;
+
+    /// <summary>Surface follow strength percent (0 = vertical, 100 = full follow).</summary>
+    public double OrientationFollowPercent { get; set; } = 100.0;
 
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
     public double ApoCvel { get; set; } = 100.0;

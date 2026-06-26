@@ -430,6 +430,7 @@ public partial class ViewportView
 
         _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0 || _cellGpuUploadPending;
         _currentToolNode = null;
+        RefreshMultiToolSelectability();
     }
 
     void ApplyMultiToolUnmount(ViewportViewModel vm, bool updateVm = true)

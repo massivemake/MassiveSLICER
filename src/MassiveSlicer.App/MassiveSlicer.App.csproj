@@ -5,7 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\..\assets\Icons\icon.ico</ApplicationIcon>
     <!-- COM interop is required for the Windows WGL P/Invoke GL host. Not needed on
          macOS/Linux, but harmless to leave unconditional for a Windows-only project. -->
     <BuiltInComInteropSupport Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BuiltInComInteropSupport>
@@ -37,7 +37,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="Assets\icon.ico"/>
+    <!-- Canonical app icon lives in repo assets/Icons (generated from Square44x44Logo PNGs). -->
+    <AvaloniaResource Include="..\..\assets\Icons\icon.ico" Link="Assets\icon.ico"/>
     <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
   </ItemGroup>
 

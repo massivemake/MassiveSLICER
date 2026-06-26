@@ -24,10 +24,15 @@ public sealed class SceneRenderer : IDisposable
     private BackdropRenderer?    _backdrop;
     private PlanePreviewRenderer? _planePreview;
     private SeamGuideRenderer?    _seamGuides;
+    private SeamGuideRenderer?    _boundaryLowMarkers;
+    private SeamGuideRenderer?    _boundaryHighMarkers;
     private SequencePathRenderer? _sequencePath;
     private IReadOnlyList<Vector3> _seamGuidePoints = [];
     private int _seamGuideSelectedIndex = -1;
     private bool _seamGuidesDirty;
+    private IReadOnlyList<Vector3> _boundaryLowPoints = [];
+    private IReadOnlyList<Vector3> _boundaryHighPoints = [];
+    private bool _boundaryLoopsDirty;
     private bool _sequencePathActive;
     private bool _sequencePathDirty;
     private bool _sequencePathClearPending;
@@ -607,7 +612,9 @@ public sealed class SceneRenderer : IDisposable
         // Sensor origin gizmo: orange X / lime Y / sky-blue Z, 150mm to distinguish from TCP.
         _sensorAxes       = new AxisRenderer(0.95f, 0.50f, 0.15f, 0.30f, 0.90f, 0.45f, 0.15f, 0.65f, 0.95f, 150f);
         _gizmo            = new GizmoRenderer();
-        _seamGuides       = new SeamGuideRenderer();
+        _seamGuides           = new SeamGuideRenderer();
+        _boundaryLowMarkers   = new SeamGuideRenderer();
+        _boundaryHighMarkers  = new SeamGuideRenderer();
         _sequencePath     = new SequencePathRenderer();
         _maskShader       = new Shader(MaskVertSrc, MaskFragSrc);
         _compositeShader  = new Shader(CompositeVertSrc, CompositeFragSrc);
@@ -855,6 +862,26 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.DepthTest);
         }
 
+        // -- Curved boundary loop markers --------------------------------------
+        if ((_boundaryLowPoints.Count > 0 || _boundaryHighPoints.Count > 0)
+            && _boundaryLowMarkers is not null && _boundaryHighMarkers is not null)
+        {
+            if (_boundaryLoopsDirty)
+            {
+                _boundaryLowMarkers.Update(_boundaryLowPoints, radius: 3f);
+                _boundaryHighMarkers.Update(_boundaryHighPoints, radius: 3f);
+                _boundaryLoopsDirty = false;
+            }
+
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            if (_boundaryLowPoints.Count > 0)
+                _boundaryLowMarkers.Draw(mvp, new Vector3(0.2f, 0.9f, 0.3f), new Vector3(0.2f, 0.9f, 0.3f));
+            if (_boundaryHighPoints.Count > 0)
+                _boundaryHighMarkers.Draw(mvp, new Vector3(1.0f, 0.55f, 0.1f), new Vector3(1.0f, 0.55f, 0.1f));
+            GL.Enable(EnableCap.DepthTest);
+        }
+
         // -- Tool-change sequence overlay (MassiveCONNECT-style path + marker) -
         if (_sequencePath is not null)
         {
@@ -981,6 +1008,14 @@ public sealed class SceneRenderer : IDisposable
         _seamGuidePoints        = points;
         _seamGuideSelectedIndex = selectedIndex;
         _seamGuidesDirty        = true;
+    }
+
+    /// <summary>Queues curved-slicing LOW (green) and HIGH (orange) boundary vertex markers.</summary>
+    public void SetCurvedBoundaryLoops(IReadOnlyList<Vector3> lowPoints, IReadOnlyList<Vector3> highPoints)
+    {
+        _boundaryLowPoints  = lowPoints;
+        _boundaryHighPoints = highPoints;
+        _boundaryLoopsDirty = true;
     }
 
     /// <summary>Queues tool-change sequence overlay data; GPU upload runs on the GL thread.</summary>
@@ -1240,6 +1275,8 @@ public sealed class SceneRenderer : IDisposable
         _backdrop?.Dispose();
         _planePreview?.Dispose();
         _seamGuides?.Dispose();
+        _boundaryLowMarkers?.Dispose();
+        _boundaryHighMarkers?.Dispose();
         _sequencePath?.Dispose();
         foreach (var entry in _toolpaths.Values) entry.Renderer.Dispose();
         _toolpaths.Clear();

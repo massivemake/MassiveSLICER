@@ -1573,6 +1573,10 @@ public sealed class ViewportViewModel : ViewModelBase
         SeamEditorSelectPointCommand = new RelayCommand(() => SeamEditorTool = SeamEditorToolKind.SelectPoint, () => IsSeamEditorActive);
         ToggleSeamGuideLayerCommand = new RelayCommand(() => IsSeamGuideLayerOpen = !IsSeamGuideLayerOpen, () => IsSeamEditorActive && SeamGuideDraft.Count > 0);
         SelectSeamGuideByIndexCommand = new RelayCommand<int>(SelectSeamGuideByIndex, _ => IsSeamEditorActive);
+        BoundaryEditorSaveCommand       = new RelayCommand(SaveBoundaryEditor, () => IsBoundaryEditorActive);
+        BoundaryEditorCancelCommand     = new RelayCommand(CancelBoundaryEditor, () => IsBoundaryEditorActive);
+        BoundaryEditorLowTargetCommand  = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low, () => IsBoundaryEditorActive);
+        BoundaryEditorHighTargetCommand = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.High, () => IsBoundaryEditorActive);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
         UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
@@ -1882,6 +1886,89 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Raised when seam guide draft changes — viewport refreshes markers.</summary>
     public Action? OnSeamGuidesChanged;
 
+    // -- Curved boundary editor ------------------------------------------------
+
+    private bool _isBoundaryEditorActive;
+
+    public bool IsBoundaryEditorActive
+    {
+        get => _isBoundaryEditorActive;
+        set
+        {
+            if (SetField(ref _isBoundaryEditorActive, value))
+            {
+                BoundaryEditorSaveCommand.RaiseCanExecuteChanged();
+                BoundaryEditorCancelCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    private CurvedBoundaryEditorTarget _boundaryEditorTarget = CurvedBoundaryEditorTarget.Low;
+
+    public CurvedBoundaryEditorTarget BoundaryEditorTarget
+    {
+        get => _boundaryEditorTarget;
+        set
+        {
+            if (SetField(ref _boundaryEditorTarget, value))
+            {
+                OnPropertyChanged(nameof(IsBoundaryLowTarget));
+                OnPropertyChanged(nameof(IsBoundaryHighTarget));
+            }
+        }
+    }
+
+    public bool IsBoundaryLowTarget  => BoundaryEditorTarget == CurvedBoundaryEditorTarget.Low;
+    public bool IsBoundaryHighTarget => BoundaryEditorTarget == CurvedBoundaryEditorTarget.High;
+
+    public ObservableCollection<int> BoundaryLowDraft  { get; } = [];
+    public ObservableCollection<int> BoundaryHighDraft { get; } = [];
+
+    public RelayCommand BoundaryEditorSaveCommand { get; }
+    public RelayCommand BoundaryEditorCancelCommand { get; }
+    public RelayCommand BoundaryEditorLowTargetCommand { get; }
+    public RelayCommand BoundaryEditorHighTargetCommand { get; }
+
+    public void BeginBoundaryEditor(IReadOnlyList<int> low, IReadOnlyList<int> high)
+    {
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        foreach (var v in low)  BoundaryLowDraft.Add(v);
+        foreach (var v in high) BoundaryHighDraft.Add(v);
+        BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low;
+        IsBoundaryEditorActive = true;
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    public void SetBoundaryDraft(IReadOnlyList<int> low, IReadOnlyList<int> high)
+    {
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        foreach (var v in low)  BoundaryLowDraft.Add(v);
+        foreach (var v in high) BoundaryHighDraft.Add(v);
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    private void SaveBoundaryEditor()
+    {
+        AdditiveSettings?.SetCurvedBoundaries(BoundaryLowDraft, BoundaryHighDraft);
+        if (AdditiveSettings is not null)
+            AdditiveSettings.CurvedBoundarySourceDisplay = "Viewport Pick";
+        IsBoundaryEditorActive = false;
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    private void CancelBoundaryEditor()
+    {
+        IsBoundaryEditorActive = false;
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    /// <summary>Raised when curved boundary draft changes — viewport refreshes markers.</summary>
+    public Action? OnBoundaryDraftChanged;
+
     // -- Slicing ---------------------------------------------------------------
 
     private bool _isSlicing;
@@ -1892,13 +1979,39 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _isSlicing;
         set
         {
-        if (SetField(ref _isSlicing, value))
+            if (SetField(ref _isSlicing, value))
             {
                 SliceCommand?.RaiseCanExecuteChanged();
                 UpdateSliceCommand?.RaiseCanExecuteChanged();
+                OnPropertyChanged(nameof(ShowSliceStatus));
             }
         }
     }
+
+    private string _sliceStatusMessage = string.Empty;
+
+    /// <summary>Human-readable slice progress, result, or error (shown in overlay + status bar).</summary>
+    public string SliceStatusMessage
+    {
+        get => _sliceStatusMessage;
+        set
+        {
+            if (SetField(ref _sliceStatusMessage, value))
+                OnPropertyChanged(nameof(ShowSliceStatus));
+        }
+    }
+
+    private bool _sliceStatusIsError;
+
+    /// <summary>When true, <see cref="SliceStatusMessage"/> is styled as an error.</summary>
+    public bool SliceStatusIsError
+    {
+        get => _sliceStatusIsError;
+        set => SetField(ref _sliceStatusIsError, value);
+    }
+
+    /// <summary>True when a slice error message should be shown in-panel (progress uses footer line + console).</summary>
+    public bool ShowSliceStatus => SliceStatusIsError && !string.IsNullOrWhiteSpace(SliceStatusMessage);
 
     /// <summary>
     /// Completed toolpaths queued for upload on the GL thread.

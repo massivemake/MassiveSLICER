@@ -15,6 +15,7 @@ using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing;
+using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.FK;
@@ -38,6 +39,7 @@ public partial class ViewportView : UserControl
     private SceneNode?             _rotaryBedPivot;
     private SceneNode?             _rotaryBedRoot;   // "RotaryBed" env root — relocated when the bed is recentred
     private bool                   _multiToolFlangeParented;
+    private readonly HashSet<SceneNode> _lfamInfrastructureNodes = [];
     private bool                   _lastOutlinerLayerPreview;
     private SceneNode?             _lastLayerPreviewTargetNode;
     private const float InteractionScale = 0.55f;
@@ -87,6 +89,8 @@ public partial class ViewportView : UserControl
 
     // Seam guide drag
     private bool _seamGuideDragging;
+    private WeldedMesh? _boundaryEditorMesh;
+    private int _sliceStatusClearGen;
     private int  _seamGuideDragIndex = -1;
 
     // Cached VM reference -- set on the UI thread in WireGlCanvas, read from GL thread in OnRender.
@@ -234,13 +238,15 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowOrientationPreview))
                     GlCanvas.RequestNextFrameRendering();
                 else if (pe.PropertyName is nameof(ViewportViewModel.IsLayFlatMode)
-                                         or nameof(ViewportViewModel.IsSeamEditorActive))
-                    Cursor = vm.IsLayFlatMode || vm.IsSeamEditorActive
+                                         or nameof(ViewportViewModel.IsSeamEditorActive)
+                                         or nameof(ViewportViewModel.IsBoundaryEditorActive))
+                    Cursor = vm.IsLayFlatMode || vm.IsSeamEditorActive || vm.IsBoundaryEditorActive
                         ? new Cursor(StandardCursorType.Cross)
                         : Cursor.Default;
             };
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
             vm.OnSeamGuidesChanged = () => UpdateSeamGuideMarkers(vm);
+            vm.OnBoundaryDraftChanged = () => UpdateBoundaryMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
@@ -253,12 +259,7 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
-            vm.OnOutlinerSelectRequested = node =>
-            {
-                _renderer.Select(node);
-                UpdateFocusOverlay();
-                GlCanvas.RequestNextFrameRendering();
-            };
+            vm.OnOutlinerSelectRequested = node => RequestSceneSelection(vm, node);
             vm.GetSelectedSceneNode = () => _renderer.SelectedNode;
             vm.OnNodeHidden           = node =>
             {
@@ -502,6 +503,9 @@ public partial class ViewportView : UserControl
             additive.OnOpenSeamEditorRequested = () =>
                 vm.BeginSeamEditor(additive.BuildSeamGuideList());
 
+            additive.OnOpenCurvedBoundaryEditorRequested = () => OpenCurvedBoundaryEditor(vm, additive);
+            additive.OnImportCurvedBoundariesRequested  = () => ImportCurvedBoundariesAsync(vm, additive);
+
             additive.PropertyChanged += (_, pe) =>
             {
                 // Recompute layer-preview heatmap when any relevant setting changes.
@@ -555,7 +559,8 @@ public partial class ViewportView : UserControl
 
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.SmoothRotation)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
-                                    or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm))
+                                    or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm)
+                                    or nameof(AdditiveSettingsViewModel.OrientationFollowPercent))
                     ReapplyOrientationSmoothing(additive);
             };
 
@@ -582,6 +587,123 @@ public partial class ViewportView : UserControl
         }
         _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void UpdateBoundaryMarkers(ViewportViewModel vm)
+    {
+        if (_boundaryEditorMesh is null)
+        {
+            _renderer.SetCurvedBoundaryLoops([], []);
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        IReadOnlyList<int> lowIdx, highIdx;
+        if (vm.IsBoundaryEditorActive)
+        {
+            lowIdx  = vm.BoundaryLowDraft.ToList();
+            highIdx = vm.BoundaryHighDraft.ToList();
+        }
+        else
+        {
+            lowIdx  = vm.AdditiveSettings?.BuildCurvedLowBoundaryList()  ?? [];
+            highIdx = vm.AdditiveSettings?.BuildCurvedHighBoundaryList() ?? [];
+        }
+
+        var lowPts = lowIdx
+            .Where(i => i >= 0 && i < _boundaryEditorMesh.VertexCount)
+            .Select(i => _boundaryEditorMesh.Vertices[i])
+            .Select(v => new TkVector3(v.X, v.Y, v.Z))
+            .ToList();
+        var highPts = highIdx
+            .Where(i => i >= 0 && i < _boundaryEditorMesh.VertexCount)
+            .Select(i => _boundaryEditorMesh.Vertices[i])
+            .Select(v => new TkVector3(v.X, v.Y, v.Z))
+            .ToList();
+        _renderer.SetCurvedBoundaryLoops(lowPts, highPts);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void OpenCurvedBoundaryEditor(ViewportViewModel vm, AdditiveSettingsViewModel additive)
+    {
+        var sourceItem = vm.ResolveActivePrintObjectItem();
+        if (sourceItem?.Node is null) return;
+
+        var snapshots = CollectMeshSnapshots(sourceItem, requireVisible: false);
+        if (snapshots.Count == 0) return;
+
+        var flatMeshes = new List<NVec3[]>();
+        foreach (var (positions, indices, world) in snapshots)
+        {
+            NVec3[] flat;
+            if (indices is null)
+            {
+                flat = new NVec3[positions.Length];
+                for (int i = 0; i < positions.Length; i++)
+                    flat[i] = TransformPoint(positions[i], world);
+            }
+            else
+            {
+                flat = new NVec3[indices.Length];
+                for (int i = 0; i < indices.Length; i++)
+                    flat[i] = TransformPoint(positions[indices[i]], world);
+            }
+            flatMeshes.Add(flat);
+        }
+
+        _boundaryEditorMesh = MeshGraph.Build(flatMeshes);
+        IReadOnlyList<int> low, high;
+        if (additive.BuildCurvedLowBoundaryList().Count > 0 && additive.BuildCurvedHighBoundaryList().Count > 0)
+        {
+            low  = additive.BuildCurvedLowBoundaryList();
+            high = additive.BuildCurvedHighBoundaryList();
+        }
+        else
+        {
+            (low, high) = BoundaryAutoDetect.Detect(
+                _boundaryEditorMesh, (float)additive.CurvedAutoDetectBandMm);
+        }
+
+        vm.BeginBoundaryEditor(low, high);
+        UpdateBoundaryMarkers(vm);
+    }
+
+    private async Task ImportCurvedBoundariesAsync(ViewportViewModel vm, AdditiveSettingsViewModel additive)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window window) return;
+        var files = await window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import curved slicing boundaries",
+            AllowMultiple = true,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("JSON") { Patterns = ["*.json"] },
+            ],
+        });
+        if (files.Count == 0) return;
+
+        try
+        {
+            IReadOnlyList<int> low, high;
+            if (files.Count >= 2)
+            {
+                (low, high) = BoundaryJsonIO.LoadPair(files[0].Path.LocalPath, files[1].Path.LocalPath);
+            }
+            else
+            {
+                (low, high) = BoundaryJsonIO.LoadCombined(files[0].Path.LocalPath);
+            }
+
+            additive.SetCurvedBoundaries(low, high);
+            additive.CurvedBoundarySourceDisplay = "JSON Import";
+            if (_boundaryEditorMesh is not null && vm.IsBoundaryEditorActive)
+                vm.SetBoundaryDraft(low, high);
+            UpdateBoundaryMarkers(vm);
+        }
+        catch
+        {
+            // Import errors are surfaced via empty boundary state; user can retry.
+        }
     }
 
     private bool TryPlaceSeamGuide(Ray ray, out System.Numerics.Vector3 hit)
@@ -752,6 +874,7 @@ public partial class ViewportView : UserControl
                 RebuildFrameMatrices();
                 toolNode.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
                 toolNode.Selectable     = true;
+                toolNode.PickTier       = PickTier.Content;
                 _renderer.SceneRoot.AddChild(toolNode);
                 UploadPendingMeshes(toolNode);
                 _currentToolNode = toolNode;
@@ -788,6 +911,7 @@ public partial class ViewportView : UserControl
                 RebuildFrameMatrices();
                 swap.Node.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
                 swap.Node.Selectable     = true;
+                swap.Node.PickTier       = PickTier.Content;
                 _renderer.SceneRoot.AddChild(swap.Node);
                 UploadPendingMeshes(swap.Node);
                 _currentToolNode = swap.Node;
@@ -1176,6 +1300,7 @@ public partial class ViewportView : UserControl
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
         _multiToolFlangeParented    = false;
+        _lfamInfrastructureNodes.Clear();
         _renderer.TcpFrameMatrix    = null;
         _renderer.FlangeFrameMatrix = null;
         if (vm.Robot is not null) vm.Robot.IkSolver = null;
@@ -1246,10 +1371,11 @@ public partial class ViewportView : UserControl
             _renderer.SceneRoot.AddChild(robot);
             UploadVisiblePendingMeshes(robot);
 
-            // Expose the robot as a selectable outliner group: Root → Pedestal → Arm.
+            // Outliner visibility for robot — selection blocked on LFAM 2/3 (see RequestSceneSelection).
             var robotRoot = robot;
             var pedestal  = robot.FindDescendant("KR_120_R2700-2_BASE");
             var arm       = robot.FindDescendant("joint_1");
+            RegisterLfamInfrastructure(robotRoot, pedestal, arm);
             Dispatcher.UIThread.Post(() => vm.SetRobotGroup(robotRoot, pedestal, arm));
         }
         else
@@ -1299,7 +1425,12 @@ public partial class ViewportView : UserControl
                 cellEnvOutliner.Add((env, env.Name));
         }
         if (swap.BedNode is { } bedNode)
+        {
             cellEnvOutliner.Add((bedNode, "Print Bed"));
+            RegisterLfamInfrastructure(bedNode);
+        }
+
+        RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
 
         Dispatcher.UIThread.Post(() =>
         {
@@ -1335,6 +1466,7 @@ public partial class ViewportView : UserControl
                 RebuildFrameMatrices();
                 swap.ToolHolder.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
                 swap.ToolHolder.Selectable     = true;
+                swap.ToolHolder.PickTier       = PickTier.Content;
                 _renderer.SceneRoot.AddChild(swap.ToolHolder);
                 UploadVisiblePendingMeshes(swap.ToolHolder);
                 _currentToolNode = swap.ToolHolder;
@@ -1760,7 +1892,20 @@ public partial class ViewportView : UserControl
                 var ray   = _renderer.Camera.GetPickRay(
                     (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
 
-                if (DataContext is ViewportViewModel flatVm && flatVm.IsSeamEditorActive)
+                if (DataContext is ViewportViewModel bndVm && bndVm.IsBoundaryEditorActive
+                    && _boundaryEditorMesh is not null
+                    && TryPlaceSeamGuide(ray, out var bndHit))
+                {
+                    int seed = CurvedBoundaryPicker.FindNearestVertex(_boundaryEditorMesh, bndHit);
+                    float band = (float)(bndVm.AdditiveSettings?.CurvedAutoDetectBandMm ?? 2.0);
+                    bool isLow = bndVm.BoundaryEditorTarget == CurvedBoundaryEditorTarget.Low;
+                    var ring = CurvedBoundaryPicker.GrowRingFromSeed(_boundaryEditorMesh, seed, band, isLow);
+                    if (isLow)
+                        bndVm.SetBoundaryDraft(ring, bndVm.BoundaryHighDraft);
+                    else
+                        bndVm.SetBoundaryDraft(bndVm.BoundaryLowDraft, ring);
+                }
+                else if (DataContext is ViewportViewModel flatVm && flatVm.IsSeamEditorActive)
                 {
                     int guideHit = _renderer.PickSeamGuide(
                         (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
@@ -1812,9 +1957,13 @@ public partial class ViewportView : UserControl
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
                     if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
                         _renderer.ToggleToolpathSelection(picked);
+                    else if (DataContext is ViewportViewModel pickVm)
+                        RequestSceneSelection(pickVm, picked);
                     else
+                    {
                         _renderer.Select(picked);
-                    UpdateFocusOverlay();
+                        UpdateFocusOverlay();
+                    }
                 }
 
                 GlCanvas.RequestNextFrameRendering();
@@ -1910,19 +2059,19 @@ public partial class ViewportView : UserControl
     {
         foreach (var pair in mt.Tools.Values)
         {
-            pair.FlangeHolder.Selectable = false;
             if (flange is not null)
                 flange.AddChild(pair.FlangeHolder);
 
             if (pair.DockHolder is { } dock)
             {
-                dock.Selectable = false;
                 if (dock.Parent is null)
                     _renderer.SceneRoot.AddChild(dock);
                 if (dock.Visible)
                     EnqueueCellGpuUpload(dock);
             }
         }
+
+        RefreshMultiToolSelectability();
     }
 
     /// <summary>LFAM 3: all toolheads parked on docks; flange empty until a Pick simulation or manual mount.</summary>
@@ -1964,10 +2113,16 @@ public partial class ViewportView : UserControl
             _currentToolNode = active.FlangeHolder;
         }
 
+        RefreshMultiToolSelectability();
         RebuildIkSolver(vm);
         if (vm.Robot is not null)
             SyncTcpReadout(vm);
         PostMultiToolVmState(vm, tool.Name);
+        if (_currentToolNode is not null)
+        {
+            _renderer.Select(_currentToolNode);
+            Dispatcher.UIThread.Post(UpdateFocusOverlay);
+        }
         Dispatcher.UIThread.Post(vm.NotifyCellChanged);
     }
 
@@ -2127,14 +2282,24 @@ public partial class ViewportView : UserControl
             ResumeRampDistanceMm       = (float)s.ResumeRampDistanceMm,
             ResumeRampSteps            = s.ResumeRampSteps,
             SeamGuidePoints = s.BuildSeamGuideList(),
+            CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
+            CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
+            CurvedBoundarySource        = s.CurvedBoundarySource,
+            CurvedAutoDetectBandMm      = (float)s.CurvedAutoDetectBandMm,
+            CurvedEnableRegionSplit     = s.CurvedEnableRegionSplit,
+            OrientationFollowStrength   = s.OrientationFollowStrength,
         };
     }
 
     private static async Task<(Toolpath smoothed, Toolpath raw, SliceSettings settings)> ComputeToolpathAsync(
         List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> meshSnapshots,
         SliceMethod method,
-        SliceSettings settings)
+        SliceSettings settings,
+        Action<string>? reportProgress = null)
     {
+        void Report(string msg) => reportProgress?.Invoke(msg);
+
+        Report("Preparing mesh…");
         var toolpath = await Task.Run(() =>
         {
             var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
@@ -2156,17 +2321,30 @@ public partial class ViewportView : UserControl
                 flatMeshes.Add(flat);
             }
 
+            Report(method switch
+            {
+                SliceMethod.Curved   => "Curved (Sweep): computing boundaries and layers…",
+                SliceMethod.Geodesic => "Geodesic: computing surface-distance layers…",
+                SliceMethod.Angled   => "Angled: intersecting tilted planes…",
+                _                    => "Planar: intersecting layers…",
+            });
+
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
             else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
+
+            Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
             tp = MovementPostProcessor.Apply(tp, settings);
             return ResumeRampPostProcessor.Apply(tp, settings);
         });
 
-        var rawToolpath      = toolpath;
-        var smoothedToolpath = OrientationSmoother.Apply(rawToolpath, settings);
+        var rawToolpath = ToolpathClone.Copy(toolpath);
+        var toSmooth    = ToolpathClone.Copy(toolpath);
+        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+        var smoothedToolpath = OrientationSmoother.Apply(toSmooth, settings);
         return (smoothedToolpath, rawToolpath, settings);
     }
 
@@ -2237,18 +2415,61 @@ public partial class ViewportView : UserControl
         vm.HasToolpathStats = true;
     }
 
+    private void SetSliceStatus(ViewportViewModel vm, string message, bool isError = false)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            vm.SliceStatusIsError = isError;
+            vm.SliceStatusMessage = message;
+        });
+    }
+
+    private void ScheduleClearSliceStatus(ViewportViewModel vm, int delayMs = 6000)
+    {
+        int gen = ++_sliceStatusClearGen;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(delayMs);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (gen != _sliceStatusClearGen || vm.IsSlicing) return;
+                vm.SliceStatusMessage = string.Empty;
+                vm.SliceStatusIsError = false;
+            });
+        });
+    }
+
+    private static string SliceMethodLabel(SliceMethod method) => method switch
+    {
+        SliceMethod.Curved   => "Curved (Sweep)",
+        SliceMethod.Geodesic => "Geodesic",
+        SliceMethod.Angled   => "Angled",
+        _                    => "Planar",
+    };
+
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
         if (vm.IsSlicing || vm.OutlinerItems.Count == 0) return;
+        _sliceStatusClearGen++;
         vm.IsSlicing = true;
+        vm.SliceStatusIsError = false;
+        SetSliceStatus(vm, "Slicing…");
 
         try
         {
             var selectedNode = _renderer.SelectedNode;
-            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem) return;
+            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
+            {
+                SetSliceStatus(vm, "Slice failed: select a mesh to slice.", isError: true);
+                return;
+            }
 
             var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
-            if (meshSnapshots.Count == 0) return;
+            if (meshSnapshots.Count == 0)
+            {
+                SetSliceStatus(vm, "Slice failed: mesh has no geometry.", isError: true);
+                return;
+            }
 
             // Additive stock from the material maps: print the displaced surface (low-poly mesh +
             // PBR-map detail) inflated by a uniform allowance, so the blank carries the detail and
@@ -2274,12 +2495,22 @@ public partial class ViewportView : UserControl
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
-            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(meshSnapshots, method, settings);
+            SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
+            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+
+            int layerCount = smoothedToolpath.Layers.Count;
+            if (layerCount == 0)
+            {
+                SetSliceStatus(vm, "Slice finished with 0 layers — check mesh, boundaries, and settings.", isError: true);
+                return;
+            }
 
             var toolpathName = method switch
             {
-                SliceMethod.Angled => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                  => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
             };
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
@@ -2304,6 +2535,15 @@ public partial class ViewportView : UserControl
             _renderer.Select(null);
             UpdateFocusOverlay();
             GlCanvas.RequestNextFrameRendering();
+
+            int moveCount = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
+            SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+            ScheduleClearSliceStatus(vm);
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Slice failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[slice] {ex}");
         }
         finally
         {
@@ -2594,22 +2834,37 @@ public partial class ViewportView : UserControl
         if (vm.IsSlicing) return;
         if (FindResliceSource(vm) is not { } source) return;
 
+        _sliceStatusClearGen++;
         vm.IsSlicing = true;
+        vm.SliceStatusIsError = false;
+        SetSliceStatus(vm, "Updating slice…");
         try
         {
             var (parentItem, toolpathItem) = source;
             var toolpathNode = toolpathItem.Node;
             var meshSnapshots = CollectMeshSnapshots(parentItem, requireVisible: false);
-            if (meshSnapshots.Count == 0) return;
+            if (meshSnapshots.Count == 0)
+            {
+                SetSliceStatus(vm, "Update failed: source mesh has no geometry.", isError: true);
+                return;
+            }
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
-            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(meshSnapshots, method, settings);
+            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+
+            if (smoothedToolpath.Layers.Count == 0)
+            {
+                SetSliceStatus(vm, "Update finished with 0 layers.", isError: true);
+                return;
+            }
 
             toolpathNode.Name = method switch
             {
-                SliceMethod.Angled => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                  => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
             };
 
             var selectedPreset = vm.AdditiveSettings is { } asp
@@ -2643,6 +2898,14 @@ public partial class ViewportView : UserControl
             ApplyToolpathStats(vm, smoothedToolpath);
             vm.ResetScrubIndex(smoothedToolpath.Layers.Sum(l => l.Moves.Count), smoothedToolpath);
             GlCanvas.RequestNextFrameRendering();
+
+            SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+            ScheduleClearSliceStatus(vm);
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Update failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[slice] update: {ex}");
         }
         finally
         {
@@ -3054,6 +3317,127 @@ public partial class ViewportView : UserControl
         return minZ;
     }
 
+    // -- LFAM tool TCP selection (robot/bed blocked; IK follows drag) ----------
+
+    static bool IsLfamProductionCell(ViewportViewModel vm)
+        => vm.ActiveCell?.Name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) == true
+        || vm.ActiveCell?.Name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) == true;
+
+    void RegisterLfamInfrastructure(params SceneNode?[] nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node is not null)
+                _lfamInfrastructureNodes.Add(node);
+        }
+    }
+
+    bool IsLfamInfrastructureNode(SceneNode? node)
+    {
+        if (node is null) return false;
+        for (var cur = node; cur is not null; cur = cur.Parent)
+        {
+            if (_lfamInfrastructureNodes.Contains(cur))
+                return true;
+        }
+        return false;
+    }
+
+    static bool IsSameOrDescendant(SceneNode root, SceneNode node)
+    {
+        if (node == root) return true;
+        foreach (var d in root.SelfAndDescendants())
+        {
+            if (d == node) return true;
+        }
+        return false;
+    }
+
+    bool TryResolveMultiToolPick(SceneNode picked, out string toolName, out SceneNode toolRoot, out bool onDock)
+    {
+        toolName = "";
+        toolRoot = picked;
+        onDock   = false;
+        if (_multiTools is null) return false;
+
+        foreach (var (name, pair) in _multiTools.Tools)
+        {
+            if (IsSameOrDescendant(pair.FlangeHolder, picked))
+            {
+                toolName = name;
+                toolRoot = pair.FlangeHolder;
+                onDock   = false;
+                return true;
+            }
+
+            if (pair.DockHolder is { } dock && IsSameOrDescendant(dock, picked))
+            {
+                toolName = name;
+                toolRoot = dock;
+                onDock   = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void RefreshMultiToolSelectability()
+    {
+        if (_multiTools is null) return;
+
+        foreach (var pair in _multiTools.Tools.Values)
+        {
+            bool mounted = pair.FlangeHolder.Visible;
+            pair.FlangeHolder.Selectable = mounted;
+            pair.FlangeHolder.PickTier   = PickTier.Content;
+
+            if (pair.DockHolder is { } dock)
+            {
+                bool docked = dock.Visible;
+                dock.Selectable = docked;
+                dock.PickTier   = PickTier.Content;
+            }
+        }
+    }
+
+    void RequestSceneSelection(ViewportViewModel vm, SceneNode? node)
+    {
+        if (node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
+        {
+            if (_currentToolNode is not null)
+                node = _currentToolNode;
+            else
+                node = null;
+        }
+        else if (node is not null && _multiTools is not null
+                 && TryResolveMultiToolPick(node, out var toolName, out var toolRoot, out var onDock))
+        {
+            if (onDock && vm.ActiveCell is { } cell)
+            {
+                var cfg = cell.EffectiveTools.FirstOrDefault(t => t.Name == toolName);
+                if (cfg is not null)
+                {
+                    ApplyMultiToolMount(cfg, vm);
+                    node = _currentToolNode;
+                }
+                else
+                    node = toolRoot;
+            }
+            else
+                node = toolRoot;
+        }
+        else if (node is not null && _currentToolNode is not null
+                 && IsSameOrDescendant(_currentToolNode, node))
+        {
+            node = _currentToolNode;
+        }
+
+        _renderer.Select(node);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
     // -- Toolhead selection check ----------------------------------------------
 
     private bool IsToolNodeSelected()
@@ -3111,6 +3495,8 @@ public partial class ViewportView : UserControl
         _toolIsDragging = (node == _currentToolNode);
         if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
         {
+            if (DataContext is ViewportViewModel { Robot: { } kbRobot })
+                kbRobot.Desync();
             _ikDragTcpOffset = tcpMat.Row3.Xyz - node.WorldTransform.Row3.Xyz;
             if (DataContext is ViewportViewModel { Robot: { } robot })
                 _ikDragTargetRot = _ikSolver.TargetRotFromKukaAbc(
@@ -3609,6 +3995,11 @@ public partial class ViewportView : UserControl
 
         if (selected is null)
             SetGizmoMode(GizmoMode.None);
+        else if (isToolNode)
+        {
+            vm.Robot?.Desync();
+            SetGizmoMode(GizmoMode.Translate);
+        }
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
@@ -3936,10 +4327,13 @@ public partial class ViewportView : UserControl
             SmoothRotation                = s.SmoothRotation,
             SmoothRotationRadius          = s.SmoothRotationRadius,
             SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
+            OrientationFollowStrength     = s.OrientationFollowStrength,
         };
         foreach (var (node, raw) in _rawToolpathByNode)
         {
-            var smoothed = OrientationSmoother.Apply(raw, smoothSettings);
+            var blended  = ToolpathClone.Copy(raw);
+            OrientationBlender.ApplyInPlace(blended, smoothSettings.OrientationFollowStrength);
+            var smoothed = OrientationSmoother.Apply(blended, smoothSettings);
             _toolpathByNode[node]   = smoothed;
             _scrubCacheByNode[node] = BuildScrubCache(smoothed);
             _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
@@ -4396,6 +4790,8 @@ public partial class ViewportView : UserControl
         _toolIsDragging = (node == _currentToolNode);
         if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
         {
+            if (DataContext is ViewportViewModel { Robot: { } dragRobot })
+                dragRobot.Desync();
             _ikDragTcpOffset = tcpMat.Row3.Xyz - node.WorldTransform.Row3.Xyz;
             if (DataContext is ViewportViewModel { Robot: { } robot })
                 _ikDragTargetRot = _ikSolver.TargetRotFromKukaAbc(
