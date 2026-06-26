@@ -55,6 +55,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     private bool _applyingUndoRedo;
     private string _lastCommittedPrefsJson = "";
     private CancellationTokenSource? _settingsUndoDebounce;
+    private string _lastProgressLogMessage = string.Empty;
 
     private static readonly JsonSerializerOptions PrefsJsonOptions = new() { WriteIndented = false };
 
@@ -138,7 +139,33 @@ public sealed class MainWindowViewModel : ViewModelBase
                                 or nameof(ViewportViewModel.HasPrePrintScanStep))
                 SyncLfam3WorkflowSidebar();
 
-            // Skip transient / non-persistent properties to avoid unnecessary disk writes.
+            if (e.PropertyName is nameof(ViewportViewModel.IsSlicing))
+            {
+                StatusBar.IsProgressActive = Viewport.IsSlicing;
+                if (Viewport.IsSlicing)
+                {
+                    StatusBar.OperationFeedback = string.Empty;
+                    LogProgressDetail("Starting slice…");
+                }
+                else
+                {
+                    if (!string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
+                    {
+                        StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+                        LogProgressDetail(Viewport.SliceStatusMessage);
+                    }
+                    _lastProgressLogMessage = string.Empty;
+                }
+            }
+
+            if (e.PropertyName is nameof(ViewportViewModel.SliceStatusMessage))
+            {
+                if (Viewport.IsSlicing)
+                    LogProgressDetail(Viewport.SliceStatusMessage);
+                else if (!string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
+                    StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+            }
+
             if (e.PropertyName is nameof(ViewportViewModel.HasSelection)
                                 or nameof(ViewportViewModel.HasMeshSelected)
                                 or nameof(ViewportViewModel.IsSlicing)
@@ -2122,6 +2149,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ResumeRampDistanceMm      = copy.ResumeRampDistanceMm;
         live.ResumeRampSteps           = copy.ResumeRampSteps;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
+        live.CurvedBoundarySource       = copy.CurvedBoundarySource;
+        live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
+        live.CurvedEnableRegionSplit    = copy.CurvedEnableRegionSplit;
+        live.CurvedBoundaryLowVertices  = [.. copy.CurvedBoundaryLowVertices];
+        live.CurvedBoundaryHighVertices = [.. copy.CurvedBoundaryHighVertices];
         live.LayerHeight            = copy.LayerHeight;
         live.BeadWidth              = copy.BeadWidth;
         live.FirstLayerHeight       = copy.FirstLayerHeight;
@@ -2261,11 +2293,21 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
+        add.CurvedBoundarySourceDisplay = p.CurvedBoundarySource switch
+        {
+            "Viewport Pick" => "Viewport Pick",
+            "JSON Import"   => "JSON Import",
+            _               => "Auto",
+        };
+        add.CurvedAutoDetectBandMm    = p.CurvedAutoDetectBandMm;
+        add.CurvedEnableRegionSplit   = p.CurvedEnableRegionSplit;
+        add.SetCurvedBoundaries(p.CurvedBoundaryLowVertices, p.CurvedBoundaryHighVertices);
         add.ToolDataIndex = p.ToolDataIndex;
         add.BaseDataIndex = p.BaseDataIndex;
         add.ToolheadA     = p.ToolheadA;
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
+        add.OrientationFollowPercent = p.OrientationFollowPercent;
         add.ApoCvel                = p.ApoCvel;
 
         // Scan settings
@@ -2408,11 +2450,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();
+        p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
+        p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
+        p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;
+        p.CurvedBoundaryLowVertices  = add.BuildCurvedLowBoundaryList().ToList();
+        p.CurvedBoundaryHighVertices = add.BuildCurvedHighBoundaryList().ToList();
         p.ToolDataIndex    = add.ToolDataIndex;
         p.BaseDataIndex    = add.BaseDataIndex;
         p.ToolheadA        = add.ToolheadA;
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
+        p.OrientationFollowPercent = add.OrientationFollowPercent;
         p.ApoCvel                = add.ApoCvel;
 
         // Scan settings
@@ -2443,5 +2491,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Convert.ToInt32(s[4..6], 16) / 255f);
         }
         catch { return System.Numerics.Vector3.Zero; }
+    }
+
+    private void LogProgressDetail(string message)
+    {
+        if (string.IsNullOrWhiteSpace(message) || message == _lastProgressLogMessage)
+            return;
+
+        _lastProgressLogMessage = message;
+        Console.Log($"[progress] {message}");
     }
 }

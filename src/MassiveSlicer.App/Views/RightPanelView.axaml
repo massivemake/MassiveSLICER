@@ -47,6 +47,51 @@
                                    Width="100" FontSize="11"
                                    ToolTip.Tip="Normal: solid volume with shells and infill. Surface: cladding/boundary paths on mesh intersections; tool stays vertical unless Overhang orientation is enabled."/>
                     </Grid>
+
+                    <!-- Curved (Sweep) boundary controls -->
+                    <StackPanel Spacing="4" IsVisible="{Binding Additive.ShowCurvedControls}">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Boundary source" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding Additive.CurvedBoundarySourceOptions}"
+                                      SelectedItem="{Binding Additive.CurvedBoundarySourceDisplay, Mode=TwoWay}"
+                                      Width="120" FontSize="11"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Grid.Column="0" Text="Auto-detect band (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.CurvedAutoDetectBandMm}"/>
+                        </Grid>
+                        <TextBlock Text="{Binding Additive.CurvedBoundarySummary}" FontSize="10" Opacity="0.75" Margin="0,2,0,0"/>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <Button Grid.Column="0"
+                                    Content="Edit boundaries"
+                                    Classes="ToolbarButton"
+                                    Padding="10,4"
+                                    Margin="0,0,4,0"
+                                    Command="{Binding Additive.OpenCurvedBoundaryEditorCommand}"
+                                    ToolTip.Tip="Pick LOW/HIGH edge loops on the mesh (or preview auto-detected rings)."/>
+                            <Button Grid.Column="1"
+                                    Content="Import JSON"
+                                    Classes="ToolbarButton"
+                                    Padding="10,4"
+                                    Command="{Binding Additive.ImportCurvedBoundariesCommand}"
+                                    ToolTip.Tip="Load compas_slicer boundaryLOW.json / boundaryHIGH.json vertex indices."/>
+                        </Grid>
+                        <CheckBox Content="Region split for branching (Y-shapes)"
+                                  IsChecked="{Binding Additive.CurvedEnableRegionSplit, Mode=TwoWay}"
+                                  Margin="0,2,0,0"/>
+                        <Grid ColumnDefinitions="*,*,56" Margin="0,4,0,0">
+                            <TextBlock Grid.Column="0" Text="Surface follow (%)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="0 = vertical toolhead. 100 = full stacking normal."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
                 </StackPanel>
 
                 <ScrollViewer Grid.Row="1"
@@ -609,6 +654,12 @@
                             HorizontalAlignment="Stretch"
                             Margin="8,8,8,4"
                             Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+                    <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SliceStatusMessage}"
+                               Margin="8,0,8,6"
+                               FontSize="10"
+                               TextWrapping="Wrap"
+                               Opacity="0.8"
+                               IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceStatus}"/>
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -1134,6 +1185,32 @@
                                        ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
                         </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <TextBlock Text="SURFACE FOLLOW" Classes="SectionHeader"
+                                   ToolTip.Tip="Blend tool approach between vertical (+Z) and surface-following normals. Lower on steep curves to avoid flange collisions."/>
+
+                        <Grid Margin="8,2,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Strength (%)"
+                                       Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="0 = vertical toolhead. 100 = full path/surface follow."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                   Margin="8,0,8,8"
+                                   Text="Adjust while scrubbing to preview robot clearance. Re-slice to bake into exported KRL."/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

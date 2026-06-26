@@ -16,6 +16,26 @@
 
     <Grid Background="Transparent">
 
+        <!-- Slice error overlay (progress uses footer line + console) -->
+        <Border IsVisible="{Binding ShowSliceStatus}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="#D90B1220"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="20,14"
+                MinWidth="280"
+                MaxWidth="420"
+                ZIndex="40">
+            <TextBlock Text="{Binding SliceStatusMessage}"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="#FFFF7070"/>
+        </Border>
+
         <!-- N-key HUD — hidden until N; no always-visible tab on the viewport edge. -->
         <StackPanel HorizontalAlignment="Left"
                     VerticalAlignment="Center"
@@ -509,6 +529,43 @@
                             Command="{Binding SeamEditorCancelCommand}"/>
                     <Button Content="Save" Classes="PrimaryButton" Padding="12,4"
                             Command="{Binding SeamEditorSaveCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Curved boundary editor toolbar -->
+        <Border IsVisible="{Binding IsBoundaryEditorActive}"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,6"
+                ZIndex="30">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="Curved boundaries (Sweep)"
+                           VerticalAlignment="Center" FontSize="12" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <Button Content="LOW ring"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsBoundaryLowTarget}"
+                            Padding="10,4"
+                            Command="{Binding BoundaryEditorLowTargetCommand}"
+                            ToolTip.Tip="Click mesh to set/grow the LOW (start) boundary ring"/>
+                    <Button Content="HIGH ring"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsBoundaryHighTarget}"
+                            Padding="10,4"
+                            Command="{Binding BoundaryEditorHighTargetCommand}"
+                            ToolTip.Tip="Click mesh to set/grow the HIGH (end) boundary ring"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Button Content="Cancel" Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding BoundaryEditorCancelCommand}"/>
+                    <Button Content="Save" Classes="PrimaryButton" Padding="12,4"
+                            Command="{Binding BoundaryEditorSaveCommand}"/>
                 </StackPanel>
             </Grid>
         </Border>
