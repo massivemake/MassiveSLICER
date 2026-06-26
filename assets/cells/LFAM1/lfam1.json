@@ -117,7 +117,7 @@
   "tools": [
     {
       "name": "HF Extruder",
-      "modelPath": "assets/cells/LFAM2/ToolHeads/hv_extruder.glb",
+      "modelPath": "assets/cells/LFAM1/CREHF_Extruder.glb",
       "tcpX": 901.2,
       "tcpY": -165,
       "tcpZ": 249.99,

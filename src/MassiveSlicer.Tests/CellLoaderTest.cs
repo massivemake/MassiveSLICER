@@ -52,6 +52,7 @@ public class CellLoaderTest
         Assert.Equal(249.99f, tool.TcpZ, 2);
 
         Assert.Contains(cell.KrlBases, b => b.Name == "massiveb1" && b.Index == 1);
+        Assert.Contains("CREHF_Extruder", tool.ModelPath, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? ResolveCellJson(string folder, string file)
