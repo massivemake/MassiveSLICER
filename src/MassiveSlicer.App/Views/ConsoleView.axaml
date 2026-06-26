@@ -13,14 +13,10 @@
         </Style>
     </UserControl.Styles>
 
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="28"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-
-        <Border Grid.Row="0"
+    <!-- Dock input to bottom so history never shares vertical space with the command line. -->
+    <DockPanel LastChildFill="True">
+        <Border DockPanel.Dock="Top"
+                Height="28"
                 Background="{DynamicResource Bg3}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="0,0,0,1">
@@ -32,25 +28,9 @@
                        Margin="10,0"/>
         </Border>
 
-        <ScrollViewer Grid.Row="1"
-                      x:Name="HistoryScroll"
-                      VerticalScrollBarVisibility="Auto"
-                      Background="{DynamicResource Bg1}"
-                      Padding="8,4,8,10">
-            <ItemsControl ItemsSource="{Binding History}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate x:DataType="vm:ConsoleHistoryEntry">
-                        <SelectableTextBlock Text="{Binding DisplayLine}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,2"
-                                   FontFamily="Consolas,Courier New,monospace"
-                                   Classes.error="{Binding IsError}"/>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
-        </ScrollViewer>
-
-        <Border Grid.Row="2"
+        <Border DockPanel.Dock="Bottom"
+                x:Name="InputChrome"
+                MinHeight="36"
                 Background="{DynamicResource Bg3}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="0,1,0,0">
@@ -120,5 +100,23 @@
                 </Border>
             </Grid>
         </Border>
-    </Grid>
+
+        <ScrollViewer x:Name="HistoryScroll"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="{DynamicResource Bg1}"
+                      Padding="8,6,8,14">
+            <ItemsControl ItemsSource="{Binding History}" Margin="0,0,0,6">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:ConsoleHistoryEntry">
+                        <SelectableTextBlock Text="{Binding DisplayLine}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,3"
+                                   FontFamily="Consolas,Courier New,monospace"
+                                   FontSize="11"
+                                   Classes.error="{Binding IsError}"/>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+    </DockPanel>
 </UserControl>

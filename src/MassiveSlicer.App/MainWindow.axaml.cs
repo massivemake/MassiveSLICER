@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm) return;
 
+        vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
+
         // -- Local control bridge (external tooling reads console / sends commands) --
         if (_controlBridge is null)
         {
@@ -33,7 +35,7 @@ public partial class MainWindow : Window
                 _controlBridge = new MassiveSlicer.App.Console.LocalControlBridge(vm);
                 int port = _controlBridge.Start();
                 vm.Console.Log(port > 0
-                    ? $"[bridge] control API on http://127.0.0.1:{port}  — GET /status, GET /console?n=N, POST /command"
+                    ? $"[bridge] control API on http://127.0.0.1:{port}  — GET /status, GET /console?n=N, GET /screenshot, GET|POST /materials, POST /command"
                     : "[bridge] control API failed to start (ports busy).");
             }
             catch (Exception ex) { vm.Console.LogError($"[bridge] {ex.Message}"); }
@@ -291,5 +293,19 @@ public partial class MainWindow : Window
         if (path is null) return;
 
         vm.SaveWorkspace(path);
+    }
+
+    /// <summary>
+    /// Captures the full application window (toolbar, panels, console, viewport) as PNG.
+    /// Refreshes the GL viewport first so the 3D frame matches what is on screen.
+    /// </summary>
+    internal async Task<byte[]?> CaptureAppScreenshotAsync()
+    {
+        await Viewport.CaptureScreenshotAsync();
+        return await Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            UpdateLayout();
+            return AppScreenshotCapture.CapturePng(this);
+        });
     }
 }

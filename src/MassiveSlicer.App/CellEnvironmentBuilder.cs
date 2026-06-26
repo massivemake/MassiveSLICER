@@ -302,6 +302,7 @@ internal static class CellEnvironmentBuilder
                 Selectable     = false,
             };
             wrap.AddChild(frame);
+            wrap.MarkEnvironmentSubtree();
             envNodes.Add(wrap);
             System.Console.WriteLine(
                 $"[stands] loaded {stand.Name} at ({pos.X:F0}, {pos.Y:F0}, {pos.Z:F0})");
@@ -336,6 +337,7 @@ internal static class CellEnvironmentBuilder
             var root = new SceneNode { Name = "RotaryBed", Selectable = false };
             root.AddChild(bottom);
             root.AddChild(pivot);
+            root.MarkEnvironmentSubtree();
 
             ApplyRotaryRootTransform(root, rb, robroot);
             var world = root.LocalTransform.Row3.Xyz;

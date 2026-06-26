@@ -26,15 +26,16 @@ internal static class WorkspaceService
         string meshDir = WorkspaceLoader.MeshesDirFor(savePath);
         Directory.CreateDirectory(meshDir);
 
-        foreach (var item in viewport.OutlinerItems)
+        foreach (var item in viewport.EnumerateUserModelItems())
         {
             var node = item.Node;
+            // Persist world pose so rotary-bed children restore correctly at any E1.
             var entry = new WorkspaceModelEntry
             {
                 Name          = node.Name,
                 Visible       = node.Visible,
                 LayerPreview  = node.LayerPreview,
-                LocalTransform = ToArray(node.LocalTransform),
+                LocalTransform = ToArray(node.WorldTransform),
             };
 
             if (node.SourceFilePath is { } src && File.Exists(src))
@@ -112,7 +113,7 @@ internal static class WorkspaceService
             node.Name         = entry.Name;
             node.Visible      = entry.Visible;
             node.LayerPreview = entry.LayerPreview;
-            viewport.AddUserNode(node);
+            viewport.AddImportNode(node);
 
             if (entry.Toolpaths.Count == 0) continue;
 

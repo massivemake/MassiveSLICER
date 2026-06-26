@@ -3,6 +3,15 @@ using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Scene;
 
+/// <summary>Ray-pick priority — content wins over cell environment (bed, rotary table, stands).</summary>
+public enum PickTier
+{
+    /// <summary>User geometry, scans, toolpaths.</summary>
+    Content = 0,
+    /// <summary>Cell fixtures: print bed, rotary bed, stands, docks (dev-mode only).</summary>
+    Environment = 1,
+}
+
 /// <summary>
 /// A node in the scene graph. Holds a local transform, an optional renderable mesh,
 /// and zero or more child nodes. World transform is computed on demand by walking
@@ -27,6 +36,11 @@ public sealed class SceneNode
     /// user geometry.
     /// </summary>
     public bool Selectable { get; set; } = true;
+
+    /// <summary>
+    /// Pick order when multiple surfaces align — lower tier wins; within a tier, closer hit wins.
+    /// </summary>
+    public PickTier PickTier { get; set; } = PickTier.Content;
 
     /// <summary>
     /// When <c>false</c> back-face culling is disabled while drawing this subtree.
@@ -119,6 +133,16 @@ public sealed class SceneNode
     }
 
     // -- Traversal -------------------------------------------------------------
+
+    /// <summary>Marks this node and its descendants as non-selectable cell environment geometry.</summary>
+    public void MarkEnvironmentSubtree()
+    {
+        foreach (var n in SelfAndDescendants())
+        {
+            n.PickTier    = PickTier.Environment;
+            n.Selectable  = false;
+        }
+    }
 
     /// <summary>Returns this node and all its descendants in depth-first order.</summary>
     public IEnumerable<SceneNode> SelfAndDescendants()

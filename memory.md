@@ -1,6 +1,6 @@
 # MassiveSLICER V2 — Project Memory
 
-Last updated: 2026-06-21 (session 6)
+Last updated: 2026-06-25 (milestone — KRL import + viewport polish)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -202,6 +202,29 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 - Resizable console (drag grip); toolbar toggle.
 - Status bar always visible (24px footer).
 
+### KRL toolpath import (scrub, pick, bead, outliner)
+- **`KrlToolpathParser`** parses inline Cartesian `LIN`/`PTP {X,Y,Z…}` frames from `.src` into a `Toolpath` (`LIN` → `MoveKind.Mill`, `PTP` → `MoveKind.Travel`). Joint-only programs (e.g. calibration sweeps) yield 0 moves.
+- **`MainWindowViewModel.ImportKrlToolpath`** + console `import-krl` / file menu; positions offset by active cell robroot + bed base.
+- **Outliner nesting:** imported KRL nodes appear under the active print object or **Rotary Bed** group (`ResolveToolpathParentOutlinerItem`, recursive `OutlinerItemView`).
+- **Selection:** nested outliner clicks no longer snap back to rotary bed (`SuppressNextOutlinerListBoxSelection`); viewport pick hits **Mill + Travel** segments (`PickToolpath`, `ToolpathMoveKinds`).
+- **Scrub / playback:** prefix sums treat Mill as cut geometry (not travel VBO); bead prefix array always sized even for mill-only paths (fixes scrub crash); `ScrubCount` bounds-checked.
+- **Show Bead:** bead mesh + overhang/orientation overlays include **Mill** segments (same as extrude lines).
+- **Shared helper:** `ToolpathMoveKinds.IsCutSegment` / `IsTravelSegment` in `ToolpathMove.cs`.
+- **Tests:** `KrlToolpathParserTest`, `KrlImportOutlinerTest`, `KrlToolpathHandlingTest`.
+
+### PBR material inspector + MCP bridge
+- **`PbrMaterialSettings`:** per-map layer toggles, overlay strength, factor overrides (metal/rough/AO/emissive).
+- **`MeshRenderer` / `SceneRenderer`:** per-layer `Use*Map` flags; `SyncPbrMaterial()`.
+- **Local control bridge:** `GET|POST /materials` via `PbrMaterialBridge.cs`.
+- **MCP:** `massiveslicer_materials_get` / `massiveslicer_materials_set` in `scripts/mcp/massiveslicer_mcp.py`.
+- **Test:** `PbrMaterialSettingsTest`.
+
+### Outliner + diagnostics polish
+- **Delete hidden** for cell infrastructure (robot, rotary bed, stands, print bed) — `OutlinerItemViewModel.CanDelete`.
+- **Nested outliner** via `OutlinerItemView.axaml` (recursive children).
+- **Full-app screenshot:** `AppScreenshotCapture.cs` — `RenderTargetBitmap` on `MainWindow` (not viewport-only).
+- **Tests:** `OutlinerCanDeleteTest`, `PickerTest`, rotary/scan outliner tests.
+
 ### Console commands
 - `ConsoleCommandRegistry.cs`, `ConsoleViewModel.cs`, `ConsoleView.axaml`.
 - Typed commands with Tab/↑↓ autocomplete and Enter to run.
@@ -335,6 +358,65 @@ No `Failed to load 'lfam2.json': … different thread owns it.`
 - `lfam3.json`: `"bed": { "hidden": true }` — flat bed omitted; **rotary bed** expected in environment nodes (`RotaryBed`).
 - Console: `robot=True bed=False rotary=True` is normal for LFAM 3.
 
+### LFAM 3 — shop-floor jog directions (verified on robot 2026-06-25)
+
+**Use this vocabulary for console `move-pose` / agent bridge commands** — NOT generic “math right = +X”.
+
+| User says | Axis delta (tool #6, base #0) | Verified |
+|-----------|-------------------------------|----------|
+| **Forward** | **+X** (+304.8 mm per foot) | ✓ user confirmed +X was forward |
+| **Back** | **−X** | (inverse of forward) |
+| **Right** | **+Y** | ✓ (inverse of −Y left) |
+| **Left** | **−Y** | ✓ user confirmed −Y was left |
+| **Up** | **+Z** | |
+| **Down** | **−Z** | ✓ 1′ down 2222.8 → 1918.0 mm |
+
+1 foot = **304.8 mm** in KUKA `$POS_ACT` (mm).
+
+### LFAM 3 — MS_* app motion (C3 + `cell.src`, 2026-06-25)
+
+**Working on LFAM3 @ 192.168.0.153** — scanner **already mounted** (do **not** use `scan-pick` / `Scanner_Pick` for jogging).
+
+| Item | Detail |
+|------|--------|
+| Bridge | `LocalControlBridge` @ `127.0.0.1:8723`, port in `%LOCALAPPDATA%\MassiveSlicer\bridge.port` |
+| Commands | `sync`, `cell LFAM 3`, `pos`, `joints`, `readvar`, `set-frame`, `move-home`, `move-pose …`, `move-joints …`, **relative:** `move-up/down/forward/back/right/left [dist]`, `move up 1'` |
+| Handshake fix | `InitCommandServerAsync` seeds from **`MS_SEQ`** not `MS_ACK` |
+| `cell.src` | CASE 1: `PTP MS_POSE` (no HOME S/T pin); CASE 5: `set-frame` only |
+| Frame rule | **`pos` prints `ctrl tool #N, base #M`** — copy the full `move-pose … 20 N M` line; app LFAM3 label (base #3) may ≠ controller `$ACT_BASE` |
+| Typical scanner jog frame | **tool #6, base #0** on controller (`set-frame 6 0` if needed) |
+| `lfam3.json` scanner **dock** pose | Stand pickup only — **not** for mounted-scanner jogging |
+
+**Agent rule:** Before Cartesian jog, run `pos` or `readvar $ACT_TOOL $ACT_BASE`. Use **LFAM 3 shop-floor table above** for direction words.
+
+**Cartesian down from HOME-area scanner pose** (`Z≈1918`, tool #6): `move-pose` **−Z** can fault **“Software limit switch +A6”** — IK pins ABC and needs A6 past soft limit. **Workflow:** run `joints` (reads `$AXIS_ACT`), plan `move-joints` tweaking **A2/A3/A5** instead of Cartesian down. `readvar $AXIS_ACT` works today; `joints` + `move-joints` added 2026-06-25.
+
+### LFAM 3 — logged TCP poses (tool #6, base #0 unless noted)
+
+Captured live via bridge during MS_* bring-up (2026-06-25). ABC in degrees.
+
+| Name | X | Y | Z | A | B | C | Notes |
+|------|---|---|---|---|---|---|-------|
+| **HOME** (scanner on) | 2520.3 | −75.7 | 2222.8 | −95.997 | −0.397 | −90.093 | After `move-home` ack |
+| **HOME −1′ Z** | 2520.3 | −75.7 | 1918.0 | −95.997 | −0.397 | −90.094 | Down 1′ — exact |
+| **HOME +1′ X (forward)** | 2825.1 | −75.7 | 1918.0 | −95.997 | −0.397 | −90.094 | +304.8 mm X |
+| **After −1′ Y attempt** | 2618.6 | −324.6 | 1501.4 | −100.719 | −2.364 | −117.957 | IK/path; not commanded Cartesian |
+| **Pre-home sync pose** | 2175.6 | −264.6 | 1448.3 | −31.265 | 88.578 | −27.720 | App status tool #6 base #3 |
+| **Scanner down ~24″ bed** | 2093.6 | −17.2 | 131.6 | −90.057 | −2.310 | 179.710 | User-teach 2026-06-25; tool #6 base #0; scanner aimed down |
+
+**Scanner down ~24″ bed — `$AXIS_ACT`:** A1=1.66 A2=−66.75 A3=109.43 A4=−180.19 A5=−46.19 A6=197.00 E1=0
+
+Copy-paste (scanner down ~24″ bed):
+```
+move-pose 2093.6 -17.2 131.6 -90.057 -2.310 179.710 20 6 0
+move-joints 1.66 -66.75 109.43 -180.19 -46.19 197.00 0 20 6 0
+```
+
+Copy-paste template (replace XYZABC):
+```
+move-pose <X> <Y> <Z> <A> <B> <C> 20 6 0
+```
+
 ### LFAM 3 KUKA joint limits & cell poses
 
 **Joint limit source (KRC4):** `\\192.168.0.153\krc\ROBOTER\KRC\R1\Mada\$machine.dat` — `$SOFTN_END[1..7]` (min), `$SOFTP_END[1..7]` (max).
@@ -392,11 +474,18 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 | Workflow | `Lfam3WorkflowTimelineView.axaml`, `Lfam3WorkflowPhaseBlock.axaml`, `Lfam3WorkflowPhaseColumn.axaml`, `Lfam3WorkflowPickDepositFloat.axaml`, `ToolChangePanelBinding.cs`, `BaseStyles.axaml`, `ViewportViewModel.cs` |
 | Live I/O | `Lfam3LiveIoPanelView.axaml`, `LiveIoMonitorViewModel.cs`, `ExtruderBridgeClient.cs`, `MillingModbusClient.cs`, `Lfam3LiveIoCatalog.cs`, `LiveIoPhasePlan.cs` |
 | Robot sync / pose | `RobotSyncService.cs`, `RobotPanelViewModel.cs` (`$AXIS_ACT`, `$POS_ACT` stream) |
+| Local control bridge | `LocalControlBridge.cs`, `ConsoleCommandRegistry.cs` (`pos`, `readvar`, `set-frame`, `move-pose`) |
+| Controller dispatcher | `\\192.168.0.153\krc\ROBOTER\KRC\R1\cell.src` (MS_* + `bRunScanPick`) |
 | Milling bridge deploy | `scripts/deploy_bridge_lfam3_milling.py` (GitHub: [scripts/deploy_bridge_lfam3_milling.py](https://github.com/MattWhite3194/MassiveSlicer/blob/main/scripts/deploy_bridge_lfam3_milling.py)) |
 | GL host | `GlHostControl.Windows.cs`, `ViewportView.axaml` |
 | Overlay | `ViewportOverlayView.axaml` |
 | Import | `ImportHelper.cs`, `GltfImportInspector.cs`, `GltfLoader.cs`, `AssetLocalCache.cs` |
-| Tests | `CellSceneLoadTest.cs`, `GltfImportTest.cs`, `Lfam3LoadTest.cs` |
+| KRL import | `KrlToolpathParser.cs`, `MainWindowViewModel.ImportKrlToolpath`, `ViewportViewModel.AddImportedToolpath` |
+| Toolpath render/pick | `ToolpathRenderer.cs`, `SceneRenderer.PickToolpath`, `ToolpathMoveKinds` |
+| PBR / MCP materials | `PbrMaterialSettings.cs`, `PbrMaterialBridge.cs`, `scripts/mcp/massiveslicer_mcp.py` |
+| Outliner | `OutlinerItemView.axaml`, `LeftPanelView.axaml`, `OutlinerItemViewModel.CanDelete` |
+| Screenshot | `AppScreenshotCapture.cs`, `MainWindow.CaptureAppScreenshotAsync` |
+| Tests | `CellSceneLoadTest.cs`, `GltfImportTest.cs`, `Lfam3LoadTest.cs`, `KrlToolpathHandlingTest.cs`, `KrlImportOutlinerTest.cs`, `PbrMaterialSettingsTest.cs`, `OutlinerCanDeleteTest.cs` |
 
 ---
 
@@ -406,13 +495,56 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
    - **"Make it pop" — DONE via user sliders + default backdrop (2026-06-21):** a *hardcoded* in-shader exposure/IBL boost **grayed** the crystal (it's mostly metal → colour comes from albedo-tinted env reflection → brightening hits ACES's desaturation shoulder). So instead: added user-facing **Exposure** + **Reflections (IBL gain)** sliders in the LIGHTING panel (`ViewportViewModel.Exposure`/`IblIntensity` → `SceneRenderer` → per-mesh `MeshRenderer.Exposure`/`IblGain` → `uExposure`/`uIblGain`, defaults 1.0 = neutral) so the user dials it live. Also set a **non-None default backdrop** (`ViewportViewModel` ctor picks AmbienceExposure4k/CasualDay4K/… from `assets/Images/*.hdr`, fallback first image) so imported models get IBL out of the box. Verified: bumping the sliders brightens + glosses the crystal with colour intact.
    - **Import display:** the committed Final Render is colourful and correct (verified after a clean rebuild). If an imported model looks grey/flat, suspect a **stale NAS build** first (clean-rebuild Viewport), then check that `ApplyShaderModeToSubtree` ran (toggling a shader mode forces it).
 2. **Optional cleanup** — delete obsolete `%LOCALAPPDATA%\MassiveSlicer\build2|build3|build4` folders.
-3. **KRL import** — parser not implemented (console/file menu stub only).
+3. ~~**KRL import**~~ — **done** (2026-06-25 milestone). Remaining: path-tangent IK for scrub on mill moves with zero normals; optional bead width from tool diameter.
 4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline expands on click; **rivets aligned on connector** (done); **Pick/Deposit pills above active phase** after expand + phase select, details expand **upward** on pill click (session-6 Canvas fix); transform bar; rock select → Focus bar; Live I/O **Position** column shows A1–A6/E1 + TCP when robot synced; P1–P3 I/O live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
 5. **Spindle RPM display** — not implemented; would need KUKA spindle `$ANOUT` or ATV340 Modbus (see LFAM 3 Live I/O map).
 
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-06-25 — Milestone: KRL import toolpath + viewport polish (GitHub `feature/print-scan-mill`)
+**Milestone title (GitHub):** `KRL Import & Viewport Polish — June 2026`
+
+**Shipped**
+- **KRL import → scrubbable toolpath:** `KrlToolpathParser`, `ImportKrlToolpath`, outliner node under rotary/print object, auto-select on GL upload.
+- **KRL scrub crash fixes:** (1) `ComputeMovePrefixSums` — Mill in extrude bucket not travel; (2) `UploadBead` early-return left empty `_beadVertexCumulative` → `IndexOutOfRangeException` on scrub; (3) `ScrubCount` clamp + bounds check.
+- **KRL selection:** `PickToolpath` includes Mill/Travel; centroid includes Mill; nested outliner `SuppressNextOutlinerListBoxSelection` prevents ListBox overriding child click.
+- **Show Bead for KRL:** `UploadBead`, `BuildBeadVertexCumulative`, `BuildBeadColoredData`, overhang scoring — all use `ToolpathMoveKinds.IsCutSegment` (Mill + Extrude).
+- **PBR material MCP:** full layer toggles + factor overrides on bridge `/materials` + MCP tools.
+- **Outliner:** hide Delete on robot/rotary/stands/print bed; recursive `OutlinerItemView` for nested toolpaths/scans.
+- **Diagnostics:** full-window screenshot capture (`app_YYYYMMDD_HHmmss.png`).
+- **Tests added:** `KrlToolpathHandlingTest`, `KrlImportOutlinerTest`, `PbrMaterialSettingsTest`, `OutlinerCanDeleteTest`, `PickerTest`, plus rotary/scan outliner tests.
+
+**Key files touched**
+- `src/MassiveSlicer.Core/IO/KrlToolpathParser.cs`, `Models/ToolpathMove.cs` (`ToolpathMoveKinds`)
+- `src/MassiveSlicer.Viewport/Rendering/ToolpathRenderer.cs`, `SceneRenderer.cs`
+- `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`, `OutlinerItemView.axaml.cs`, `LeftPanelView.axaml.cs`
+- `src/MassiveSlicer.App/ViewModels/ViewportViewModel.cs`, `MainWindowViewModel.cs`
+- `src/MassiveSlicer.App/Console/PbrMaterialBridge.cs`, `scripts/mcp/massiveslicer_mcp.py`
+- `src/MassiveSlicer.App/AppScreenshotCapture.cs`
+
+**Verify after pull**
+```powershell
+dotnet test --filter "FullyQualifiedName~KrlToolpathHandlingTest|FullyQualifiedName~KrlImportOutlinerTest|FullyQualifiedName~PbrMaterialSettingsTest|FullyQualifiedName~OutlinerCanDeleteTest"
+Stop-Process -Name "MassiveSlicer.App" -Force -ErrorAction SilentlyContinue
+Set-Location '\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2'
+dotnet publish 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release -o "$env:LOCALAPPDATA\MassiveSlicer\build"
+```
+Then: import a `.src` with inline LIN frames → select in outliner → scrub + toggle Show Bead.
+
+### 2026-06-25 — LFAM3 live MS_* motion + jog axis learning
+- **Unblocked `move-home`:** `InitCommandServerAsync` seeds `_msSeq` from `MS_SEQ` (was `MS_ACK` → seq collision).
+- **Bridge commands:** `readvar`, `set-frame` (MS_CMD=5), `move-pose … [tool] [base]`; `pos` reads `$ACT_TOOL`/`$ACT_BASE` and appends frame suffix.
+- **`cell.src`:** CASE 1 `PTP MS_POSE` without HOME S/T pin; CASE 5 set-frame-only.
+- **Verified via bridge:** `move-home` ack; hold-pose; down 1′ (−Z); forward 1′ (+X).
+- **Jog vocabulary (user-corrected):** forward **+X**, right **+Y**, left **−Y**, down **−Z** — logged in **LFAM 3 — shop-floor jog directions**.
+- **Frame trap:** `pos` may show coords in `$ACT_BASE=0` while app says base #3 — always copy `move-pose … tool base` from `pos`.
+- **Do not use** `lfam3.json` scanner dock or `scan-pick` when scanner already on robot.
+- Poses logged in **LFAM 3 — logged TCP poses** table above.
+- **+A6 soft limit:** Cartesian down from HOME scanner area faults; use `joints` / `move-joints` for joint-space planning.
+- **New commands:** `joints` (`$AXIS_ACT` + limits), `move-joints` (MS_CMD=3 / `MS_AXIS`).
+- **Relative jog (2026-06-25):** `move-up 1'`, `move down 12in`, `move forward 100mm` — distances → mm; omit distance = **1′**; LFAM3 axes per shop-floor table.
 
 ### 2026-06-22 — Multi-axis displaced-surface milling pipeline (session 8)
 - **Direction correction:** the real goal is NOT carving a flat 2D grayscale image. It is milling the **actual surface of an imported low-poly PBR model**, recovering detail from its **normal/displacement/bump/height maps** via UV, with a user-set **displacement distance**, **multi-axis** (spindle tilts to follow surface normals), plus an **after-the-fact fail-rate %** (how much the tool gouges/leaves vs the ideal). The Phase-1 image-relief path (session 7) still exists but is not the primary flow.

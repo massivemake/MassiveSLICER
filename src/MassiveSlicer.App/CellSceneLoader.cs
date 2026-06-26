@@ -48,6 +48,7 @@ internal static class CellSceneLoader
                     Selectable     = false,
                 };
                 robotBaseNode.AddChild(robot);
+                robotBaseNode.MarkEnvironmentSubtree();
             }
             catch (Exception ex)
             {
@@ -113,6 +114,7 @@ internal static class CellSceneLoader
                     Selectable     = false,
                 };
                 wrapper.AddChild(bed);
+                wrapper.MarkEnvironmentSubtree();
                 ApplyBedMaterialTint(wrapper);
                 bedNode = wrapper;
             }

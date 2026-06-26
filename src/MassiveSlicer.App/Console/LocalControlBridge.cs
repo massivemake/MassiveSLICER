@@ -16,6 +16,10 @@ namespace MassiveSlicer.App.Console;
 ///   GET  /ping                      -> { ok, app, port }
 ///   GET  /status                    -> { ok, connected, tool, base, pose:{ x,y,z,a,b,c } }
 ///   GET  /console?n=N               -> { ok, count, lines:[ { text, error, command } ] }
+///   GET  /screenshot                -> { ok, path, bytes }  (full-window PNG under %LOCALAPPDATA%/MassiveSlicer/screenshots/)
+///   GET  /screenshot?format=png     -> raw image/png body
+///   GET  /materials                 -> PBR shader mode, lighting, layer toggles, active mesh maps
+///   POST /materials  {..}           -> partial update of PBR/material viewport state
 ///   POST /command   {"command":".."} -> { ok, ran, output:[ ".." ] }   (or raw body = the command)
 ///
 /// All ViewModel access is marshalled to the UI thread. The chosen port is written to
@@ -91,10 +95,24 @@ public sealed class LocalControlBridge : IDisposable
             if (req is null) return;
             var (method, path, body) = req.Value;
             int code = 200;
-            string json;
-            try { json = await RouteAsync(method, path, body); }
-            catch (Exception ex) { code = 500; json = JsonSerializer.Serialize(new { ok = false, error = ex.Message }, Json); }
-            await WriteAsync(stream, code, json, ct);
+            try
+            {
+                string json = await RouteAsync(method, path, body);
+                if (json.StartsWith("__raw_png__:", StringComparison.Ordinal))
+                {
+                    string filePath = json["__raw_png__:".Length..];
+                    byte[] png = await File.ReadAllBytesAsync(filePath, ct);
+                    await WriteBinaryAsync(stream, 200, "image/png", png, ct);
+                    return;
+                }
+                await WriteAsync(stream, code, json, ct);
+            }
+            catch (Exception ex)
+            {
+                code = 500;
+                string json = JsonSerializer.Serialize(new { ok = false, error = ex.Message }, Json);
+                await WriteAsync(stream, code, json, ct);
+            }
         }
         catch { /* per-connection failure: ignore */ }
     }
@@ -188,6 +206,39 @@ public sealed class LocalControlBridge : IDisposable
             });
         }
 
+        if (method == "GET" && path == "/screenshot")
+        {
+            bool rawPng = query.Split('&', StringSplitOptions.RemoveEmptyEntries)
+                .Any(p => p.Equals("format=png", StringComparison.OrdinalIgnoreCase));
+            string saved = await Dispatcher.UIThread.InvokeAsync(async () => await _main.SaveViewportScreenshotAsync());
+            if (saved.StartsWith("App screenshot", StringComparison.Ordinal))
+                return JsonSerializer.Serialize(new { ok = false, error = saved }, Json);
+            if (rawPng && File.Exists(saved))
+                return "__raw_png__:" + saved;
+            return JsonSerializer.Serialize(new
+            {
+                ok = true,
+                path = saved,
+                bytes = File.Exists(saved) ? new FileInfo(saved).Length : 0,
+            }, Json);
+        }
+
+        if (method == "GET" && path == "/materials")
+            return await Dispatcher.UIThread.InvokeAsync(() =>
+                JsonSerializer.Serialize(PbrMaterialBridge.BuildStatus(_main), Json));
+
+        if (method == "POST" && path == "/materials")
+        {
+            if (string.IsNullOrWhiteSpace(body))
+                return JsonSerializer.Serialize(new { ok = false, error = "missing JSON body" }, Json);
+            return await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                using var doc = JsonDocument.Parse(body);
+                PbrMaterialBridge.ApplyPatch(_main, doc.RootElement);
+                return JsonSerializer.Serialize(PbrMaterialBridge.BuildStatus(_main), Json);
+            });
+        }
+
         if (method == "POST" && path == "/command")
         {
             string cmd = ParseCommand(body);
@@ -217,6 +268,19 @@ public sealed class LocalControlBridge : IDisposable
         }
         catch { /* not JSON — treat the raw body as the command */ }
         return body.Trim();
+    }
+
+    private static async Task WriteBinaryAsync(NetworkStream s, int code, string contentType, byte[] body, CancellationToken ct)
+    {
+        string reason = code == 200 ? "OK" : "Error";
+        string header = $"HTTP/1.1 {code} {reason}\r\n" +
+                        $"Content-Type: {contentType}\r\n" +
+                        $"Content-Length: {body.Length}\r\n" +
+                        "Access-Control-Allow-Origin: *\r\n" +
+                        "Connection: close\r\n\r\n";
+        await s.WriteAsync(Encoding.ASCII.GetBytes(header), ct);
+        await s.WriteAsync(body, ct);
+        await s.FlushAsync(ct);
     }
 
     private static async Task WriteAsync(NetworkStream s, int code, string json, CancellationToken ct)

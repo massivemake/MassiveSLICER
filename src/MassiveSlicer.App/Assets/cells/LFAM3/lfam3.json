@@ -291,7 +291,7 @@
       "index": 5
     }
   ],
-  "scanToolName": "ZividScanner",
+  "scanToolName": "Scanner",
   "bridgeIp": "192.168.0.153",
   "bridgePort": 7000,
   "extIp": "192.168.0.196",

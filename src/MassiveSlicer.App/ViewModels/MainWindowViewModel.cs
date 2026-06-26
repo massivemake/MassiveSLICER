@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
@@ -121,11 +121,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         PersistSettings();
         _lastCommittedPrefsJson = CapturePrefsJson();
 
-        // ── Auto-save on any relevant change ─────────────────────────────────
+        // â”€â”€ Auto-save on any relevant change â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
         Viewport.PropertyChanged += (_, e) =>
         {
-            // Cross-panel: mesh → Additive (or LFAM 3 phase tab); toolpath → Toolpath.
+            // Cross-panel: mesh â†’ Additive (or LFAM 3 phase tab); toolpath â†’ Toolpath.
             if (e.PropertyName is nameof(ViewportViewModel.IsToolpathSelected)
                                 or nameof(ViewportViewModel.HasMeshSelected))
                 SyncRightPanelToViewportSelection();
@@ -192,7 +192,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Wire hand-eye calibration: provide the live flange pose and apply result to TCP fields.
         // CRITICAL: calibration must use the SAME flange frame the viewport applies scans in
-        // (rendered glTF flange × glTF→KUKA correction), NOT KukaIkSolver.ForwardKinematics.
+        // (rendered glTF flange Ã— glTFâ†’KUKA correction), NOT KukaIkSolver.ForwardKinematics.
         // The analytic FK flange and the rendered flange are different frames; feeding the
         // analytic one makes calibration learn the camera in a frame registration never uses,
         // so scans land rotated/translated wrong despite tiny calibration residuals.
@@ -217,13 +217,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         var bedCal = robot.BedCalibration;
         bedCal.GetCameraToWorld = () =>
         {
-            var tools = Viewport.ActiveCell?.EffectiveTools;
-            ToolCellConfig? scannerTool = null;
-            if (tools is not null && (uint)robot.SelectedToolIndex < (uint)tools.Count)
-                scannerTool = tools[robot.SelectedToolIndex];
-            if (scannerTool is null) return null;
+            if (ResolveCalibratedScannerTool() is not { } scannerTool) return null;
             if (Viewport.GetToolWorldPose?.Invoke(scannerTool) is not { } p) return null;
-            // OpenTK Matrix4 (row-vector: rows = camera axes in world, Row3 = origin) → System.Numerics.
+            // OpenTK Matrix4 (row-vector: rows = camera axes in world, Row3 = origin) â†’ System.Numerics.
             return new System.Numerics.Matrix4x4(
                 p.M11, p.M12, p.M13, p.M14,
                 p.M21, p.M22, p.M23, p.M24,
@@ -237,7 +233,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             robot.ApplyBedCalibration(x, y, z, sign);
             Console.Log($"[bedcal] Applied bed centre ({x:F1}, {y:F1}, {z:F1}), rotation {(sign < 0 ? "CW" : "CCW")}.");
             // Also push the calibrated rotary base back to the controller (live), so coordinated
-            // motion matches the model — not just the app's cell. Fire-and-forget with logging.
+            // motion matches the model â€” not just the app's cell. Fire-and-forget with logging.
             _ = WriteRotaryBaseToControllerAsync(x, y, z);
         };
         bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
@@ -273,7 +269,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             }
         };
 
-        // Propagate KRL frame dropdown / selected tool → export settings for the active tab.
+        // Propagate KRL frame dropdown / selected tool â†’ export settings for the active tab.
         robot.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(RobotPanelViewModel.KrlToolIndex))
@@ -342,12 +338,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         scan.ScanStatus = "Starting capture...";
         try
         {
-            // Snapshot the camera pose at capture time using the currently selected tool.
             var robot = RightPanel.Settings.Robot;
-            var tools = Viewport.ActiveCell?.EffectiveTools;
-            ToolCellConfig? scannerTool = null;
-            if (tools is not null && (uint)robot.SelectedToolIndex < (uint)tools.Count)
-                scannerTool = tools[robot.SelectedToolIndex];
+            EnsureCalibratedScannerToolSelected("[scan]");
+            ToolCellConfig? scannerTool = ResolveCalibratedScannerTool();
 
             Matrix4? cameraPose = scannerTool is not null
                 ? Viewport.GetToolWorldPose?.Invoke(scannerTool)
@@ -360,7 +353,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 Console.Log($"[scan] Camera Z-axis  : ({dbgPose.Row2.X:F3}, {dbgPose.Row2.Y:F3}, {dbgPose.Row2.Z:F3})");
             }
             else
-                Console.Log($"[scan] No camera pose — tool={scannerTool?.Name ?? "none"}, flange available={Viewport.GetToolWorldPose is not null}");
+                Console.Log($"[scan] No camera pose â€” tool={scannerTool?.Name ?? "none"}, flange available={Viewport.GetToolWorldPose is not null}");
 
             var outDir = scan.OutputDirectory;
             var meta = new ScanMetadata
@@ -392,21 +385,21 @@ public sealed class MainWindowViewModel : ViewModelBase
             node.CullFaces = false;
             if (cameraPose is { } pose)
             {
-                // Registered: camera frame → world via robot pose at capture time.
+                // Registered: camera frame â†’ world via robot pose at capture time.
                 node.LocalTransform = pose;
                 Console.Log("[scan] Registered via robot pose (scanner TOOL frame).");
             }
             else
             {
-                // No robot loaded — flip the camera frame upright and centre on the bed.
+                // No robot loaded â€” flip the camera frame upright and centre on the bed.
                 node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
                 ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
-                Console.Log("[scan] No robot pose available — placed scan on bed centre unregistered.");
+                Console.Log("[scan] No robot pose available â€” placed scan on bed centre unregistered.");
             }
 
             // Stash the registered scan's capture-time WORLD points + E1 for the rotary diagnostic
-            // export (offline calibration solve). Do it now — node.LocalTransform is still the clean
-            // camera→world pose, before AddScanNode reparents it under the E1 pivot.
+            // export (offline calibration solve). Do it now â€” node.LocalTransform is still the clean
+            // cameraâ†’world pose, before AddScanNode reparents it under the E1 pivot.
             if (cameraPose is not null && node.PendingMesh is { } stashMesh)
                 Viewport.StashScanDiag(name, (float)robot.E1, stashMesh.Positions, node.LocalTransform);
 
@@ -418,7 +411,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var saved = result.SavedZdfPath is { } p
                 ? $", saved {System.IO.Path.GetFileName(p)}{(result.SavedMetadataPath is not null ? " + .json" : "")}"
                 : "";
-            scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
+            scan.ScanStatus = $"Added \"{name}\" â€” {result.ValidPointCount:N0} points{saved}";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
         catch (Exception ex)
@@ -453,7 +446,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// Pushes the calibrated rotary base (centre + fitted axis orientation A/B/C) to the controller's
-    /// <c>BASE_DATA[rotary]</c> frame so coordinated motion matches the model — not just the app's cell.
+    /// <c>BASE_DATA[rotary]</c> frame so coordinated motion matches the model â€” not just the app's cell.
     /// Position is the bed centre relative to ROBROOT (BASE_DATA is $WORLD/$ROBROOT-relative). No-op
     /// (logged) when the robot isn't connected or the cell has no rotary base. Fire-and-forget.
     /// </summary>
@@ -464,12 +457,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (!robot.IsConnected)
         {
-            Console.Log("[bedcal] Robot not connected — BASE_DATA not written (calibration saved to the cell only).");
+            Console.Log("[bedcal] Robot not connected â€” BASE_DATA not written (calibration saved to the cell only).");
             return;
         }
         if (Viewport.ActiveCell is not { } cell)
         {
-            Console.Log("[bedcal] No active cell — BASE_DATA not written.");
+            Console.Log("[bedcal] No active cell â€” BASE_DATA not written.");
             return;
         }
 
@@ -478,13 +471,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (bse.Name.IndexOf("Rotary", System.StringComparison.OrdinalIgnoreCase) >= 0) { rotary = bse; break; }
         if (rotary is null)
         {
-            Console.Log("[bedcal] Cell has no 'Base Rotary' entry — BASE_DATA not written.");
+            Console.Log("[bedcal] Cell has no 'Base Rotary' entry â€” BASE_DATA not written.");
             return;
         }
 
         // BASE_DATA is $WORLD/$ROBROOT-relative; our centre is in world/ROBROOT mm, so subtract robroot.
         // X/Y follow the calibrated axis centre; Z keeps the modeled rotary base height (the axis-centre
-        // fit doesn't measure table height — writing the fit's Z would drop the base).
+        // fit doesn't measure table height â€” writing the fit's Z would drop the base).
         var rw = cell.Robot.WorldPosition;
         double bz = cell.RotaryBed is { } rbZ && rbZ.BasePos.Length > 2 ? rbZ.BasePos[2] : cz - rw.Z;
         double bx = cx - rw.X, by = cy - rw.Y;
@@ -494,7 +487,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             var echo = await robot.WriteBaseDataAsync(rotary.Index, bx, by, bz, a, b, c);
             Console.Log($"[bedcal] Wrote BASE_DATA[{rotary.Index}] ('{rotary.Name}') = " +
-                        $"(X {bx:F2}, Y {by:F2}, Z {bz:F2}, A {a:F3}, B {b:F3}, C {c:F3}) → controller. " +
+                        $"(X {bx:F2}, Y {by:F2}, Z {bz:F2}, A {a:F3}, B {b:F3}, C {c:F3}) â†’ controller. " +
                         $"Echo: {echo?.Trim()}");
         }
         catch (System.Exception ex)
@@ -505,211 +498,180 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private async Task RunAutoBedCalibration()
     {
-        var robot  = RightPanel.Settings.Robot;
-        var bedCal = robot.BedCalibration;
+        var robot   = RightPanel.Settings.Robot;
+        var bedCal  = robot.BedCalibration;
+        var scanCal = RightPanel.Scan.Calibration;
+        var scan    = RightPanel.Scan;
 
         if (!robot.IsConnected)
         {
             bedCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
+            Console.LogError("[bedcal] Robot not connected — run `sync` first.");
+            return;
+        }
+        if (bedCal.IsAutoRunning)
+        {
+            Console.LogError("[bedcal] Auto calibration already running — wait for it to finish.");
+            return;
+        }
+        if (scanCal.IsAutoRunning)
+        {
+            Console.LogError("[bedcal] scan-cal is still running — wait for `=== Done ===` before bed-cal.");
+            return;
+        }
+        if (scan.IsScanning)
+        {
+            Console.LogError("[bedcal] A Zivid capture is in progress — wait for it to finish.");
             return;
         }
 
-        try
-        {
-            var dest = robot.DeployBedScanProgram();
-            Console.Log($"[bedcal] Deployed KRL → {dest}");
-            var folder = System.IO.Path.GetDirectoryName(dest);
-            if (folder is not null)
-            {
-                try
-                {
-                    foreach (var alt in System.IO.Directory.EnumerateFiles(folder, "*bed*scan*cal*.src"))
-                    {
-                        if (!string.Equals(alt, dest, StringComparison.OrdinalIgnoreCase))
-                            Console.Log($"[bedcal] Also on controller: {System.IO.Path.GetFileName(alt)} — C3 path uses DEF BED_SCAN_CAL, not the filename.");
-                    }
-                }
-                catch { /* optional */ }
-            }
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: the program may already be on the controller.
-            Console.Log($"[bedcal] KRL deploy skipped: {ex.Message}");
-        }
-
-        bedCal.ClearSamples();
-        bedCal.SetStatus("Starting BED_SCAN_CAL on the robot (AUTO mode, drives on)…");
-
-        // C3 path must match the KRL DEF name (BED_SCAN_CAL). On LFAM3 the working form is
-        // /R1/BED_SCAN_CAL (not /R1/Program/…). Filename on the share can differ.
-        string[] programPaths =
-        [
-            "/R1/BED_SCAN_CAL",
-            "BED_SCAN_CAL",
-            "/R1/Program/BED_SCAN_CAL",
-            "/R1/PROGRAM/BED_SCAN_CAL",
-        ];
-        const int maxStops = 64;   // safety cap — the SRC ends the sweep via $FLAG[2] (v5 pattern is ~28 stops)
-        int captured = 0;
-        // Surface clouds (world mm) + E1 per pose — used after the centre fit to estimate the
-        // constant rotational phase (bed mesh vs reality) from the hole pattern, in one shot.
-        var phaseClouds = new List<(double E1, float[] World)>();
+        bedCal.SetAutoRunning(true);
         robot.PauseStreaming();
+        int captured = 0;
         try
         {
-            await robot.SetFlagAsync(1, false);
-            await robot.SetFlagAsync(2, false);
+            Console.Log("[bedcal] === Auto bed calibration (CELL MS_AXIS E1 sweep) ===");
 
-            // Remote start via C3 Bridge message #10 (select + run). Requires the C3 Bridge
-            // Interface Server on the KRC — stock KUKAVARPROXY alone returns ErrorNotImplemented (7).
-            C3BridgeClient.ProgramResult sel = default, run = default, start = default;
-            string? startedPath = null;
-            foreach (var programName in programPaths)
+            bedCal.SetStatus("Moving to bed-cal waypoint…");
+            Console.Log("[bedcal] Step 1: pre-cal waypoint (scanner-down-bed)…");
+            if (!await GoToCalWaypointAsync("bed-cal", bedCal.SetStatus, "[bedcal]"))
+                return;
+
+            Viewport.ClearScanDiag();
+            bedCal.ClearSamples();
+
+            var cell = ActiveCellConfig();
+            var wp = cell is not null ? CellLoader.FindWaypointByTag(cell, "bed-cal") : null;
+            if (wp?.Joints is not { Length: >= 6 })
             {
-                sel = await robot.SelectProgramAsync(programName);
-                Console.Log($"[bedcal] Select {programName}: {C3ErrorName(sel.ErrorCode)} (success={sel.Success}).");
-                if (!sel.Success) continue;
-
-                run = await robot.RunProgramAsync(programName);
-                Console.Log($"[bedcal] Run {programName}: {C3ErrorName(run.ErrorCode)} (success={run.Success}).");
-                if (run.Success) { startedPath = programName; break; }
-
-                // Some C3 builds accept Select but need a separate interpreter Start (cmd 2).
-                start = await robot.ProgramControlAsync(2);
-                Console.Log($"[bedcal] Start after select {programName}: {C3ErrorName(start.ErrorCode)} (success={start.Success}).");
-                if (start.Success) { startedPath = programName; break; }
+                bedCal.SetStatus("No bed-cal waypoint with joints — teach scanner-down-bed first.");
+                Console.LogError("[bedcal] Missing waypoint tagged bed-cal (need joints for E1 sweep).");
+                return;
             }
 
-            if (startedPath is null)
+            int tool = wp.Tool, baseIdx = wp.Base, vel = wp.VelocityPct;
+            var e1Angles = BedScanCalSweep.E1AnglesForCell(cell?.BedScan);
+            var yVantages = BedScanCalSweep.VantageOffsetsY(cell?.BedScan);
+            // Surface scans for rotation-phase fit; YOffsetMm tags the vantage (phase uses Y0 only).
+            var phaseClouds = new List<(double E1, float[] World, float YOffsetMm)>();
+            int totalStops = yVantages.Count * e1Angles.Count;
+
+            Console.Log("[bedcal] Step 2: activate scanner tool on controller…");
+            EnsureCalibratedScannerToolSelected("[bedcal]");
+            await robot.InitCommandServerAsync();
+            if (!await robot.SetFrameAsync(tool, baseIdx, timeoutMs: 30000))
             {
-                // This controller does variable read/write (sync + the $FLAG handshake work) but not
-                // C3 program select/start (E_FAIL), and the .src deploy is blocked by share creds.
-                // Don't give up: fall back to a MANUAL start — the operator runs BED_SCAN_CAL on the
-                // pendant and we still drive the capture/clear handshake here (which only needs the
-                // working variable read/write). Previously we returned here, so the loop never ran and
-                // nothing ever cleared $FLAG[1].
-                Console.Log($"[bedcal] C3 auto-start unavailable (select={C3ErrorName(sel.ErrorCode)}, " +
-                            $"run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}); " +
-                            "waiting for a manual pendant start.");
-                bedCal.SetStatus("Couldn't auto-start. Run BED_SCAN_CAL on the pendant now (AUTO, drives on) — capture begins at the first stop and the robot is released automatically.");
-            }
-            else
-            {
-                Console.Log($"[bedcal] Started {startedPath} via C3 program-run.");
+                bedCal.SetStatus($"Couldn't activate tool #{tool} — is CELL selected, AUTO, drives on?");
+                Console.LogError($"[bedcal] SetFrame tool #{tool} base #{baseIdx} timed out.");
+                return;
             }
 
-            for (int n = 0; n < maxStops; n++)
+            bedCal.SetStatus($"Step 3: {yVantages.Count} Y × {e1Angles.Count} E1 — keep CELL selected…");
+            Console.Log($"[bedcal] Step 3: multi-vantage E1 sweep — Y [{string.Join(", ", yVantages)}] mm, " +
+                        $"{e1Angles.Count} E1/step, tool #{tool} base #{baseIdx}.");
+
+            bool aborted = false;
+            for (int v = 0; v < yVantages.Count && !aborted; v++)
             {
-                // Wait for the robot to reach a stop ($FLAG[1]) or finish ($FLAG[2]).
-                // Allow extra time on the first stop so the operator can start the program on the
-                // pendant when C3 auto-start wasn't available (~360 s); ~120 s/stop afterwards.
-                bool atStop = false, done = false;
-                int pollMax = n == 0 ? 1800 : 600;
-                Console.Log($"[bedcal] Stop {n + 1} — waiting for the robot to settle…");
-                for (int poll = 0; poll < pollMax; poll++)
+                float yOff = yVantages[v];
+                bedCal.SetStatus($"Vantage {v + 1}/{yVantages.Count}: Y offset {yOff:F0} mm…");
+                Console.Log($"[bedcal] === Vantage {v + 1}/{yVantages.Count} (Y {(yOff >= 0 ? "+" : "")}{yOff:F0} mm) ===");
+
+                if (!await BedCalMoveToVantageAsync(robot, wp, yOff, vel, tool, baseIdx))
                 {
-                    if (await robot.ReadFlagAsync(2)) { done = true; break; }
-                    if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
-                    await Task.Delay(200);
-                }
-                if (done) { Console.Log("[bedcal] Robot signalled sweep complete."); break; }
-                if (!atStop)
-                {
-                    bedCal.SetStatus($"Timed out waiting for the robot (captured {captured}).");
-                    Console.Log($"[bedcal] Timed out waiting for the robot at stop {n + 1} (captured {captured}).");
+                    bedCal.SetStatus($"Couldn't reach Y offset {yOff:F0} mm (captured {captured}).");
+                    Console.LogError($"[bedcal] Vantage Y{yOff:F0} move failed.");
+                    aborted = true;
                     break;
                 }
 
-                var axes = await robot.ReadAxesAsync();
-                robot.E1 = Math.Round(axes[6], 2);
-                Console.Log($"[bedcal] At stop {n + 1} (E1 {axes[6]:F1}°) — scanning…");
-                await bedCal.AddSampleAsync();          // board centroid → (E1, world point) for the circle fit
-                captured++;
-                bedCal.SetStatus($"Captured {captured} (E1 {axes[6]:F0}°)…");
-                Console.Log($"[bedcal] Board capture done (stop {captured}).");
+                var park = await robot.ReadAxesAsync();
+                (int vantageCaptured, captured) = await BedCalRunE1SweepAsync(
+                    robot, bedCal, e1Angles, park, phaseClouds, v, yOff, vel, tool, baseIdx,
+                    captured, totalStops);
+                Console.Log($"[bedcal] Vantage Y{yOff:F0}: {vantageCaptured} board samples this ring.");
 
-                // Also grab a full surface cloud (bed top + holes) for the rotation-phase estimate,
-                // lifted to world via the same fixed camera pose the centroid fit uses.
-                try
-                {
-                    if (bedCal.GetCameraToWorld?.Invoke() is { } camW)
-                    {
-                        var sres = await Task.Run(() => ZividScanService.Capture(null, null, null));
-                        var src  = sres.PointsXYZ;
-                        var world = new float[src.Length];
-                        int valid = 0;
-                        for (int i = 0; i + 2 < src.Length; i += 3)
-                        {
-                            var wv = System.Numerics.Vector3.Transform(
-                                new System.Numerics.Vector3(src[i], src[i + 1], src[i + 2]), camW);
-                            world[i] = wv.X; world[i + 1] = wv.Y; world[i + 2] = wv.Z;
-                            if (!float.IsNaN(wv.X)) valid++;
-                        }
-                        phaseClouds.Add((axes[6], world));
-                        Console.Log($"[bedcal] Surface scan complete ({valid:N0} pts).");
-                    }
-                }
-                catch (Exception ex) { Console.Log($"[bedcal] surface capture skipped at E1 {axes[6]:F0}°: {ex.Message}"); }
-
-                Console.Log("[bedcal] Released — moving to the next position…");
-                await robot.SetFlagAsync(1, false);     // release the robot to the next stop
+                Console.Log("[bedcal] E1 → 0° before next vantage…");
+                await robot.SendAxesAsync(park[0], park[1], park[2], park[3], park[4], park[5], 0, vel, tool, baseIdx);
+                await SyncRobotAxesFromControllerAsync(robot);
             }
+
+            Console.Log("[bedcal] Returning to bed-cal waypoint…");
+            await ExecuteWaypointMoveAsync(robot, wp, "[bedcal]", vel);
+            await SyncRobotAxesFromControllerAsync(robot);
+
+            if (captured >= 3)
+            {
+                Console.Log($"[bedcal] Step 4: fit from {captured} board samples, {phaseClouds.Count} surface scans…");
+                bedCal.Compute();
+                if (bedCal.HasResult)
+                {
+                    Console.Log($"[bedcal] Centre ({bedCal.CenterX:F1}, {bedCal.CenterY:F1}, {bedCal.CenterZ:F1}) mm, " +
+                                $"R {bedCal.Radius:F0} mm, residual {bedCal.Residual:F2} mm, " +
+                                $"rotation {(bedCal.RotationSign < 0 ? "CW" : "CCW")}.");
+                    bedCal.Apply();
+                    Console.Log("[bedcal] Centre + rotation sign applied. Estimating rotation phase…");
+                    if (phaseClouds.Count >= 2)
+                        await EstimateAndApplyBedPhaseAsync(phaseClouds, bedCal);
+                    else
+                        Console.Log("[bedcal] Too few surface scans for rotation-phase estimate.");
+                }
+                else
+                {
+                    Console.Log($"[bedcal] Sweep captured {captured} samples but the fit failed — not applied.");
+                }
+            }
+            else
+            {
+                Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
+                bedCal.SetStatus($"Bed-cal ended with {captured} samples (need >=3).");
+            }
+
+            if (Viewport.ScanDiagCount > 0)
+                Console.Log($"[bedcal] {Viewport.ScanDiagCount} surface scans stashed — run `diag-scans` to export.");
         }
         catch (Exception ex)
         {
             bedCal.SetStatus($"Auto-cal error: {ex.Message}");
-            Console.Log($"[bedcal] ERROR: {ex.GetType().Name}: {ex.Message}");
+            Console.LogError($"[bedcal] ERROR: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
             robot.ResumeStreaming();
-        }
-
-        if (captured >= 3)
-        {
-            Console.Log($"[bedcal] Sweep complete — {captured} board samples, {phaseClouds.Count} surface scans. Fitting the rotary axis…");
-            bedCal.Compute();
-            if (bedCal.HasResult)
-            {
-                Console.Log($"[bedcal] Centre ({bedCal.CenterX:F1}, {bedCal.CenterY:F1}, {bedCal.CenterZ:F1}) mm, R {bedCal.Radius:F0} mm, residual {bedCal.Residual:F2} mm, rotation {(bedCal.RotationSign < 0 ? "CW" : "CCW")}.");
-                bedCal.Apply();   // centre + rotation sign → cell (no extra click)
-                Console.Log("[bedcal] Centre + rotation sign applied. Estimating rotation phase from the hole pattern…");
-                // One-shot: also estimate and apply the constant rotational phase (geometry-vs-reality)
-                // from the hole pattern in the captured surface scans.
-                if (phaseClouds.Count >= 2)
-                    await EstimateAndApplyBedPhaseAsync(phaseClouds, bedCal);
-                else
-                    Console.Log("[bedcal] Too few surface scans for the rotation-phase estimate — centre/sign applied only.");
-            }
-            else Console.Log($"[bedcal] Sweep captured {captured} samples but the fit failed — not applied.");
-        }
-        else
-        {
-            Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
+            bedCal.SetAutoRunning(false);
+            Console.Log("[bedcal] === Done ===");
         }
     }
 
     /// <summary>
     /// Estimates the rotary bed's constant orientation phase (model vs reality) from the surface scans
-    /// captured during the sweep — by un-rotating each to E1=0 about the fitted centre and fitting the
-    /// hole-lattice angle (<see cref="RotaryPhaseEstimator"/>) — and applies it as the bed orientation
-    /// offset. Assumes the model bed's holes are world-axis-aligned (true for LFAM 3, measured +0.01°);
-    /// the scan grid's deviation from world is the offset. Bounded to ±5° (~1in) as a sanity gate.
+    /// captured during the sweep â€” by un-rotating each to E1=0 about the fitted centre and fitting the
+    /// hole-lattice angle (<see cref="RotaryPhaseEstimator"/>) â€” and applies it as the bed orientation
+    /// offset. Assumes the model bed's holes are world-axis-aligned (true for LFAM 3, measured +0.01Â°);
+    /// the scan grid's deviation from world is the offset. Bounded to Â±5Â° (~1in) as a sanity gate.
     /// </summary>
-    private async Task EstimateAndApplyBedPhaseAsync(List<(double E1, float[] World)> clouds, RotaryBedCalibrationViewModel bedCal)
+    private async Task EstimateAndApplyBedPhaseAsync(List<(double E1, float[] World, float YOffsetMm)> clouds, RotaryBedCalibrationViewModel bedCal)
     {
+        // Only the primary (Y0) vantage — offset Y positions skew registration and pollute the lattice fit.
+        var phaseClouds = clouds.Where(c => Math.Abs(c.YOffsetMm) < 1f).ToList();
+        if (phaseClouds.Count < clouds.Count)
+            Console.Log($"[bedcal] Rotation phase: using {phaseClouds.Count}/{clouds.Count} surface scans (Y0 vantage only).");
+
         double cx = bedCal.CenterX, cy = bedCal.CenterY;
         double sign = bedCal.RotationSign != 0 ? bedCal.RotationSign : -1;
 
         // Dominant top-plane Z (the dense flat bed top) via a coarse pooled histogram.
         double zmin = double.MaxValue, zmax = double.MinValue;
-        foreach (var (_, w) in clouds)
+        foreach (var (_, w, _) in phaseClouds)
             for (int i = 2; i < w.Length; i += 3)
                 if (!float.IsNaN(w[i])) { if (w[i] < zmin) zmin = w[i]; if (w[i] > zmax) zmax = w[i]; }
-        if (zmax <= zmin) { Console.Log("[bedcal] Rotation phase: no surface points captured."); return; }
+        if (phaseClouds.Count < 2 || zmax <= zmin)
+        {
+            Console.Log("[bedcal] Rotation phase: not enough Y0 surface scans — orientation offset unchanged.");
+            return;
+        }
         const int bins = 200; var hist = new int[bins]; double bw = (zmax - zmin) / bins;
-        foreach (var (_, w) in clouds)
+        foreach (var (_, w, _) in phaseClouds)
             for (int i = 2; i < w.Length; i += 3)
                 if (!float.IsNaN(w[i])) { int b = (int)((w[i] - zmin) / bw); hist[Math.Clamp(b, 0, bins - 1)]++; }
         int pk = 0; for (int b = 1; b < bins; b++) if (hist[b] > hist[pk]) pk = b;
@@ -718,7 +680,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Un-rotate each cloud to E1=0 about the centre, keep the top band, project to plan.
         var plan = new List<(double, double)>();
         const double r2d = Math.PI / 180.0;
-        foreach (var (e1, w) in clouds)
+        foreach (var (e1, w, _) in phaseClouds)
         {
             double ang = sign * e1 * r2d, ca = Math.Cos(-ang), sa = Math.Sin(-ang);
             for (int i = 0; i + 2 < w.Length; i += 3)
@@ -734,29 +696,27 @@ public sealed class MainWindowViewModel : ViewModelBase
         var scanAngle = RotaryPhaseEstimator.HoleLatticeAngleDeg(plan, out int hc);
         if (scanAngle is null || double.IsNaN(scanAngle.Value))
         {
-            Console.Log($"[bedcal] Rotation phase: hole pattern not detected ({hc} holes, {plan.Count} pts) — orientation offset unchanged.");
+            Console.Log($"[bedcal] Rotation phase: hole pattern not detected ({hc} holes, {plan.Count} pts) â€” orientation offset unchanged.");
             return;
         }
         // Model holes are world-aligned, so the scan grid's deviation is the misalignment. Apply the
-        // NEGATIVE to rotate the bed mesh onto the scans (sign confirmed on-robot — the hole patterns
-        // align this way; applying +deviation rotated the wrong direction).
+        // measured angle directly (+offset was wrong on LFAM 3; negative values are valid).
         double measured = scanAngle.Value;
-        double phase = -measured;
+        double phase = measured;
         if (Math.Abs(phase) > 5.0)
         {
-            Console.Log($"[bedcal] Rotation phase {phase:F2}° exceeds the ±5° (~1in) sanity bound — NOT applied (holes {hc}). Re-scan with more bed coverage.");
+            Console.Log($"[bedcal] Rotation phase {phase:F2}Â° exceeds the Â±5Â° (~1in) sanity bound â€” NOT applied (holes {hc}). Re-scan with more bed coverage.");
             return;
         }
-        Console.Log($"[bedcal] Rotation phase: bed grid measured {measured:+0.000;-0.000}° from model → applying offset {phase:+0.000;-0.000}° ({hc} holes, {plan.Count} pts).");
+        Console.Log($"[bedcal] Rotation phase: bed grid measured {measured:+0.000;-0.000}Â° from model â†’ applying offset {phase:+0.000;-0.000}Â° ({hc} holes, {plan.Count} pts).");
         Console.Log($"[bedcal] {SetBedOrientationOffset((float)phase)}");
         await Task.CompletedTask;
     }
 
     /// <summary>
-    /// Automated 3D scan-tool (hand-eye) calibration: deploy + run SCAN_TOOL_CAL (or fall back to a
-    /// manual pendant start), then at each pose read the robot axes, capture a scan of the calibration
-    /// card, release the robot ($FLAG[1]), and finally run the hand-eye fit and apply it to the TCP.
-    /// Mirrors <see cref="RunAutoBedCalibration"/>; the robot motion lives in the KRL pose sweep.
+    /// Automated 3D scan-tool (hand-eye) calibration via CELL <c>MS_AXIS</c> wrist nutation — no
+    /// <c>SCAN_TOOL_CAL</c> program. At each pose the calibration card must be fully in frame; if not,
+    /// wrist tilt is halved and the pose is retried until in frame or <see cref="ScanToolCalSweep.MinScale"/>.
     /// </summary>
     private async Task RunAutoScanToolCalibration()
     {
@@ -766,217 +726,379 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (!robot.IsConnected)
         {
             scanCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
+            Console.LogError("[scancal] Robot not connected — run `sync` first.");
             return;
         }
         if (scanCal.IsAutoRunning)
         {
-            Console.Log("[scancal] Auto calibration already running — ignoring re-click.");
+            Console.LogError("[scancal] Auto calibration already running — wait for it to finish (or restart the app if stuck).");
             return;
         }
+        if (robot.BedCalibration.IsAutoRunning)
+        {
+            Console.LogError("[scancal] bed-cal is running — wait for it to finish before scan-cal.");
+            return;
+        }
+
         scanCal.SetAutoRunning(true);
-        try   // outer: always clear the sweep-in-progress flag, however we exit
-        {
-
-        try
-        {
-            var dest = robot.DeployScanToolProgram();
-            Console.Log($"[scancal] Deployed KRL → {dest}");
-        }
-        catch (Exception ex)
-        {
-            Console.Log($"[scancal] KRL deploy skipped: {ex.Message}");   // may already be on the controller
-        }
-
-        scanCal.ClearForAuto();
-        scanCal.SetStatus("Aim the scanner at the card, then starting SCAN_TOOL_CAL (AUTO, drives on)…");
-
-        string[] programPaths =
-        [
-            "/R1/SCAN_TOOL_CAL",
-            "SCAN_TOOL_CAL",
-            "/R1/Program/SCAN_TOOL_CAL",
-            "/R1/PROGRAM/SCAN_TOOL_CAL",
-        ];
-        const int target = 9;          // must match the pose count in SCAN_TOOL_CAL.src
-        const int maxRetriesPerPose = 3;   // re-present at half tilt each time the card is out of frame
-        int captured = 0, skipped = 0;
         robot.PauseStreaming();
+        int captured = 0;
         try
         {
-            await robot.SetFlagAsync(1, false);
-            await robot.SetFlagAsync(2, false);
-            await robot.SetFlagAsync(3, false);
+            Console.Log("[scancal] === Auto scan-tool calibration (CELL MS_AXIS, no SCAN_TOOL_CAL) ===");
 
-            C3BridgeClient.ProgramResult sel = default, run = default, start = default;
-            string? startedPath = null;
-            foreach (var programName in programPaths)
+            scanCal.SetStatus("Moving to scan-cal waypoint…");
+            Console.Log("[scancal] Step 1/4: pre-cal waypoint (scanner-down-bed)…");
+            if (!await GoToCalWaypointAsync("scan-cal", scanCal.SetStatus, "[scancal]"))
+                return;
+
+            scanCal.ClearForAuto();
+
+            var cell = ActiveCellConfig();
+            var wp = cell is not null ? CellLoader.FindWaypointByTag(cell, "scan-cal") : null;
+            int calTool = ScanToolCalSweep.CalToolIndex;
+            int resultTool = ScanToolCalSweep.ResultToolIndex;
+            int baseIdx = wp?.Base ?? robot.KrlBaseIndex;
+            int vel = wp?.VelocityPct > 0
+                ? Math.Min(wp.VelocityPct, ScanToolCalSweep.DefaultVelPct)
+                : ScanToolCalSweep.DefaultVelPct;
+
+            Console.Log("[scancal] Step 2/4: activate tool #5 on controller (sweep uses uncalibrated scan tool)…");
+            if (!await ScanCalActivateToolAsync(robot, scanCal, calTool, baseIdx))
+                return;
+
+            var home = await robot.ReadAxesAsync();
+            Console.Log($"[scancal] Home joints: A1={home[0]:F1}…A6={home[5]:F1} A4={home[3]:F1} A5={home[4]:F1} A6={home[5]:F1} E1={home[6]:F1}.");
+
+            var wristDeltas = ScanToolCalSweep.PoseDeltasForCell(cell?.BedScan);
+            bool usingLearned = cell?.BedScan?.ScanCalWristDeltas is { Length: ScanToolCalSweep.PoseCount };
+            scanCal.SetStatus($"Step 3/4: {wristDeltas.Count} wrist poses — CELL selected, card visible…");
+            Console.Log($"[scancal] Step 3/4: wrist nutation — tool #{calTool} base #{baseIdx} @ {vel}% " +
+                        $"({(usingLearned ? "learned" : "default")} deltas from cell).");
+
+            string? cellPath = Viewport.ActiveCellPath;
+            (captured, _) = await ScanCalRunWristSweepAsync(
+                robot, scanCal, home, vel, calTool, baseIdx, wristDeltas, cellPath);
+
+            Console.Log("[scancal] Returning to home pose…");
+            await robot.SendAxesAsync(
+                home[0], home[1], home[2], home[3], home[4], home[5], home[6], vel, calTool, baseIdx);
+            await SyncRobotAxesFromControllerAsync(robot);
+
+            if (wp is not null)
             {
-                sel = await robot.SelectProgramAsync(programName);
-                Console.Log($"[scancal] Select {programName}: {C3ErrorName(sel.ErrorCode)} (success={sel.Success}).");
-                if (!sel.Success) continue;
-
-                run = await robot.RunProgramAsync(programName);
-                Console.Log($"[scancal] Run {programName}: {C3ErrorName(run.ErrorCode)} (success={run.Success}).");
-                if (run.Success) { startedPath = programName; break; }
-
-                start = await robot.ProgramControlAsync(2);
-                Console.Log($"[scancal] Start after select {programName}: {C3ErrorName(start.ErrorCode)} (success={start.Success}).");
-                if (start.Success) { startedPath = programName; break; }
+                Console.Log("[scancal] Returning to scan-cal waypoint…");
+                await ExecuteWaypointMoveAsync(robot, wp, "[scancal]", vel);
+                await SyncRobotAxesFromControllerAsync(robot);
             }
 
-            if (startedPath is null)
+            if (captured >= 3)
             {
-                // As with bed-cal: variable read/write works even when C3 program-start doesn't.
-                // Fall back to a manual pendant start and still drive the capture/clear handshake.
-                Console.Log($"[scancal] C3 auto-start unavailable (select={C3ErrorName(sel.ErrorCode)}, " +
-                            $"run={C3ErrorName(run.ErrorCode)}, start={C3ErrorName(start.ErrorCode)}); " +
-                            "waiting for a manual pendant start.");
-                scanCal.SetStatus("Couldn't auto-start (this controller has no remote program-select). On the pendant: Navigator → R1\\Program → select SCAN_TOOL_CAL (it's newly deployed — refresh if needed), then press Start (AUTO, drives on). Scanning begins at the first pose; the robot is released automatically.");
+                scanCal.SetStatus($"Step 4/4: computing hand-eye from {captured} poses…");
+                Console.Log($"[scancal] Step 4/4: hand-eye fit ({captured} poses) → save to tool #{resultTool}…");
+                await scanCal.ComputeCalibrationAsync();
+                if (scanCal.HasResult)
+                    await ApplyScanCalibrationResultAsync(robot, scanCal, resultTool);
+                else
+                {
+                    Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
+                }
             }
             else
             {
-                Console.Log($"[scancal] Started {startedPath} via C3 program-run.");
+                Console.Log($"[scancal] Ended with {captured} poses (need >=3) — nothing computed.");
+                scanCal.SetStatus($"Scan-cal ended with {captured} poses (need >=3 in frame).");
             }
-
-            bool sweepDone = false;
-            for (int n = 0; n < target && !sweepDone; n++)
-            {
-                int retriesLeft = maxRetriesPerPose;
-                bool poseSettled = false;
-                while (!poseSettled)
-                {
-                    // Wait for the robot to (re-)present this pose, or for the sweep to finish.
-                    bool atStop = false, done = false;
-                    // Allow a long wait only for the very first pose (manual pendant start); retries
-                    // are a short PTP, so they get the per-pose budget.
-                    int pollMax = (n == 0 && retriesLeft == maxRetriesPerPose) ? 1800 : 600;
-                    for (int poll = 0; poll < pollMax; poll++)
-                    {
-                        if (await robot.ReadFlagAsync(2)) { done = true; break; }
-                        if (await robot.ReadFlagAsync(1)) { atStop = true; break; }
-                        await Task.Delay(200);
-                    }
-                    if (done) { sweepDone = true; break; }
-                    if (!atStop)
-                    {
-                        scanCal.SetStatus($"Timed out waiting for the robot (captured {captured}/{target} poses).");
-                        sweepDone = true;
-                        break;
-                    }
-
-                    // Drive the viewport FK to the robot's actual pose so the flange frame the hand-eye
-                    // capture reads is current (streaming is paused during the sweep), then capture.
-                    var axes = await robot.ReadAxesAsync();
-                    robot.A1 = Math.Round(axes[0], 2); robot.A2 = Math.Round(axes[1], 2); robot.A3 = Math.Round(axes[2], 2);
-                    robot.A4 = Math.Round(axes[3], 2); robot.A5 = Math.Round(axes[4], 2); robot.A6 = Math.Round(axes[5], 2);
-                    robot.E1 = Math.Round(axes[6], 2);
-                    await Task.Delay(400);   // let the FK settle before reading the flange
-
-                    // CapturePoseAutoAsync returns true only when the full calibration board is
-                    // detected — i.e. the card is in frame. A false return = partially/fully out of frame.
-                    bool inFrame = await scanCal.CapturePoseAutoAsync();
-                    if (inFrame)
-                    {
-                        captured++;
-                        scanCal.SetStatus($"Pose {n + 1}/{target}: card in frame — captured ({captured} good, E1 {axes[6]:F0}°)…");
-                        await robot.SetFlagAsync(3, false);   // accept — no retry
-                        await robot.SetFlagAsync(1, false);   // release to the next pose
-                        poseSettled = true;
-                    }
-                    else if (retriesLeft > 0)
-                    {
-                        retriesLeft--;
-                        Console.Log($"[scancal] Pose {n + 1}: card out of frame ({scanCal.LastCaptureStatus}); " +
-                                    $"re-presenting at reduced tilt ({retriesLeft} retr{(retriesLeft == 1 ? "y" : "ies")} left).");
-                        scanCal.SetStatus($"Pose {n + 1}/{target}: card out of frame — re-aiming at a gentler angle…");
-                        // Order matters: set the retry flag BEFORE releasing, so the robot sees it the
-                        // instant it wakes from WAIT FOR ($FLAG[1]==FALSE).
-                        await robot.SetFlagAsync(3, true);    // robot re-presents this pose, tilt halved
-                        await robot.SetFlagAsync(1, false);   // release; robot re-moves and re-raises $FLAG[1]
-                        // stay in the while loop — poll for $FLAG[1] again at the same pose index
-                    }
-                    else
-                    {
-                        skipped++;
-                        Console.Log($"[scancal] Pose {n + 1}: card still out of frame after {maxRetriesPerPose} retries — skipping.");
-                        scanCal.SetStatus($"Pose {n + 1}/{target}: skipped (card never fully in frame).");
-                        await robot.SetFlagAsync(3, false);   // give up — advance
-                        await robot.SetFlagAsync(1, false);
-                        poseSettled = true;
-                    }
-                }
-            }
-            if (skipped > 0)
-                Console.Log($"[scancal] Sweep complete: {captured} poses in frame, {skipped} skipped (card out of frame after retries).");
         }
         catch (Exception ex)
         {
             scanCal.SetStatus($"Auto scan-cal error: {ex.Message}");
-            Console.Log($"[scancal] ERROR: {ex.GetType().Name}: {ex.Message}");
+            Console.LogError($"[scancal] ERROR: {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
             robot.ResumeStreaming();
+            scanCal.SetAutoRunning(false);
+            Console.Log("[scancal] === Done ===");
+        }
+    }
+
+    /// <summary>MS_CMD=5 tool #{5} + UI selection — sweep runs on uncalibrated scan tool; result goes to #6.</summary>
+    async Task<bool> ScanCalActivateToolAsync(
+        RobotPanelViewModel robot, ScanCalibrationViewModel scanCal, int tool, int baseIdx)
+    {
+        scanCal.SetStatus($"Activating tool #{tool} on controller…");
+        await robot.InitCommandServerAsync();
+
+        bool frameOk = await robot.SetFrameAsync(tool, baseIdx, timeoutMs: 30000);
+        if (!frameOk)
+        {
+            scanCal.SetStatus($"Couldn't activate tool #{tool} — is CELL selected, AUTO, drives on?");
+            Console.LogError($"[scancal] SetFrame tool #{tool} base #{baseIdx} timed out — check CELL / AUTO / drives.");
+            return false;
         }
 
-        if (captured >= 3)
+        string actTool = (await robot.ReadVarAsync("$ACT_TOOL")).Trim();
+        Console.Log($"[scancal] Controller $ACT_TOOL={actTool} (expect {tool}).");
+
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
         {
-            // Run the hand-eye fit automatically — no manual "Calibrate" click needed.
-            scanCal.SetStatus($"Computing hand-eye calibration from {captured} poses…");
-            await scanCal.ComputeCalibrationAsync();
-            if (scanCal.HasResult)
+            if (robot.SelectToolByKrlIndex(tool))
+                Console.Log($"[scancal] UI tool → #{tool} (uncalibrated scan tool for hand-eye sweep).");
+            else
+                Console.Log($"[scancal] WARNING: tool #{tool} not in cell tool list — FK may not match controller.");
+        });
+
+        return true;
+    }
+
+    /// <summary>
+    /// Persists hand-eye TCP to tool #6 in the active cell JSON (tcpX/Y/Z, tcpA/B/C), applies it
+    /// live in the viewport, and reloads the cell scene.
+    /// </summary>
+    async Task ApplyScanCalibrationResultAsync(
+        RobotPanelViewModel robot, ScanCalibrationViewModel scanCal, int resultToolKrlIndex)
+    {
+        double x = scanCal.ResultX, y = scanCal.ResultY, z = scanCal.ResultZ;
+        double a = scanCal.ResultA, b = scanCal.ResultB, c = scanCal.ResultC;
+
+        if (Viewport.ActiveCellPath is not { } cellPath)
+        {
+            scanCal.SetStatus("Calibration computed but no active cell — load LFAM 3 first.");
+            Console.LogError("[scancal] No ActiveCellPath — TCP not written to JSON. Run `cell LFAM 3` then re-calibrate.");
+            return;
+        }
+
+        if (!CellLoader.TrySaveToolTcp(cellPath, resultToolKrlIndex,
+                (float)x, (float)y, (float)z, (float)a, (float)b, (float)c, out var saveErr,
+                mirrorSensorOrigin: true))
+        {
+            scanCal.SetStatus($"Couldn't save tool #{resultToolKrlIndex} TCP: {saveErr}");
+            Console.LogError($"[scancal] JSON save FAILED ({System.IO.Path.GetFileName(cellPath)}): {saveErr}");
+            return;
+        }
+
+        Console.Log($"[scancal] Saved tool #{resultToolKrlIndex} TCP to {cellPath}: " +
+                    $"tcpX={x:F2} tcpY={y:F2} tcpZ={z:F2} tcpA={a:F3} tcpB={b:F3} tcpC={c:F3} " +
+                    $"(rot residual {scanCal.ResidualRot:F3}°, trans {scanCal.ResidualTrans:F3} mm).");
+
+        MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);
+
+        bool wentLive = false;
+        await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+        {
+            if (robot.SelectToolByKrlIndex(resultToolKrlIndex))
             {
-                // Calibrated with the uncalibrated working tool (#5); the computed camera TCP belongs
-                // to the calibrated scanner Tool #6. Save AND apply it live so it takes effect with no
-                // manual reselect/reload — select tool 6, then push the TCP through the normal edit path
-                // (updates the IK/render TCP and writes it to the cell JSON for tool 6).
-                const int calibratedToolKrlIndex = 6;
-                double x = scanCal.ResultX, y = scanCal.ResultY, z = scanCal.ResultZ;
-                double a = scanCal.ResultA, b = scanCal.ResultB, c = scanCal.ResultC;
-
-                bool wentLive = false;
-                Avalonia.Threading.Dispatcher.UIThread.Invoke(() =>
-                {
-                    if (robot.SelectToolByKrlIndex(calibratedToolKrlIndex))
-                    {
-                        robot.ApplyTcpOffset(x, y, z, a, b, c);   // live TCP + saves to tool 6 via OnTcpOffsetEdited
-                        wentLive = true;
-                    }
-                });
-
-                if (Viewport.ActiveCellPath is { } cellPath)
-                {
-                    // Durable save regardless of the live path (covers a cell whose tool list lacks #6).
-                    CellLoader.SaveToolTcp(cellPath, calibratedToolKrlIndex,
-                        (float)x, (float)y, (float)z, (float)a, (float)b, (float)c);
-                    MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);   // cached clones pick up the new tool-6 TCP
-
-                    string howApplied = wentLive
-                        ? $"Calibrated ✓ — applied to Tool #{calibratedToolKrlIndex} (now live) and saved."
-                        : $"Calibrated ✓ — saved to Tool #{calibratedToolKrlIndex} (select tool {calibratedToolKrlIndex} to use it).";
-                    scanCal.MarkApplied(howApplied);
-                    Console.Log($"[scancal] {(wentLive ? "Applied + saved" : "Saved")} calibrated TCP to Tool #{calibratedToolKrlIndex}: " +
-                                $"({x:F2}, {y:F2}, {z:F2}) mm / A{a:F3} B{b:F3} C{c:F3} " +
-                                $"(rot residual {scanCal.ResidualRot:F3}°, trans {scanCal.ResidualTrans:F3} mm)." +
-                                (wentLive ? " Live now." : " Tool 6 not found in this cell — reselect to use."));
-                }
-                else
-                {
-                    Console.Log("[scancal] Computed result but no active cell path — TCP not saved to disk" +
-                                (wentLive ? " (applied live for this session only)." : "."));
-                }
+                robot.ApplyTcpOffset(x, y, z, a, b, c);
+                wentLive = true;
             }
-            else Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
-        }
+        });
+
+        Viewport.ActiveCell = CellLoader.Load(cellPath);
+        Viewport.OnDevCellReloadRequested?.Invoke(cellPath);
+
+        string howApplied = wentLive
+            ? $"Calibrated ✓ — tool #{resultToolKrlIndex} TCP saved to JSON and live."
+            : $"Calibrated ✓ — tool #{resultToolKrlIndex} TCP saved to JSON (select Scanner / tool {resultToolKrlIndex} to view).";
+        scanCal.MarkApplied(howApplied);
+        Console.Log($"[scancal] {(wentLive ? "Live viewport" : "JSON only")} — reloaded {System.IO.Path.GetFileName(cellPath)}.");
+
+        await Task.CompletedTask;
+    }
+
+    /// <summary>Scanner tool #6 — hand-eye result lives here after scan-cal.</summary>
+    ToolCellConfig? ResolveCalibratedScannerTool()
+    {
+        var tools = Viewport.ActiveCell?.EffectiveTools;
+        if (tools is null) return null;
+        int krl = ScanToolCalSweep.ResultToolIndex;
+        return tools.FirstOrDefault(t => t.KrlIndex == krl)
+            ?? tools.FirstOrDefault(t => string.Equals(t.Name, "Scanner", StringComparison.OrdinalIgnoreCase));
+    }
+
+    void EnsureCalibratedScannerToolSelected(string logPrefix)
+    {
+        var robot = RightPanel.Settings.Robot;
+        int krl = ScanToolCalSweep.ResultToolIndex;
+        if (robot.KrlToolIndex == krl) return;
+        if (robot.SelectToolByKrlIndex(krl))
+            Console.Log($"{logPrefix} Selected tool #{krl} (Scanner) for registration.");
         else
+            Console.LogError($"{logPrefix} Tool #{krl} (Scanner) not in cell — run scan-cal and `cell LFAM 3` first.");
+    }
+
+    System.Numerics.Matrix4x4? GetScannerCameraToWorld()
+    {
+        EnsureCalibratedScannerToolSelected("[scan]");
+        if (ResolveCalibratedScannerTool() is not { } scannerTool
+            || Viewport.GetToolWorldPose?.Invoke(scannerTool) is not { } p)
+            return null;
+        return new System.Numerics.Matrix4x4(
+            p.M11, p.M12, p.M13, p.M14,
+            p.M21, p.M22, p.M23, p.M24,
+            p.M31, p.M32, p.M33, p.M34,
+            p.M41, p.M42, p.M43, p.M44);
+    }
+
+    /// <summary>
+    /// Captures a Zivid frame, meshes for viewport (optional), stashes world points for diag export.
+    /// Callable from console / bridge.
+    /// </summary>
+    public async Task RunConsoleScanAsync(bool addToViewport = true, bool saveToDisk = false)
+    {
+        var scan = RightPanel.Scan;
+        if (scan.IsScanning)
         {
-            Console.Log($"[scancal] Ended with {captured} poses (need >=3) — nothing computed.");
+            Console.LogError("[scan] Capture already in progress.");
+            return;
         }
+
+        scan.IsScanning = true;
+        scan.ScanStatus = "Starting capture...";
+        try
+        {
+            var robot = RightPanel.Settings.Robot;
+            var camW = GetScannerCameraToWorld();
+            if (camW is null)
+                Console.Log("[scan] No scanner camera pose â€” cloud will be unregistered.");
+
+            var outDir = saveToDisk ? scan.OutputDirectory : null;
+            var meta = new ScanMetadata
+            {
+                A1 = (float)robot.A1, A2 = (float)robot.A2, A3 = (float)robot.A3,
+                A4 = (float)robot.A4, A5 = (float)robot.A5, A6 = (float)robot.A6,
+                E1 = (float)robot.E1,
+                TcpX = (float)robot.EditTcpX, TcpY = (float)robot.EditTcpY, TcpZ = (float)robot.EditTcpZ,
+                TcpA = (float)robot.EditTcpA, TcpB = (float)robot.EditTcpB, TcpC = (float)robot.EditTcpC,
+            };
+
+            var result = await Task.Run(() => ZividScanService.Capture(
+                outDir, meta,
+                msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
+
+            if (camW is { } cw)
+            {
+                var (world, valid) = ScanPointCloudTransform.ToWorld(result.PointsXYZ, cw);
+                var name = $"scan_{DateTime.Now:HH-mm-ss}";
+                Viewport.StashScanDiagWorld(name, (float)robot.E1, world);
+                Console.Log($"[scan] {valid:N0} world points stashed (E1 {robot.E1:F1}Â°) â€” run `diag-scans` to export.");
+            }
+
+            if (!addToViewport)
+            {
+                scan.ScanStatus = $"Captured {result.ValidPointCount:N0} points (CPU only, no viewport mesh).";
+                Console.Log($"[scan] {scan.ScanStatus}");
+                return;
+            }
+
+            scan.ScanStatus = $"Meshing {result.ValidPointCount:N0} points...";
+            var nodeName = $"Scan {DateTime.Now:HH-mm-ss}";
+            var node = await Task.Run(() => PointCloudMesher.Build(
+                result.PointsXYZ, result.Width, result.Height, nodeName));
+            if (node is null)
+            {
+                scan.ScanStatus = "Scan contained no meshable points.";
+                return;
+            }
+
+            node.CullFaces = false;
+            OpenTK.Mathematics.Matrix4? otPose = ResolveCalibratedScannerTool() is { } st
+                ? Viewport.GetToolWorldPose?.Invoke(st)
+                : null;
+
+            if (otPose is { } pose)
+            {
+                node.LocalTransform = pose;
+                Console.Log("[scan] Registered via robot pose (scanner TOOL frame).");
+            }
+            else
+            {
+                node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+            }
+
+            Viewport.AddScanNode(node);
+            scan.ScanStatus = $"Added \"{nodeName}\" â€” {result.ValidPointCount:N0} points";
+            Console.Log($"[scan] {scan.ScanStatus}");
+        }
+        catch (Exception ex)
+        {
+            scan.ScanStatus = $"Scan failed: {ex.Message}";
+            Console.LogError($"[scan] {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
-            scanCal.SetAutoRunning(false);
+            scan.IsScanning = false;
         }
+    }
+
+    /// <summary>Bridge/console entry point for Auto Bed Calibration (fire-and-forget).</summary>
+    public void StartBedCalibration()
+    {
+        Console.Log("[bedcal] Starting auto bed calibration from console…");
+        _ = RunAutoBedCalibration().ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception is { } ex)
+                Console.LogError($"[bedcal] Unhandled: {ex.GetBaseException().Message}");
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>Bridge/console entry point for Auto 3D Scan (hand-eye) Calibration (fire-and-forget).</summary>
+    public void StartScanCalibration()
+    {
+        Console.Log("[scancal] Starting auto scan-tool calibration from console…");
+        _ = RunAutoScanToolCalibration().ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception is { } ex)
+                Console.LogError($"[scancal] Unhandled: {ex.GetBaseException().Message}");
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>Rotates E1 to <paramref name="e1Deg"/> while holding A1â€“A6 at current values.</summary>
+    public async Task MoveE1Async(double e1Deg, int vel = 20)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[e1] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            var axes = await robot.ReadAxesAsync();
+            Console.Log($"[e1] PTP E1 â†’ {e1Deg:F1}Â° (holding A1â€“A6) @ {vel}% â€¦");
+            await robot.InitCommandServerAsync();
+            bool ok = await robot.SendAxesAsync(
+                axes[0], axes[1], axes[2], axes[3], axes[4], axes[5], e1Deg, vel,
+                robot.KrlToolIndex, robot.KrlBaseIndex);
+            if (ok)
+            {
+                robot.E1 = Math.Round(e1Deg, 2);
+                Console.Log($"[e1] At E1={e1Deg:F1}Â°.");
+            }
+            else
+                Console.LogError("[e1] Move timed out.");
+        }
+        catch (Exception ex) { Console.LogError($"[e1] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Captures the full app window as PNG bytes. Wired from <c>MainWindow</c> on load.</summary>
+    internal Func<Task<byte[]?>>? CaptureAppScreenshot { get; set; }
+
+    /// <summary>Saves a full-window PNG under <c>%LOCALAPPDATA%/MassiveSlicer/screenshots/</c> and returns the path.</summary>
+    public async Task<string> SaveViewportScreenshotAsync()
+    {
+        if (CaptureAppScreenshot is not { } capture)
+            return "App screenshot not available.";
+        var png = await capture();
+        if (png is null || png.Length == 0)
+            return "App screenshot failed (no frame).";
+        var dir = System.IO.Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "MassiveSlicer", "screenshots");
+        System.IO.Directory.CreateDirectory(dir);
+        var path = System.IO.Path.Combine(dir, $"app_{DateTime.Now:yyyyMMdd_HHmmss}.png");
+        await System.IO.File.WriteAllBytesAsync(path, png);
+        Console.Log($"[screenshot] {path} ({png.Length:N0} bytes)");
+        return path;
     }
 
     /// <summary>
@@ -987,7 +1109,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string ExportScanDiagnostics()
     {
         if (Viewport.ScanDiagCount == 0)
-            return "No scans stashed this session — run registered scans around the bed first.";
+            return "No scans stashed this session â€” run `scan`, auto bed-cal, or registered scans first.";
 
         var robot = RightPanel.Settings.Robot;
         float sign = (float)robot.BedRotationSign;
@@ -1016,23 +1138,25 @@ public sealed class MainWindowViewModel : ViewModelBase
             return $"Failed: {err}";
         MassiveSlicer.App.CellSceneCache.Invalidate(path);
         Viewport.OnDevCellReloadRequested?.Invoke(path);
-        return $"Bed orientation offset = {deg:F3}° — reloading cell.";
+        return $"Bed orientation offset = {deg:F3}Â° â€” reloading cell.";
     }
 
-    // ── Motion commands (handled by the controller's CELL.SRC loop via the MS_* globals) ──
+    // â”€â”€ Motion commands (handled by the controller's CELL.SRC loop via the MS_* globals) â”€â”€
 
     /// <summary>Sends a Cartesian move (PTP or LIN) to the controller's motion loop and logs the result.</summary>
-    public async Task MoveServerPoseAsync(bool linear, double x, double y, double z, double a, double b, double c, int vel)
+    public async Task MoveServerPoseAsync(bool linear, double x, double y, double z, double a, double b, double c, int vel, int tool = -1, int baseIndex = -1)
     {
         var robot = RightPanel.Settings.Robot;
-        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected — Sync first."); return; }
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected â€” Sync first."); return; }
+        int useTool = tool >= 0 ? tool : robot.KrlToolIndex;
+        int useBase = baseIndex >= 0 ? baseIndex : robot.KrlBaseIndex;
         robot.PauseStreaming();
         try
         {
             await robot.InitCommandServerAsync();
-            Console.Log($"[srv] {(linear ? "LIN" : "PTP")} → ({x:F1}, {y:F1}, {z:F1}) A{a:F1} B{b:F1} C{c:F1} @ {vel}% …");
-            bool ok = await robot.SendPoseAsync(linear, x, y, z, a, b, c, vel, robot.KrlToolIndex, robot.KrlBaseIndex);
-            Console.Log(ok ? "[srv] Move acknowledged." : "[srv] Move timed out — is MASSIVE_SERVER running on the controller?");
+            Console.Log($"[srv] {(linear ? "LIN" : "PTP")} â†’ ({x:F1}, {y:F1}, {z:F1}) A{a:F1} B{b:F1} C{c:F1} @ {vel}% tool #{useTool} base #{useBase} â€¦");
+            bool ok = await robot.SendPoseAsync(linear, x, y, z, a, b, c, vel, useTool, useBase);
+            Console.Log(ok ? "[srv] Move acknowledged." : "[srv] Move timed out â€” is MASSIVE_SERVER running on the controller?");
         }
         catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
         finally { robot.ResumeStreaming(); }
@@ -1042,32 +1166,607 @@ public sealed class MainWindowViewModel : ViewModelBase
     public async Task MoveServerHomeAsync(int vel)
     {
         var robot = RightPanel.Settings.Robot;
-        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected — Sync first."); return; }
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected â€” Sync first."); return; }
         robot.PauseStreaming();
         try
         {
             await robot.InitCommandServerAsync();
-            Console.Log($"[srv] HOME @ {vel}% …");
+            Console.Log($"[srv] HOME @ {vel}% â€¦");
             bool ok = await robot.GoHomeAsync(vel);
-            Console.Log(ok ? "[srv] At HOME." : "[srv] Home timed out — is MASSIVE_SERVER running?");
+            Console.Log(ok ? "[srv] At HOME." : "[srv] Home timed out â€” is MASSIVE_SERVER running?");
         }
         catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
         finally { robot.ResumeStreaming(); }
     }
 
-    /// <summary>Logs the live robot TCP pose ($POS_ACT) plus a ready-to-paste move-pose line
-    /// (current pose, in the active tool/base frame — copy it, change one axis, send it).</summary>
-    public void LogCurrentPose()
+    /// <summary>Triggers <c>Scanner_Pick</c> via the <c>CELL</c> dispatcher (<c>bRunScanPick</c> BOOL).</summary>
+    public async Task TriggerScanPickAsync()
     {
         var robot = RightPanel.Settings.Robot;
-        if (!robot.IsConnected) { Console.LogError("[pos] Robot not connected — Sync first."); return; }
+        if (!robot.IsConnected) { Console.LogError("[pick] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            var echo = await robot.TriggerScanPickAsync();
+            Console.Log($"[pick] bRunScanPick=TRUE (echo {echo.Trim()}) â€” watch CELL run Scanner_Pick.");
+        }
+        catch (Exception ex) { Console.LogError($"[pick] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Reads one or more KRL variables over C3Bridge and logs the raw values.</summary>
+    public async Task ReadKrlVarsAsync(string names)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[var] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            foreach (var name in names.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var value = await robot.ReadVarAsync(name);
+                Console.Log($"[var] {name} = {value.Trim()}");
+            }
+        }
+        catch (Exception ex) { Console.LogError($"[var] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Applies tool/base on the controller (MS_CMD=5) so pos/move-pose share the same frame.</summary>
+    public async Task SetServerFrameAsync(int tool, int baseIndex)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[frame] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            await robot.InitCommandServerAsync();
+            bool ok = await robot.SetFrameAsync(tool, baseIndex);
+            Console.Log(ok ? $"[frame] controller tool #{tool}, base #{baseIndex}." : "[frame] timed out â€” reload cell.src?");
+        }
+        catch (Exception ex) { Console.LogError($"[frame] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Logs $AXIS_ACT (A1â€“A6, E1) with LFAM3 soft-limit hints and a move-joints line.</summary>
+    public async Task LogCurrentJointsAsync()
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[joints] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var axisStr = await robot.ReadVarAsync("$AXIS_ACT");
+            var (j, e1) = MassiveSlicer.Core.C3Bridge.KrlVarParser.ParseAxisActWithE1(axisStr);
+            int actTool = robot.KrlToolIndex, actBase = robot.KrlBaseIndex;
+            var toolStr = await robot.ReadVarAsync("$ACT_TOOL");
+            var baseStr = await robot.ReadVarAsync("$ACT_BASE");
+            if (int.TryParse(toolStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var t)) actTool = t;
+            if (int.TryParse(baseStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var bIdx)) actBase = bIdx;
+
+            static string Lim(int i, double v) => i switch
+            {
+                1 => v is < -185 or > 185 ? " !A1" : "",
+                2 => v is < -140 or > -5 ? " !A2" : "",
+                3 => v is < -120 or > 168 ? " !A3" : "",
+                4 => v is < -350 or > 350 ? " !A4" : "",
+                5 => v is < -125 or > 125 ? " !A5" : "",
+                6 => v is < -350 or > 350 ? " !A6" : "",
+                _ => ""
+            };
+
+            Console.Log(string.Format(inv,
+                "[joints] A1={0:F2} A2={1:F2} A3={2:F2} A4={3:F2} A5={4:F2} A6={5:F2} E1={6:F2}  (ctrl tool #{7}, base #{8})",
+                j[0], j[1], j[2], j[3], j[4], j[5], e1, actTool, actBase));
+            for (int i = 0; i < 6; i++)
+            {
+                var flag = Lim(i + 1, j[i]);
+                if (flag.Length > 0)
+                    Console.Log($"[joints] near/outside soft limit:{flag} on A{i + 1}={j[i]:F2}");
+            }
+            Console.Log(string.Format(inv,
+                "move-joints {0:F2} {1:F2} {2:F2} {3:F2} {4:F2} {5:F2} {6:F2} 20 {7} {8}",
+                j[0], j[1], j[2], j[3], j[4], j[5], e1, actTool, actBase));
+            Console.Log("[joints] Use move-joints when move-pose hits +A6 / workspace â€” tweak A2/A3/A5 to lower TCP without pinning ABC.");
+        }
+        catch (Exception ex) { Console.LogError($"[joints] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Relative Cartesian jog in the active controller frame (LFAM3: +X fwd, +Y right, +Z up).</summary>
+    public async Task MoveRelativeAsync(double dxMm, double dyMm, double dzMm, int vel = 20)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var posStr = await robot.ReadVarAsync("$POS_ACT");
+            var (x, y, z, a, b, c) = MassiveSlicer.Core.C3Bridge.KrlVarParser.ParsePosAct(posStr);
+            int actTool = robot.KrlToolIndex, actBase = robot.KrlBaseIndex;
+            var toolStr = await robot.ReadVarAsync("$ACT_TOOL");
+            var baseStr = await robot.ReadVarAsync("$ACT_BASE");
+            if (int.TryParse(toolStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var t)) actTool = t;
+            if (int.TryParse(baseStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var bIdx)) actBase = bIdx;
+
+            double nx = x + dxMm, ny = y + dyMm, nz = z + dzMm;
+            Console.Log(string.Format(inv,
+                "[srv] Relative Î”X={0:F1} Î”Y={1:F1} Î”Z={2:F1} mm â†’ ({3:F1}, {4:F1}, {5:F1})",
+                dxMm, dyMm, dzMm, nx, ny, nz));
+            await robot.InitCommandServerAsync();
+            bool ok = await robot.SendPoseAsync(false, nx, ny, nz, a, b, c, vel, actTool, actBase);
+            Console.Log(ok ? "[srv] Move acknowledged." : "[srv] Move timed out â€” try joints if soft limit (+A6).");
+        }
+        catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>PTP to a joint target via MS_CMD=3 (MS_AXIS).</summary>
+    public async Task MoveServerJointsAsync(double a1, double a2, double a3, double a4, double a5, double a6, double e1,
+        int vel, int tool = -1, int baseIndex = -1)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[srv] Robot not connected â€” Sync first."); return; }
+        int useTool = tool >= 0 ? tool : robot.KrlToolIndex;
+        int useBase = baseIndex >= 0 ? baseIndex : robot.KrlBaseIndex;
+        robot.PauseStreaming();
+        try
+        {
+            await robot.InitCommandServerAsync();
+            Console.Log(string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "[srv] PTP joints A1={0:F1} A2={1:F1} A3={2:F1} A4={3:F1} A5={4:F1} A6={5:F1} E1={6:F1} @ {7}% tool #{8} base #{9} â€¦",
+                a1, a2, a3, a4, a5, a6, e1, vel, useTool, useBase));
+            bool ok = await robot.SendAxesAsync(a1, a2, a3, a4, a5, a6, e1, vel, useTool, useBase);
+            Console.Log(ok ? "[srv] Joint move acknowledged." : "[srv] Joint move timed out.");
+        }
+        catch (Exception ex) { Console.LogError($"[srv] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Logs $POS_ACT plus a move-pose line using the controller's actual $ACT_TOOL/$ACT_BASE.</summary>
+    public async Task LogCurrentPoseAsync()
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected) { Console.LogError("[pos] Robot not connected â€” Sync first."); return; }
+        robot.PauseStreaming();
+        try
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var posStr = await robot.ReadVarAsync("$POS_ACT");
+            var (x, y, z, a, b, c) = MassiveSlicer.Core.C3Bridge.KrlVarParser.ParsePosAct(posStr);
+            int actTool = robot.KrlToolIndex, actBase = robot.KrlBaseIndex;
+            var toolStr = await robot.ReadVarAsync("$ACT_TOOL");
+            var baseStr = await robot.ReadVarAsync("$ACT_BASE");
+            if (int.TryParse(toolStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var t)) actTool = t;
+            if (int.TryParse(baseStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var bIdx)) actBase = bIdx;
+            Console.Log(string.Format(inv,
+                "[pos] X={0:F1} Y={1:F1} Z={2:F1} A={3:F3} B={4:F3} C={5:F3}  (ctrl tool #{6}, base #{7})",
+                x, y, z, a, b, c, actTool, actBase));
+            Console.Log(string.Format(inv,
+                "move-pose {0:F1} {1:F1} {2:F1} {3:F3} {4:F3} {5:F3} 20 {6} {7}",
+                x, y, z, a, b, c, actTool, actBase));
+        }
+        catch (Exception ex) { Console.LogError($"[pos] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    CellConfig? ActiveCellConfig()
+        => Viewport.ActiveCellPath is { } path ? CellLoader.Load(path) : Viewport.ActiveCell;
+
+    /// <summary>Returns a named waypoint from the active cell config, or null.</summary>
+    public CellWaypointConfig? GetActiveWaypoint(string name)
+    {
+        if (ActiveCellConfig() is not { } cell || string.IsNullOrWhiteSpace(name))
+            return null;
+        return CellLoader.FindWaypoint(cell, name);
+    }
+
+    /// <summary>Lists saved waypoints for the active cell.</summary>
+    public void LogWaypoints()
+    {
+        if (ActiveCellConfig() is not { } cell)
+        {
+            Console.LogError("[waypoint] No active cell.");
+            return;
+        }
+
+        if (cell.Waypoints.Count == 0)
+        {
+            Console.Log("[waypoint] No waypoints saved for this cell â€” use `waypoint save <name>` at the teach pose.");
+            return;
+        }
+
         var inv = System.Globalization.CultureInfo.InvariantCulture;
-        Console.Log(string.Format(inv,
-            "[pos] X={0:F1} Y={1:F1} Z={2:F1} A={3:F3} B={4:F3} C={5:F3}  (tool #{6}, base #{7})",
-            robot.TcpX, robot.TcpY, robot.TcpZ, robot.TcpA, robot.TcpB, robot.TcpC,
-            robot.KrlToolIndex, robot.KrlBaseIndex));
-        Console.Log(string.Format(inv, "move-pose {0:F1} {1:F1} {2:F1} {3:F3} {4:F3} {5:F3} 20",
-            robot.TcpX, robot.TcpY, robot.TcpZ, robot.TcpA, robot.TcpB, robot.TcpC));
+        Console.Log($"[waypoint] {cell.Waypoints.Count} saved for {cell.Name}:");
+        foreach (var wp in cell.Waypoints)
+        {
+            var tags = wp.Tags.Count > 0 ? $" [{string.Join(", ", wp.Tags)}]" : "";
+            var mode = wp.PreferJoints ? "joints" : "pose";
+            Console.Log($"  {wp.Name}{tags} â€” {wp.Description ?? "(no description)"} ({mode}, tool #{wp.Tool} base #{wp.Base})");
+            Console.Log(string.Format(inv,
+                "    TCP ({0:F1}, {1:F1}, {2:F1}) A={3:F3} B={4:F3} C={5:F3}",
+                wp.TcpX, wp.TcpY, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC));
+            if (wp.Joints is { Length: >= 6 } j)
+            {
+                var e1 = j.Length >= 7 ? j[6] : 0;
+                Console.Log(string.Format(inv,
+                    "    joints A1={0:F2}..A6={5:F2} E1={6:F2}",
+                    j[0], j[1], j[2], j[3], j[4], j[5], e1));
+            }
+        }
+        Console.Log("[waypoint] Recall: `waypoint go <name>`");
+    }
+
+    /// <summary>Moves the robot to a saved cell waypoint (joint or Cartesian per <see cref="CellWaypointConfig.PreferJoints"/>).</summary>
+    public async Task GoToWaypointAsync(string name, int velOverride = -1)
+    {
+        if (Viewport.ActiveCellPath is not { } path)
+        {
+            Console.LogError("[waypoint] No active cell.");
+            return;
+        }
+
+        var cell = CellLoader.Load(path);
+        if (CellLoader.FindWaypoint(cell, name) is not { } wp)
+        {
+            Console.LogError($"[waypoint] '{name}' not found â€” run `waypoint list`.");
+            return;
+        }
+
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected)
+        {
+            Console.LogError("[waypoint] Robot not connected â€” Sync first.");
+            return;
+        }
+
+        robot.PauseStreaming();
+        try
+        {
+            bool ok = await ExecuteWaypointMoveAsync(robot, wp, "[waypoint]", velOverride);
+            Console.Log(ok
+                ? $"[waypoint] At {wp.Name}."
+                : "[waypoint] Move timed out â€” check MASSIVE_SERVER / CELL.");
+        }
+        catch (Exception ex) { Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>
+    /// Moves to the cell waypoint tagged for a calibration workflow (<c>bed-cal</c>, <c>scan-cal</c>).
+    /// Returns false when the move was required but failed; true when skipped (no tag) or successful.
+    /// </summary>
+    async Task<bool> GoToCalWaypointAsync(string tag, Action<string> setStatus, string logPrefix)
+    {
+        if (ActiveCellConfig() is not { } cell)
+        {
+            Console.Log($"{logPrefix} No active cell â€” skipping pre-cal waypoint.");
+            return true;
+        }
+
+        if (CellLoader.FindWaypointByTag(cell, tag) is not { } wp)
+        {
+            Console.Log($"{logPrefix} No waypoint tagged '{tag}' â€” skipping pre-cal move.");
+            return true;
+        }
+
+        var robot = RightPanel.Settings.Robot;
+        setStatus($"Moving to {wp.Name}â€¦");
+        Console.Log($"{logPrefix} Pre-cal â†’ {wp.Name} (tag {tag}, tool #{wp.Tool}, base #{wp.Base})");
+
+        try
+        {
+            bool ok = await ExecuteWaypointMoveAsync(robot, wp, logPrefix);
+            if (!ok)
+            {
+                setStatus($"Couldn't reach {wp.Name} â€” check MASSIVE_SERVER / CELL.");
+                Console.Log($"{logPrefix} Pre-cal move to {wp.Name} timed out.");
+                return false;
+            }
+
+            await SyncRobotAxesFromControllerAsync(robot);
+            setStatus($"At {wp.Name} â€” starting calibrationâ€¦");
+            Console.Log($"{logPrefix} At {wp.Name} â€” proceeding with calibration.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            setStatus($"Pre-cal move failed: {ex.Message}");
+            Console.Log($"{logPrefix} Pre-cal move error: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
+
+    async Task<bool> ExecuteWaypointMoveAsync(
+        RobotPanelViewModel robot, CellWaypointConfig wp, string logPrefix, int velOverride = -1)
+    {
+        int vel = velOverride >= 0 ? velOverride : wp.VelocityPct;
+        await robot.InitCommandServerAsync();
+        Console.Log($"{logPrefix} â†’ {wp.Name} @ {vel}% ({(wp.PreferJoints ? "joints" : "pose")})");
+
+        if (wp.PreferJoints && wp.Joints is { Length: >= 6 } j)
+        {
+            double e1 = j.Length >= 7 ? j[6] : 0;
+            return await robot.SendAxesAsync(j[0], j[1], j[2], j[3], j[4], j[5], e1, vel, wp.Tool, wp.Base);
+        }
+
+        return await robot.SendPoseAsync(false, wp.TcpX, wp.TcpY, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC, vel, wp.Tool, wp.Base);
+    }
+
+    /// <summary>Parks TCP at bed-cal waypoint + <paramref name="yOffsetMm"/> on Y (active base frame).</summary>
+    async Task<bool> BedCalMoveToVantageAsync(
+        RobotPanelViewModel robot, CellWaypointConfig wp, float yOffsetMm, int vel, int tool, int baseIdx)
+    {
+        if (Math.Abs(yOffsetMm) < 0.5f)
+        {
+            Console.Log("[bedcal] Vantage Y+0 — using bed-cal waypoint joints.");
+            return await ExecuteWaypointMoveAsync(robot, wp, "[bedcal]", vel);
+        }
+
+        double y = wp.TcpY + yOffsetMm;
+        Console.Log($"[bedcal] MS_POSE Y offset {yOffsetMm:F0} mm → ({wp.TcpX:F1}, {y:F1}, {wp.TcpZ:F1})");
+        bool ok = await robot.SendPoseAsync(
+            false, wp.TcpX, y, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC, vel, tool, baseIdx, timeoutMs: 120000);
+        if (ok)
+        {
+            await Task.Delay(500);
+            await SyncRobotAxesFromControllerAsync(robot);
+        }
+        return ok;
+    }
+
+    /// <summary>
+    /// Nine wrist nutation poses about <paramref name="home"/>; halves tilt when the calibration card
+    /// is out of frame until in frame or <see cref="ScanToolCalSweep.MinScale"/>. Successful gentler
+    /// angles are persisted to <c>bedScan.scanCalWristDeltas</c> so the next run starts closer.
+    /// </summary>
+    async Task<(int Captured, int Skipped)> ScanCalRunWristSweepAsync(
+        RobotPanelViewModel robot,
+        ScanCalibrationViewModel scanCal,
+        double[] home,
+        int vel,
+        int tool,
+        int baseIdx,
+        IReadOnlyList<ScanToolCalSweep.WristDelta> startingDeltas,
+        string? cellPath)
+    {
+        int captured = 0, skipped = 0;
+        var deltas = startingDeltas.Select(d => d).ToList();
+        int target = deltas.Count;
+        var learned = new bool[target];
+
+        for (int n = 0; n < target; n++)
+        {
+            var delta = deltas[n];
+            double scale = 1.0;
+
+            while (true)
+            {
+                double a4 = home[3] + delta.A4 * scale;
+                double a5 = home[4] + delta.A5 * scale;
+                double a6 = home[5] + delta.A6 * scale;
+
+                scanCal.SetStatus(
+                    $"Pose {n + 1}/{target}: scale {scale:P0} — moving wrist (card must be in frame)…");
+                Console.Log($"[scancal] Pose {n + 1}/{target} scale={scale:F3} → A4={a4:F1} A5={a5:F1} A6={a6:F1}");
+
+                bool moved = await robot.SendAxesAsync(
+                    home[0], home[1], home[2], a4, a5, a6, home[6], vel, tool, baseIdx, timeoutMs: 120000);
+                if (!moved)
+                {
+                    Console.Log($"[scancal] Pose {n + 1}: wrist move timed out — skipping.");
+                    skipped++;
+                    break;
+                }
+
+                await Task.Delay(500);
+                await SyncRobotAxesFromControllerAsync(robot);
+                await Task.Delay(400);
+
+                bool inFrame = await scanCal.CapturePoseAutoAsync();
+                if (inFrame)
+                {
+                    captured++;
+                    if (scale < 0.999)
+                    {
+                        deltas[n] = new ScanToolCalSweep.WristDelta(
+                            delta.A4 * scale, delta.A5 * scale, delta.A6 * scale);
+                        learned[n] = true;
+                        Console.Log($"[scancal] Pose {n + 1}: learned ΔA4={deltas[n].A4:F2} ΔA5={deltas[n].A5:F2} ΔA6={deltas[n].A6:F2}° " +
+                                    $"(was scale {scale:F3} of ΔA4={delta.A4:F1} ΔA5={delta.A5:F1} ΔA6={delta.A6:F1}).");
+                    }
+                    scanCal.SetStatus($"Pose {n + 1}/{target}: card in frame — captured ({captured} good)…");
+                    Console.Log($"[scancal] Pose {n + 1}: card in frame — pose {captured} accepted.");
+                    break;
+                }
+
+                if (scale <= ScanToolCalSweep.MinScale)
+                {
+                    skipped++;
+                    Console.Log($"[scancal] Pose {n + 1}: card still out of frame at min scale ({scanCal.LastCaptureStatus}) — skipped.");
+                    scanCal.SetStatus($"Pose {n + 1}/{target}: skipped (card never fully in frame).");
+                    break;
+                }
+
+                scale *= 0.5;
+                Console.Log($"[scancal] Pose {n + 1}: card out of frame ({scanCal.LastCaptureStatus}); re-aiming at scale {scale:F3}.");
+                scanCal.SetStatus($"Pose {n + 1}/{target}: card out of frame — gentler wrist angle…");
+            }
+        }
+
+        if (skipped > 0)
+            Console.Log($"[scancal] Sweep: {captured} poses in frame, {skipped} skipped.");
+
+        if (learned.Any(l => l) && cellPath is not null)
+        {
+            if (CellLoader.TrySaveScanCalWristDeltas(cellPath, deltas, out var saveErr))
+            {
+                int nLearned = learned.Count(l => l);
+                Console.Log($"[scancal] Saved {nLearned} learned wrist delta(s) to {cellPath} — next scan-cal will start gentler.");
+                MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);
+                Viewport.ActiveCell = CellLoader.Load(cellPath);
+                Viewport.OnDevCellReloadRequested?.Invoke(cellPath);
+            }
+            else
+                Console.LogError($"[scancal] Couldn't save learned wrist deltas: {saveErr}");
+        }
+
+        return (captured, skipped);
+    }
+
+    /// <summary>Full E1 sweep at the current parked arm pose; merges captures into bed-cal + phase clouds.</summary>
+    async Task<(int VantageCaptured, int CapturedTotal)> BedCalRunE1SweepAsync(
+        RobotPanelViewModel robot,
+        RotaryBedCalibrationViewModel bedCal,
+        IReadOnlyList<double> e1Angles,
+        double[] parkJoints,
+        List<(double E1, float[] World, float YOffsetMm)> phaseClouds,
+        int vantageIndex,
+        float yOffsetMm,
+        int vel,
+        int tool,
+        int baseIdx,
+        int capturedTotal,
+        int totalStops)
+    {
+        int vantageCaptured = 0;
+        string yTag = $"Y{yOffsetMm:F0}";
+
+        for (int n = 0; n < e1Angles.Count; n++)
+        {
+            double e1 = e1Angles[n];
+            int stopNum = vantageIndex * e1Angles.Count + n + 1;
+            bedCal.SetStatus($"[{yTag}] E1 {e1:F0}° ({stopNum}/{totalStops})…");
+            Console.Log($"[bedcal] [{yTag}] {n + 1}/{e1Angles.Count} — MS_AXIS E1={e1:F1}°");
+
+            bool moved = await robot.SendAxesAsync(
+                parkJoints[0], parkJoints[1], parkJoints[2], parkJoints[3], parkJoints[4], parkJoints[5],
+                e1, vel, tool, baseIdx, timeoutMs: 120000);
+            if (!moved)
+            {
+                Console.Log($"[bedcal] [{yTag}] E1 move timed out at {e1:F0}°.");
+                break;
+            }
+
+            await Task.Delay(500);
+            await SyncRobotAxesFromControllerAsync(robot);
+
+            int before = bedCal.SampleCount;
+            await bedCal.AddSampleAsync();
+            if (bedCal.SampleCount > before)
+            {
+                capturedTotal++;
+                vantageCaptured++;
+                Console.Log($"[bedcal] [{yTag}] board sample {capturedTotal} @ E1 {e1:F0}°.");
+            }
+            else
+            {
+                Console.Log($"[bedcal] [{yTag}] board not detected @ E1 {e1:F0}° — continuing.");
+            }
+
+            try
+            {
+                if (bedCal.GetCameraToWorld?.Invoke() is { } camW)
+                {
+                    var sres = await Task.Run(() => ZividScanService.Capture(null, null, null));
+                    var (world, valid) = ScanPointCloudTransform.ToWorld(sres.PointsXYZ, camW);
+                    phaseClouds.Add((e1, world, yOffsetMm));
+                    Viewport.StashScanDiagWorld($"bedcal_{yTag}_E1_{e1:F0}", (float)e1, world);
+                    Console.Log($"[bedcal] [{yTag}] surface scan ({valid:N0} pts).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Log($"[bedcal] [{yTag}] surface skipped @ E1 {e1:F0}°: {ex.Message}");
+            }
+        }
+
+        return (vantageCaptured, capturedTotal);
+    }
+
+    static async Task SyncRobotAxesFromControllerAsync(RobotPanelViewModel robot)
+    {
+        var axes = await robot.ReadAxesAsync();
+        robot.A1 = Math.Round(axes[0], 2);
+        robot.A2 = Math.Round(axes[1], 2);
+        robot.A3 = Math.Round(axes[2], 2);
+        robot.A4 = Math.Round(axes[3], 2);
+        robot.A5 = Math.Round(axes[4], 2);
+        robot.A6 = Math.Round(axes[5], 2);
+        robot.E1 = Math.Round(axes[6], 2);
+    }
+
+    /// <summary>Captures the live robot pose and saves it as a named waypoint in the active cell JSON.</summary>
+    public async Task SaveWaypointFromRobotAsync(string name, string? description = null, IReadOnlyList<string>? tags = null)
+    {
+        if (Viewport.ActiveCellPath is not { } path)
+        {
+            Console.LogError("[waypoint] No active cell.");
+            return;
+        }
+
+        name = (name ?? string.Empty).Trim();
+        if (name.Length == 0)
+        {
+            Console.LogError("[waypoint] usage: waypoint save <name>");
+            return;
+        }
+
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected)
+        {
+            Console.LogError("[waypoint] Robot not connected â€” Sync first.");
+            return;
+        }
+
+        robot.PauseStreaming();
+        try
+        {
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var posStr = await robot.ReadVarAsync("$POS_ACT");
+            var (x, y, z, a, b, c) = MassiveSlicer.Core.C3Bridge.KrlVarParser.ParsePosAct(posStr);
+            var axisStr = await robot.ReadVarAsync("$AXIS_ACT");
+            var (j, e1) = MassiveSlicer.Core.C3Bridge.KrlVarParser.ParseAxisActWithE1(axisStr);
+            int actTool = robot.KrlToolIndex, actBase = robot.KrlBaseIndex;
+            var toolStr = await robot.ReadVarAsync("$ACT_TOOL");
+            var baseStr = await robot.ReadVarAsync("$ACT_BASE");
+            if (int.TryParse(toolStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var t)) actTool = t;
+            if (int.TryParse(baseStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var bIdx)) actBase = bIdx;
+
+            var wp = new CellWaypointConfig
+            {
+                Name = name,
+                Description = description,
+                Tags = tags ?? [],
+                TcpX = (float)x, TcpY = (float)y, TcpZ = (float)z,
+                TcpA = (float)a, TcpB = (float)b, TcpC = (float)c,
+                Joints = [(float)j[0], (float)j[1], (float)j[2], (float)j[3], (float)j[4], (float)j[5], (float)e1],
+                Tool = actTool,
+                Base = actBase,
+                VelocityPct = 20,
+                PreferJoints = true,
+            };
+
+            if (!CellLoader.SaveWaypoint(path, wp, out var err))
+            {
+                Console.LogError($"[waypoint] Save failed: {err}");
+                return;
+            }
+
+            CellSceneCache.Invalidate(path);
+            Viewport.ActiveCell = CellLoader.Load(path);
+            Console.Log($"[waypoint] Saved '{name}' (tool #{actTool}, base #{actBase}, preferJoints=true).");
+            Console.Log(string.Format(inv,
+                "  TCP ({0:F1}, {1:F1}, {2:F1}) A={3:F3} B={4:F3} C={5:F3}",
+                x, y, z, a, b, c));
+            Console.Log(string.Format(inv,
+                "  joints A1={0:F2} A2={1:F2} A3={2:F2} A4={3:F2} A5={4:F2} A6={5:F2} E1={6:F2}",
+                j[0], j[1], j[2], j[3], j[4], j[5], e1));
+        }
+        catch (Exception ex) { Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}"); }
+        finally { robot.ResumeStreaming(); }
     }
 
     /// <summary>Switches to a cell whose display name matches <paramref name="name"/>
@@ -1093,7 +1792,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             return $"[cell] already on {names[idx]}.";
 
         LeftPanel.SelectedCellIndex = idx; // fires the async cell load
-        return $"[cell] switching to {names[idx]}…";
+        return $"[cell] switching to {names[idx]}â€¦";
     }
 
     /// <summary>Syncs (connects) the robot over C3Bridge if not already connected.</summary>
@@ -1101,8 +1800,8 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         var r = RightPanel.Settings.Robot;
         if (r.IsConnected) return "[sync] already synced.";
-        r.ConnectCommand.Execute(null); // ToggleConnect → connect (async)
-        return "[sync] connecting…";
+        r.ConnectCommand.Execute(null); // ToggleConnect â†’ connect (async)
+        return "[sync] connectingâ€¦";
     }
 
     /// <summary>Desyncs (disconnects) the robot if connected.</summary>
@@ -1149,19 +1848,19 @@ public sealed class MainWindowViewModel : ViewModelBase
                     cell.Robot.WorldPosition.Y + cell.Bed.BaseData.Y,
                     cell.Robot.WorldPosition.Z + cell.Bed.BaseData.Z);
             else
-                Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
+                Console.Log("[krl] No active cell â€” placing the toolpath in raw KRL base coordinates.");
 
             var tp = KrlToolpathParser.Parse(text, off, out int moves);
             if (moves == 0)
             {
-                Console.LogError($"[krl] No Cartesian LIN/PTP moves found in {System.IO.Path.GetFileName(path)} — " +
+                Console.LogError($"[krl] No Cartesian LIN/PTP moves found in {System.IO.Path.GetFileName(path)} â€” " +
                                  "nothing to display (joint-only programs like calibration sweeps aren't toolpaths).");
                 return false;
             }
 
             var name = $"KRL: {System.IO.Path.GetFileNameWithoutExtension(path)}";
             Viewport.AddImportedToolpath(tp, name);
-            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} → \"{name}\". " +
+            Console.Log($"[krl] Imported {moves} moves from {System.IO.Path.GetFileName(path)} â†’ \"{name}\". " +
                         "Select it in the outliner to scrub the toolpath.");
             return true;
         }
@@ -1204,21 +1903,21 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
-        // Inspect BEFORE enqueuing: AddUserNode hands the node to the GL upload thread,
+        // Inspect BEFORE enqueuing: AddImportNode hands the node to the GL upload thread,
         // which clears PendingMesh once uploaded -- for small meshes that can happen before
         // the inspector runs, making it report 0 verts. Summarize while the mesh is intact.
         var report = GltfImportInspector.InspectLoaded(node, path);
         foreach (var line in report.ToLogLines())
             Console.Log(line);
 
-        Viewport.AddUserNode(node);
+        Viewport.AddImportNode(node);
 
         Console.Log($"[import] Added '{node.Name}' to scene.");
         return true;
     }
 
     /// <summary>
-    /// Loads a <c>.mass</c> workspace from <paramref name="path"/> (File → Open).
+    /// Loads a <c>.mass</c> workspace from <paramref name="path"/> (File â†’ Open).
     /// </summary>
     public void OpenWorkspace(string path)
     {
@@ -1472,13 +2171,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         var path = Viewport.ActiveCellPath;
         if (view is null || path is null)
         {
-            Console.Log("[view] No active cell — load a cell before saving a view.");
+            Console.Log("[view] No active cell â€” load a cell before saving a view.");
             return;
         }
         CellLoader.SaveCameraView(path, view);
         Viewport.ActiveCell = CellLoader.Load(path);   // refresh in-memory model
         Console.Log($"[view] Saved view to {System.IO.Path.GetFileName(path)} " +
-                    $"(azimuth {view.Azimuth:F0}°, elevation {view.Elevation:F0}°, radius {view.Radius:F0} mm). " +
+                    $"(azimuth {view.Azimuth:F0}Â°, elevation {view.Elevation:F0}Â°, radius {view.Radius:F0} mm). " +
                     "Restored on next load for all users.");
     }
 
@@ -1579,7 +2278,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// Keeps the right sidebar tab aligned with the viewport selection:
-    /// source meshes → Additive (slicing settings); toolpaths → Toolpath.
+    /// source meshes â†’ Additive (slicing settings); toolpaths â†’ Toolpath.
     /// </summary>
     void SyncRightPanelToViewportSelection()
     {
@@ -1597,7 +2296,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        // LFAM 3 phase gating hides Additive outside Print — use the active phase tab.
+        // LFAM 3 phase gating hides Additive outside Print â€” use the active phase tab.
         if (!Viewport.ShowLfam3ToolPicker) return;
 
         if (Viewport.IsMillStepActive)
@@ -1610,7 +2309,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>
     /// LFAM 3: sidebar tabs per workflow phase (+ Toolpath on all phases).
-    /// Print → Additive; Scan → Scan; Mill → Subtractive.
+    /// Print â†’ Additive; Scan â†’ Scan; Mill â†’ Subtractive.
     /// </summary>
     void SyncLfam3WorkflowSidebar()
     {
@@ -1737,7 +2436,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         try
         {
             var s = hex.TrimStart('#');
-            if (s.Length == 8) s = s[2..]; // strip alpha → RRGGBB
+            if (s.Length == 8) s = s[2..]; // strip alpha â†’ RRGGBB
             return new System.Numerics.Vector3(
                 Convert.ToInt32(s[0..2], 16) / 255f,
                 Convert.ToInt32(s[2..4], 16) / 255f,

@@ -4,7 +4,7 @@ namespace MassiveSlicer.Tests;
 
 public class RotaryOrientationOffsetTest
 {
-    // The bed orientation offset must persist to the cell JSON and round-trip, defaulting to 0.
+    // The bed orientation offset must persist to the cell JSON and round-trip, defaulting to -0.97°.
     [Fact]
     public void SaveRotaryOrientation_persists_and_round_trips()
     {
@@ -27,7 +27,7 @@ public class RotaryOrientationOffsetTest
             }
             """);
 
-        Assert.Equal(0f, CellLoader.Load(path).RotaryBed!.OrientationOffsetDeg);   // default
+        Assert.Equal(-0.97f, CellLoader.Load(path).RotaryBed!.OrientationOffsetDeg, 3);   // default
 
         Assert.True(CellLoader.SaveRotaryOrientation(path, -0.93f, out var err), err);
 

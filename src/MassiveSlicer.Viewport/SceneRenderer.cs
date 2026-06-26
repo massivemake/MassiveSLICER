@@ -196,6 +196,18 @@ public sealed class SceneRenderer : IDisposable
         set { if (_iblIntensity != value) { _iblIntensity = value; _shaderAppearanceDirty = true; } }
     }
 
+    private PbrMaterialSettings _pbrMaterial = new();
+    /// <summary>Per-map layer toggles, layer-overlay compositing, and optional factor overrides.</summary>
+    public PbrMaterialSettings PbrMaterial => _pbrMaterial;
+
+    /// <summary>Copies <paramref name="source"/> when it differs and marks shader appearance dirty.</summary>
+    public void SyncPbrMaterial(PbrMaterialSettings source)
+    {
+        if (_pbrMaterial.Matches(source)) return;
+        _pbrMaterial.CopyFrom(source);
+        _shaderAppearanceDirty = true;
+    }
+
     private Vector3 ComputeLightDir()
     {
         float az = MathHelper.DegreesToRadians(LightAzimuth);
@@ -1127,7 +1139,7 @@ public sealed class SceneRenderer : IDisposable
 
     /// <summary>
     /// Tests whether screen position (<paramref name="mx"/>, <paramref name="my"/>) is
-    /// within 8 px of any extrude segment in the toolpath. Returns the toolpath node, or
+    /// within 8 px of any cut or travel segment in the toolpath. Returns the toolpath node, or
     /// <c>null</c> if no hit (or toolpath is hidden / absent).
     /// </summary>
     public SceneNode? PickToolpath(float mx, float my, float vpW, float vpH)
@@ -1147,7 +1159,9 @@ public sealed class SceneRenderer : IDisposable
             foreach (var layer in entry.Data.Layers)
                 foreach (var move in layer.Moves)
                 {
-                    if (move.Kind != MoveKind.Extrude) continue;
+                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)
+                        && !ToolpathMoveKinds.IsTravelSegment(move.Kind))
+                        continue;
                     var a = WorldToScreen(new Vector3(move.From.X - origin.X, move.From.Y - origin.Y, move.From.Z - origin.Z), mvp, vpW, vpH);
                     var b = WorldToScreen(new Vector3(move.To.X   - origin.X, move.To.Y   - origin.Y, move.To.Z   - origin.Z), mvp, vpW, vpH);
                     if (float.IsNaN(a.X) || float.IsNaN(b.X)) continue;
@@ -1173,7 +1187,7 @@ public sealed class SceneRenderer : IDisposable
         int count = 0;
         foreach (var layer in toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     sum += move.From + move.To;
                     count += 2;
@@ -1246,14 +1260,21 @@ public sealed class SceneRenderer : IDisposable
     private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.07f, 0.07f, 0.07f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 PurpleColor    = new(0.53f, 0.25f, 0.80f, 1f);
 
+    private static bool InheritsLayerPreview(SceneNode n)
+    {
+        for (var cur = n; cur is not null; cur = cur.Parent)
+            if (cur.LayerPreview) return true;
+        return false;
+    }
+
     private void ApplyShaderModeToSubtree(SceneNode root, bool hasEnv)
     {
-        bool forceLayerPreview = root.LayerPreview;
         bool debugChannel = IsMaterialDebug(_shaderMode);
         bool wireframe = _shaderMode == ShaderMode.Wireframe;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
+            bool forceLayerPreview = InheritsLayerPreview(n);
             mesh.Exposure         = _exposure;
             mesh.IblGain          = _iblIntensity;
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
@@ -1265,17 +1286,23 @@ public sealed class SceneRenderer : IDisposable
             mesh.MaterialChannel  = 0;
             mesh.SuppressTextures = false;
             mesh.WireframeMode    = false;
+            mesh.UseBaseColorMap            = _pbrMaterial.BaseColorMapEnabled;
+            mesh.UseMetallicRoughnessMap    = _pbrMaterial.MetallicRoughnessMapEnabled;
+            mesh.UseNormalMap               = _pbrMaterial.NormalMapEnabled;
+            mesh.UseAoMap                   = _pbrMaterial.AoMapEnabled;
+            mesh.UseEmissiveMap             = _pbrMaterial.EmissiveMapEnabled;
+            mesh.LayerOverlayEnabled        = _pbrMaterial.LayerOverlayEnabled;
+            mesh.LayerOverlayStrength       = _pbrMaterial.LayerOverlayStrength;
 
             if (forceLayerPreview)
             {
-                mesh.NormalsMode      = false;
-                mesh.LayerPreviewMode = true;
-                mesh.LayerHeight      = _layerPreviewHeight;
-                mesh.LayerZOffset     = BedZ;
+                mesh.NormalsMode         = false;
+                mesh.LayerPreviewMode    = true;
+                mesh.LayerHeight         = _layerPreviewHeight;
+                mesh.LayerZOffset        = BedZ;
                 mesh.LayerZMin           = _layerColorZMin;
                 mesh.LayerZMax           = _layerColorZMax;
                 mesh.LayerBoundaryCount  = _layerBoundaryCount;
-                mesh.Metallic            = 0f;
                 continue;
             }
 
@@ -1305,13 +1332,19 @@ public sealed class SceneRenderer : IDisposable
                 case ShaderMode.Standard:
                 {
                     var pd = mesh.PickingData;
-                    float smoothness = 1f - pd.Roughness;
+                    var mat = pd.Material;
+                    float metallic    = _pbrMaterial.MetallicFactorOverride    ?? mat?.MetallicFactor    ?? pd.Metallic;
+                    float roughness   = _pbrMaterial.RoughnessFactorOverride   ?? mat?.RoughnessFactor   ?? pd.Roughness;
+                    float smoothness  = 1f - roughness;
                     mesh.NormalsMode      = false;
-                    mesh.Color            = pd.Material?.BaseColorFactor ?? pd.BaseColor;
-                    mesh.Metallic         = pd.Material?.MetallicFactor ?? pd.Metallic;
-                    mesh.RoughnessFactor  = pd.Material?.RoughnessFactor ?? pd.Roughness;
+                    mesh.Color            = mat?.BaseColorFactor ?? pd.BaseColor;
+                    mesh.Metallic         = metallic;
+                    mesh.RoughnessFactor  = roughness;
+                    mesh.NormalScale      = _pbrMaterial.NormalScaleOverride       ?? mat?.NormalScale       ?? 1f;
+                    mesh.OcclusionStrength = _pbrMaterial.OcclusionStrengthOverride ?? mat?.OcclusionStrength ?? 1f;
+                    mesh.EmissiveFactor   = _pbrMaterial.EmissiveFactorOverride    ?? mat?.EmissiveFactor    ?? Vector3.Zero;
                     mesh.Shininess        = MathF.Pow(2f, smoothness * 5f);
-                    mesh.SpecularStrength = smoothness * (0.25f + pd.Metallic * 0.5f);
+                    mesh.SpecularStrength = smoothness * (0.25f + metallic * 0.5f);
                     break;
                 }
                 case ShaderMode.Clay:

@@ -33,7 +33,10 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>When true, renders world-space normals as RGB instead of Phong shading.</summary>
     public bool NormalsMode { get; set; }
 
-    /// <summary>When true, renders horizontal layer-height stripes in world Z instead of Phong shading.</summary>
+    /// <summary>
+    /// When true, renders adaptive layer-height preview. Textured meshes keep PBR and composite
+    /// the heatmap overlay; untextured meshes use heatmap-only shading.
+    /// </summary>
     public bool LayerPreviewMode { get; set; }
 
     /// <summary>When true, uses a cheap Lambert pass (cell robot/stands/tools).</summary>
@@ -96,6 +99,14 @@ public sealed class MeshRenderer : IDisposable
     /// flat preset modes (Clay/Metal/Chrome/…) so they don't tint the file's albedo map.</summary>
     public bool SuppressTextures { get; set; }
 
+    public bool UseBaseColorMap { get; set; } = true;
+    public bool UseMetallicRoughnessMap { get; set; } = true;
+    public bool UseNormalMap { get; set; } = true;
+    public bool UseAoMap { get; set; } = true;
+    public bool UseEmissiveMap { get; set; } = true;
+    public bool LayerOverlayEnabled { get; set; } = true;
+    public float LayerOverlayStrength { get; set; } = 0.62f;
+
     /// <summary>When true, renders flat (faceted) shading plus a wireframe overlay line pass.</summary>
     public bool WireframeMode { get; set; }
 
@@ -155,6 +166,8 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uMetallic;       // legacy alias (see uMetallicFactor)
         uniform float     uLightIntensity; // scales the directional light
         uniform int       uShadingMode;    // 0=PBR,1=normals,2=layer,3=fastcell,4..10=debug channels
+        uniform int       uLayerOverlay;   // 1 = composite layer heatmap over PBR (textured meshes)
+        uniform float     uLayerOverlayStrength;
         uniform float     uLayerHeight;
         uniform float     uLayerZOffset;
         uniform float     uLayerZMin;
@@ -221,6 +234,26 @@ public sealed class MeshRenderer : IDisposable
             return min(z - bBelow, bAbove - z);
         }
 
+        // Adaptive layer-height preview: heatmap + screen-space seam lines.
+        vec3 evalLayerPreview(vec3 worldPos, vec3 N) {
+            float range = uLayerZMax - uLayerZMin;
+            vec3  col;
+            if (range > 0.001) {
+                float t = clamp((worldPos.z - uLayerZMin) / range, 0.0, 1.0);
+                col     = texture(uLayerColorTex, t).rgb;
+
+                float distB = distToNearestBound(worldPos.z);
+                float dz    = fwidth(worldPos.z);
+                float seamW = max(dz * 1.5, 1e-4);
+                float seam  = 1.0 - smoothstep(0.0, seamW, distB);
+                col = mix(col, vec3(0.04), seam * 0.92);
+            } else {
+                col = vec3(0.45);
+            }
+            float NdotL = max(dot(N, normalize(uLightDir)), 0.0);
+            return col * (0.30 + 0.70 * NdotL);
+        }
+
         vec3 sampleEnv(vec3 dir, float lod) {
             float u = atan(dir.y, dir.x) / (2.0 * PI) + 0.5;
             float v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
@@ -279,34 +312,8 @@ public sealed class MeshRenderer : IDisposable
             }
 
             if (uShadingMode == 2) {
-                // Variable layer-height preview: sample precomputed heatmap for layer colour.
-                // Green = thin layers, yellow = medium, red = thick.
-                // Seam lines are computed in screen space so they are always a consistent
-                // width regardless of surface incline. Falls back to grey before first slice.
-                float range = uLayerZMax - uLayerZMin;
-                vec3  col;
-                if (range > 0.001) {
-                    float t = clamp((vWorldPos.z - uLayerZMin) / range, 0.0, 1.0);
-                    col     = texture(uLayerColorTex, t).rgb;
-
-                    // Screen-space seam lines using exact boundary positions.
-                    // distToNearestBound() binary-searches the uploaded boundary texture
-                    // for the world-Z distance to the nearest layer boundary.
-                    // Seam width = max(1.5 screen pixels, 1e-4 mm guard) so lines are
-                    // always the same apparent width regardless of surface incline.
-                    float distB = distToNearestBound(vWorldPos.z);
-                    float dz    = fwidth(vWorldPos.z);
-                    float seamW = max(dz * 1.5, 1e-4);
-                    float seam  = 1.0 - smoothstep(0.0, seamW, distB);
-                    col = mix(col, vec3(0.04), seam * 0.92);
-                } else {
-                    col = vec3(0.45);
-                }
-                float NdotL = max(dot(N, normalize(uLightDir)), 0.0);
-                vec3 Vp     = normalize(uViewPos - vWorldPos);
-                vec3 Rp     = reflect(-normalize(uLightDir), N);
-                float spec  = pow(max(dot(Rp, Vp), 0.0), 16.0) * 0.05;
-                fragColor   = vec4(col * (0.30 + 0.70 * NdotL) + vec3(spec), 1.0);
+                // Untextured meshes: heatmap-only preview (no PBR maps to show through).
+                fragColor = vec4(evalLayerPreview(vWorldPos, N), 1.0);
                 return;
             }
 
@@ -406,6 +413,8 @@ public sealed class MeshRenderer : IDisposable
             }
 
             vec3 color = direct + ambient + emissive;
+            if (uLayerOverlay == 1)
+                color = mix(color, evalLayerPreview(vWorldPos, Nm), uLayerOverlayStrength);
             color *= uExposure;                      // user exposure (1 = neutral)
             color = aces(color);                     // ACES filmic tonemap
             fragColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2)), alpha);
@@ -481,14 +490,18 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uShininess",        Shininess);
         _shader.SetFloat("uMetallic",         Metallic);
         _shader.SetFloat("uLightIntensity",   lightIntensity);
-        int shadingMode = LayerPreviewMode ? 2
+        bool hasPbrMaps   = _baseColorTex != 0 || _mrTex != 0;
+        bool layerOverlay = LayerPreviewMode && hasPbrMaps && LayerOverlayEnabled;
+        int shadingMode = LayerPreviewMode && !hasPbrMaps ? 2
                         : NormalsMode      ? 1
                         : FastCellMode     ? 3
                         : WireframeMode    ? 11
                         : MaterialChannel > 0 ? 3 + MaterialChannel   // 1..7 -> 4..10
                         : 0;
-        _shader.SetInt("uShadingMode",        shadingMode);
-        _shader.SetInt("uWireframe",          0);
+        _shader.SetInt("uShadingMode",           shadingMode);
+        _shader.SetInt("uLayerOverlay",          layerOverlay ? 1 : 0);
+        _shader.SetFloat("uLayerOverlayStrength", LayerOverlayStrength);
+        _shader.SetInt("uWireframe",             0);
 
         // PBR material factors.
         _shader.SetFloat("uMetallicFactor",   Metallic);
@@ -504,11 +517,11 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetInt("uHasTangent",         _hasTangent ? 1 : 0);
 
         // Bind material maps to units 4-8 (1=env, 2=heatmap, 3=boundary already used).
-        BindMaterialTex(4, "uBaseColorTex", "uHasBaseColorTex", _baseColorTex);
-        BindMaterialTex(5, "uMRTex",        "uHasMRTex",        _mrTex);
-        BindMaterialTex(6, "uNormalTex",    "uHasNormalTex",    _normalTex);
-        BindMaterialTex(7, "uAOTex",        "uHasAOTex",        _aoTex);
-        BindMaterialTex(8, "uEmissiveTex",  "uHasEmissiveTex",  _emissiveTex);
+        BindMaterialTex(4, "uBaseColorTex", "uHasBaseColorTex", _baseColorTex, UseBaseColorMap);
+        BindMaterialTex(5, "uMRTex",        "uHasMRTex",        _mrTex,        UseMetallicRoughnessMap);
+        BindMaterialTex(6, "uNormalTex",    "uHasNormalTex",    _normalTex,    UseNormalMap);
+        BindMaterialTex(7, "uAOTex",        "uHasAOTex",        _aoTex,        UseAoMap);
+        BindMaterialTex(8, "uEmissiveTex",  "uHasEmissiveTex",  _emissiveTex,  UseEmissiveMap);
         GL.ActiveTexture(TextureUnit.Texture0);
         _shader.SetFloat("uLayerHeight",      LayerHeight);
         _shader.SetFloat("uLayerZOffset",     LayerZOffset);
@@ -546,12 +559,12 @@ public sealed class MeshRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    private void BindMaterialTex(int unit, string samplerUniform, string flagUniform, int handle)
+    private void BindMaterialTex(int unit, string samplerUniform, string flagUniform, int handle, bool layerEnabled)
     {
         GL.ActiveTexture(TextureUnit.Texture0 + unit);
         GL.BindTexture(TextureTarget.Texture2D, handle);   // 0 unbinds when no map
         _shader.SetInt(samplerUniform, unit);
-        _shader.SetInt(flagUniform, (handle != 0 && !SuppressTextures) ? 1 : 0);
+        _shader.SetInt(flagUniform, (handle != 0 && !SuppressTextures && layerEnabled) ? 1 : 0);
     }
 
     /// <summary>

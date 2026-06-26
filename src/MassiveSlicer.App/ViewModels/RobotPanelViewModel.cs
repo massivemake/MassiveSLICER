@@ -71,6 +71,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
     private bool   _isRotaryBed;
     private double _bedCenterX, _bedCenterY, _bedCenterZ, _bedDiameter;
     private double _bedRotationSign = -1;
+    private double _bedOrientationOffsetDeg = RotaryBedCellConfig.DefaultOrientationOffsetDeg;
     private bool   _suppressBedCallback;
 
     /// <summary>True when the active cell's bed is a circular rotary turntable (shows the ROTARY BED panel).</summary>
@@ -99,8 +100,25 @@ public sealed class RobotPanelViewModel : ViewModelBase
         set => BedRotationSign = value ? -1 : 1;
     }
 
+    /// <summary>
+    /// Rotary bed hole-grid phase offset (degrees about vertical through centre). Normally set by bed-cal;
+    /// default <see cref="RotaryBedCellConfig.DefaultOrientationOffsetDeg"/>.
+    /// </summary>
+    public double BedOrientationOffsetDeg
+    {
+        get => _bedOrientationOffsetDeg;
+        set
+        {
+            if (SetField(ref _bedOrientationOffsetDeg, Math.Round(value, 3)))
+                OnBedOrientationEdited?.Invoke(_bedOrientationOffsetDeg);
+        }
+    }
+
     /// <summary>Invoked when any rotary-bed field is edited. Args: centre x, y, z (mm), diameter (mm), rotation sign.</summary>
     internal Action<double, double, double, double, double>? OnBedEdited { get; set; }
+
+    /// <summary>Invoked when <see cref="BedOrientationOffsetDeg"/> is edited (degrees).</summary>
+    internal Action<double>? OnBedOrientationEdited { get; set; }
 
     private void FireBedEdited()
     {
@@ -109,7 +127,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
     }
 
     /// <summary>Loads the rotary-bed fields from the active cell (no callback fired).</summary>
-    public void ConfigureBed(double x, double y, double z, double diameter, double rotationSign, bool isRotary)
+    public void ConfigureBed(double x, double y, double z, double diameter, double rotationSign,
+        double orientationOffsetDeg, bool isRotary)
     {
         _suppressBedCallback = true;
         BedCenterX      = Math.Round(x, 2);
@@ -117,6 +136,8 @@ public sealed class RobotPanelViewModel : ViewModelBase
         BedCenterZ      = Math.Round(z, 2);
         BedDiameter     = Math.Round(diameter, 2);
         BedRotationSign = rotationSign;
+        _bedOrientationOffsetDeg = Math.Round(orientationOffsetDeg, 3);
+        OnPropertyChanged(nameof(BedOrientationOffsetDeg));
         IsRotaryBed     = isRotary;
         _suppressBedCallback = false;
     }
@@ -234,8 +255,17 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     // -- MASSIVE_SERVER motion command server (variable-driven; no .src reloads) ----------------
 
-    /// <summary>Syncs the host command counter to the server's last ack (call once after connect).</summary>
+    /// <summary>Syncs the host command counter to the controller's current MS_SEQ (call once after connect).</summary>
     public Task<int> InitCommandServerAsync(CancellationToken ct = default) => _sync.InitCommandServerAsync(ct);
+
+    /// <summary>Reads a KRL variable by name and returns the raw controller value.</summary>
+    public Task<string> ReadVarAsync(string name, CancellationToken ct = default) => _sync.ReadVarAsync(name, ct);
+
+    /// <summary>Writes a KRL variable by name (BOOL, INT, FRAME, etc.).</summary>
+    public Task<string> WriteVarAsync(string name, string value, CancellationToken ct = default) => _sync.WriteVarAsync(name, value, ct);
+
+    /// <summary>Pulses <c>bRunScanPick</c> while <c>CELL</c> is running to execute <c>Scanner_Pick</c>.</summary>
+    public Task<string> TriggerScanPickAsync(CancellationToken ct = default) => _sync.WriteVarAsync("bRunScanPick", "TRUE", ct);
 
     /// <summary>PTP/LIN the tool to a Cartesian pose via MASSIVE_SERVER (returns true on ack).</summary>
     public Task<bool> SendPoseAsync(bool linear, double x, double y, double z, double a, double b, double c,
@@ -244,12 +274,16 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
     /// <summary>PTP to a joint target (A1..A6, E1, KRL deg) via MASSIVE_SERVER.</summary>
     public Task<bool> SendAxesAsync(double a1, double a2, double a3, double a4, double a5, double a6, double e1,
-        int vel, int timeoutMs = 60000, CancellationToken ct = default)
-        => _sync.SendAxesAsync(a1, a2, a3, a4, a5, a6, e1, vel, timeoutMs, ct);
+        int vel, int tool = 0, int baseIndex = 0, int timeoutMs = 60000, CancellationToken ct = default)
+        => _sync.SendAxesAsync(a1, a2, a3, a4, a5, a6, e1, vel, tool, baseIndex, timeoutMs, ct);
 
     /// <summary>Move to the controller HOME via MASSIVE_SERVER.</summary>
     public Task<bool> GoHomeAsync(int vel = 20, int timeoutMs = 60000, CancellationToken ct = default)
         => _sync.GoHomeAsync(vel, timeoutMs, ct);
+
+    /// <summary>Applies tool/base on the controller without moving (MS_CMD=5).</summary>
+    public Task<bool> SetFrameAsync(int tool, int baseIndex, int timeoutMs = 10000, CancellationToken ct = default)
+        => _sync.SetFrameAsync(tool, baseIndex, timeoutMs, ct);
 
     // Motion handling is integrated into the controller's CELL.SRC loop (the existing dispatcher),
     // so there is no separate server program to deploy or stop.
