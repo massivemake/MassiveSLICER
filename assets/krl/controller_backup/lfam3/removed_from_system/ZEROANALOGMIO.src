@@ -1,0 +1,56 @@
+&ACCESS RVP
+DEF ZEROANALOGMIO()
+
+;FOLD INI
+;HF & HV SAFETY & FLANGE
+;TURN ON EXTRUDER AT START
+;TURN EXTRUDER & AIR OFF AT END
+
+;FOLD BASISTECH INI
+GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+INTERRUPT ON 3
+
+;FOLD CaracolSafety
+
+INTERRUPT DECL 1 WHEN $STOPMESS==TRUE DO STOPEXTRHF()
+INTERRUPT ON 1
+
+;in 5 -> Antincendio
+;in 6 -> PLC signal - extrusion enabled
+;in 7 -> flangia anti caduta
+
+$CYCFLAG[2] = ($IN[5]==TRUE) OR ($IN[6]==FALSE) OR ($IN[7] == TRUE)
+INTERRUPT DECL 4 WHEN $CYCFLAG[2] DO FULLREMOTESTOPHF()
+INTERRUPT ON 4
+
+;ENDFOLD(CaracolSafety)
+
+;FOLD CheckFlange
+IF $IN[7]== TRUE THEN
+       msgnotify("!!! The flange is currently detached - place it back in position and press play")
+
+    WAIT FOR $IN[7]==FALSE
+       HALT ;press ">" to go forward
+ENDIF
+
+;ENDFOLD(CheckFlange)
+
+BAS (#INITMOV,0 )
+;ENDFOLD (BASISTECH INI)
+
+;ENDFOLD (INI)
+
+;FOLD MAT
+
+T1 = 0
+T2 = 0
+T3 = 0
+RPM = 0
+$OUT[9] = FALSE
+
+
+;ENDFOLD MAT
+
+
+END
+

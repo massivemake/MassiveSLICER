@@ -55,16 +55,19 @@ KUKA KRL zero posture ≠ DH zero posture. Apply these offsets **before** feedin
 
 ## Joint Limits (Software)
 
+Sourced from KUKA controller `\\192.168.0.153\krc\ROBOTER\KRC\R1\Mada\$machine.dat` — `$SOFTN_END` / `$SOFTP_END` (2026-06-21).
+
 | Joint | Min (deg) | Max (deg) | Range (deg) |
 |-------|-----------|-----------|-------------|
-| A1 | −60 | +60 | 120 |
-| A2 | −120 | +70 | 190 |
+| A1 | −185 | +185 | 370 |
+| A2 | −140 | −5 | 135 |
 | A3 | −120 | +168 | 288 |
 | A4 | −350 | +350 | 700 |
 | A5 | −125 | +125 | 250 |
 | A6 | −350 | +350 | 700 |
+| E1 | −185 | +185 | 370 |
 
-> Hardware limits may be tighter. Always verify on the physical controller.
+> A2 max is −5° on the live controller (not +70°). Re-read `$machine.dat` after any KUKA software-limit changes.
 
 ---
 

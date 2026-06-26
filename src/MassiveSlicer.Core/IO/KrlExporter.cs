@@ -15,6 +15,8 @@ public sealed record KrlExportSettings
     public float PrintSpeedMps { get; init; } = 0.1f;
     /// <summary>Travel (non-extrusion) move speed in m/s.</summary>
     public float TravelSpeedMps { get; init; } = 0.5f;
+    /// <summary>Wipe extrusion move speed in m/s.</summary>
+    public float WipeSpeedMps { get; init; } = 0.12f;
     public int AccelerationPercent { get; init; } = 100;
     /// <summary>World Z lift above the first/last print position for approach and retreat.</summary>
     public float ApproachZMm { get; init; } = 50f;
@@ -29,14 +31,40 @@ public sealed record KrlExportSettings
     /// <summary>Deposited layer height in mm.</summary>
     public float LayerHeightMm { get; init; } = 3f;
     /// <summary>
-    /// Material extrusion constant in rev/cm³ -- motor revolutions per cubic centimetre deposited.
-    /// Combined with bead geometry and feed rate to give volumetric flow, then RPM percentage:
-    ///   volume_cm³/s = beadWidth_mm × layerHeight_mm × feedMps
-    ///   rpm_percent  = volume × FlowRate × 60
-    ///   $ANOUT[4]    = rpm_percent × 0.1
-    /// Defaults to 1.0 (full speed) when no material preset is active.
+    /// Material <see cref="Models.MaterialPreset.FlowRate"/> in rev/cm³.
+    /// Export uses <see cref="KrlAnout"/> for on-cell <c>$ANOUT</c> scaling unless overrides are set.
     /// </summary>
-    public float FlowRate { get; init; } = 1.0f;
+    public float FlowRate { get; init; } = 0.463f;
+
+    /// <summary>Optional KRL literal for header <c>$ANOUT[1]</c>. Null/empty = compute from <see cref="Temperature1"/>.</summary>
+    public string? Anout1Text { get; init; }
+
+    /// <summary>Optional KRL literal for header <c>$ANOUT[2]</c>. Null/empty = compute from <see cref="Temperature2"/>.</summary>
+    public string? Anout2Text { get; init; }
+
+    /// <summary>Optional KRL literal for header <c>$ANOUT[3]</c>. Null/empty = compute from <see cref="Temperature3"/>.</summary>
+    public string? Anout3Text { get; init; }
+
+    /// <summary>Optional KRL literal for idle <c>$ANOUT[4]</c>. Null/empty = <see cref="KrlAnout.RpmIdleAnoutText"/>.</summary>
+    public string? Anout4IdleText { get; init; }
+
+    /// <summary>Optional KRL literal for extrusion TRIGGER <c>$ANOUT[4]</c>. Null/empty = compute from <see cref="ExtrusionRpmPercent"/> or bead geometry.</summary>
+    public string? Anout4ExtrudeText { get; init; }
+
+    /// <summary>Optional extrusion motor speed (%). When set, overrides geometry-based RPM before writing <c>$ANOUT[4]</c>.</summary>
+    public float? ExtrusionRpmPercent { get; init; }
+
+    /// <summary>
+    /// Pause (seconds) after the first extrusion RPM-on before the first print move. 0 = disabled.
+    /// When &gt; 0, emits an immediate <c>$ANOUT[4]</c> (not TRIGGER) so the wait happens after RPM changes.
+    /// </summary>
+    public float ExtrusionStartWaitSec { get; init; } = 1f;
+
+    /// <summary>
+    /// Pause (seconds) after each travel before the next extrusion move. 0 = disabled.
+    /// Uses immediate <c>$ANOUT[4]</c> so the wait happens after RPM changes.
+    /// </summary>
+    public float ExtrusionResumeWaitSec { get; init; }
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
     /// <summary>
     /// How far ahead of each point (mm) to centre the Gaussian normal-smoothing kernel.
@@ -64,11 +92,134 @@ public sealed record KrlExportSettings
     public Vector3 RobrootWorldPos { get; init; }
     /// <summary>BASE_DATA offset relative to ROBROOT (mm). Assumes zero BASE rotation.</summary>
     public Vector3 BaseDataOffset { get; init; }
+
+    /// <summary>Emit <c>$ANOUT[4] = 0</c> before travel moves instead of a TRIGGER idle pulse.</summary>
+    public bool TravelSetAnout4Zero { get; init; } = true;
+
+    // -- Milling (subtractive) --------------------------------------------------
+
+    /// <summary>When true, export a relief-milling program (LIN cuts + rapids, no extruder/temperature).</summary>
+    public bool IsMilling { get; init; }
+    /// <summary>Spindle RPM (informational; used by the mill header template token).</summary>
+    public float SpindleRpm { get; init; } = 12000f;
+    /// <summary>Cutting feed (mm/min) for mill moves.</summary>
+    public float CuttingFeedMmMin { get; init; } = 3000f;
+    /// <summary>Plunge feed (mm/min) for downward mill approaches.</summary>
+    public float PlungeFeedMmMin { get; init; } = 1000f;
+
+    /// <summary>Custom header template. Null/empty uses <see cref="KrlExporter.DefaultHeaderTemplate"/>
+    /// (or <see cref="KrlExporter.DefaultMillHeaderTemplate"/> when <see cref="IsMilling"/>).</summary>
+    public string? HeaderTemplate { get; init; }
+
+    /// <summary>Custom footer template. Null/empty uses <see cref="KrlExporter.DefaultFooterTemplate"/>.</summary>
+    public string? FooterTemplate { get; init; }
 }
 
 public static class KrlExporter
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    /// <summary>Default KRL header template with {{PLACEHOLDER}} tokens.</summary>
+    public const string DefaultHeaderTemplate = """
+        &ACCESS RVP
+        DEF {{PROGRAM_NAME}} ()
+
+        ;FOLD INI
+        ;FOLD BASISTECH INI
+        GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+        INTERRUPT ON 3
+        BAS (#INITMOV,0 )
+        ;ENDFOLD (BASISTECH INI)
+        ;ENDFOLD (INI)
+
+        ;FOLD CheckFlange
+        IF $IN[7]== TRUE THEN
+               msgnotify("!!! The flange is currently detached - place it back in position and press play")
+
+            WAIT FOR $IN[7]==FALSE
+               HALT ;press ">" to go forward
+        ENDIF
+
+        ;ENDFOLD(CheckFlange)
+
+        ;FOLD MAT
+        $OUT[9] = TRUE
+        $ANOUT[1] = {{TEMP1_V}} ; T1 = {{TEMP1_C}}C
+        $ANOUT[2] = {{TEMP2_V}} ; T2 = {{TEMP2_C}}C
+        $ANOUT[3] = {{TEMP3_V}} ; T3 = {{TEMP3_C}}C
+        $ANOUT[4] = {{RPM_IDLE_V}} ; RPM idle
+        ;ENDFOLD MAT
+
+        ;FOLD READYTOPRINT
+        $OUT[7]=TRUE
+        ;IF IN[6] DOES NOT CONNECT EXTRUDER WILL NOT START
+        WAIT FOR $IN[6]==TRUE
+        ;ENDFOLD
+
+        ;FOLD PRESETS
+        $BWDSTART = FALSE
+        PDAT_ACT = {VEL 6,ACC 100,APO_DIST 50}
+        FDAT_ACT = {TOOL_NO {{TOOL_NO}},BASE_NO {{BASE_NO}},IPO_FRAME #BASE}
+        BAS (#PTP_PARAMS,6)
+        $ADVANCE=5
+        $APO.CVEL={{APO_CVEL}}
+        $ACC.CP = 5.0
+        $VEL.CP={{PRINT_SPEED}}
+        ;ENDFOLD (PRESETS)
+
+        ;FOLD TIMER
+        WAIT SEC 0
+        $TIMER_STOP[7] = TRUE
+        $TIMER[7] = 0
+        $TIMER_STOP[7] = FALSE
+        ;ENDFOLD
+
+        BAS(#BASE,{{BASE_NO}})
+        BAS(#VEL_PTP,10)
+        {{HOME_PTP}}
+        """;
+
+    /// <summary>Default KRL footer template.</summary>
+    public const string DefaultFooterTemplate = """
+        $OUT[7]=FALSE
+        $OUT[8] = FALSE
+        $OUT[9] = FALSE
+        END
+        """;
+
+    /// <summary>Default milling header — no extruder/temperature. Spindle on/RPM is a placeholder
+    /// the operator wires to the real channel (KUKA 0-10V -> ATV340 VFD).</summary>
+    public const string DefaultMillHeaderTemplate = """
+        &ACCESS RVP
+        DEF {{PROGRAM_NAME}} ()
+
+        ;FOLD INI
+        ;FOLD BASISTECH INI
+        GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+        INTERRUPT ON 3
+        BAS (#INITMOV,0 )
+        ;ENDFOLD (BASISTECH INI)
+        ;ENDFOLD (INI)
+
+        ;FOLD PRESETS
+        PDAT_ACT = {VEL 6,ACC 100,APO_DIST 50}
+        FDAT_ACT = {TOOL_NO {{TOOL_NO}},BASE_NO {{BASE_NO}},IPO_FRAME #BASE}
+        BAS (#PTP_PARAMS,6)
+        $ADVANCE=5
+        $APO.CVEL={{APO_CVEL}}
+        $ACC.CP = 5.0
+        $VEL.CP={{FEED_MPS}}
+        ;ENDFOLD (PRESETS)
+
+        ;FOLD SPINDLE ON -- wire to the real spindle channel (e.g. $ANOUT[n] = 0-10V for {{SPINDLE_RPM}} RPM)
+        ;$ANOUT[n] = <0-10V for {{SPINDLE_RPM}} RPM>
+        ;WAIT SEC 2 ; spindle spin-up
+        ;ENDFOLD
+
+        BAS(#BASE,{{BASE_NO}})
+        BAS(#VEL_PTP,10)
+        {{HOME_PTP}}
+        """;
 
     public static string Export(Toolpath toolpath, KrlExportSettings s)
     {
@@ -80,7 +231,14 @@ public static class KrlExporter
         var firstEntry = FindFirstExtrude(toolpath);
         if (firstEntry is null)
         {
-            WriteFooter(sb);
+            WriteFooter(sb, s);
+            return sb.ToString();
+        }
+
+        if (s.IsMilling)
+        {
+            WriteMillBody(sb, toolpath, s);
+            WriteFooter(sb, s);
             return sb.ToString();
         }
 
@@ -99,6 +257,8 @@ public static class KrlExporter
         Vector3 lastPos = p0;
         (float a, float b, float c) lastAbc = (a0, b0, c0);
         bool needsRpmOn = true;
+        bool isFirstPrintStart = true;
+        bool inZHopSequence = false;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
         // kernel before ABC conversion. This prevents the KRL exporter from producing
@@ -123,15 +283,35 @@ public static class KrlExporter
 
                 if (move.Kind == MoveKind.Travel)
                 {
-                    sb.AppendLine(move.IsLayerChange ? ";layer change" : ";travel");
-                    // TRIGGER fires exactly when the preceding extrude ends (exact-stop means
-                    // DISTANCE=0 coincides with the actual waypoint, not a C_VEL blend zone).
-                    sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
-                    sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-                    // Carry the last printed orientation through the travel — avoids a sudden
-                    // ABC jump when per-move overhang normals differ from the layer plane normal.
-                    // The first extrude of the next contour/layer smoothly transitions to its
-                    // own orientation.
+                    if (move.IsZHop)
+                    {
+                        if (!inZHopSequence)
+                        {
+                            sb.AppendLine(";z-hop");
+                            if (s.TravelSetAnout4Zero)
+                                sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
+                            else
+                                sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
+                            inZHopSequence = true;
+                        }
+
+                        var zHopSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
+                        sb.AppendLine($"$VEL.CP = {zHopSpeed.ToString("F6", Inv)}");
+                        var (za, zb, zc) = lastAbc;
+                        sb.AppendLine(FormatLinExact(to, za, zb, zc));
+                        lastPos = to;
+                        needsRpmOn = true;
+                        continue;
+                    }
+
+                    inZHopSequence = false;
+                    sb.AppendLine(move.IsLayerChange ? ";layer change" : move.IsMergeConnector ? ";merge travel" : ";travel");
+                    if (s.TravelSetAnout4Zero)
+                        sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
+                    else
+                        sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
+                    var travelSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
+                    sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
                     var (ta, tb, tc) = lastAbc;
                     sb.AppendLine(FormatLinExact(to, ta, tb, tc));
                     sb.AppendLine();
@@ -139,6 +319,7 @@ public static class KrlExporter
                 }
                 else
                 {
+                    inZHopSequence = false;
                     // Use pre-smoothed normal when available; fall back to raw move normal.
                     var effectiveNormal = smoothedLayer?[mi] ?? move.Normal;
 
@@ -152,10 +333,69 @@ public static class KrlExporter
                             ? KukaAbc(effectiveNormal, s)
                             : (la, lb, lc);
 
+                    if (move.IsWipe)
+                    {
+                        sb.AppendLine(";wipe");
+                        sb.AppendLine(FormatDirectAnout4(
+                            ResolveAnout4ExtrudeText(s, move.WipeRpmScale), "wipe"));
+                        sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
+                        sb.AppendLine(FormatLin(to, ma, mb, mc));
+                        lastAbc = (ma, mb, mc);
+                        lastPos = to;
+                        continue;
+                    }
+
+                    if (move.IsResumeRamp)
+                    {
+                        if (needsRpmOn)
+                        {
+                            float waitSec = isFirstPrintStart
+                                ? s.ExtrusionStartWaitSec
+                                : s.ExtrusionResumeWaitSec;
+                            if (waitSec > 0f)
+                            {
+                                sb.AppendLine(FormatDirectAnout4(
+                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                                sb.AppendLine(FormatWaitSec(waitSec));
+                            }
+                            else
+                            {
+                                sb.AppendLine(FormatDirectAnout4(
+                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                            }
+
+                            isFirstPrintStart = false;
+                            needsRpmOn = false;
+                        }
+                        else
+                        {
+                            sb.AppendLine(FormatDirectAnout4(
+                                ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                        }
+
+                        float rampSpeed = s.PrintSpeedMps * move.ResumeSpeedScale;
+                        sb.AppendLine($"$VEL.CP = {rampSpeed.ToString("F6", Inv)}");
+                        sb.AppendLine(FormatLin(to, ma, mb, mc));
+                        lastAbc = (ma, mb, mc);
+                        lastPos = to;
+                        continue;
+                    }
+
                     if (needsRpmOn)
                     {
-                        sb.AppendLine(FormatTriggerAnout4(RpmVoltage(s), "RPM on"));
+                        float waitSec = isFirstPrintStart
+                            ? s.ExtrusionStartWaitSec
+                            : s.ExtrusionResumeWaitSec;
+                        if (waitSec > 0f)
+                        {
+                            sb.AppendLine(FormatDirectAnout4(ResolveAnout4ExtrudeText(s), "RPM on"));
+                            sb.AppendLine(FormatWaitSec(waitSec));
+                        }
+                        else
+                            sb.AppendLine(FormatTriggerAnout4(ResolveAnout4ExtrudeText(s), "RPM on"));
+
                         sb.AppendLine($"$VEL.CP = {s.PrintSpeedMps.ToString("F6", Inv)}");
+                        isFirstPrintStart = false;
                         needsRpmOn = false;
                     }
                     sb.AppendLine(FormatLin(to, ma, mb, mc));
@@ -169,11 +409,14 @@ public static class KrlExporter
         // -- Final retreat --------------------------------------------------------
         var (fa, fb, fc) = lastAbc;
         sb.AppendLine(";retreat");
-        sb.AppendLine(FormatTriggerAnout4(0.100f, "RPM idle"));
+        if (s.TravelSetAnout4Zero)
+            sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
+        else
+            sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
         sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc));
         sb.AppendLine();
-        WriteFooter(sb);
+        WriteFooter(sb, s);
 
         return sb.ToString();
     }
@@ -182,85 +425,95 @@ public static class KrlExporter
 
     private static void WriteHeader(StringBuilder sb, string name, KrlExportSettings s)
     {
-        sb.AppendLine("&ACCESS RVP");
-        sb.AppendLine($"DEF {name} ()");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD INI");
-        sb.AppendLine(";FOLD BASISTECH INI");
-        sb.AppendLine("GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )");
-        sb.AppendLine("INTERRUPT ON 3");
-        sb.AppendLine("BAS (#INITMOV,0 )");
-        sb.AppendLine(";ENDFOLD (BASISTECH INI)");
-        sb.AppendLine(";ENDFOLD (INI)");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD CheckFlange");
-        sb.AppendLine("IF $IN[7]== TRUE THEN");
-        sb.AppendLine("       msgnotify(\"!!! The flange is currently detached - place it back in position and press play\")");
-        sb.AppendLine();
-        sb.AppendLine("    WAIT FOR $IN[7]==FALSE");
-        sb.AppendLine("       HALT ;press \">\" to go forward");
-        sb.AppendLine("ENDIF");
-        sb.AppendLine();
-        sb.AppendLine(";ENDFOLD(CheckFlange)");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD MAT");
-        sb.AppendLine("$OUT[9] = TRUE");
-        sb.AppendLine($"$ANOUT[1] = {TempToVoltage(s.Temperature1).ToString("F3", Inv)} ; T1 = {s.Temperature1:F0}C");
-        sb.AppendLine($"$ANOUT[2] = {TempToVoltage(s.Temperature2).ToString("F3", Inv)} ; T2 = {s.Temperature2:F0}C");
-        sb.AppendLine($"$ANOUT[3] = {TempToVoltage(s.Temperature3).ToString("F3", Inv)} ; T3 = {s.Temperature3:F0}C");
-        sb.AppendLine("$ANOUT[4] = 0.100 ; RPM idle");
-        sb.AppendLine(";ENDFOLD MAT");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD READYTOPRINT");
-        sb.AppendLine("$OUT[7]=TRUE");
-        sb.AppendLine(";IF IN[6] DOES NOT CONNECT EXTRUDER WILL NOT START");
-        sb.AppendLine("WAIT FOR $IN[6]==TRUE");
-        sb.AppendLine(";ENDFOLD");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD PRESETS");
-        sb.AppendLine("$BWDSTART = FALSE");
-        sb.AppendLine("PDAT_ACT = {VEL 6,ACC 100,APO_DIST 50}");
-        sb.AppendLine($"FDAT_ACT = {{TOOL_NO {s.ToolDataIndex},BASE_NO {s.BaseDataIndex},IPO_FRAME #BASE}}");
-        sb.AppendLine("BAS (#PTP_PARAMS,6)");
-        sb.AppendLine("$ADVANCE=5");
-        sb.AppendLine($"$APO.CVEL={s.ApoCvel}");
-        sb.AppendLine("$ACC.CP = 5.0");
-        sb.AppendLine($"$VEL.CP={s.PrintSpeedMps.ToString("F6", Inv)}");
-        sb.AppendLine(";ENDFOLD (PRESETS)");
-        sb.AppendLine();
-
-        sb.AppendLine(";FOLD TIMER");
-        sb.AppendLine("WAIT SEC 0");
-        sb.AppendLine("$TIMER_STOP[7] = TRUE");
-        sb.AppendLine("$TIMER[7] = 0");
-        sb.AppendLine("$TIMER_STOP[7] = FALSE");
-        sb.AppendLine(";ENDFOLD");
-        sb.AppendLine();
-
-        sb.AppendLine($"BAS(#BASE,{s.BaseDataIndex})");
-        sb.AppendLine("BAS(#VEL_PTP,10)");
-        var h = s.HomePosition;
-        sb.AppendLine($"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}}}");
+        var fallback = s.IsMilling ? DefaultMillHeaderTemplate : DefaultHeaderTemplate;
+        var template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? fallback : s.HeaderTemplate!;
+        AppendRenderedTemplate(sb, RenderHeaderTemplate(template, name, s));
     }
 
-    private static void WriteFooter(StringBuilder sb)
+    /// <summary>Emits a relief-milling body: LIN cuts at the cutting feed, rapids/plunges for
+    /// repositioning. No extruder/temperature/wipe logic. Top-down spindle (layer PlaneNormal).</summary>
+    private static void WriteMillBody(StringBuilder sb, Toolpath toolpath, KrlExportSettings s)
     {
-        sb.AppendLine("$OUT[7]=FALSE");
-        sb.AppendLine("$OUT[8] = FALSE");
-        sb.AppendLine("$OUT[9] = FALSE");
-        sb.AppendLine("END");
+        string cutV    = (s.CuttingFeedMmMin / 60000f).ToString("F6", Inv);
+        string plungeV = (s.PlungeFeedMmMin / 60000f).ToString("F6", Inv);
+        string rapidV  = s.TravelSpeedMps.ToString("F6", Inv);
+
+        // Rapid to safe Z above the first cut.
+        var first = FindFirstExtrude(toolpath)!.Value;
+        var (a0, b0, c0) = KukaAbc(first.layer.PlaneNormal, s);
+        var p0 = ToBase(first.move.From, s);
+        sb.AppendLine($"$VEL.CP = {rapidV}");
+        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0));
+        sb.AppendLine();
+
+        foreach (var layer in toolpath.Layers)
+        {
+            var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
+            foreach (var move in layer.Moves)
+            {
+                var to = ToBase(move.To, s);
+                // Multi-axis: orient the spindle to the per-move tool axis (surface normal) when
+                // present; fall back to the layer plane normal (top-down) otherwise.
+                var (a, b, c) = move.Normal != Vector3.Zero ? KukaAbc(move.Normal, s) : (la, lb, lc);
+                if (move.Kind == MoveKind.Mill)
+                {
+                    sb.AppendLine($"$VEL.CP = {cutV}");
+                    sb.AppendLine(FormatLin(to, a, b, c));
+                }
+                else // Travel: rapid (up/over) or plunge (down)
+                {
+                    bool plunging = move.To.Z < move.From.Z - 1e-4f;
+                    sb.AppendLine(plunging ? ";plunge" : ";rapid");
+                    sb.AppendLine($"$VEL.CP = {(plunging ? plungeV : rapidV)}");
+                    sb.AppendLine(FormatLinExact(to, a, b, c));
+                }
+            }
+        }
+        sb.AppendLine();
+    }
+
+    private static void WriteFooter(StringBuilder sb, KrlExportSettings s)
+    {
+        var template = string.IsNullOrWhiteSpace(s.FooterTemplate) ? DefaultFooterTemplate : s.FooterTemplate!;
+        AppendRenderedTemplate(sb, template.TrimEnd());
+    }
+
+    private static void AppendRenderedTemplate(StringBuilder sb, string text)
+    {
+        foreach (var line in text.Replace("\r\n", "\n").Split('\n'))
+            sb.AppendLine(line);
+    }
+
+    internal static string RenderHeaderTemplate(string template, string programName, KrlExportSettings s)
+    {
+        var h = s.HomePosition;
+        var homePtp = $"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, " +
+                      $"A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, " +
+                      $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}}}";
+
+        return template
+            .Replace("{{PROGRAM_NAME}}", programName)
+            .Replace("{{TOOL_NO}}",      s.ToolDataIndex.ToString(Inv))
+            .Replace("{{BASE_NO}}",      s.BaseDataIndex.ToString(Inv))
+            .Replace("{{TEMP1_V}}",       ResolveTempAnoutText(s, 1))
+            .Replace("{{TEMP2_V}}",       ResolveTempAnoutText(s, 2))
+            .Replace("{{TEMP3_V}}",       ResolveTempAnoutText(s, 3))
+            .Replace("{{TEMP1_C}}",       s.Temperature1.ToString("F0", Inv))
+            .Replace("{{TEMP2_C}}",       s.Temperature2.ToString("F0", Inv))
+            .Replace("{{TEMP3_C}}",       s.Temperature3.ToString("F0", Inv))
+            .Replace("{{RPM_IDLE_V}}",    ResolveAnout4IdleText(s))
+            .Replace("{{PRINT_SPEED}}",   s.PrintSpeedMps.ToString("F6", Inv))
+            .Replace("{{FEED_MPS}}",      (s.CuttingFeedMmMin / 60000f).ToString("F6", Inv))
+            .Replace("{{SPINDLE_RPM}}",   s.SpindleRpm.ToString("F0", Inv))
+            .Replace("{{APO_CVEL}}",      s.ApoCvel.ToString(Inv))
+            .Replace("{{HOME_PTP}}",      homePtp);
     }
 
     private static (ToolpathMove move, ToolpathLayer layer)? FindFirstExtrude(Toolpath tp)
     {
         foreach (var layer in tp.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
                     return (move, layer);
         return null;
     }
@@ -435,16 +688,6 @@ public static class KrlExporter
     }
 
 
-    // -- Voltage conversions ---------------------------------------------------
-
-    private static float TempToVoltage(float tempC) => (tempC - 149f) * 0.032f;
-
-    // volume_cm³/s = beadWidth_mm × layerHeight_mm × feedMps  (mm × mm × m/s -> cm³/s, units cancel)
-    // rpm_percent  = volume × flowRate [rev/cm³] × 60
-    // voltage      = rpm_percent × 0.1  (PLC convention: 0.1 V per 1%)
-    private static float RpmVoltage(KrlExportSettings s)
-        => s.BeadWidthMm * s.LayerHeightMm * s.PrintSpeedMps * s.FlowRate * 6f;
-
     // -- Line formatting -------------------------------------------------------
 
     // C_VEL: approximate (blended) positioning — used for extrude moves so the robot
@@ -463,8 +706,54 @@ public static class KrlExporter
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
            $"E1 0.000, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
 
-    private static string FormatTriggerAnout4(float v, string comment)
-        => $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]={v.ToString("F3", Inv)} ; {comment}";
+    private static string FormatTriggerAnout4(string text, string comment)
+        => $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]={text} ; {comment}";
+
+    private static string FormatDirectAnout4(string text, string comment)
+        => $"$ANOUT[4] = {text} ; {comment}";
+
+    private static string FormatWaitSec(float seconds)
+    {
+        string text = seconds.ToString(seconds % 1f == 0f ? "F0" : "F1", Inv);
+        return $"WAIT SEC {text}";
+    }
+
+    private static string ResolveTempAnoutText(KrlExportSettings s, int channel)
+    {
+        string? o = channel switch
+        {
+            1 => s.Anout1Text,
+            2 => s.Anout2Text,
+            3 => s.Anout3Text,
+            _ => null,
+        };
+        if (!string.IsNullOrWhiteSpace(o))
+            return o.Trim();
+
+        return channel switch
+        {
+            1 => KrlAnout.TempToAnoutText(s.Temperature1),
+            2 => KrlAnout.TempToAnoutText(s.Temperature2),
+            3 => KrlAnout.TempToAnoutText(s.Temperature3),
+            _ => "0",
+        };
+    }
+
+    private static string ResolveAnout4IdleText(KrlExportSettings s)
+        => string.IsNullOrWhiteSpace(s.Anout4IdleText)
+            ? KrlAnout.RpmIdleAnoutText
+            : s.Anout4IdleText.Trim();
+
+    private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
+    {
+        if (!string.IsNullOrWhiteSpace(s.Anout4ExtrudeText) && Math.Abs(rpmScale - 1f) < 1e-4f)
+            return s.Anout4ExtrudeText.Trim();
+
+        float rpmPercent = s.ExtrusionRpmPercent
+            ?? KrlAnout.ComputeRpmPercent(s.BeadWidthMm, s.LayerHeightMm, s.PrintSpeedMps, s.FlowRate);
+        rpmPercent *= Math.Clamp(rpmScale, 0f, 1f);
+        return KrlAnout.RpmPercentToAnoutText(rpmPercent);
+    }
 
     private static string SafeName(string raw)
         => Regex.Replace(raw.Trim(), @"[^A-Za-z0-9_]", "_");

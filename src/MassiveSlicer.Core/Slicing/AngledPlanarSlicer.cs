@@ -155,6 +155,8 @@ public static class AngledPlanarSlicer
         // ── Stage 3: nesting depth + bead-width offset + seam ────────────────
         if (rawContours.Count == 0) return new List<ContourTrack>();
 
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+
         int nc = rawContours.Count;
         var depths = new int[nc];
         for (int i = 0; i < nc; i++)
@@ -171,8 +173,13 @@ public static class AngledPlanarSlicer
             }
         }
 
+        if (surfaceMode)
+            depths = SurfaceSlicing.FilterContours(rawContours, depths, settings.BeadWidth);
+        nc = rawContours.Count;
+
         float halfBead = settings.BeadWidth * 0.5f;
         float simpTol  = settings.SimplificationTolerance;
+        bool  skipInset = settings.DisableContourOffset || surfaceMode;
         var insetContours = new List<List<Vector2>>(nc);
         for (int ci = 0; ci < nc; ci++)
         {
@@ -185,7 +192,7 @@ public static class AngledPlanarSlicer
             if (wantCCW == isCCW) oriented = c;
             else { var r = new List<Vector2>(c); r.Reverse(); oriented = r; }
 
-            if (settings.DisableContourOffset)
+            if (skipInset)
             {
                 var ol = oriented is List<Vector2> ol2 ? ol2 : oriented.ToList();
                 if (ol.Count >= 3)

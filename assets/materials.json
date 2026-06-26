@@ -3,10 +3,10 @@
     "Name": "PETG - Clear",
     "MaterialType": "PETG",
     "Color": "Clear",
-    "Temperature1": 220,
-    "Temperature2": 220,
-    "Temperature3": 220,
-    "FlowRate": 1,
+    "Temperature1": 240,
+    "Temperature2": 240,
+    "Temperature3": 240,
+    "FlowRate": 0.463,
     "MaterialDensity": 1,
     "CostPerLb": 5
   }

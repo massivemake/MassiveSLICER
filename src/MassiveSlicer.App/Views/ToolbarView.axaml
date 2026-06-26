@@ -25,11 +25,37 @@
                            FontWeight="Light" FontSize="14"
                            Foreground="{DynamicResource TextSecondary}"
                            VerticalAlignment="Center"
-                           Margin="2,0,16,0"/>
+                           Margin="2,0,12,0"/>
 
-                <Button Content="Open Model"   Classes="ToolbarButton" Command="{Binding OpenModelCommand}"       Margin="0,0,4,0"/>
-                <Button Content="Import KRL"   Classes="ToolbarButton" Command="{Binding ImportKrlCommand}"       Margin="0,0,4,0"/>
-<Button Content="Preferences"  Classes="ToolbarButton" Command="{Binding OpenPreferencesCommand}"/>
+                <Menu Background="Transparent" VerticalAlignment="Center" Margin="0,0,4,0">
+                    <MenuItem Header="_File">
+                        <MenuItem Header="_Open..."
+                                  Command="{Binding OpenWorkspaceCommand}"
+                                  InputGesture="Ctrl+O"/>
+                        <MenuItem Header="_Save"
+                                  Command="{Binding SaveWorkspaceCommand}"
+                                  InputGesture="Ctrl+S"/>
+                        <MenuItem Header="Save _As..."
+                                  Command="{Binding SaveWorkspaceAsCommand}"
+                                  InputGesture="Ctrl+Shift+S"/>
+                        <Separator/>
+                        <MenuItem Header="Import _Model..."
+                                  Command="{Binding OpenModelCommand}"/>
+                        <MenuItem Header="Import _KRL..."
+                                  Command="{Binding ImportKrlCommand}"/>
+                        <Separator/>
+                        <MenuItem Header="_Preferences..."
+                                  Command="{Binding OpenPreferencesCommand}"/>
+                    </MenuItem>
+                    <MenuItem Header="_Edit">
+                        <MenuItem Header="_Undo"
+                                  Command="{Binding UndoCommand}"
+                                  InputGesture="Ctrl+Z"/>
+                        <MenuItem Header="_Redo"
+                                  Command="{Binding RedoCommand}"
+                                  InputGesture="Ctrl+Y"/>
+                    </MenuItem>
+                </Menu>
             </StackPanel>
 
             <!-- ── Right: camera presets + units + toggles ───────────────────── -->

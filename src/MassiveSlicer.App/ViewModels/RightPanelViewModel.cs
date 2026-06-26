@@ -10,8 +10,12 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class RightPanelViewModel : ViewModelBase
 {
-    private RightPanelTab _activeTab = RightPanelTab.Scan;
+    private RightPanelTab _activeTab = RightPanelTab.Additive;
     private bool _hasScanTab = true;
+    private bool _lfam3TabGating;
+    private bool _lfam3ShowAdditiveTab = true;
+    private bool _lfam3ShowScanTab = true;
+    private bool _lfam3ShowSubtractiveTab;
 
     /// <summary>
     /// Whether the Scan tab is available for the current cell.
@@ -24,6 +28,7 @@ public sealed class RightPanelViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _hasScanTab, value)) return;
+            NotifyTabBarVisibility();
             if (!value && _activeTab == RightPanelTab.Scan)
                 ActiveTab = RightPanelTab.Additive;
         }
@@ -49,6 +54,20 @@ public sealed class RightPanelViewModel : ViewModelBase
     public bool IsSubtractiveTab  => ActiveTab == RightPanelTab.Subtractive;
     public bool IsSettingsTab     => ActiveTab == RightPanelTab.Settings;
     public bool IsToolpathTab     => ActiveTab == RightPanelTab.Toolpath;
+
+    /// <summary>LFAM 3 workflow limits the tab bar to the active phase.</summary>
+    public bool IsLfam3TabGatingActive => _lfam3TabGating;
+
+    public bool ShowAdditiveTabButton =>
+        !_lfam3TabGating || _lfam3ShowAdditiveTab;
+
+    public bool ShowScanTabButton =>
+        HasScanTab && (!_lfam3TabGating || _lfam3ShowScanTab);
+
+    public bool ShowSubtractiveTabButton =>
+        !_lfam3TabGating || _lfam3ShowSubtractiveTab;
+
+    public bool ShowToolpathTabButton => true;
 
     public ICommand ShowAdditiveCommand     { get; }
     public ICommand ShowScanCommand         { get; }
@@ -79,4 +98,43 @@ public sealed class RightPanelViewModel : ViewModelBase
     /// Activated via the gear icon.
     /// </summary>
     public SettingsViewModel Settings { get; } = new();
+
+    /// <summary>
+    /// LFAM 3 workflow: show only the sidebar tab(s) for the active phase and select it.
+    /// </summary>
+    public void SetLfam3WorkflowTabGating(bool active, bool showAdditive, bool showScan, bool showSubtractive)
+    {
+        if (_lfam3TabGating == active
+            && _lfam3ShowAdditiveTab == showAdditive
+            && _lfam3ShowScanTab == showScan
+            && _lfam3ShowSubtractiveTab == showSubtractive)
+            return;
+
+        _lfam3TabGating = active;
+        _lfam3ShowAdditiveTab = showAdditive;
+        _lfam3ShowScanTab = showScan;
+        _lfam3ShowSubtractiveTab = showSubtractive;
+        NotifyTabBarVisibility();
+
+        if (!active) return;
+
+        // Keep TOOLPATH open when the user is reviewing path options across phase changes.
+        if (_activeTab == RightPanelTab.Toolpath) return;
+
+        if (showSubtractive)
+            ActiveTab = RightPanelTab.Subtractive;
+        else if (showScan && HasScanTab)
+            ActiveTab = RightPanelTab.Scan;
+        else if (showAdditive)
+            ActiveTab = RightPanelTab.Additive;
+    }
+
+    void NotifyTabBarVisibility()
+    {
+        OnPropertyChanged(nameof(IsLfam3TabGatingActive));
+        OnPropertyChanged(nameof(ShowAdditiveTabButton));
+        OnPropertyChanged(nameof(ShowScanTabButton));
+        OnPropertyChanged(nameof(ShowSubtractiveTabButton));
+        OnPropertyChanged(nameof(ShowToolpathTabButton));
+    }
 }

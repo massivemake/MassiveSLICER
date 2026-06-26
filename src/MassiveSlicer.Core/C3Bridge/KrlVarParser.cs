@@ -29,11 +29,14 @@ public static class KrlVarParser
         return result;
     }
 
-    /// <summary>Returns joint angles [A1..A6] in KRL degrees from a $AXIS_ACT response.</summary>
+    /// <summary>
+    /// Returns joint angles [A1..A6, E1] in KRL degrees from a $AXIS_ACT response.
+    /// Index 6 is E1 (external axis 1 — rotary bed). Defaults to 0 if absent.
+    /// </summary>
     public static double[] ParseAxisAct(string response)
     {
-        var v = Parse(response, ["A1", "A2", "A3", "A4", "A5", "A6"]);
-        return [v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"]];
+        var v = Parse(response, ["A1", "A2", "A3", "A4", "A5", "A6", "E1"]);
+        return [v["A1"], v["A2"], v["A3"], v["A4"], v["A5"], v["A6"], v["E1"]];
     }
 
     /// <summary>Returns joint angles [A1..A6] and the E1 external-axis value from a $AXIS_ACT response.</summary>
@@ -48,5 +51,23 @@ public static class KrlVarParser
     {
         var v = Parse(response, ["X", "Y", "Z", "A", "B", "C"]);
         return (v["X"], v["Y"], v["Z"], v["A"], v["B"], v["C"]);
+    }
+
+    /// <summary>Parses a KRL BOOL response (TRUE/FALSE).</summary>
+    public static bool ParseBool(string response)
+        => response.Trim().Equals("TRUE", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Parses a scalar REAL/INT response or the first number in the string.</summary>
+    public static double ParseScalar(string response)
+    {
+        var t = response.Trim();
+        if (double.TryParse(t, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out var direct))
+            return direct;
+
+        var m = Regex.Match(t, @"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?");
+        return m.Success
+            ? double.Parse(m.Groups[0].Value, System.Globalization.CultureInfo.InvariantCulture)
+            : 0.0;
     }
 }

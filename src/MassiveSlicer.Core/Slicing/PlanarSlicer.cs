@@ -125,6 +125,8 @@ public static class PlanarSlicer
         ToolpathLayer layer,
         bool isLastLayer = false)
     {
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+
         // ── Stage 1: raw intersection segments ───────────────────────────────
         var normalLookup = settings.OverhangOrientation
             ? new List<(Vector2 pos, Vector3 normal)>()
@@ -134,7 +136,8 @@ public static class PlanarSlicer
         foreach (var verts in meshes)
         {
             var segs = new List<(Vector2, Vector2)>(64);
-            CollectSegments(verts, z, segs, normalLookup);
+            // Face normals only when the user explicitly enables overhang orientation in Surface mode.
+            CollectSegments(verts, z, segs, normalLookup, surfaceMode && settings.OverhangOrientation);
             if (segs.Count > 0) perMeshSegs.Add(segs);
         }
         if (perMeshSegs.Count == 0) return new List<ContourTrack>();
@@ -175,8 +178,13 @@ public static class PlanarSlicer
             }
         }
 
+        if (surfaceMode)
+            depths = SurfaceSlicing.FilterContours(rawContours, depths, settings.BeadWidth);
+        nc = rawContours.Count;
+
         float halfBead = settings.BeadWidth * 0.5f;
         float simpTol  = settings.SimplificationTolerance;
+        bool  skipInset = settings.DisableContourOffset || surfaceMode;
         var insetContours = new List<List<Vector2>>(nc);
         var insetClosed   = new List<bool>(nc);
         for (int ci = 0; ci < nc; ci++)
@@ -190,7 +198,7 @@ public static class PlanarSlicer
             if (wantCCW == isCCW) oriented = c;
             else { var r = new List<Vector2>(c); r.Reverse(); oriented = r; }
 
-            if (settings.DisableContourOffset)
+            if (skipInset)
             {
                 var ol = oriented is List<Vector2> ol2 ? ol2 : oriented.ToList();
                 if (ol.Count >= 3)
@@ -220,7 +228,7 @@ public static class PlanarSlicer
         if (insetContours.Count == 0) return new List<ContourTrack>();
 
         // ── Infill mode: replace shell contours with a continuous fill pattern ──
-        if (settings.InfillPattern != InfillPattern.None)
+        if (!surfaceMode && settings.InfillPattern != InfillPattern.None)
         {
             float baseAngle = settings.InfillAngleDeg;
             float angle = settings.InfillPattern switch
@@ -240,7 +248,8 @@ public static class PlanarSlicer
             return new List<ContourTrack>();
         }
 
-        var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir);
+        var guideXY = settings.SeamGuidePoints.Select(g => g.ToXY()).ToList();
+        var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir, guideXY);
 
         // Assign per-vertex surface normals for overhang orientation.
         if (normalLookup != null && normalLookup.Count > 0)
@@ -254,53 +263,8 @@ public static class PlanarSlicer
             }
         }
 
-        EmitContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
+        ContourSeamPlanner.EmitOptimizedContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
         return tracks;
-    }
-
-    // Emits contours as extrude loops with travel moves between them.
-    // When zigZag is true, open contours on odd-indexed layers are printed end→start
-    // instead of start→end, eliminating the long return travel on panel-style prints.
-    private static void EmitContours(IEnumerable<ContourTrack> tracks, float z, ToolpathLayer layer,
-                                     bool zigZag = false, int layerIndex = 0)
-    {
-        var lastPos = new Vector2(float.NaN);
-        foreach (var track in tracks)
-        {
-            var  c        = track.Contour;
-            bool isClosed = track.IsClosed;
-            bool reversed = zigZag && !isClosed && (layerIndex % 2 == 1);
-            int  n        = c.Count;
-
-            Vector2? first      = null;
-            Vector3  firstNorm  = Vector3.Zero;
-            Vector3  prev       = default;
-            int      count      = 0;
-            for (int vi = 0; vi < n; vi++)
-            {
-                int     ci2  = reversed ? n - 1 - vi : vi;
-                var     v    = c[ci2];
-                var     p    = new Vector3(v.X, v.Y, z);
-                Vector3 norm = track.Normals != null ? track.Normals[ci2] : Vector3.Zero;
-                if (count == 0)
-                {
-                    first     = v;
-                    firstNorm = norm;
-                    if (!float.IsNaN(lastPos.X))
-                        layer.Moves.Add(new ToolpathMove(new Vector3(lastPos.X, lastPos.Y, z), p, MoveKind.Travel));
-                }
-                else
-                {
-                    layer.Moves.Add(new ToolpathMove(prev, p, MoveKind.Extrude) { Normal = norm });
-                }
-                prev = p; count++;
-            }
-            if (count > 2 && first.HasValue && isClosed)
-                layer.Moves.Add(new ToolpathMove(prev, new Vector3(first.Value.X, first.Value.Y, z), MoveKind.Extrude)
-                    { Normal = firstNorm });
-            if (count > 0)
-                lastPos = new Vector2(prev.X, prev.Y);
-        }
     }
 
     // -- Intersection / segment collection -------------------------------------
@@ -309,7 +273,8 @@ public static class PlanarSlicer
         Vector3[] verts,
         float z,
         List<(Vector2, Vector2)> segments,
-        List<(Vector2 pos, Vector3 normal)>? normalLookup = null)
+        List<(Vector2 pos, Vector3 normal)>? normalLookup = null,
+        bool surfaceNormals = false)
     {
         Span<Vector2> pts = stackalloc Vector2[2];
 
@@ -339,26 +304,28 @@ public static class PlanarSlicer
                 segments.Add((pts[0], pts[1]));
                 if (normalLookup != null)
                 {
-                    // Gradient of Z-height on the triangle face — the direction in which
-                    // successive layers stack along the surface.  Same formula as the geodesic
-                    // slicer's distance-field gradient, but using vertex Z values as distances.
-                    // Vertical walls → (0,0,1) (no tilt), 45° slope → 45° tilt, etc.
                     var e1 = v1 - v0; var e2 = v2 - v0;
                     var fn = Vector3.Cross(e1, e2);
                     float fnLen2 = fn.LengthSquared();
-                    Vector3 gradDir;
-                    if (fnLen2 > 1e-10f)
+                    Vector3 nDir;
+                    if (surfaceNormals && fnLen2 > 1e-10f)
                     {
+                        // Surface/cladding: tool follows the mesh face normal at the intersection.
+                        nDir = Vector3.Normalize(fn);
+                    }
+                    else if (fnLen2 > 1e-10f)
+                    {
+                        // Normal/solid: gradient of layer height along the surface.
                         float dz1 = v1.Z - v0.Z, dz2 = v2.Z - v0.Z;
                         var grad = (-dz1 * Vector3.Cross(fn, e2) + dz2 * Vector3.Cross(fn, e1)) / fnLen2;
                         float gLen = grad.Length();
-                        gradDir = gLen > 1e-6f ? grad / gLen : Vector3.UnitZ;
+                        nDir = gLen > 1e-6f ? grad / gLen : Vector3.UnitZ;
                     }
                     else
                     {
-                        gradDir = Vector3.UnitZ;
+                        nDir = Vector3.UnitZ;
                     }
-                    normalLookup.Add(((pts[0] + pts[1]) * 0.5f, gradDir));
+                    normalLookup.Add(((pts[0] + pts[1]) * 0.5f, nDir));
                 }
             }
         }
@@ -455,101 +422,11 @@ public static class PlanarSlicer
         return contours;
     }
 
-    private static void AlignSeam(
-        List<Vector2> contour,
-        Vector2 seamOrigin, Vector2 seamDir,
-        ref Vector2 prevSeamXY)
-    {
-        if (contour.Count < 3) return;
-
-        int n = contour.Count;
-        int bestEdge;
-        float bestT;
-
-        if (float.IsNaN(prevSeamXY.X))
-        {
-            SeamEdgeFromRay(contour, seamOrigin, seamDir, out bestEdge, out bestT);
-        }
-        else
-        {
-            bestEdge = 0; bestT = 0f;
-            float bestDist = float.MaxValue;
-            for (int i = 0; i < n; i++)
-            {
-                var a = contour[i];
-                var b = contour[(i + 1) % n];
-                float t = ClosestT(a, b, prevSeamXY);
-                var pt = a + t * (b - a);
-                float d = Dist2(pt, prevSeamXY);
-                if (d < bestDist) { bestDist = d; bestEdge = i; bestT = t; }
-            }
-        }
-
-        var pa     = contour[bestEdge];
-        var pb     = contour[(bestEdge + 1) % n];
-        var seamPt = pa + bestT * (pb - pa);
-
-        int insertAt = bestEdge + 1;
-        if      (Dist2(seamPt, pa) < 1e-4f) insertAt = bestEdge;
-        else if (Dist2(seamPt, pb) < 1e-4f) insertAt = (bestEdge + 1) % n;
-        else                                contour.Insert(insertAt, seamPt);
-
-        if (insertAt % contour.Count != 0)
-        {
-            var rotated = new List<Vector2>(contour.Count);
-            rotated.AddRange(contour.GetRange(insertAt, contour.Count - insertAt));
-            rotated.AddRange(contour.GetRange(0, insertAt));
-            contour.Clear();
-            contour.AddRange(rotated);
-        }
-
-        prevSeamXY = contour[0];
-    }
-
-    private static void SeamEdgeFromRay(
-        List<Vector2> contour, Vector2 seamOrigin, Vector2 seamDir,
-        out int edge, out float t)
-    {
-        var   rayDir   = -seamDir;
-        float bestRayT = float.MaxValue;
-        edge = 0; t = 0f;
-
-        for (int i = 0; i < contour.Count; i++)
-        {
-            var a = contour[i];
-            var b = contour[(i + 1) % contour.Count];
-            if (RaySegment(seamOrigin, rayDir, a, b, out float rayT, out float segS) && rayT < bestRayT)
-            {
-                bestRayT = rayT; edge = i; t = segS;
-            }
-        }
-    }
-
-    private static bool RaySegment(Vector2 origin, Vector2 dir, Vector2 a, Vector2 b,
-        out float t, out float s)
-    {
-        var   ab  = b - a;
-        float den = dir.X * ab.Y - dir.Y * ab.X;
-        if (MathF.Abs(den) < 1e-9f) { t = s = 0f; return false; }
-        var ao = a - origin;
-        t = (ao.X * ab.Y - ao.Y * ab.X) / den;
-        s = (ao.X * dir.Y - ao.Y * dir.X) / den;
-        return t > -1e-4f && s >= -1e-4f && s <= 1f + 1e-4f;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static float Dist2(Vector2 a, Vector2 b)
     {
         float dx = a.X - b.X, dy = a.Y - b.Y;
         return dx * dx + dy * dy;
-    }
-
-    private static float ClosestT(Vector2 a, Vector2 b, Vector2 p)
-    {
-        var ab = b - a;
-        float d = ab.LengthSquared();
-        if (d < 1e-10f) return 0f;
-        return Math.Clamp(Vector2.Dot(p - a, ab) / d, 0f, 1f);
     }
 
     private static float SignedArea(List<Vector2> poly)
@@ -575,7 +452,8 @@ public static class PlanarSlicer
         List<List<Vector2>> contours,
         List<bool>          closedFlags,
         List<ContourTrack>  prevTracks,
-        Vector2 seamOrigin, Vector2 seamDir)
+        Vector2 seamOrigin, Vector2 seamDir,
+        IReadOnlyList<Vector2> seamGuides)
     {
         var tracks = new List<ContourTrack>(contours.Count);
         for (int i = 0; i < contours.Count; i++)
@@ -599,7 +477,15 @@ public static class PlanarSlicer
                 : new Vector2(float.NaN, float.NaN);
 
             if (closedFlags[i])
-                AlignSeam(contour, seamOrigin, seamDir, ref seamRef);
+            {
+                if (float.IsNaN(seamRef.X) && seamGuides.Count > 0)
+                {
+                    var guide = ContourSeamPlanner.NearestGuideToContour(contour, seamGuides);
+                    ContourSeamPlanner.AlignSeamToGuide(contour, guide, ref seamRef);
+                }
+                else
+                    ContourSeamPlanner.AlignSeamFromRay(contour, seamOrigin, seamDir, ref seamRef);
+            }
             tracks.Add(new ContourTrack(contour, seamRef, closedFlags[i]));
         }
         return tracks;
@@ -633,7 +519,7 @@ public static class PlanarSlicer
 
     // -- Per-contour seam tracking ---------------------------------------------
 
-    private sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY, bool isClosed)
+    public sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY, bool isClosed)
     {
         public readonly List<Vector2>  Contour  = contour;
         public readonly Vector2        SeamXY   = seamXY;

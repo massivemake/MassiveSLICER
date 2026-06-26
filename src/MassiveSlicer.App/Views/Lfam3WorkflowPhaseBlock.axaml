@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:shapes="using:Avalonia.Controls.Shapes"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             x:Class="MassiveSlicer.App.Views.Lfam3WorkflowPhaseBlock"
+             x:Name="Root"
+             Background="Transparent"
+             ClipToBounds="False"
+             VerticalAlignment="Center"
+             HorizontalAlignment="Stretch"
+             Height="56">
+
+    <!-- Rivet + phase label only — floats live in Lfam3WorkflowPhaseColumn. -->
+    <Grid ClipToBounds="False"
+          VerticalAlignment="Center"
+          HorizontalAlignment="Stretch">
+
+        <Button Classes="Lfam3WorkflowStep"
+                Command="{Binding SelectPhaseCommand, ElementName=Root}"
+                ToolTip.Tip="{Binding PhaseToolTip, ElementName=Root}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Width="52"
+                Height="52"
+                ZIndex="2">
+            <Grid Classes="Lfam3WorkflowPhaseIconHost">
+                <!-- Opaque disc (track background) masks the connector line behind the rivet so
+                     the green/grey line terminates cleanly at the circle perimeter instead of
+                     showing through the semi-transparent node fill. -->
+                <shapes:Ellipse Width="54" Height="54"
+                                Fill="#0A0E14"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"/>
+                <shapes:Ellipse Classes="Lfam3WorkflowGlow"
+                                IsVisible="{Binding IsStepActive, ElementName=Root}"/>
+                <shapes:Ellipse Classes="Lfam3WorkflowNode"
+                                Classes.completed="{Binding IsStepCompleted, ElementName=Root}"
+                                Classes.active="{Binding IsStepActive, ElementName=Root}"
+                                Classes.pending="{Binding IsStepPending, ElementName=Root}"/>
+                <ia:Icon Classes="Lfam3WorkflowPhaseIcon"
+                         Value="{Binding PhaseIcon, ElementName=Root}"
+                         Foreground="#59FF0D"
+                         IsVisible="{Binding !IsStepPending, ElementName=Root}"/>
+                <ia:Icon Classes="Lfam3WorkflowPhaseIcon"
+                         Value="{Binding PhaseIcon, ElementName=Root}"
+                         Foreground="#6b7280"
+                         Opacity="0.55"
+                         IsVisible="{Binding IsStepPending, ElementName=Root}"/>
+            </Grid>
+        </Button>
+
+        <TextBlock Text="{Binding PhaseTitle, ElementName=Root}"
+                   Classes="Lfam3WorkflowPhaseTitle chip"
+                   Classes.active="{Binding IsStepActive, ElementName=Root}"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Bottom"
+                   Margin="0,0,0,58"
+                   ZIndex="4"
+                   IsVisible="{Binding !IsDetailExpanded, ElementName=Root}"/>
+    </Grid>
+</UserControl>

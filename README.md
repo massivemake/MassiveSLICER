@@ -25,10 +25,14 @@ dotnet --version
 
 ### Clone the repository
 
+**Canonical repo:** [github.com/massivemake/MassiveSLICER](https://github.com/massivemake/MassiveSLICER) — always work on the `main` branch.
+
 ```powershell
-git clone https://github.com/MattWhite3194/MassiveSlicer.git
-cd MassiveSlicer
+git clone https://github.com/massivemake/MassiveSLICER.git
+cd MassiveSLICER
 ```
+
+> **Note:** Older checkouts under `MassiveSlicer` (MattWhite3194) or `Slicing/MassiveSLICER` are deprecated. Use this repo only.
 
 ### Build
 

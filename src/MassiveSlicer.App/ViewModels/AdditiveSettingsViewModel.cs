@@ -1,5 +1,7 @@
 ﻿using System.Collections.ObjectModel;
+using System.Globalization;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels.Base;
 
@@ -12,9 +14,25 @@ namespace MassiveSlicer.ViewModels;
 /// </summary>
 public sealed class AdditiveSettingsViewModel : ViewModelBase
 {
+    /// <summary>KRL SRC post-processing rules and header/footer templates.</summary>
+    public KrlPostProcessSettingsViewModel KrlPostProcess { get; } = new();
+
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
+        OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
+        ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
+
+        PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName is nameof(BeadWidth) or nameof(LayerHeight) or nameof(PrintSpeed)
+                or nameof(SelectedPresetIndex) or nameof(ExtrusionSpeedOffset))
+                OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+
+            if (e.PropertyName is nameof(SelectedPresetIndex) or nameof(TemperatureOffset))
+                OnPropertyChanged(nameof(ExportTemperatureC));
+        };
     }
 
     // -- Geometry -------------------------------------------------------------
@@ -35,6 +53,26 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _beadWidth;
         set => SetField(ref _beadWidth, Math.Clamp(value, 1.0, 100.0));
+    }
+
+    private bool   _useDisplacedStock;
+    private double _stockAllowanceMm = 2.0;
+
+    /// <summary>
+    /// Print the displaced surface (low-poly mesh + PBR-map detail from the MILLING panel) instead of
+    /// the raw mesh, so the blank carries the detail and the later mill has material to cut.
+    /// </summary>
+    public bool UseDisplacedStock
+    {
+        get => _useDisplacedStock;
+        set => SetField(ref _useDisplacedStock, value);
+    }
+
+    /// <summary>Uniform extra skin added over the displaced surface for the mill to remove (mm).</summary>
+    public double StockAllowanceMm
+    {
+        get => _stockAllowanceMm;
+        set => SetField(ref _stockAllowanceMm, Math.Clamp(value, 0.0, 50.0));
     }
 
     private double _firstLayerHeight = 3.0;
@@ -73,6 +111,33 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
     public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
 
+    // -- Slicing mode (Normal vs Surface) -------------------------------------
+
+    public string[] SlicingModeOptions { get; } = ["Normal", "Surface"];
+
+    private string _slicingMode = "Normal";
+
+    /// <summary>
+    /// Normal = volumetric shells + infill. Surface = boundary/cladding paths; tool stays vertical unless Overhang orientation is on.
+    /// </summary>
+    public string SlicingMode
+    {
+        get => _slicingMode;
+        set
+        {
+            if (SetField(ref _slicingMode, value))
+            {
+                OnPropertyChanged(nameof(ShowInfillControls));
+                OnPropertyChanged(nameof(SurfaceModeActive));
+            }
+        }
+    }
+
+    public bool SurfaceModeActive => _slicingMode == "Surface";
+
+    /// <summary>Surface mode is for planar/angled strategies (not geodesic/curved).</summary>
+    public bool ShowSlicingMode => _method is not SliceMethod.Geodesic and not SliceMethod.Curved;
+
     private double _adaptiveQuality = 0.5;
 
     /// <summary>0 = finest detail (thin layers on slopes), 1 = fastest (thick layers where possible).</summary>
@@ -108,11 +173,15 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
+                OnPropertyChanged(nameof(ShowSlicingMode));
+                OnPropertyChanged(nameof(ShowCurvedControls));
+                OnPropertyChanged(nameof(IsCurvedMethod));
             }
         }
     }
 
-    public string[] AvailableMethodNames { get; } = ["Planar", "Angled", "Geodesic (Experimental)"];
+    public string[] AvailableMethodNames { get; } =
+        ["Planar", "Angled", "Geodesic (Experimental)", "Curved (Sweep)"];
 
     public string MethodDisplayName
     {
@@ -120,6 +189,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         {
             SliceMethod.Angled   => "Angled",
             SliceMethod.Geodesic => "Geodesic (Experimental)",
+            SliceMethod.Curved   => "Curved (Sweep)",
             _                    => "Planar",
         };
         set => Method = value switch
@@ -127,12 +197,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             "Angled"                  => SliceMethod.Angled,
             "Geodesic (Experimental)" => SliceMethod.Geodesic,
             "Geodesic"                => SliceMethod.Geodesic,
+            "Curved (Sweep)"          => SliceMethod.Curved,
+            "Curved"                  => SliceMethod.Curved,
             _                         => SliceMethod.Planar,
         };
     }
 
+    public bool IsCurvedMethod          => Method == SliceMethod.Curved;
+    public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
-    public bool ShowContourOffsetOption => Method != SliceMethod.Geodesic;
+    public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private bool _disableContourOffset;
 
@@ -152,6 +226,90 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _seamMode;
         set => SetField(ref _seamMode, value);
     }
+
+    /// <summary>World-space seam position guides for planar slicing.</summary>
+    public ObservableCollection<SeamGuidePoint> SeamGuides { get; } = [];
+
+    public string SeamGuideSummary =>
+        SeamGuides.Count == 0 ? "No guides" : $"{SeamGuides.Count} guide point(s)";
+
+    public void SetSeamGuides(IEnumerable<SeamGuidePoint> guides)
+    {
+        SeamGuides.Clear();
+        foreach (var g in guides)
+            SeamGuides.Add(g);
+        OnPropertyChanged(nameof(SeamGuideSummary));
+    }
+
+    public IReadOnlyList<SeamGuidePoint> BuildSeamGuideList() => [.. SeamGuides];
+
+    /// <summary>Opens the viewport seam guide editor.</summary>
+    public RelayCommand OpenSeamEditorCommand { get; }
+
+    internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    // -- Curved slicing boundaries --------------------------------------------
+
+    public string[] CurvedBoundarySourceOptions { get; } = ["Auto", "Viewport Pick", "JSON Import"];
+
+    private string _curvedBoundarySource = "Auto";
+
+    public string CurvedBoundarySourceDisplay
+    {
+        get => _curvedBoundarySource;
+        set
+        {
+            if (SetField(ref _curvedBoundarySource, value))
+                OnPropertyChanged(nameof(CurvedBoundarySummary));
+        }
+    }
+
+    public CurvedBoundarySource CurvedBoundarySource => _curvedBoundarySource switch
+    {
+        "Viewport Pick" => CurvedBoundarySource.ViewportPick,
+        "JSON Import"   => CurvedBoundarySource.JsonImport,
+        _               => CurvedBoundarySource.AutoDetect,
+    };
+
+    private double _curvedAutoDetectBandMm = 2.0;
+
+    public double CurvedAutoDetectBandMm
+    {
+        get => _curvedAutoDetectBandMm;
+        set => SetField(ref _curvedAutoDetectBandMm, Math.Clamp(value, 0.1, 50.0));
+    }
+
+    private bool _curvedEnableRegionSplit = true;
+
+    public bool CurvedEnableRegionSplit
+    {
+        get => _curvedEnableRegionSplit;
+        set => SetField(ref _curvedEnableRegionSplit, value);
+    }
+
+    public ObservableCollection<int> CurvedBoundaryLowVertices  { get; } = [];
+    public ObservableCollection<int> CurvedBoundaryHighVertices { get; } = [];
+
+    public string CurvedBoundarySummary =>
+        $"LOW: {CurvedBoundaryLowVertices.Count} verts, HIGH: {CurvedBoundaryHighVertices.Count} verts";
+
+    public void SetCurvedBoundaries(IEnumerable<int> low, IEnumerable<int> high)
+    {
+        CurvedBoundaryLowVertices.Clear();
+        CurvedBoundaryHighVertices.Clear();
+        foreach (var v in low)  CurvedBoundaryLowVertices.Add(v);
+        foreach (var v in high) CurvedBoundaryHighVertices.Add(v);
+        OnPropertyChanged(nameof(CurvedBoundarySummary));
+    }
+
+    public IReadOnlyList<int> BuildCurvedLowBoundaryList()  => [.. CurvedBoundaryLowVertices];
+    public IReadOnlyList<int> BuildCurvedHighBoundaryList() => [.. CurvedBoundaryHighVertices];
+
+    public RelayCommand OpenCurvedBoundaryEditorCommand { get; }
+    public RelayCommand ImportCurvedBoundariesCommand { get; }
+
+    internal Action? OnOpenCurvedBoundaryEditorRequested { get; set; }
+    internal Func<Task>? OnImportCurvedBoundariesRequested { get; set; }
 
     private double _passAngle;
 
@@ -426,7 +584,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public bool ShowInfillControls => InfillPattern != "None";
+    public bool ShowInfillControls => InfillPattern != "None" && !SurfaceModeActive;
 
     private double _infillSpacingMm = 0.0;
 
@@ -471,6 +629,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _maxOverhangTiltDeg;
         set => SetField(ref _maxOverhangTiltDeg, Math.Clamp(value, 0.0, 89.0));
     }
+
+    // -- Surface follow (vertical ↔ path-normal blend) --------------------------
+
+    private double _orientationFollowPercent = 100.0;
+
+    /// <summary>
+    /// How strongly the tool follows surface/stacking normals (0–100%).
+    /// 0 = vertical (world +Z), 100 = full path/surface follow.
+    /// </summary>
+    public double OrientationFollowPercent
+    {
+        get => _orientationFollowPercent;
+        set => SetField(ref _orientationFollowPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    public float OrientationFollowStrength => (float)(OrientationFollowPercent / 100.0);
 
     // -- Orientation smoothing ------------------------------------------------
 
@@ -627,11 +801,193 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public bool HasSelectedPreset => _selectedPresetIndex >= 0 && _selectedPresetIndex < MaterialPresets.Count;
 
+    /// <summary>Active material preset, or <c>null</c> when none is selected.</summary>
+    public MaterialPreset? SelectedPreset =>
+        HasSelectedPreset ? MaterialPresets[_selectedPresetIndex] : null;
+
     private void ApplyPreset(MaterialPreset p)
     {
         Temperature1 = p.Temperature1;
         Temperature2 = p.Temperature2;
         Temperature3 = p.Temperature3;
+        OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+        OnPropertyChanged(nameof(ExportTemperatureC));
+    }
+
+    // -- KRL export (Toolpath tab) ---------------------------------------------
+
+    private string _temperatureOffset = "";
+
+    /// <summary>±°C adjustment applied to all extruder zones at export. Empty = no change.</summary>
+    public string TemperatureOffset
+    {
+        get => _temperatureOffset;
+        set => SetField(ref _temperatureOffset, value);
+    }
+
+    /// <summary>Material preset temperature (°C) shown for all zones before offset.</summary>
+    public double ExportTemperatureC => Temperature1;
+
+    /// <summary>Zone temperature (°C) written to KRL after applying <see cref="TemperatureOffset"/>.</summary>
+    public float GetEffectiveExportTemperature()
+    {
+        float temp = (float)Temperature1 + (float)ParseSignedOffset(_temperatureOffset);
+        return Math.Clamp(temp, 0f, 450f);
+    }
+
+    private string _extrusionSpeedOffset = "";
+
+    /// <summary>±% adjustment applied to computed extrusion speed at export. Empty = no change.</summary>
+    public string ExtrusionSpeedOffset
+    {
+        get => _extrusionSpeedOffset;
+        set => SetField(ref _extrusionSpeedOffset, value);
+    }
+
+    /// <summary>Computed extrusion motor speed (%) from bead geometry and material flow.</summary>
+    public double ExtrusionSpeedPercent => ComputeExtrusionSpeedPercent();
+
+    private double ComputeExtrusionSpeedPercent()
+    {
+        float flow = (float)(SelectedPreset?.FlowRate ?? 0.463);
+        return KrlAnout.ComputeRpmPercent(
+            (float)BeadWidth, (float)LayerHeight, (float)(PrintSpeed / 1000.0), flow);
+    }
+
+    /// <summary>Extrusion motor speed (%) written to KRL after applying <see cref="ExtrusionSpeedOffset"/>.</summary>
+    public float GetEffectiveExtrusionSpeedPercent()
+    {
+        float pct = (float)ComputeExtrusionSpeedPercent() + (float)ParseSignedOffset(_extrusionSpeedOffset);
+        return Math.Max(0f, pct);
+    }
+
+    private double _extrusionStartWaitSec = 1.0;
+
+    /// <summary>Pause (seconds) after first RPM-on before the first extrusion move.</summary>
+    public double ExtrusionStartWaitSec
+    {
+        get => _extrusionStartWaitSec;
+        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 60.0));
+    }
+
+    private double _extrusionResumeWaitSec;
+
+    /// <summary>Pause (seconds) after each travel before the next extrusion move.</summary>
+    public double ExtrusionResumeWaitSec
+    {
+        get => _extrusionResumeWaitSec;
+        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 60.0));
+    }
+
+    // -- Movement (z-hop, wipe) ------------------------------------------------
+
+    private double _zHopMm;
+
+    /// <summary>Vertical lift on travel moves in mm. 0 = disabled.</summary>
+    public double ZHopMm
+    {
+        get => _zHopMm;
+        set => SetField(ref _zHopMm, Math.Max(0.0, value));
+    }
+
+    public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction"];
+
+    private string _wipeModeDisplay = "Off";
+
+    /// <summary>Wipe path before travel: Off, Retrace (back), or Same-Direction (forward past the point).</summary>
+    public string WipeModeDisplay
+    {
+        get => _wipeModeDisplay;
+        set => SetField(ref _wipeModeDisplay, value);
+    }
+
+    private double _wipeLengthMm = 10.0;
+
+    /// <summary>Total wipe distance in mm.</summary>
+    public double WipeLengthMm
+    {
+        get => _wipeLengthMm;
+        set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
+    }
+
+    private double _wipeRampMm = 5.0;
+
+    /// <summary>
+    /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
+    /// Negative = extra |N| mm past wipe length with ramp-down squeeze.
+    /// </summary>
+    public double WipeRampMm
+    {
+        get => _wipeRampMm;
+        set => SetField(ref _wipeRampMm, Math.Clamp(value, -500.0, 500.0));
+    }
+
+    private double _wipeSpeed = 120.0;
+
+    /// <summary>Linear speed for wipe moves in mm/s (independent of travel speed).</summary>
+    public double WipeSpeed
+    {
+        get => _wipeSpeed;
+        set => SetField(ref _wipeSpeed, Math.Clamp(value, 1.0, 2000.0));
+    }
+
+    private bool _resumeRampEnabled;
+
+    /// <summary>Stepped speed/RPM ramp after each travel before full extrusion resumes.</summary>
+    public bool ResumeRampEnabled
+    {
+        get => _resumeRampEnabled;
+        set => SetField(ref _resumeRampEnabled, value);
+    }
+
+    private double _resumeRampStartSpeed = 0.5;
+
+    /// <summary>Print speed at the start of the post-travel ramp (mm/s).</summary>
+    public double ResumeRampStartSpeed
+    {
+        get => _resumeRampStartSpeed;
+        set => SetField(ref _resumeRampStartSpeed, Math.Clamp(value, 0.01, 2000.0));
+    }
+
+    private double _resumeRampStartRpmPercent = 1.0;
+
+    /// <summary>Extruder motor speed at ramp start (%).</summary>
+    public double ResumeRampStartRpmPercent
+    {
+        get => _resumeRampStartRpmPercent;
+        set => SetField(ref _resumeRampStartRpmPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _resumeRampDistanceMm = 609.6;
+
+    /// <summary>Total ramp distance along the path (mm). Default 609.6 ≈ 2 ft.</summary>
+    public double ResumeRampDistanceMm
+    {
+        get => _resumeRampDistanceMm;
+        set => SetField(ref _resumeRampDistanceMm, Math.Clamp(value, 1.0, 10000.0));
+    }
+
+    private int _resumeRampSteps = 10;
+
+    /// <summary>Number of discrete speed/RPM steps over the ramp distance.</summary>
+    public int ResumeRampSteps
+    {
+        get => _resumeRampSteps;
+        set => SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50));
+    }
+
+    private static double ParseSignedOffset(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return 0;
+
+        var trimmed = text.Trim();
+        if (trimmed.StartsWith('+'))
+            trimmed = trimmed[1..];
+
+        return double.TryParse(trimmed, NumberStyles.Float, CultureInfo.InvariantCulture, out var v)
+            ? v
+            : 0;
     }
 
     // -- Home positions --------------------------------------------------------

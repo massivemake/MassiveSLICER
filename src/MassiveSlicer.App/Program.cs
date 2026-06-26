@@ -9,8 +9,12 @@ namespace MassiveSlicer.App;
 class Program
 {
     [STAThread]
-    public static void Main(string[] args) => BuildAvaloniaApp()
-        .StartWithClassicDesktopLifetime(args);
+    public static void Main(string[] args)
+    {
+        // Cell JSON + GLBs resolve from assets/ next to the executable.
+        Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+    }
 
     public static AppBuilder BuildAvaloniaApp()
     {

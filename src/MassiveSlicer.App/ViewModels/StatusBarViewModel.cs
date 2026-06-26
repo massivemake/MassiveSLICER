@@ -26,4 +26,13 @@ public sealed class StatusBarViewModel : ViewModelBase
         get => _operationFeedback;
         set => SetField(ref _operationFeedback, value);
     }
+
+    private bool _isProgressActive;
+
+    /// <summary>True while a long-running operation is in progress (shows the footer progress line).</summary>
+    public bool IsProgressActive
+    {
+        get => _isProgressActive;
+        set => SetField(ref _isProgressActive, value);
+    }
 }

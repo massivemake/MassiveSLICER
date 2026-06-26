@@ -35,6 +35,12 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
     public event Action<TimeSpan, int, int>? GlRender;
     public event Action?                     GlDeinitialized;
 
+    /// <inheritdoc cref="GlHostControl.InteractionRenderScale"/>
+    public float InteractionRenderScale { get; set; } = 1f;
+
+    /// <inheritdoc cref="GlHostControl.CaptureScreenshotPngAsync"/>
+    public Task<byte[]?> CaptureScreenshotPngAsync(int timeoutMs = 5000) => Task.FromResult<byte[]?>(null);
+
     // -- Output FBO (what SceneRenderer composites into) -----------------------
 
     private int _outputFbo, _outputColorTex, _outputDepthRbo;
@@ -63,9 +69,12 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
 
     protected override void OnOpenGlRender(GlInterface gl, int fb)
     {
-        double scale = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
-        int w = Math.Max(1, (int)(Bounds.Width  * scale));
-        int h = Math.Max(1, (int)(Bounds.Height * scale));
+        double dpi = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+        int displayW = Math.Max(1, (int)(Bounds.Width  * dpi));
+        int displayH = Math.Max(1, (int)(Bounds.Height * dpi));
+        float interaction = Math.Clamp(InteractionRenderScale, 0.25f, 1f);
+        int w = Math.Max(1, (int)(displayW * interaction));
+        int h = Math.Max(1, (int)(displayH * interaction));
 
         if (w != _fboW || h != _fboH)
             ResizeResources(w, h);
