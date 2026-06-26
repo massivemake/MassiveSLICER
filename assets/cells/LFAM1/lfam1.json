@@ -5,7 +5,7 @@
     "worldPosition": {
       "x": 0,
       "y": 0,
-      "z": 0
+      "z": 500
     },
     "joints": [
       {
@@ -92,15 +92,15 @@
   "bed": {
     "modelPath": "assets/cells/LFAM1/lfam1_bed.glb",
     "origin": {
-      "x": 1496.36047,
-      "y": -577.892273,
-      "z": 278
+      "x": 1345.21,
+      "y": -708.56,
+      "z": 272.93
     },
     "width": 1200,
     "depth": 800,
     "baseData": {
-      "x": 1496.36047,
-      "y": -577.892273,
+      "x": 1496.3605,
+      "y": -577.8923,
       "z": 278
     },
     "hidden": false
@@ -110,8 +110,14 @@
     "worldPosition": {
       "x": 0,
       "y": 0,
-      "z": 0
+      "z": 500
     }
+  },
+  "robotRail": {
+    "axis": "Y",
+    "minMm": -4650,
+    "maxMm": 150,
+    "e1Sign": -1
   },
   "stands": [],
   "tools": [
@@ -135,20 +141,20 @@
       "index": 1
     }
   ],
-  "krcRoot": "\\\\192.168.0.151\\krc\\ROBOTER\\KRC\\R1",
   "bridgeIp": "192.168.0.151",
   "bridgePort": 7000,
   "extIp": "192.168.0.195",
   "extBridgePort": 8765,
   "millBridgePort": 8765,
   "hasMilling": false,
+  "krcRoot": "\\\\192.168.0.151\\krc\\ROBOTER\\KRC\\R1",
   "view": {
-    "azimuth": -39,
-    "elevation": 8,
-    "radius": 2200,
-    "targetX": 2096.36,
-    "targetY": -177.89,
-    "targetZ": 278
+    "azimuth": -22.600056,
+    "elevation": 4.0000267,
+    "radius": 4038.6013,
+    "targetX": 1024.8336,
+    "targetY": 1807.4492,
+    "targetZ": 1421.2273
   },
   "waypoints": []
 }
