@@ -5,7 +5,7 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+    <ApplicationIcon>..\..\assets\Icons\icon.ico</ApplicationIcon>
     <!-- COM interop is required for the Windows WGL P/Invoke GL host. Not needed on
          macOS/Linux, but harmless to leave unconditional for a Windows-only project. -->
     <BuiltInComInteropSupport Condition="$([MSBuild]::IsOSPlatform('Windows'))">true</BuiltInComInteropSupport>
@@ -28,12 +28,34 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MassiveSlicer.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MassiveSlicer.Core\MassiveSlicer.Core.csproj" />
     <ProjectReference Include="..\MassiveSlicer.Viewport\MassiveSlicer.Viewport.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <AvaloniaResource Include="Assets\icon.ico"/>
+    <!-- Canonical app icon lives in repo assets/Icons (generated from Square44x44Logo PNGs). -->
+    <AvaloniaResource Include="..\..\assets\Icons\icon.ico" Link="Assets\icon.ico"/>
+    <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
+  </ItemGroup>
+
+  <!-- Bed-calibration KRL deployed to the KRC over SMB during AUTO-CALIBRATE. -->
+  <ItemGroup>
+    <None Include="..\..\assets\krl\*.src" Link="assets\krl\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Cell definitions + GLB/STL geometry (LFAM2/LFAM3 robots, tools, stands, rotary bed). -->
+  <ItemGroup>
+    <None Include="..\..\assets\cells\**\*.*" Link="assets\cells\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Shared preset libraries (git-tracked under repo assets/). -->
+  <ItemGroup>
+    <None Include="..\..\assets\materials.json" Link="assets\materials.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\assets\krl_postprocess.json" Link="assets\krl_postprocess.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

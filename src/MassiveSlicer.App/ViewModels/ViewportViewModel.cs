@@ -2,8 +2,14 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows.Input;
+using Avalonia.Threading;
+using MassiveSlicer.App;
+using MassiveSlicer.App.Enums;
+using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
@@ -126,10 +132,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // -- Toolpath colors -------------------------------------------------------
 
-    private System.Numerics.Vector3 _toolpathExtrudeColor    = new(0.1f,  0.45f, 0.9f);
-    private System.Numerics.Vector3 _toolpathTravelColor     = new(0.85f, 0.18f, 0.18f);
-    private System.Numerics.Vector3 _toolpathSeamColor       = new(1.0f,  0.9f,  0.0f);
-    private System.Numerics.Vector3 _toolpathUnselectedColor = new(0.38f, 0.38f, 0.38f);
+    private System.Numerics.Vector3 _toolpathExtrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private System.Numerics.Vector3 _toolpathTravelColor      = new(0.85f, 0.18f, 0.18f);
+    private System.Numerics.Vector3 _toolpathWipeColor        = new(1.0f,  0.53f, 0.0f);
+    private System.Numerics.Vector3 _toolpathRetractionColor  = new(0.61f, 0.15f, 0.69f);
+    private System.Numerics.Vector3 _toolpathSeamColor        = new(1.0f,  0.9f,  0.0f);
+    private System.Numerics.Vector3 _toolpathUnselectedColor  = new(0.38f, 0.38f, 0.38f);
 
     public System.Numerics.Vector3 ToolpathExtrudeColor
     {
@@ -141,6 +149,18 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get => _toolpathTravelColor;
         set => SetField(ref _toolpathTravelColor, value);
+    }
+
+    public System.Numerics.Vector3 ToolpathWipeColor
+    {
+        get => _toolpathWipeColor;
+        set => SetField(ref _toolpathWipeColor, value);
+    }
+
+    public System.Numerics.Vector3 ToolpathRetractionColor
+    {
+        get => _toolpathRetractionColor;
+        set => SetField(ref _toolpathRetractionColor, value);
     }
 
     public System.Numerics.Vector3 ToolpathSeamColor
@@ -208,6 +228,655 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
+
+    // -- N-key HUD (hidden until N; no viewport-edge tab) ----------------------
+
+    private bool _isSyncHudOpen;
+
+    /// <summary>Whether the left-side HUD is visible (toggle with N).</summary>
+    public bool IsSyncHudOpen
+    {
+        get => _isSyncHudOpen;
+        set => SetField(ref _isSyncHudOpen, value);
+    }
+
+    /// <summary>True when robot sync is active — HUD panels show live data.</summary>
+    public bool IsRobotSynced => Robot?.IsConnected == true;
+
+    private string _mountedToolName = "—";
+    private int _lfam3WorkflowPhaseIndex;
+    private bool _hasPrePrintScanStep;
+    private string? _lfam3WorkflowCellName;
+    private SceneNode? _armatureScanNode;
+
+    /// <summary>Currently mounted tool on the flange (multi-tool cells).</summary>
+    public string MountedToolName
+    {
+        get => _mountedToolName;
+        set
+        {
+            if (!SetField(ref _mountedToolName, value)) return;
+            OnPropertyChanged(nameof(MountedToolLabel));
+            OnPropertyChanged(nameof(HasFlangeMountedTool));
+            SyncWorkflowPhaseFromMountedTool();
+            NotifyWorkflowStateChanged();
+            RaiseToolChangeCommandsCanExecuteChanged();
+        }
+    }
+
+    /// <summary>Human-readable mounted tool for HUD (empty flange → "No tool").</summary>
+    public string MountedToolLabel =>
+        string.IsNullOrEmpty(MountedToolName) ? "No tool" : MountedToolName;
+
+    /// <summary>True when a toolhead mesh is on the robot flange.</summary>
+    public bool HasFlangeMountedTool => !string.IsNullOrEmpty(MountedToolName);
+
+    /// <summary>LFAM 3 workflow timeline (Print → Scan → Mill, optional pre-print scan).</summary>
+    public bool ShowLfam3ToolPicker =>
+        ActiveCell?.Name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) == true
+        && !Lfam3MinimalProbe.IsActive(ActiveCell.Name);
+
+    private bool _isLfam3WorkflowExpanded = true;
+
+    /// <summary>When true, the full LFAM 3 phase timeline is shown; false = slim minimized bar.</summary>
+    public bool IsLfam3WorkflowExpanded
+    {
+        get => _isLfam3WorkflowExpanded;
+        set
+        {
+            if (!SetField(ref _isLfam3WorkflowExpanded, value)) return;
+            if (!value && LiveIo.IsExpanded)
+                LiveIo.IsExpanded = false;
+            OnPropertyChanged(nameof(Lfam3WorkflowMinimizeIcon));
+            OnPropertyChanged(nameof(Lfam3WorkflowMinimizeTip));
+            OnPropertyChanged(nameof(Lfam3WorkflowMargin));
+            OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+            OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
+        }
+    }
+
+    public string Lfam3WorkflowMinimizeIcon =>
+        IsLfam3WorkflowExpanded ? "mdi-chevron-down" : "mdi-chevron-up";
+
+    public string Lfam3WorkflowMinimizeTip =>
+        IsLfam3WorkflowExpanded ? "Collapse workflow panel" : "Expand workflow panel upward";
+
+    public string Lfam3WorkflowStatusLabel =>
+        IsPrePrintScanStepActive ? "Pre-print scan"
+        : IsPrintStepActive       ? "Print"
+        : IsVerifyScanStepActive  ? "Verify scan"
+        : IsMillStepActive          ? "Mill"
+        : "Workflow";
+
+    /// <summary>When true, inserts a scene scan step before print (armatures &amp; fixtures).</summary>
+    public bool HasPrePrintScanStep
+    {
+        get => _hasPrePrintScanStep;
+        set
+        {
+            if (!SetField(ref _hasPrePrintScanStep, value)) return;
+            AdjustPhaseIndexForPrePrintScanToggle(value);
+            NotifyWorkflowStateChanged();
+        }
+    }
+
+    public string PrePrintScanToggleIcon  => HasPrePrintScanStep ? "mdi-minus" : "mdi-plus";
+    public string PrePrintScanToggleTip   => HasPrePrintScanStep
+        ? "Remove pre-print scene scan step"
+        : "Add pre-print scene scan before print";
+
+    /// <summary>Active LFAM 3 workflow step index within the visible timeline.</summary>
+    public int Lfam3WorkflowPhaseIndex => _lfam3WorkflowPhaseIndex;
+
+    int PrintPhaseIndex  => HasPrePrintScanStep ? 1 : 0;
+    int ScanPhaseIndex   => HasPrePrintScanStep ? 2 : 1;
+    int MillPhaseIndex   => HasPrePrintScanStep ? 3 : 2;
+
+    public bool IsWorkflowSegment0Complete => _lfam3WorkflowPhaseIndex > 0;
+    public bool IsWorkflowSegment1Complete => _lfam3WorkflowPhaseIndex > 1;
+    public bool IsWorkflowSegment2Complete => HasPrePrintScanStep && _lfam3WorkflowPhaseIndex > 2;
+
+    public bool IsPrePrintScanStepCompleted => HasPrePrintScanStep && _lfam3WorkflowPhaseIndex > 0;
+    public bool IsPrePrintScanStepActive    => HasPrePrintScanStep && _lfam3WorkflowPhaseIndex == 0;
+    public bool IsPrePrintScanStepPending   => HasPrePrintScanStep && _lfam3WorkflowPhaseIndex < 0;
+
+    public bool IsPrintStepCompleted => _lfam3WorkflowPhaseIndex > PrintPhaseIndex;
+    public bool IsPrintStepActive    => _lfam3WorkflowPhaseIndex == PrintPhaseIndex;
+    public bool IsPrintStepPending   => _lfam3WorkflowPhaseIndex < PrintPhaseIndex;
+
+    public bool IsVerifyScanStepCompleted => _lfam3WorkflowPhaseIndex > ScanPhaseIndex;
+    public bool IsVerifyScanStepActive    => _lfam3WorkflowPhaseIndex == ScanPhaseIndex;
+    public bool IsVerifyScanStepPending   => _lfam3WorkflowPhaseIndex < ScanPhaseIndex;
+
+    public bool IsMillStepCompleted => _lfam3WorkflowPhaseIndex > MillPhaseIndex;
+    public bool IsMillStepActive    => _lfam3WorkflowPhaseIndex == MillPhaseIndex;
+    public bool IsMillStepPending   => _lfam3WorkflowPhaseIndex < MillPhaseIndex;
+
+    /// <summary>Active phase column shows playback/details after Pick or Deposit is clicked.</summary>
+    public bool IsPrePrintScanStepExpanded => IsPrePrintScanStepActive && ScannerToolPanel.ShowPlayback;
+    public bool IsPrintStepExpanded        => IsPrintStepActive && ExtruderToolPanel.ShowPlayback;
+    public bool IsVerifyScanStepExpanded   => IsVerifyScanStepActive && ScannerToolPanel.ShowPlayback;
+    public bool IsMillStepExpanded         => IsMillStepActive && SpindleToolPanel.ShowPlayback;
+
+    // Inactive phase cards stack over the viewport when Live I/O is open — only the active
+    // phase column expands; click another phase icon to switch.
+    public bool ShowPrePrintScanParamCard => false;
+    public bool ShowPrintParamCard        => false;
+    public bool ShowVerifyScanParamCard   => false;
+    public bool ShowMillParamCard         => false;
+
+    public bool IsExtruderToolActive => IsPrintStepActive;
+    public bool IsScannerToolActive  => IsPrePrintScanStepActive || IsVerifyScanStepActive;
+    public bool IsSpindleToolActive  => IsMillStepActive;
+
+    /// <summary>LFAM 3 toolpath panel uses phase-specific option groups.</summary>
+    public bool IsLfam3ToolpathPhased => ShowLfam3ToolPicker;
+
+    public bool Lfam3ToolpathShowPrintOptions => !ShowLfam3ToolPicker || IsPrintStepActive;
+
+    public bool Lfam3ToolpathShowScanOptions => ShowLfam3ToolPicker && IsScannerToolActive;
+
+    public bool Lfam3ToolpathShowMillOptions => ShowLfam3ToolPicker && IsMillStepActive;
+
+    /// <summary>True when the initial-scan armature/fixture mesh is loaded in the scene.</summary>
+    public bool HasArmatureScanMesh => _armatureScanNode is not null;
+
+    public string PrePrintScanParamLine1 => HasArmatureScanMesh
+        ? "Scene mesh in scene"
+        : "Import point cloud / mesh";
+
+    public string PrePrintScanParamLine2 => ActiveCell?.BedScan is { } scan
+        ? $"Capture fixtures · {scan.ScanSteps} rotations"
+        : "Capture fixtures & armatures";
+
+    public string PrintParamLine1 => AdditiveSettings is { } a
+        ? $"Layer {a.LayerHeight:F1} mm · Bead {a.BeadWidth:F1} mm"
+        : "Pellet extrusion";
+
+    public string PrintParamLine2 => HasPrePrintScanStep && !HasArmatureScanMesh
+        ? "Requires pre-print scan mesh"
+        : HasArmatureScanMesh
+            ? (AdditiveSettings?.SelectedPreset?.Name ?? "Print-in armatures if needed")
+            : (AdditiveSettings?.SelectedPreset?.Name ?? "Pellet extrusion");
+
+    public string VerifyScanParamLine1 => HasArmatureScanMesh
+        ? "Collision check vs armature"
+        : "Load armature scan first";
+
+    public string VerifyScanParamLine2 => ActiveCell?.BedScan is { } scan
+        ? $"Re-scan before laydown · {scan.ScanSteps} steps"
+        : "Re-scan before laydown";
+
+    public string MillParamLine1 => "Subtractive finish";
+    public string MillParamLine2 => IsMillStepActive ? "Spindle · mounted" : "Spindle · on dock";
+
+    public LiveIoMonitorViewModel LiveIo { get; } = new();
+
+    /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
+    public Avalonia.Thickness Lfam3WorkflowMargin
+    {
+        get
+        {
+            var bottom = _isToolpathSelected ? 88 : 32;
+            return new Avalonia.Thickness(20, 0, 20, bottom);
+        }
+    }
+
+    const double Lfam3WorkflowPanelPadding = 14;
+    const double Lfam3WorkflowCollapsedMaxHeight = 56;
+    const double Lfam3WorkflowExpandedMaxHeight = 240;
+    const double Lfam3WorkflowSeqPlaybackMaxHeight = 340;
+    const double Lfam3WorkflowLiveIoExpandedMaxHeight = 720;
+    const double Lfam3WorkflowPhaseTrackHeight = 68;
+    const double Lfam3WorkflowSeqStripHeight = 120;
+
+    bool AnyLfam3PhaseColumnExpanded => AnyLfam3SeqPlaybackExpanded;
+
+    /// <summary>Viewport chrome above the Live I/O scroll region (header, timeline, gaps).</summary>
+    double Lfam3LiveIoLayoutChromeHeight
+    {
+        get
+        {
+            var panelPadding = Lfam3WorkflowPanelPadding * 2;
+            const double headerRow = 36;
+            const double sectionGap = 8;
+            const double dividerBlock = 9;
+            var timeline = AnyLfam3SeqPlaybackExpanded
+                ? Lfam3WorkflowPhaseTrackHeight + Lfam3WorkflowSeqStripHeight
+                : AnyLfam3PhaseColumnExpanded ? 200.0 : Lfam3WorkflowPhaseTrackHeight;
+            return panelPadding + headerRow + sectionGap + timeline + sectionGap + dividerBlock;
+        }
+    }
+
+    /// <summary>Max height for the workflow overlay — taller when Live I/O is expanded.</summary>
+    public double Lfam3WorkflowMaxHeight
+    {
+        get
+        {
+            if (!IsLfam3WorkflowExpanded) return Lfam3WorkflowCollapsedMaxHeight;
+            if (LiveIo.IsExpanded) return Lfam3WorkflowLiveIoExpandedMaxHeight;
+            if (AnyLfam3SeqPlaybackExpanded) return Lfam3WorkflowSeqPlaybackMaxHeight;
+            return Lfam3WorkflowExpandedMaxHeight;
+        }
+    }
+
+    /// <summary>Scroll area height for the expanded Live I/O monitor — fills remaining overlay space.</summary>
+    public double Lfam3LiveIoMaxHeight =>
+        !LiveIo.IsExpanded ? 0 :
+        Math.Max(240, Lfam3WorkflowLiveIoExpandedMaxHeight - Lfam3LiveIoLayoutChromeHeight);
+
+    void NotifyPhaseExpansionChanged()
+    {
+        OnPropertyChanged(nameof(IsPrePrintScanStepExpanded));
+        OnPropertyChanged(nameof(IsPrintStepExpanded));
+        OnPropertyChanged(nameof(IsVerifyScanStepExpanded));
+        OnPropertyChanged(nameof(IsMillStepExpanded));
+        OnPropertyChanged(nameof(ShowPrePrintScanParamCard));
+        OnPropertyChanged(nameof(ShowPrintParamCard));
+        OnPropertyChanged(nameof(ShowVerifyScanParamCard));
+        OnPropertyChanged(nameof(ShowMillParamCard));
+        OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
+        OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+        OnPropertyChanged(nameof(Lfam3LiveIoLayoutChromeHeight));
+    }
+
+    void NotifyWorkflowStateChanged()
+    {
+        OnPropertyChanged(nameof(Lfam3WorkflowPhaseIndex));
+        OnPropertyChanged(nameof(IsWorkflowSegment0Complete));
+        OnPropertyChanged(nameof(IsWorkflowSegment1Complete));
+        OnPropertyChanged(nameof(IsWorkflowSegment2Complete));
+        OnPropertyChanged(nameof(HasPrePrintScanStep));
+        OnPropertyChanged(nameof(PrePrintScanToggleIcon));
+        OnPropertyChanged(nameof(PrePrintScanToggleTip));
+        OnPropertyChanged(nameof(IsPrePrintScanStepCompleted));
+        OnPropertyChanged(nameof(IsPrePrintScanStepActive));
+        OnPropertyChanged(nameof(IsPrePrintScanStepPending));
+        OnPropertyChanged(nameof(IsPrintStepCompleted));
+        OnPropertyChanged(nameof(IsPrintStepActive));
+        OnPropertyChanged(nameof(IsPrintStepPending));
+        OnPropertyChanged(nameof(IsVerifyScanStepCompleted));
+        OnPropertyChanged(nameof(IsVerifyScanStepActive));
+        OnPropertyChanged(nameof(IsVerifyScanStepPending));
+        OnPropertyChanged(nameof(IsMillStepCompleted));
+        OnPropertyChanged(nameof(IsMillStepActive));
+        OnPropertyChanged(nameof(IsMillStepPending));
+        NotifyPhaseExpansionChanged();
+        OnPropertyChanged(nameof(IsExtruderToolActive));
+        OnPropertyChanged(nameof(IsScannerToolActive));
+        OnPropertyChanged(nameof(IsSpindleToolActive));
+        OnPropertyChanged(nameof(IsLfam3ToolpathPhased));
+        OnPropertyChanged(nameof(Lfam3ToolpathShowPrintOptions));
+        OnPropertyChanged(nameof(Lfam3ToolpathShowScanOptions));
+        OnPropertyChanged(nameof(Lfam3ToolpathShowMillOptions));
+        LiveIo.UpdateWorkflowPhase(
+            showExtruder: IsPrintStepActive,
+            showScanner:  IsScannerToolActive,
+            showMilling:  IsMillStepActive);
+        OnPropertyChanged(nameof(HasArmatureScanMesh));
+        OnPropertyChanged(nameof(PrePrintScanParamLine1));
+        OnPropertyChanged(nameof(PrePrintScanParamLine2));
+        OnPropertyChanged(nameof(PrintParamLine2));
+        OnPropertyChanged(nameof(VerifyScanParamLine1));
+        OnPropertyChanged(nameof(VerifyScanParamLine2));
+    }
+
+    /// <summary>Refreshes workflow parameter cards when slice settings change.</summary>
+    public void NotifyWorkflowParamsChanged()
+    {
+        OnPropertyChanged(nameof(PrintParamLine1));
+        OnPropertyChanged(nameof(PrintParamLine2));
+        OnPropertyChanged(nameof(PrePrintScanParamLine1));
+        OnPropertyChanged(nameof(PrePrintScanParamLine2));
+        OnPropertyChanged(nameof(VerifyScanParamLine1));
+        OnPropertyChanged(nameof(VerifyScanParamLine2));
+        OnPropertyChanged(nameof(MillParamLine1));
+        OnPropertyChanged(nameof(MillParamLine2));
+    }
+
+    public RelayCommand TogglePrePrintScanStepCommand { get; }
+    public RelayCommand SelectPrePrintScanPhaseCommand { get; }
+    public RelayCommand SelectPrintPhaseCommand        { get; }
+    public RelayCommand SelectVerifyScanPhaseCommand   { get; }
+    public RelayCommand SelectMillPhaseCommand         { get; }
+    public RelayCommand ToggleLfam3WorkflowCommand     { get; }
+
+    public RelayCommand SimulateExtruderPickCommand    { get; }
+    public RelayCommand SimulateExtruderDepositCommand { get; }
+    public RelayCommand SimulateScannerPickCommand     { get; }
+    public RelayCommand SimulateScannerDepositCommand  { get; }
+    public RelayCommand SimulateSpindlePickCommand     { get; }
+    public RelayCommand SimulateSpindleDepositCommand  { get; }
+
+    public ToolChangePanelBinding ExtruderToolPanel { get; }
+    public ToolChangePanelBinding ScannerToolPanel  { get; }
+    public ToolChangePanelBinding SpindleToolPanel  { get; }
+
+    /// <summary>Dev-mode editor for tool-change sequence waypoints (Global_Points.dat).</summary>
+    public SequenceWaypointEditorViewModel SequenceWaypointEditor { get; }
+
+    public RelayCommand ToggleToolChangePlaybackCommand { get; }
+    public RelayCommand CollapseToolChangePlaybackCommand { get; }
+
+    string? _activeToolChangeSequenceId;
+    bool _isToolChangePlaybackExpanded;
+
+    /// <summary>KRL tool-change sequence playing in the viewport overlay, or null.</summary>
+    public string? ActiveToolChangeSequenceId
+    {
+        get => _activeToolChangeSequenceId;
+        set
+        {
+            if (!SetField(ref _activeToolChangeSequenceId, value)) return;
+            OnPropertyChanged(nameof(IsExtruderPickSequenceActive));
+            OnPropertyChanged(nameof(IsExtruderDepositSequenceActive));
+            OnPropertyChanged(nameof(IsScannerPickSequenceActive));
+            OnPropertyChanged(nameof(IsScannerDepositSequenceActive));
+            OnPropertyChanged(nameof(IsSpindlePickSequenceActive));
+            OnPropertyChanged(nameof(IsSpindleDepositSequenceActive));
+            if (value is null)
+            {
+                IsToolChangePlaybackExpanded = false;
+                ToolChangeStepText = "";
+                ToolChangeStepTextCompact = "";
+                SetToolChangeScrubFromViewport(0);
+                ToolChangeIsPlaying = false;
+                ClearSequenceWaypointTags();
+            }
+            else
+                IsToolChangePlaybackExpanded = true;
+
+            NotifyToolChangePanels();
+            ToggleToolChangePlaybackCommand.RaiseCanExecuteChanged();
+            CollapseToolChangePlaybackCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>When true, the compact scrub/play strip is shown above the active phase dome.</summary>
+    public bool IsToolChangePlaybackExpanded
+    {
+        get => _isToolChangePlaybackExpanded;
+        set
+        {
+            if (!SetField(ref _isToolChangePlaybackExpanded, value)) return;
+            NotifyToolChangePanels();
+            CollapseToolChangePlaybackCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    string _toolChangeStepText = "";
+    int _toolChangeScrubValue;
+    bool _toolChangeIsPlaying;
+    bool _suppressToolChangeScrubCallback;
+
+    public string ToolChangeStepText
+    {
+        get => _toolChangeStepText;
+        set
+        {
+            if (!SetField(ref _toolChangeStepText, value)) return;
+            NotifyToolChangePanels();
+        }
+    }
+
+    string _toolChangeStepTextCompact = "";
+
+    /// <summary>Compact playback caption (waypoint + move only, no I/O lines).</summary>
+    public string ToolChangeStepTextCompact
+    {
+        get => _toolChangeStepTextCompact;
+        set
+        {
+            if (!SetField(ref _toolChangeStepTextCompact, value)) return;
+            NotifyToolChangePanels();
+        }
+    }
+
+    public ObservableCollection<SequenceWaypointTag> SequenceWaypointTags { get; } = [];
+
+    public bool HasSequenceWaypointTags => SequenceWaypointTags.Count > 0;
+
+    public void SetSequenceWaypointTags(IReadOnlyList<SequenceWaypointTag> tags)
+    {
+        SequenceWaypointTags.Clear();
+        foreach (var tag in tags)
+            SequenceWaypointTags.Add(tag);
+        OnPropertyChanged(nameof(HasSequenceWaypointTags));
+    }
+
+    public void ClearSequenceWaypointTags()
+    {
+        if (SequenceWaypointTags.Count == 0) return;
+        SequenceWaypointTags.Clear();
+        OnPropertyChanged(nameof(HasSequenceWaypointTags));
+    }
+
+    public int ToolChangeScrubValue
+    {
+        get => _toolChangeScrubValue;
+        set
+        {
+            if (!SetField(ref _toolChangeScrubValue, value)) return;
+            if (!_suppressToolChangeScrubCallback)
+                OnToolChangeScrubRequested?.Invoke(value);
+            NotifyToolChangePanels();
+        }
+    }
+
+    public bool ToolChangeIsPlaying
+    {
+        get => _toolChangeIsPlaying;
+        set
+        {
+            if (!SetField(ref _toolChangeIsPlaying, value)) return;
+            OnPropertyChanged(nameof(ToolChangePlaybackToggleIcon));
+            NotifyToolChangePanels();
+        }
+    }
+
+    public string ToolChangePlaybackToggleIcon =>
+        ToolChangeIsPlaying ? "mdi-pause" : "mdi-play";
+
+    internal void SetToolChangeScrubFromViewport(int value)
+    {
+        _suppressToolChangeScrubCallback = true;
+        ToolChangeScrubValue = value;
+        _suppressToolChangeScrubCallback = false;
+    }
+
+    void NotifyToolChangePanels()
+    {
+        ExtruderToolPanel.NotifyStateChanged();
+        ScannerToolPanel.NotifyStateChanged();
+        SpindleToolPanel.NotifyStateChanged();
+        OnPropertyChanged(nameof(AnyLfam3SeqPlaybackExpanded));
+        NotifyPhaseExpansionChanged();
+        OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+        OnPropertyChanged(nameof(Lfam3LiveIoLayoutChromeHeight));
+    }
+
+    public bool AnyLfam3SeqPlaybackExpanded =>
+        ExtruderToolPanel.ShowPlayback || ScannerToolPanel.ShowPlayback || SpindleToolPanel.ShowPlayback;
+
+    public bool IsExtruderPickSequenceActive    => ActiveToolChangeSequenceId == "Extruder_Pick";
+    public bool IsExtruderDepositSequenceActive => ActiveToolChangeSequenceId == "Extruder_Deposit";
+    public bool IsScannerPickSequenceActive     => ActiveToolChangeSequenceId == "Scanner_Pick";
+    public bool IsScannerDepositSequenceActive  => ActiveToolChangeSequenceId == "Scanner_Deposit";
+    public bool IsSpindlePickSequenceActive     => ActiveToolChangeSequenceId == "Spindle_Pick";
+    public bool IsSpindleDepositSequenceActive  => ActiveToolChangeSequenceId == "Spindle_Deposit";
+
+    /// <summary>Refreshes LFAM 3 tool-picker visibility after a cell swap (UI thread).</summary>
+    public void NotifyCellChanged()
+    {
+        if (!Dispatcher.UIThread.CheckAccess())
+        {
+            Dispatcher.UIThread.Post(NotifyCellChanged);
+            return;
+        }
+
+        KrlToolChangeSequenceParser.KrcRootOverride = ActiveCell?.KrcRoot;
+        OnPropertyChanged(nameof(ShowLfam3ToolPicker));
+        if (ShowLfam3ToolPicker)
+            IsLfam3WorkflowExpanded = true;
+        else
+        {
+            if (LiveIo.IsExpanded)
+                LiveIo.IsExpanded = false;
+            IsLfam3WorkflowExpanded = false;
+        }
+        var cellName = ActiveCell?.Name;
+        if (!string.Equals(cellName, _lfam3WorkflowCellName, StringComparison.Ordinal))
+        {
+            _lfam3WorkflowCellName = cellName;
+            ResetLfam3WorkflowPhase();
+        }
+        NotifyWorkflowStateChanged();
+        NotifyWorkflowParamsChanged();
+        RaiseLfam3PhaseCommandsCanExecuteChanged();
+        RaiseToolChangeCommandsCanExecuteChanged();
+    }
+
+    void SelectLfam3WorkflowPhase(int phaseIndex, string toolName)
+    {
+        if (!ShowLfam3ToolPicker) return;
+        _lfam3WorkflowPhaseIndex = phaseIndex;
+        SelectLfam3Tool(toolName);
+        NotifyWorkflowStateChanged();
+    }
+
+    void SyncWorkflowPhaseFromMountedTool()
+    {
+        if (!ShowLfam3ToolPicker) return;
+        int? phase = MountedToolName switch
+        {
+            "HV Extruder" => PrintPhaseIndex,
+            "Spindle"     => MillPhaseIndex,
+            _             => null,
+        };
+        if (phase is int p && p != _lfam3WorkflowPhaseIndex)
+            _lfam3WorkflowPhaseIndex = p;
+    }
+
+    void AdjustPhaseIndexForPrePrintScanToggle(bool prePrintScanEnabled)
+    {
+        if (prePrintScanEnabled)
+            _lfam3WorkflowPhaseIndex++;
+        else if (_lfam3WorkflowPhaseIndex > 0)
+            _lfam3WorkflowPhaseIndex--;
+    }
+
+    void ResetLfam3WorkflowPhase()
+    {
+        _hasPrePrintScanStep = false;
+        _lfam3WorkflowPhaseIndex = 0;
+        _armatureScanNode = null;
+    }
+
+    void RaiseLfam3PhaseCommandsCanExecuteChanged()
+    {
+        TogglePrePrintScanStepCommand.RaiseCanExecuteChanged();
+        SelectPrePrintScanPhaseCommand.RaiseCanExecuteChanged();
+        SelectPrintPhaseCommand.RaiseCanExecuteChanged();
+        SelectVerifyScanPhaseCommand.RaiseCanExecuteChanged();
+        SelectMillPhaseCommand.RaiseCanExecuteChanged();
+        ToggleLfam3WorkflowCommand.RaiseCanExecuteChanged();
+        RaiseToolChangeCommandsCanExecuteChanged();
+    }
+
+    public void RaiseToolChangeCommandsCanExecuteChanged()
+    {
+        SimulateExtruderPickCommand.RaiseCanExecuteChanged();
+        SimulateExtruderDepositCommand.RaiseCanExecuteChanged();
+        SimulateScannerPickCommand.RaiseCanExecuteChanged();
+        SimulateScannerDepositCommand.RaiseCanExecuteChanged();
+        SimulateSpindlePickCommand.RaiseCanExecuteChanged();
+        SimulateSpindleDepositCommand.RaiseCanExecuteChanged();
+    }
+
+    static bool CanSimulateToolPick(string cellToolName, string mountedToolName, bool showPicker) =>
+        showPicker && string.IsNullOrEmpty(mountedToolName)
+        && KrlToolChangeSequenceParser.IsSequenceAvailable(PickSequenceId(cellToolName));
+
+    static bool CanSimulateToolDeposit(string cellToolName, string mountedToolName, bool showPicker) =>
+        showPicker && mountedToolName == cellToolName
+        && KrlToolChangeSequenceParser.IsSequenceAvailable(DepositSequenceId(cellToolName));
+
+    static string PickSequenceId(string cellToolName) => cellToolName switch
+    {
+        "HV Extruder" => "Extruder_Pick",
+        "Scanner"     => "Scanner_Pick",
+        "Spindle"     => "Spindle_Pick",
+        _             => "",
+    };
+
+    static string DepositSequenceId(string cellToolName) => cellToolName switch
+    {
+        "HV Extruder" => "Extruder_Deposit",
+        "Scanner"     => "Scanner_Deposit",
+        "Spindle"     => "Spindle_Deposit",
+        _             => "",
+    };
+
+    void RequestToolChangeSimulation(string sequenceId)
+    {
+        if (string.IsNullOrEmpty(sequenceId)) return;
+        OnSimulateToolChangeRequested?.Invoke(sequenceId);
+    }
+
+    void SelectLfam3Tool(string toolName)
+    {
+        if (!ShowLfam3ToolPicker || Robot is null || ActiveCell is null) return;
+        var tools = ActiveCell.EffectiveTools;
+        for (int i = 0; i < tools.Count; i++)
+        {
+            if (!string.Equals(tools[i].Name, toolName, StringComparison.Ordinal)) continue;
+            Robot.SelectedToolIndex = i;
+            return;
+        }
+    }
+
+    /// <summary>True when a bed scan should register as the pre-print scene mesh.</summary>
+    public bool IsPrePrintScanRegistrationPhase =>
+        HasPrePrintScanStep && _lfam3WorkflowPhaseIndex == 0;
+
+    /// <summary>Registers the pre-print scan mesh used for armature/fixture collision checks.</summary>
+    public void RegisterArmatureScanMesh(SceneNode node)
+    {
+        _armatureScanNode = node;
+        node.Name = node.Name.StartsWith("Armature Scan", StringComparison.Ordinal)
+            ? node.Name
+            : $"Armature Scan · {node.Name}";
+        NotifyWorkflowStateChanged();
+    }
+
+    void ClearArmatureScanMeshIfRemoved(SceneNode node)
+    {
+        if (_armatureScanNode == node)
+        {
+            _armatureScanNode = null;
+            NotifyWorkflowStateChanged();
+        }
+    }
+
+    /// <summary>Toggles the N-key sync HUD panel.</summary>
+    public void ToggleSyncHud() => IsSyncHudOpen = !IsSyncHudOpen;
+
+    public RelayCommand ToggleSyncHudCommand { get; }
+
+    /// <summary>Closes transient viewport overlays (seam editor, gizmo, lay-flat).</summary>
+    public void ResetViewportOverlayState()
+    {
+        IsSyncHudOpen         = false;
+        IsLayFlatMode         = false;
+        IsSeamEditorActive    = false;
+        IsSeamGuideLayerOpen  = false;
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        ActiveGizmoModeInternal = GizmoMode.None;
+    }
+
+    /// <summary>Refreshes sync-HUD bindings when robot connection state changes.</summary>
+    public void NotifyRobotSyncChanged() => OnPropertyChanged(nameof(IsRobotSynced));
 
     // -- Render request --------------------------------------------------------
 
@@ -284,6 +953,23 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _lightIntensity, value);
     }
 
+    private float _exposure = 1f;
+    private float _iblIntensity = 1f;
+
+    /// <summary>Final-render exposure multiplier applied before tonemapping (1 = neutral).</summary>
+    public float Exposure
+    {
+        get => _exposure;
+        set => SetField(ref _exposure, value);
+    }
+
+    /// <summary>Environment reflection / image-based-lighting gain (1 = neutral).</summary>
+    public float IblIntensity
+    {
+        get => _iblIntensity;
+        set => SetField(ref _iblIntensity, value);
+    }
+
     // -- Shader mode -----------------------------------------------------------
 
     private ShaderMode _activeShaderMode = ShaderMode.Standard;
@@ -297,6 +983,16 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Sets <see cref="ActiveShaderMode"/> from a string enum name (e.g. "Clay").</summary>
     public RelayCommand<string> SetShaderModeCommand { get; }
+
+    /// <summary>Global PBR layer toggles, overlay compositing, and optional factor overrides.</summary>
+    public PbrMaterialSettings PbrMaterial { get; } = new();
+
+    /// <summary>Raises change notification after in-place <see cref="PbrMaterial"/> mutation (bridge/MCP).</summary>
+    public void NotifyPbrMaterialChanged()
+    {
+        OnPropertyChanged(nameof(PbrMaterial));
+        NotifyRenderNeeded();
+    }
 
     // -- Gizmo mode (synced to renderer via OnRender) -------------------------
 
@@ -339,6 +1035,9 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action<double, double, double>? OnSelectionTranslated { get; set; }
     internal Action<double, double, double>? OnSelectionRotated    { get; set; }
 
+    /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
+    internal UndoRedoService? UndoRedo { get; set; }
+
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
 
@@ -362,6 +1061,43 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _hasSelection, value);
     }
 
+    private bool _isDevMode;
+
+    /// <summary>When true, cell environment props (bed, stands, docks) can be picked and edited.</summary>
+    public bool IsDevMode
+    {
+        get => _isDevMode;
+        set
+        {
+            if (!SetField(ref _isDevMode, value)) return;
+            OnDevModeChanged?.Invoke(value);
+            SaveDevTransformCommand.RaiseCanExecuteChanged();
+            SaveAllDevTransformsCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _isDevObjectSelected;
+
+    /// <summary>True when a dev-mode environment object is selected.</summary>
+    public bool IsDevObjectSelected
+    {
+        get => _isDevObjectSelected;
+        set
+        {
+            if (SetField(ref _isDevObjectSelected, value))
+                SaveDevTransformCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private string _devSelectedLabel = "";
+
+    /// <summary>Display name of the selected dev object (e.g. stand or dock).</summary>
+    public string DevSelectedLabel
+    {
+        get => _devSelectedLabel;
+        set => SetField(ref _devSelectedLabel, value);
+    }
+
     private bool _hasMeshSelected;
 
     /// <summary>True when a sliceable user mesh (not a toolpath or toolhead) is selected.</summary>
@@ -375,6 +1111,45 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _canUngroup;
+
+    /// <summary>True when the selection can be ungrouped (has child objects).</summary>
+    public bool CanUngroup
+    {
+        get => _canUngroup;
+        set
+        {
+            if (SetField(ref _canUngroup, value))
+                UngroupCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _canExplode;
+
+    /// <summary>True when the selection contains disconnected mesh shells to split apart.</summary>
+    public bool CanExplode
+    {
+        get => _canExplode;
+        set
+        {
+            if (SetField(ref _canExplode, value))
+                ExplodeCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _canMeshCleanup;
+
+    /// <summary>True when the selection contains triangle mesh geometry to repair.</summary>
+    public bool CanMeshCleanup
+    {
+        get => _canMeshCleanup;
+        set
+        {
+            if (SetField(ref _canMeshCleanup, value))
+                MeshCleanupCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
     private bool _isToolpathSelected;
 
     /// <summary>True when the active toolpath node is the current selection.</summary>
@@ -385,10 +1160,71 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (SetField(ref _isToolpathSelected, value))
             {
+                OnPropertyChanged(nameof(Lfam3WorkflowMargin));
                 ExportKrlCommand?.RaiseCanExecuteChanged();
+                SendToRobotCommand?.RaiseCanExecuteChanged();
+                UpdateSliceCommand?.RaiseCanExecuteChanged();
                 TogglePlaybackCommand?.RaiseCanExecuteChanged();
             }
         }
+    }
+
+    private bool _canMergeToolpaths;
+
+    /// <summary>True when two or more toolpaths are shift-selected in the viewport.</summary>
+    public bool CanMergeToolpaths
+    {
+        get => _canMergeToolpaths;
+        set
+        {
+            if (SetField(ref _canMergeToolpaths, value))
+                MergeToolpathsCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _isMergedToolpathSelected;
+
+    /// <summary>True when the selected toolpath was created by merging multiple toolpaths.</summary>
+    public bool IsMergedToolpathSelected
+    {
+        get => _isMergedToolpathSelected;
+        set => SetField(ref _isMergedToolpathSelected, value);
+    }
+
+    private double _mergedRetractionHeightMm;
+    private bool _suppressMergedSettingsCb;
+
+    /// <summary>Z-hop retraction height (mm) between merged toolpath segments.</summary>
+    public double MergedRetractionHeightMm
+    {
+        get => _mergedRetractionHeightMm;
+        set
+        {
+            if (SetField(ref _mergedRetractionHeightMm, value) && !_suppressMergedSettingsCb)
+                OnMergedSettingsChanged?.Invoke();
+        }
+    }
+
+    private double _mergedTravelSpeed = 120.0;
+
+    /// <summary>Travel speed (mm/s) for connectors between merged toolpath segments.</summary>
+    public double MergedTravelSpeed
+    {
+        get => _mergedTravelSpeed;
+        set
+        {
+            if (SetField(ref _mergedTravelSpeed, value) && !_suppressMergedSettingsCb)
+                OnMergedSettingsChanged?.Invoke();
+        }
+    }
+
+    /// <summary>Syncs merged connector settings without triggering a re-merge.</summary>
+    internal void SyncMergedSettingsDisplay(double retractionMm, double travelMmS)
+    {
+        _suppressMergedSettingsCb = true;
+        MergedRetractionHeightMm = retractionMm;
+        MergedTravelSpeed        = travelMmS;
+        _suppressMergedSettingsCb = false;
     }
 
     /// <summary>
@@ -504,6 +1340,7 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         ActiveScrubToolpath = toolpath;
         ExportKrlCommand?.RaiseCanExecuteChanged();
+        UpdateSliceCommand?.RaiseCanExecuteChanged();
 
         _toolpathScrubMax   = max;
         OnPropertyChanged(nameof(ToolpathScrubMax));
@@ -628,6 +1465,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public RelayCommand FocusCommand                { get; }
     public RelayCommand DropToPlateCommand          { get; }
+    public RelayCommand UngroupCommand              { get; }
+    public RelayCommand ExplodeCommand              { get; }
+    public RelayCommand MeshCleanupCommand          { get; }
+    public RelayCommand SaveViewCommand             { get; }
+    public RelayCommand SaveDevTransformCommand     { get; }
+    public RelayCommand SaveAllDevTransformsCommand { get; }
     public RelayCommand TogglePlaybackCommand       { get; }
 
     private bool _isPlaying;
@@ -682,19 +1525,70 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnFocusRequested      { get; set; }
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to ungroup the selection.</summary>
+    internal Action? OnUngroupRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to explode disconnected mesh shells.</summary>
+    internal Action? OnExplodeRequested { get; set; }
+    /// <summary>Callback set by the viewport code-behind to open mesh cleanup on the selection.</summary>
+    internal Action? OnMeshCleanupRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
+    /// <summary>Callback (wired by MainWindowViewModel) to save the current camera view to the active cell.</summary>
+    internal Action? OnSaveViewRequested    { get; set; }
+    /// <summary>Callback set by the viewport code-behind when dev-mode toggles.</summary>
+    internal Action<bool>? OnDevModeChanged { get; set; }
+    /// <summary>Callback set by the viewport code-behind to persist a dev-object transform.</summary>
+    internal Action? OnSaveDevTransformRequested { get; set; }
+    internal Action? OnSaveAllDevTransformsRequested { get; set; }
+    /// <summary>Callback wired by MainWindow to reload the active cell after dev saves.</summary>
+    internal Action<string>? OnDevCellReloadRequested { get; set; }
+    internal Action<string>? OnDevLog { get; set; }
+    /// <summary>Returns the current orbit-camera pose; set by the viewport code-behind.</summary>
+    internal Func<CameraView?>? GetCameraState { get; set; }
+
+    /// <summary>Applies a saved camera pose; set by the viewport code-behind.</summary>
+    internal Action<CameraView>? ApplyCameraState { get; set; }
 
     public ViewportViewModel()
     {
+        LiveIo.ExpandedChanged += () =>
+        {
+            OnPropertyChanged(nameof(Lfam3WorkflowMargin));
+            OnPropertyChanged(nameof(Lfam3WorkflowMaxHeight));
+            OnPropertyChanged(nameof(Lfam3LiveIoMaxHeight));
+            NotifyPhaseExpansionChanged();
+        };
+
         SetShaderModeCommand = new RelayCommand<string>(name =>
         {
             if (Enum.TryParse<ShaderMode>(name, out var mode))
                 ActiveShaderMode = mode;
         });
+        ToggleSyncHudCommand = new RelayCommand(ToggleSyncHud);
         LayFlatCommand     = new RelayCommand(() => IsLayFlatMode = !IsLayFlatMode);
+        SeamEditorSaveCommand   = new RelayCommand(SaveSeamEditor, () => IsSeamEditorActive);
+        SeamEditorCancelCommand = new RelayCommand(CancelSeamEditor, () => IsSeamEditorActive);
+        SeamEditorDeleteCommand = new RelayCommand(DeleteSeamGuide, () => IsSeamEditorActive && SeamGuideDraft.Count > 0);
+        SeamEditorAddPointCommand = new RelayCommand(() => SeamEditorTool = SeamEditorToolKind.AddPoint, () => IsSeamEditorActive);
+        SeamEditorSelectPointCommand = new RelayCommand(() => SeamEditorTool = SeamEditorToolKind.SelectPoint, () => IsSeamEditorActive);
+        ToggleSeamGuideLayerCommand = new RelayCommand(() => IsSeamGuideLayerOpen = !IsSeamGuideLayerOpen, () => IsSeamEditorActive && SeamGuideDraft.Count > 0);
+        SelectSeamGuideByIndexCommand = new RelayCommand<int>(SelectSeamGuideByIndex, _ => IsSeamEditorActive);
+        BoundaryEditorSaveCommand       = new RelayCommand(SaveBoundaryEditor, () => IsBoundaryEditorActive);
+        BoundaryEditorCancelCommand     = new RelayCommand(CancelBoundaryEditor, () => IsBoundaryEditorActive);
+        BoundaryEditorLowTargetCommand  = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low, () => IsBoundaryEditorActive);
+        BoundaryEditorHighTargetCommand = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.High, () => IsBoundaryEditorActive);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
+        ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
+        MeshCleanupCommand    = new RelayCommand(() => OnMeshCleanupRequested?.Invoke(), () => CanMeshCleanup);
+        SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
+        SaveDevTransformCommand = new RelayCommand(
+            () => OnSaveDevTransformRequested?.Invoke(),
+            () => IsDevMode && IsDevObjectSelected);
+        SaveAllDevTransformsCommand = new RelayCommand(
+            () => OnSaveAllDevTransformsRequested?.Invoke(),
+            () => IsDevMode);
         TogglePlaybackCommand = new RelayCommand(() =>
         {
             bool starting = !IsPlaying;
@@ -710,9 +1604,78 @@ public sealed class ViewportViewModel : ViewModelBase
             execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasMeshSelected);
 
+        // Relief milling: guard inside RunMillAsync (no canExecute predicate to avoid
+        // threading RaiseCanExecuteChanged through every selection-change site).
+        MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
+        PreviewDisplacedCommand = new RelayCommand(() => _ = OnPreviewDisplacedRequested?.Invoke());
+        GenerateMultiAxisCommand = new RelayCommand(() => _ = OnGenerateMultiAxisRequested?.Invoke());
+
+        UpdateSliceCommand = new RelayCommand(
+            execute:    () => _ = OnUpdateSliceRequested?.Invoke(),
+            canExecute: () => !IsSlicing && IsToolpathSelected && (CanUpdateSlice?.Invoke() ?? false));
+
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
             canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
+
+        SendToRobotCommand = new RelayCommand(
+            execute:    () => _ = OnSendToRobotRequested?.Invoke(),
+            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null && ActiveCell is not null);
+
+        MergeToolpathsCommand = new RelayCommand(
+            execute:    () => OnMergeToolpathsRequested?.Invoke(),
+            canExecute: () => CanMergeToolpaths);
+
+        TogglePrePrintScanStepCommand = new RelayCommand(
+            () => HasPrePrintScanStep = !HasPrePrintScanStep, () => ShowLfam3ToolPicker);
+        SelectPrePrintScanPhaseCommand = new RelayCommand(
+            () => SelectLfam3WorkflowPhase(0, "Scanner"),
+            () => ShowLfam3ToolPicker && HasPrePrintScanStep);
+        SelectPrintPhaseCommand = new RelayCommand(
+            () => SelectLfam3WorkflowPhase(PrintPhaseIndex, "HV Extruder"), () => ShowLfam3ToolPicker);
+        SelectVerifyScanPhaseCommand = new RelayCommand(
+            () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner"), () => ShowLfam3ToolPicker);
+        SelectMillPhaseCommand = new RelayCommand(
+            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle"), () => ShowLfam3ToolPicker);
+        ToggleLfam3WorkflowCommand = new RelayCommand(
+            () => IsLfam3WorkflowExpanded = !IsLfam3WorkflowExpanded, () => ShowLfam3ToolPicker);
+
+        SimulateExtruderPickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Extruder_Pick"),
+            () => CanSimulateToolPick("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+        SimulateExtruderDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Extruder_Deposit"),
+            () => CanSimulateToolDeposit("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+        SimulateScannerPickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Scanner_Pick"),
+            () => CanSimulateToolPick("Scanner", MountedToolName, ShowLfam3ToolPicker));
+        SimulateScannerDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Scanner_Deposit"),
+            () => CanSimulateToolDeposit("Scanner", MountedToolName, ShowLfam3ToolPicker));
+        SimulateSpindlePickCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Spindle_Pick"),
+            () => CanSimulateToolPick("Spindle", MountedToolName, ShowLfam3ToolPicker));
+        SimulateSpindleDepositCommand = new RelayCommand(
+            () => RequestToolChangeSimulation("Spindle_Deposit"),
+            () => CanSimulateToolDeposit("Spindle", MountedToolName, ShowLfam3ToolPicker));
+
+        ExtruderToolPanel = new ToolChangePanelBinding(
+            this, "HV EXTRUDER", "Extruder_Pick", "Extruder_Deposit",
+            SimulateExtruderPickCommand, SimulateExtruderDepositCommand);
+        ScannerToolPanel = new ToolChangePanelBinding(
+            this, "SCANNER", "Scanner_Pick", "Scanner_Deposit",
+            SimulateScannerPickCommand, SimulateScannerDepositCommand);
+        SpindleToolPanel = new ToolChangePanelBinding(
+            this, "SPINDLE", "Spindle_Pick", "Spindle_Deposit",
+            SimulateSpindlePickCommand, SimulateSpindleDepositCommand);
+        SequenceWaypointEditor = new SequenceWaypointEditorViewModel(this);
+        SequenceWaypointEditor.WireCommands();
+        ToggleToolChangePlaybackCommand = new RelayCommand(
+            () => OnToggleToolChangePlaybackRequested?.Invoke(),
+            () => ActiveToolChangeSequenceId is not null);
+        CollapseToolChangePlaybackCommand = new RelayCommand(
+            () => OnCollapseToolChangePlaybackRequested?.Invoke(),
+            () => ActiveToolChangeSequenceId is not null && IsToolChangePlaybackExpanded);
 
         var options = new List<BackdropOption> { new("None", null) };
         if (Directory.Exists("assets/Images"))
@@ -723,7 +1686,18 @@ public sealed class ViewportViewModel : ViewModelBase
                     .Select(f => new BackdropOption(Path.GetFileNameWithoutExtension(f), f)));
         }
         AvailableBackdrops = options;
-        _activeBackdrop    = options[0];
+        // Default to a soft, balanced HDRI so imported models get environment lighting
+        // (reflections + fill) out of the box. Falls back to the first available image,
+        // then to "None". The user can change it in the BACKDROP selector.
+        _activeBackdrop = options[0];
+        string[] preferred = ["AmbienceExposure4k", "CasualDay4K", "DayInTheClouds4k", "FluffballDay4k"];
+        foreach (var name in preferred)
+        {
+            var match = options.FirstOrDefault(o => string.Equals(o.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) { _activeBackdrop = match; break; }
+        }
+        if (ReferenceEquals(_activeBackdrop, options[0]) && options.Count > 1)
+            _activeBackdrop = options[1];
     }
 
     // -- Lay Flat --------------------------------------------------------------
@@ -743,6 +1717,258 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Toggles <see cref="IsLayFlatMode"/> to begin or cancel face-pick mode.</summary>
     public RelayCommand LayFlatCommand { get; }
 
+    // -- Seam guide editor -----------------------------------------------------
+
+    private bool _isSeamEditorActive;
+
+    public bool IsSeamEditorActive
+    {
+        get => _isSeamEditorActive;
+        set
+        {
+            if (SetField(ref _isSeamEditorActive, value))
+            {
+                SeamEditorSaveCommand.RaiseCanExecuteChanged();
+                SeamEditorCancelCommand.RaiseCanExecuteChanged();
+                SeamEditorDeleteCommand.RaiseCanExecuteChanged();
+                SeamEditorAddPointCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public ObservableCollection<SeamGuidePoint> SeamGuideDraft { get; } = [];
+
+    private SeamEditorToolKind _seamEditorTool = SeamEditorToolKind.AddPoint;
+
+    public SeamEditorToolKind SeamEditorTool
+    {
+        get => _seamEditorTool;
+        set
+        {
+            if (SetField(ref _seamEditorTool, value))
+            {
+                OnPropertyChanged(nameof(IsSeamAddPointActive));
+                OnPropertyChanged(nameof(IsSeamSelectPointActive));
+            }
+        }
+    }
+
+    public bool IsSeamAddPointActive => SeamEditorTool == SeamEditorToolKind.AddPoint;
+    public bool IsSeamSelectPointActive => SeamEditorTool == SeamEditorToolKind.SelectPoint;
+    public bool HasSeamGuideDraft => SeamGuideDraft.Count > 0;
+
+    public string SeamGuideLayerLabel =>
+        SeamGuideDraft.Count == 0 ? "Points" : $"Points ({SeamGuideDraft.Count})";
+
+    private bool _isSeamGuideLayerOpen;
+
+    /// <summary>When true, the guide-point list panel is visible in the viewport.</summary>
+    public bool IsSeamGuideLayerOpen
+    {
+        get => _isSeamGuideLayerOpen;
+        set => SetField(ref _isSeamGuideLayerOpen, value);
+    }
+
+    private int _selectedSeamGuideIndex = -1;
+
+    /// <summary>Index of the guide point selected for move/delete, or -1.</summary>
+    public int SelectedSeamGuideIndex
+    {
+        get => _selectedSeamGuideIndex;
+        set
+        {
+            if (!SetField(ref _selectedSeamGuideIndex, value)) return;
+            if (value >= 0 && IsSeamEditorActive)
+            {
+                SeamEditorTool = SeamEditorToolKind.SelectPoint;
+                OnPropertyChanged(nameof(IsSeamAddPointActive));
+                OnPropertyChanged(nameof(IsSeamSelectPointActive));
+            }
+            OnSeamGuidesChanged?.Invoke();
+        }
+    }
+
+    public RelayCommand SeamEditorSaveCommand { get; }
+    public RelayCommand SeamEditorCancelCommand { get; }
+    public RelayCommand SeamEditorDeleteCommand { get; }
+    public RelayCommand SeamEditorAddPointCommand { get; }
+    public RelayCommand SeamEditorSelectPointCommand { get; }
+    public RelayCommand ToggleSeamGuideLayerCommand { get; }
+    public RelayCommand<int> SelectSeamGuideByIndexCommand { get; }
+
+    public void BeginSeamEditor(IReadOnlyList<SeamGuidePoint> current)
+    {
+        SeamGuideDraft.Clear();
+        foreach (var g in current)
+            SeamGuideDraft.Add(g);
+        SeamEditorTool = SeamEditorToolKind.AddPoint;
+        SelectedSeamGuideIndex = -1;
+        IsSeamGuideLayerOpen = SeamGuideDraft.Count > 0;
+        IsSeamEditorActive = true;
+        OnPropertyChanged(nameof(IsSeamAddPointActive));
+        OnPropertyChanged(nameof(IsSeamSelectPointActive));
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(SeamGuideLayerLabel));
+        RaiseSeamGuideCommands();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    public void AddSeamGuidePoint(SeamGuidePoint point)
+    {
+        SeamGuideDraft.Add(point);
+        SelectedSeamGuideIndex = SeamGuideDraft.Count - 1;
+        IsSeamGuideLayerOpen = true;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(SeamGuideLayerLabel));
+        RaiseSeamGuideCommands();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    public void MoveSeamGuidePoint(int index, SeamGuidePoint point)
+    {
+        if (index < 0 || index >= SeamGuideDraft.Count) return;
+        SeamGuideDraft[index] = point;
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void SelectSeamGuideByIndex(int index)
+    {
+        if (index < 0 || index >= SeamGuideDraft.Count) return;
+        SelectedSeamGuideIndex = index;
+        SeamEditorTool = SeamEditorToolKind.SelectPoint;
+        OnPropertyChanged(nameof(IsSeamAddPointActive));
+        OnPropertyChanged(nameof(IsSeamSelectPointActive));
+    }
+
+    private void SaveSeamEditor()
+    {
+        AdditiveSettings?.SetSeamGuides(SeamGuideDraft);
+        IsSeamEditorActive = false;
+        IsSeamGuideLayerOpen = false;
+        SelectedSeamGuideIndex = -1;
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void CancelSeamEditor()
+    {
+        IsSeamEditorActive = false;
+        IsSeamGuideLayerOpen = false;
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(SeamGuideLayerLabel));
+        RaiseSeamGuideCommands();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void DeleteSeamGuide()
+    {
+        if (SeamGuideDraft.Count == 0) return;
+        int index = SelectedSeamGuideIndex >= 0 && SelectedSeamGuideIndex < SeamGuideDraft.Count
+            ? SelectedSeamGuideIndex
+            : SeamGuideDraft.Count - 1;
+        SeamGuideDraft.RemoveAt(index);
+        SelectedSeamGuideIndex = SeamGuideDraft.Count == 0
+            ? -1
+            : Math.Min(index, SeamGuideDraft.Count - 1);
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(SeamGuideLayerLabel));
+        RaiseSeamGuideCommands();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void RaiseSeamGuideCommands()
+    {
+        SeamEditorDeleteCommand.RaiseCanExecuteChanged();
+        ToggleSeamGuideLayerCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Raised when seam guide draft changes — viewport refreshes markers.</summary>
+    public Action? OnSeamGuidesChanged;
+
+    // -- Curved boundary editor ------------------------------------------------
+
+    private bool _isBoundaryEditorActive;
+
+    public bool IsBoundaryEditorActive
+    {
+        get => _isBoundaryEditorActive;
+        set
+        {
+            if (SetField(ref _isBoundaryEditorActive, value))
+            {
+                BoundaryEditorSaveCommand.RaiseCanExecuteChanged();
+                BoundaryEditorCancelCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    private CurvedBoundaryEditorTarget _boundaryEditorTarget = CurvedBoundaryEditorTarget.Low;
+
+    public CurvedBoundaryEditorTarget BoundaryEditorTarget
+    {
+        get => _boundaryEditorTarget;
+        set
+        {
+            if (SetField(ref _boundaryEditorTarget, value))
+            {
+                OnPropertyChanged(nameof(IsBoundaryLowTarget));
+                OnPropertyChanged(nameof(IsBoundaryHighTarget));
+            }
+        }
+    }
+
+    public bool IsBoundaryLowTarget  => BoundaryEditorTarget == CurvedBoundaryEditorTarget.Low;
+    public bool IsBoundaryHighTarget => BoundaryEditorTarget == CurvedBoundaryEditorTarget.High;
+
+    public ObservableCollection<int> BoundaryLowDraft  { get; } = [];
+    public ObservableCollection<int> BoundaryHighDraft { get; } = [];
+
+    public RelayCommand BoundaryEditorSaveCommand { get; }
+    public RelayCommand BoundaryEditorCancelCommand { get; }
+    public RelayCommand BoundaryEditorLowTargetCommand { get; }
+    public RelayCommand BoundaryEditorHighTargetCommand { get; }
+
+    public void BeginBoundaryEditor(IReadOnlyList<int> low, IReadOnlyList<int> high)
+    {
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        foreach (var v in low)  BoundaryLowDraft.Add(v);
+        foreach (var v in high) BoundaryHighDraft.Add(v);
+        BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low;
+        IsBoundaryEditorActive = true;
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    public void SetBoundaryDraft(IReadOnlyList<int> low, IReadOnlyList<int> high)
+    {
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        foreach (var v in low)  BoundaryLowDraft.Add(v);
+        foreach (var v in high) BoundaryHighDraft.Add(v);
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    private void SaveBoundaryEditor()
+    {
+        AdditiveSettings?.SetCurvedBoundaries(BoundaryLowDraft, BoundaryHighDraft);
+        if (AdditiveSettings is not null)
+            AdditiveSettings.CurvedBoundarySourceDisplay = "Viewport Pick";
+        IsBoundaryEditorActive = false;
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    private void CancelBoundaryEditor()
+    {
+        IsBoundaryEditorActive = false;
+        BoundaryLowDraft.Clear();
+        BoundaryHighDraft.Clear();
+        OnBoundaryDraftChanged?.Invoke();
+    }
+
+    /// <summary>Raised when curved boundary draft changes — viewport refreshes markers.</summary>
+    public Action? OnBoundaryDraftChanged;
+
     // -- Slicing ---------------------------------------------------------------
 
     private bool _isSlicing;
@@ -754,22 +1980,63 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (SetField(ref _isSlicing, value))
+            {
                 SliceCommand?.RaiseCanExecuteChanged();
+                UpdateSliceCommand?.RaiseCanExecuteChanged();
+                OnPropertyChanged(nameof(ShowSliceStatus));
+            }
         }
     }
+
+    private string _sliceStatusMessage = string.Empty;
+
+    /// <summary>Human-readable slice progress, result, or error (shown in overlay + status bar).</summary>
+    public string SliceStatusMessage
+    {
+        get => _sliceStatusMessage;
+        set
+        {
+            if (SetField(ref _sliceStatusMessage, value))
+                OnPropertyChanged(nameof(ShowSliceStatus));
+        }
+    }
+
+    private bool _sliceStatusIsError;
+
+    /// <summary>When true, <see cref="SliceStatusMessage"/> is styled as an error.</summary>
+    public bool SliceStatusIsError
+    {
+        get => _sliceStatusIsError;
+        set => SetField(ref _sliceStatusIsError, value);
+    }
+
+    /// <summary>True when a slice error message should be shown in-panel (progress uses footer line + console).</summary>
+    public bool ShowSliceStatus => SliceStatusIsError && !string.IsNullOrWhiteSpace(SliceStatusMessage);
 
     /// <summary>
     /// Completed toolpaths queued for upload on the GL thread.
     /// Produced by the slice task; consumed by the render loop.
     /// Each entry is a freshly-created SceneNode -- never re-uses an existing node.
     /// </summary>
-    public ConcurrentQueue<(Toolpath Toolpath, Toolpath RawToolpath, SceneNode Node, float BeadWidth, float LayerHeight, System.Numerics.Vector3 MaterialColor)> PendingToolpath { get; } = new();
+    public ConcurrentQueue<PendingToolpathEntry> PendingToolpath { get; } = new();
+
+    /// <summary>
+    /// Toolpath geometry replacements for an existing outliner node (Update Slice).
+    /// Consumed on the GL thread; does not create a new outliner entry.
+    /// </summary>
+    public ConcurrentQueue<PendingToolpathEntry> PendingToolpathReplace { get; } = new();
+
+    /// <summary>Returns live toolpath data for a scene node (wired by the viewport).</summary>
+    internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
     public AdditiveSettingsViewModel? AdditiveSettings { get; set; }
+
+    /// <summary>Subtractive (relief milling) settings, wired from the right panel.</summary>
+    public SubtractiveSettingsViewModel? SubtractiveSettings { get; set; }
 
     // -- Toolpath stats --------------------------------------------------------
 
@@ -814,8 +2081,42 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal Func<Task>? OnSliceRequested { get; set; }
 
+    /// <summary>Callback registered by the viewport code-behind to generate a relief-milling toolpath.</summary>
+    internal Func<Task>? OnMillRequested { get; set; }
+
+    /// <summary>Callback registered by the viewport code-behind to build + show the displaced surface.</summary>
+    internal Func<Task>? OnPreviewDisplacedRequested { get; set; }
+
+    /// <summary>Callback registered by the viewport code-behind to generate a multi-axis surface toolpath.</summary>
+    internal Func<Task>? OnGenerateMultiAxisRequested { get; set; }
+
+    /// <summary>Re-slices the source mesh at its current transform and replaces the selected toolpath.</summary>
+    internal Func<Task>? OnUpdateSliceRequested { get; set; }
+
+    /// <summary>Set by the viewport to gate <see cref="UpdateSliceCommand"/> when a parent mesh exists.</summary>
+    internal Func<bool>? CanUpdateSlice { get; set; }
+
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
+    internal Func<Task>? OnSendToRobotRequested { get; set; }
+
+    /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>
+    internal Action? OnMergeToolpathsRequested { get; set; }
+
+    /// <summary>Re-merges the selected merged toolpath when connector settings change.</summary>
+    internal Action? OnMergedSettingsChanged { get; set; }
+
+    /// <summary>Selects a scene node when the user clicks it in the outliner.</summary>
+    internal Action<SceneNode>? OnOutlinerSelectRequested { get; set; }
+
+    /// <summary>
+    /// Set by nested <c>OutlinerItemView</c> row clicks so the parent ListBox
+    /// <c>SelectionChanged</c> handler does not overwrite the child selection.
+    /// </summary>
+    internal bool SuppressNextOutlinerListBoxSelection { get; set; }
+
+    /// <summary>Returns the viewport's currently selected scene node (wired by the GL view).</summary>
+    internal Func<SceneNode?>? GetSelectedSceneNode { get; set; }
 
     /// <summary>Callback registered by the viewport code-behind to deselect a node when it is hidden.</summary>
     internal Action<SceneNode>? OnNodeHidden { get; set; }
@@ -829,17 +2130,51 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Func<ToolCellConfig, Matrix4?>? GetToolWorldPose { get; set; }
 
     /// <summary>
+    /// Returns the current flange-to-world pose in the SAME convention used by
+    /// <see cref="GetToolWorldPose"/> (rendered flange node × glTF→KUKA correction),
+    /// as a row-vector <see cref="System.Numerics.Matrix4x4"/>, or <c>null</c> when no
+    /// robot is loaded. Hand-eye calibration MUST use this — not the analytic FK — so
+    /// the learned camera transform is expressed in the frame registration applies it in.
+    /// </summary>
+    internal Func<System.Numerics.Matrix4x4?>? GetFlangeInBaseForCalibration { get; set; }
+
+    /// <summary>
     /// Invoked on the UI thread once a cell swap has fully completed and the tool
     /// library, bridge config, and IK data are up to date. Used to fire one-time
     /// startup actions (tool selection, auto-sync).
     /// </summary>
     internal Action? OnCellSwapCompleted { get; set; }
 
+    /// <summary>Viewport plays a KUKA tool-change path overlay (Pick/Deposit simulation).</summary>
+    internal Action<string>? OnSimulateToolChangeRequested { get; set; }
+
+    internal Action? OnToggleToolChangePlaybackRequested { get; set; }
+    internal Action? OnCollapseToolChangePlaybackRequested { get; set; }
+    internal Action<int>? OnToolChangeScrubRequested { get; set; }
+
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
 
+    /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
+    public RelayCommand MillCommand { get; }
+
+    /// <summary>Builds the displaced surface (low-poly mesh + PBR map detail) and adds it to the scene.</summary>
+    public RelayCommand PreviewDisplacedCommand { get; }
+
+    /// <summary>Generates a multi-axis surface-following finish toolpath over the displaced surface.</summary>
+    public RelayCommand GenerateMultiAxisCommand { get; }
+
+    /// <summary>Re-slices the parent mesh at its current pose and replaces the selected toolpath.</summary>
+    public RelayCommand UpdateSliceCommand { get; }
+
     /// <summary>Opens a save dialog and exports the selected toolpath as a KUKA KRL .src file.</summary>
     public RelayCommand ExportKrlCommand { get; }
+
+    /// <summary>Exports KRL to the active cell's robot D: share via a pre-targeted save dialog.</summary>
+    public RelayCommand SendToRobotCommand { get; }
+
+    /// <summary>Merges shift-selected toolpaths into one continuous toolpath.</summary>
+    public RelayCommand MergeToolpathsCommand { get; }
 
     // -- Outliner / user scene objects -----------------------------------------
 
@@ -863,10 +2198,384 @@ public sealed class ViewportViewModel : ViewModelBase
     public void AddUserNode(SceneNode node)
     {
         PendingNodes.Enqueue(node);
-        OutlinerItems.Add(new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node)));
+        RegisterOutlinerItem(node);
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
     }
+
+    /// <summary>Scans waiting to be parented under the rotary-bed E1 pivot on the GL thread.</summary>
+    public ConcurrentQueue<SceneNode> PendingRotaryNodes { get; } = new();
+
+    private OutlinerItemViewModel? _rotaryGroupItem;
+    private SceneNode? _rotaryPivotForScans;
+    private readonly List<OutlinerItemViewModel> _cellEnvOutlinerItems = [];
+
+    /// <summary>True when the active cell has a rotary bed, so scans should ride the turntable.</summary>
+    public bool HasRotaryBed => _rotaryPivotForScans is not null;
+
+    /// <summary>
+    /// Exposes the rotary bed as a top-level outliner group that scans nest under. The group is backed
+    /// by the E1 pivot node, so anything parented to it (in the scene graph) rotates with the table.
+    /// Call on cell swap (UI thread); pass null pivot to clear (non-rotary cell).
+    /// </summary>
+    internal void SetRotaryBedGroup(SceneNode? pivot, string displayName)
+    {
+        _rotaryPivotForScans = pivot;
+        if (_rotaryGroupItem is not null) { OutlinerItems.Remove(_rotaryGroupItem); _rotaryGroupItem = null; }
+        if (pivot is null) return;
+        // The group itself isn't deletable; visibility toggling falls through to the pivot node.
+        _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+        OutlinerItems.Add(_rotaryGroupItem);
+    }
+
+    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).</summary>
+    internal void SetCellEnvironmentOutliner(IEnumerable<(SceneNode Node, string DisplayName)> entries)
+    {
+        foreach (var item in _cellEnvOutlinerItems)
+            OutlinerItems.Remove(item);
+        _cellEnvOutlinerItems.Clear();
+
+        foreach (var (node, displayName) in entries)
+        {
+            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+            OutlinerItems.Add(item);
+            _cellEnvOutlinerItems.Add(item);
+        }
+    }
+
+    private OutlinerItemViewModel? _robotGroupItem;
+
+    /// <summary>
+    /// Exposes the robot as a selectable outliner group "Robot Root" with "Robot Pedestal" and
+    /// "Robot Arm" as direct children, each backed by the real scene node (so selection + visibility
+    /// work). Not deletable. The outliner renders one level of children, so Pedestal/Arm are siblings
+    /// under Root rather than further nested. Call on cell swap (UI thread); pass null root to clear.
+    /// </summary>
+    internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
+    {
+        if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        if (root is null) return;
+
+        _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root", canDelete: false);
+        OutlinerItems.Add(_robotGroupItem);
+
+        if (pedestal is not null)
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false));
+        if (arm is not null)
+            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false));
+    }
+
+    /// <summary>
+    /// Adds a scan result. Outliner: nested under the active print object (selected import, or the
+    /// sole model on the bed). Scene: on a rotary cell, parented to the E1 pivot so it tracks E1.
+    /// Must be called on the UI thread.
+    /// </summary>
+    public void AddScanNode(SceneNode node)
+    {
+        var parentObject = ResolveScanParentOutlinerItem();
+        EnqueueRotarySceneNode(node);
+
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        {
+            parentObject?.RemoveChild(child);
+            PendingRemoveNodes.Enqueue(child.Node);
+            NotifyRenderNeeded();
+        }, () => OnNodeHidden?.Invoke(node));
+
+        if (parentObject is not null)
+            parentObject.AddChild(item);
+        else if (_rotaryGroupItem is not null)
+            _rotaryGroupItem.AddChild(item);
+        else
+            OutlinerItems.Add(item);
+
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    private void EnqueueRotarySceneNode(SceneNode node)
+    {
+        if (_rotaryPivotForScans is null)
+            PendingNodes.Enqueue(node);
+        else
+            PendingRotaryNodes.Enqueue(node);
+    }
+
+    /// <summary>
+    /// Picks the active print object — selected user import, else the sole model on the bed.
+    /// Used for scan nesting, adaptive layer preview, and slice targeting.
+    /// </summary>
+    internal OutlinerItemViewModel? ResolveActivePrintObjectItem()
+    {
+        if (GetSelectedSceneNode?.Invoke() is { } selected)
+        {
+            var selectedItem = FindUserMeshOutlinerItem(selected);
+            if (selectedItem is not null) return selectedItem;
+        }
+
+        var models = EnumerateUserModelItems().Where(i => i.Visible).ToList();
+        return models.Count == 1 ? models[0] : null;
+    }
+
+    internal OutlinerItemViewModel? ResolveScanParentOutlinerItem() => ResolveActivePrintObjectItem();
+
+    /// <summary>
+    /// Outliner parent for imported/sliced toolpaths: active print object when present,
+    /// otherwise the rotary-bed group (so KRL imports don't land at the top level).
+    /// </summary>
+    internal OutlinerItemViewModel? ResolveToolpathParentOutlinerItem()
+        => ResolveActivePrintObjectItem() ?? _rotaryGroupItem;
+
+    /// <summary>
+    /// Clears layer-preview shading from cell groups and user objects, then enables it on the active print object.
+    /// </summary>
+    internal void SyncLayerPreviewFlags(bool enabled)
+    {
+        foreach (var item in OutlinerItems)
+            ClearLayerPreviewOnOutlinerItem(item);
+
+        if (enabled && ResolveActivePrintObjectItem() is { } target)
+            target.Node.LayerPreview = true;
+    }
+
+    private static void ClearLayerPreviewOnOutlinerItem(OutlinerItemViewModel item)
+    {
+        item.Node.LayerPreview = false;
+        foreach (var child in item.Children)
+            ClearLayerPreviewOnOutlinerItem(child);
+    }
+
+    /// <summary>
+    /// Adds imported user geometry. On a rotary cell it nests under the rotary group and is parented
+    /// to the E1 pivot (so bed rotation is reflected in <see cref="SceneNode.WorldTransform"/> for
+    /// toolpath generation); otherwise it falls back to <see cref="AddUserNode"/>.
+    /// Must be called on the UI thread.
+    /// </summary>
+    public void AddImportNode(SceneNode node) => AddRotaryBedChildNode(node);
+
+    private void AddRotaryBedChildNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
+    {
+        EnqueueRotarySceneNode(node);
+
+        if (_rotaryPivotForScans is null || _rotaryGroupItem is null)
+        {
+            var rootItem = RegisterOutlinerItem(node);
+            AdoptToolpaths(adoptToolpathsFrom, rootItem);
+            SliceCommand.RaiseCanExecuteChanged();
+            NotifyRenderNeeded();
+            return;
+        }
+
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        {
+            _rotaryGroupItem?.RemoveChild(child);
+            PendingRemoveNodes.Enqueue(child.Node);
+            NotifyRenderNeeded();
+        }, () => OnNodeHidden?.Invoke(node));
+        _rotaryGroupItem.AddChild(item);
+        AdoptToolpaths(adoptToolpathsFrom, item);
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    private static void AdoptToolpaths(OutlinerItemViewModel? from, OutlinerItemViewModel to)
+    {
+        if (from is null) return;
+        foreach (var child in from.Children.ToList())
+        {
+            from.RemoveChild(child);
+            to.AddChild(child);
+        }
+    }
+
+    /// <summary>Yields outliner entries for user-imported models (top-level or nested under the rotary group).</summary>
+    internal IEnumerable<OutlinerItemViewModel> EnumerateUserModelItems()
+    {
+        foreach (var item in OutlinerItems)
+        {
+            if (item == _rotaryGroupItem)
+            {
+                foreach (var child in item.Children)
+                    yield return child;
+                continue;
+            }
+            if (item == _robotGroupItem) continue;
+            if (_cellEnvOutlinerItems.Contains(item)) continue;
+            yield return item;
+        }
+    }
+
+    /// <summary>
+    /// Returns the user-model outliner item that owns <paramref name="node"/> (import, scan, etc.),
+    /// not the rotary-bed group whose scene subtree also contains the turntable mesh.
+    /// </summary>
+    internal OutlinerItemViewModel? FindUserMeshOutlinerItem(SceneNode? node)
+    {
+        if (node is null) return null;
+        foreach (var item in EnumerateUserModelItems())
+        {
+            if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
+                return item;
+        }
+        return null;
+    }
+
+    // ── Rotary scan diagnostics ───────────────────────────────────────────────
+    // Stash each registered scan's capture-time WORLD points + E1 so we can export them and solve
+    // the true rotary model (axis tilt / deg-per-E1 / phase / centre) offline against the scans.
+    private readonly List<(string Name, float E1, float[] WorldXyz)> _scanDiag = [];
+
+    /// <summary>Number of scans stashed for the diagnostic export.</summary>
+    public int ScanDiagCount => _scanDiag.Count;
+
+    /// <summary>
+    /// Records a scan's points (mesh/camera frame) mapped to WORLD via <paramref name="worldPose"/>,
+    /// plus its capture E1. Decimated to keep the export light. Call at capture time, before the node
+    /// is reparented under the E1 pivot (so the pose is the clean camera→world transform).
+    /// </summary>
+    public void StashScanDiag(string name, float e1, IReadOnlyList<Vector3> camPoints, Matrix4 worldPose)
+    {
+        if (camPoints is null || camPoints.Count == 0) return;
+        const int target = 8000;
+        int step = Math.Max(1, camPoints.Count / target);
+        var xyz = new List<float>(target * 3);
+        for (int i = 0; i < camPoints.Count; i += step)
+        {
+            var p = camPoints[i];
+            float wx = p.X * worldPose.M11 + p.Y * worldPose.M21 + p.Z * worldPose.M31 + worldPose.M41;
+            float wy = p.X * worldPose.M12 + p.Y * worldPose.M22 + p.Z * worldPose.M32 + worldPose.M42;
+            float wz = p.X * worldPose.M13 + p.Y * worldPose.M23 + p.Z * worldPose.M33 + worldPose.M43;
+            if (float.IsNaN(wx) || float.IsNaN(wy) || float.IsNaN(wz)) continue;
+            xyz.Add(wx); xyz.Add(wy); xyz.Add(wz);
+        }
+        _scanDiag.Add((name, e1, xyz.ToArray()));
+    }
+
+    /// <summary>
+    /// Records already-transformed world XYZ (e.g. from <see cref="ScanPointCloudTransform.ToWorld"/>).
+    /// Decimated for export size.
+    /// </summary>
+    public void StashScanDiagWorld(string name, float e1, float[] worldXyz)
+    {
+        if (worldXyz is null || worldXyz.Length < 3) return;
+        _scanDiag.Add((name, e1, ScanPointCloudTransform.Decimate(worldXyz)));
+    }
+
+    /// <summary>Clears stashed diagnostic scans (e.g. before a new bed-cal run).</summary>
+    public void ClearScanDiag() => _scanDiag.Clear();
+
+    /// <summary>
+    /// Writes the stashed scans (one .xyz of world points each) + a manifest (per-scan E1, the rotary
+    /// rotation centre, and sign) to <paramref name="dir"/> for offline calibration analysis.
+    /// </summary>
+    public string ExportScanDiag(string dir, Vector3 center, float sign)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        Directory.CreateDirectory(dir);
+        var man = new System.Text.StringBuilder();
+        man.Append("{\n");
+        man.Append($"  \"rotaryCenter\": [{center.X.ToString("F4", inv)}, {center.Y.ToString("F4", inv)}, {center.Z.ToString("F4", inv)}],\n");
+        man.Append($"  \"rotationSign\": {sign.ToString("F0", inv)},\n");
+        man.Append("  \"scans\": [\n");
+        for (int s = 0; s < _scanDiag.Count; s++)
+        {
+            var (name, e1, xyz) = _scanDiag[s];
+            var safe = new string([.. name.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_')]);
+            var file = $"{s:D2}_{safe}.xyz";
+            var sb = new System.Text.StringBuilder(xyz.Length * 8);
+            for (int i = 0; i + 2 < xyz.Length; i += 3)
+                sb.Append(xyz[i].ToString("F2", inv)).Append(' ')
+                  .Append(xyz[i + 1].ToString("F2", inv)).Append(' ')
+                  .Append(xyz[i + 2].ToString("F2", inv)).Append('\n');
+            File.WriteAllText(Path.Combine(dir, file), sb.ToString());
+            man.Append($"    {{ \"file\": \"{file}\", \"e1\": {e1.ToString("F4", inv)}, \"points\": {xyz.Length / 3} }}{(s < _scanDiag.Count - 1 ? "," : "")}\n");
+        }
+        man.Append("  ]\n}\n");
+        File.WriteAllText(Path.Combine(dir, "manifest.json"), man.ToString());
+        return $"{_scanDiag.Count} scans → {dir}";
+    }
+
+    /// <summary>
+    /// Registers an already-uploaded scene node in the outliner and queues it for
+    /// attachment to the scene root on the GL thread.
+    /// </summary>
+    internal void AttachUserNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
+        => AddRotaryBedChildNode(node, adoptToolpathsFrom);
+
+    /// <summary>
+    /// Adds an imported KRL toolpath as a scrubbable outliner node under the active print object
+    /// or rotary-bed group (same nesting as slice-generated toolpaths). Must be called on the UI thread.
+    /// </summary>
+    public void AddImportedToolpath(MassiveSlicer.Core.Models.Toolpath tp, string name, float beadWidth = 6f)
+    {
+        var node = new SceneNode { Name = name, Selectable = true };
+        RegisterToolpathInOutliner(node, ResolveToolpathParentOutlinerItem());
+        PendingToolpath.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath      = tp,
+            RawToolpath   = tp,
+            Node          = node,
+            BeadWidth     = beadWidth,
+            LayerHeight   = 3f,
+            MaterialColor = new System.Numerics.Vector3(0.10f, 0.45f, 0.90f),
+        });
+        NotifyRenderNeeded();
+    }
+
+    private OutlinerItemViewModel RegisterOutlinerItem(SceneNode node)
+    {
+        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node));
+        OutlinerItems.Add(item);
+        return item;
+    }
+
+    /// <summary>Returns the outliner item whose root node matches <paramref name="node"/>.</summary>
+    internal OutlinerItemViewModel? FindOutlinerItem(SceneNode node)
+    {
+        foreach (var item in OutlinerItems)
+        {
+            var found = FindOutlinerItemInSubtree(item, node);
+            if (found is not null) return found;
+        }
+        return null;
+    }
+
+    private static OutlinerItemViewModel? FindOutlinerItemInSubtree(OutlinerItemViewModel item, SceneNode node)
+    {
+        if (item.Node == node) return item;
+        foreach (var child in item.Children)
+        {
+            if (child.Node == node) return child;
+            var deeper = FindOutlinerItemInSubtree(child, node);
+            if (deeper is not null) return deeper;
+        }
+        return null;
+    }
+
+    private OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
+    {
+        foreach (var root in OutlinerItems)
+        {
+            var parent = FindParentInSubtree(root, item);
+            if (parent is not null) return parent;
+        }
+        return null;
+    }
+
+    private static OutlinerItemViewModel? FindParentInSubtree(OutlinerItemViewModel root, OutlinerItemViewModel target)
+    {
+        foreach (var child in root.Children)
+        {
+            if (ReferenceEquals(child, target)) return root;
+            var deeper = FindParentInSubtree(child, target);
+            if (deeper is not null) return deeper;
+        }
+        return null;
+    }
+
+    /// <summary>Returns the outliner item for a toolpath node (any depth).</summary>
+    internal OutlinerItemViewModel? FindToolpathOutlinerItem(SceneNode node)
+        => FindOutlinerItem(node);
 
     /// <summary>
     /// Creates a new toolpath outliner item as a child of <paramref name="parentItem"/>
@@ -887,6 +2596,8 @@ public sealed class ViewportViewModel : ViewModelBase
             parentItem.AddChild(item);
         else
             OutlinerItems.Add(item);
+
+        NotifyRenderNeeded();
     }
 
     /// <summary>
@@ -896,34 +2607,60 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public void RequestDeleteNode(SceneNode node)
     {
-        foreach (var item in OutlinerItems)
+        if (FindOutlinerItem(node) is not { } item) return;
+        if (item == _rotaryGroupItem || item == _robotGroupItem) return;
+
+        if (FindParentOutlinerItem(item) is { } parent)
         {
-            // Check direct match (top-level mesh or its sub-nodes)
-            if (item.Node == node || item.Node.SelfAndDescendants().Any(n => n == node))
-            {
-                RemoveUserNode(item);
-                return;
-            }
-            // Check child toolpath nodes
-            var child = item.Children.FirstOrDefault(c => c.Node == node);
-            if (child is not null)
-            {
-                item.RemoveChild(child);
-                PendingRemoveNodes.Enqueue(child.Node);
-                NotifyRenderNeeded();
-                return;
-            }
+            parent.RemoveChild(item);
+            QueueOutlinerSubtreeForRemoval(item);
+            ClearArmatureScanMeshIfRemoved(item.Node);
+            NotifyRenderNeeded();
+            return;
         }
+
+        RemoveUserNode(item);
+    }
+
+    private void QueueOutlinerSubtreeForRemoval(OutlinerItemViewModel item)
+    {
+        foreach (var child in item.Children)
+            QueueOutlinerSubtreeForRemoval(child);
+        PendingRemoveNodes.Enqueue(item.Node);
     }
 
     private void RemoveUserNode(OutlinerItemViewModel item)
     {
         OutlinerItems.Remove(item);
-        // Queue child toolpath nodes for cleanup before the parent
-        foreach (var child in item.Children)
-            PendingRemoveNodes.Enqueue(child.Node);
+        ClearArmatureScanMeshIfRemoved(item.Node);
+        foreach (var child in item.Children.ToList())
+            QueueOutlinerSubtreeForRemoval(child);
         PendingRemoveNodes.Enqueue(item.Node);
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
     }
+
+    /// <summary>Removes all user outliner entries and queues their nodes for GL disposal.</summary>
+    public void ClearUserScene()
+    {
+        foreach (var item in OutlinerItems.ToList())
+        {
+            if (item == _rotaryGroupItem || item == _robotGroupItem) continue;
+            RemoveUserNode(item);
+        }
+
+        if (_rotaryGroupItem is not null)
+        {
+            foreach (var child in _rotaryGroupItem.Children.ToList())
+            {
+                _rotaryGroupItem.RemoveChild(child);
+                QueueOutlinerSubtreeForRemoval(child);
+            }
+        }
+
+        _armatureScanNode = null;
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
 }

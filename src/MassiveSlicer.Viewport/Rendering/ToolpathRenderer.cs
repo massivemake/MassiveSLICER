@@ -86,10 +86,13 @@ public sealed class ToolpathRenderer : IDisposable
 
     private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
 
-    private Vector3 _extrudeColor   = new(0.1f,  0.45f, 0.9f);
-    private Vector3 _travelColor    = new(0.85f, 0.18f, 0.18f);
-    private Vector3 _seamColor      = new(1.0f,  0.9f,  0.0f);
-    private Vector3 _unselectedGray = new(0.38f, 0.38f, 0.38f);
+    private Vector3 _extrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _millColor        = new(0.95f, 0.6f,  0.1f);
+    private Vector3 _travelColor      = new(0.85f, 0.18f, 0.18f);
+    private Vector3 _wipeColor        = new(1.0f,  0.53f, 0.0f);
+    private Vector3 _retractionColor  = new(0.61f, 0.15f, 0.69f);
+    private Vector3 _seamColor        = new(1.0f,  0.9f,  0.0f);
+    private Vector3 _unselectedGray   = new(0.38f, 0.38f, 0.38f);
 
     private float    _beadWidth;
     private float    _beadLayerHeight;
@@ -137,13 +140,17 @@ public sealed class ToolpathRenderer : IDisposable
     /// <summary>
     /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
     /// </summary>
-    public void UpdateColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected)
+    public void UpdateColors(Vector3 extrude, Vector3 travel, Vector3 seam, Vector3 unselected,
+        Vector3 wipe, Vector3 retraction)
     {
-        bool vbosDirty = _extrudeColor != extrude || _travelColor != travel || _seamColor != seam;
-        _extrudeColor   = extrude;
-        _travelColor    = travel;
-        _seamColor      = seam;
-        _unselectedGray = unselected;
+        bool vbosDirty = _extrudeColor != extrude || _travelColor != travel || _seamColor != seam
+                      || _wipeColor != wipe || _retractionColor != retraction;
+        _extrudeColor     = extrude;
+        _travelColor      = travel;
+        _seamColor        = seam;
+        _unselectedGray   = unselected;
+        _wipeColor        = wipe;
+        _retractionColor  = retraction;
         if (vbosDirty) RebuildLineVbos();
     }
 
@@ -171,7 +178,7 @@ public sealed class ToolpathRenderer : IDisposable
         int extrudeCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill) extrudeCount++;
 
         var extData = new float[extrudeCount * 2 * 6];
         int ei = 0, mi = 0;
@@ -186,10 +193,17 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
                 {
-                    var color = _reachability is not null && mi < _reachability.Length && !_reachability[mi]
-                        ? UnreachableColor : _extrudeColor;
+                    Vector3 color;
+                    if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
+                        color = UnreachableColor;
+                    else if (move.Kind == MoveKind.Mill)
+                        color = _millColor;
+                    else if (move.IsWipe)
+                        color = _wipeColor;
+                    else
+                        color = _extrudeColor;
                     WriteVert(move.From, color);
                     WriteVert(move.To,   color);
                 }
@@ -236,8 +250,8 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude) ei += 2;
-                else                               ti += 2;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) ei += 2;
+                else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
                 fi++;
                 _extrudeVertexCumulative[fi] = ei;
                 _travelVertexCumulative[fi]  = ti;
@@ -261,7 +275,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<int>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = new List<int>(); contourFlatIndices.Add(cur); }
                     cur.Add(flatIdx);
@@ -308,7 +322,7 @@ public sealed class ToolpathRenderer : IDisposable
         int travelCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind != MoveKind.Extrude) travelCount++;
+                if (move.Kind == MoveKind.Travel) travelCount++;
 
         var trData = new float[travelCount * 2 * 6];
         int ti = 0;
@@ -321,10 +335,11 @@ public sealed class ToolpathRenderer : IDisposable
 
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind != MoveKind.Extrude)
+                if (move.Kind == MoveKind.Travel)
                 {
-                    WriteTr(move.From, _travelColor);
-                    WriteTr(move.To,   _travelColor);
+                    var color = move.IsZHop ? _retractionColor : _travelColor;
+                    WriteTr(move.From, color);
+                    WriteTr(move.To,   color);
                 }
 
         return trData;
@@ -403,17 +418,22 @@ public sealed class ToolpathRenderer : IDisposable
         _beadWidth       = beadWidth;
         _beadLayerHeight = layerHeight;
 
-        int extrudeCount = 0;
+        int cutCount = 0;
         foreach (var layer in toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
-        if (extrudeCount == 0) return;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
+        // Travel-only paths have no bead geometry — still build prefix sums for scrubbing.
+        if (cutCount == 0)
+        {
+            BuildBeadVertexCumulative();
+            return;
+        }
 
         float hw = beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
         // 4 side quads + 2 caps = 12 tris = 36 verts per segment (upper bound)
-        var data = new float[extrudeCount * 36 * 6];
+        var data = new float[cutCount * 36 * 6];
         int di = 0;
 
         void WV(NVec3 p, NVec3 n)
@@ -441,7 +461,7 @@ public sealed class ToolpathRenderer : IDisposable
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
-        // Group consecutive extrude moves within each layer into contours.
+        // Group consecutive cut moves (extrude + imported KRL LIN) into contours.
         // Each contour stores its half-height so adaptive layers use the correct bead size.
         // Caps are only emitted at contour start/end; interior junctions get blended normals.
         var contours = new List<(List<ToolpathMove> moves, float hh)>();
@@ -452,7 +472,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<ToolpathMove>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add(move);
@@ -583,13 +603,13 @@ public sealed class ToolpathRenderer : IDisposable
         float hw = _beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
-        int extrudeCount = 0;
+        int cutCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind == MoveKind.Extrude) extrudeCount++;
-        if (extrudeCount == 0) return [];
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
+        if (cutCount == 0) return [];
 
-        var data = new float[extrudeCount * 36 * 6];
+        var data = new float[cutCount * 36 * 6];
         int di = 0;
 
         void WV(NVec3 p, NVec3 c)
@@ -608,7 +628,7 @@ public sealed class ToolpathRenderer : IDisposable
             => (pt - r*hw - up*hh, pt + r*hw - up*hh,
                 pt - r*hw + up*hh, pt + r*hw + up*hh);
 
-        // Group consecutive extrude moves into contours, tracking flat move indices and layer height.
+        // Group consecutive cut moves into contours, tracking flat move indices and layer height.
         var contours = new List<(List<(ToolpathMove move, int flatIdx)> moves, float hh)>();
         int flatIdx = 0;
         foreach (var layer in _toolpath.Layers)
@@ -618,7 +638,7 @@ public sealed class ToolpathRenderer : IDisposable
             List<(ToolpathMove, int)>? cur = null;
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (cur is null) { cur = []; contours.Add((cur, lhh)); }
                     cur.Add((move, flatIdx));
@@ -694,7 +714,8 @@ public sealed class ToolpathRenderer : IDisposable
     {
         if (scrubIndex >= _totalMoveCount || _totalMoveCount == 0) return totalCount;
         if (scrubIndex <= 0) return 0;
-        return cumulative[scrubIndex];
+        if ((uint)scrubIndex >= (uint)cumulative.Length) return totalCount;
+        return Math.Min(cumulative[scrubIndex], totalCount);
     }
 
     public void Draw(Matrix4 mvp, bool selected = false,

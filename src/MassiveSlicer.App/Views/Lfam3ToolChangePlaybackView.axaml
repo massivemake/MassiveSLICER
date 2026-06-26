@@ -1,0 +1,62 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             x:Class="MassiveSlicer.App.Views.Lfam3ToolChangePlaybackView"
+             x:DataType="vm:ToolChangePanelBinding"
+             x:CompileBindings="True"
+             Background="Transparent">
+
+    <StackPanel Spacing="8">
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0"
+                       Text="{Binding ToolHeader}"
+                       FontSize="10"
+                       FontWeight="SemiBold"
+                       LetterSpacing="0.8"
+                       Foreground="#59FF0D"
+                       VerticalAlignment="Center"/>
+            <Button Grid.Column="1"
+                    Classes="Lfam3SeqCollapseBtn"
+                    Command="{Binding CollapsePlaybackCommand}"
+                    ToolTip.Tip="Hide playback"
+                    Width="24" Height="24"
+                    Padding="0">
+                <ia:Icon Value="mdi-chevron-up" FontSize="14" Foreground="#9ca3af"/>
+            </Button>
+        </Grid>
+
+        <Grid ColumnDefinitions="Auto,*" ColumnSpacing="10">
+            <Button Grid.Column="0"
+                    Classes="Lfam3SeqPlayBtn"
+                    Command="{Binding TogglePlaybackCommand}"
+                    ToolTip.Tip="Play / pause"
+                    Width="32" Height="32"
+                    Padding="0">
+                <ia:Icon Value="{Binding PlaybackToggleIcon}" FontSize="14" Foreground="#e8eaef"/>
+            </Button>
+            <Slider Grid.Column="1"
+                    Minimum="0"
+                    Maximum="1000"
+                    Value="{Binding ScrubValue, Mode=TwoWay}"
+                    VerticalAlignment="Center"
+                    Classes="Lfam3SeqScrub"/>
+        </Grid>
+
+        <TextBlock Text="{Binding StepTextCompact}"
+                   FontSize="10"
+                   Foreground="#9ca3af"
+                   TextWrapping="Wrap"/>
+
+        <StackPanel Orientation="Horizontal" Spacing="16">
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Border Width="14" Height="2" Background="#59FF0D" VerticalAlignment="Center" CornerRadius="1"/>
+                <TextBlock Text="LIN" Classes="Lfam3SeqLegendLin" FontSize="9"/>
+            </StackPanel>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Border Width="14" Height="2" Background="#f59e0b" VerticalAlignment="Center" CornerRadius="1"/>
+                <TextBlock Text="PTP" Classes="Lfam3SeqLegendPtp" FontSize="9"/>
+            </StackPanel>
+        </StackPanel>
+    </StackPanel>
+</UserControl>

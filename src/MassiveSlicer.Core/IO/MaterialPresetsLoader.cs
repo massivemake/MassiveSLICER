@@ -7,9 +7,8 @@ namespace MassiveSlicer.Core.IO;
 /// Persists the shared material preset library as JSON inside the project's
 /// <c>assets/</c> folder so that every change is tracked by git.
 ///
-/// Path (resolved relative to the process working directory, which is the
-/// repo root when running via <c>dotnet run</c>):
-///   <c>assets/materials.json</c>
+/// Path: <c>assets/materials.json</c>, resolved via <see cref="AssetPaths"/>
+/// (exe dir, cwd, and parent folders).
 ///
 /// Committing this file captures the full history of material additions and
 /// edits. Use <c>git log assets/materials.json</c> to see the change history.
@@ -27,29 +26,11 @@ public static class MaterialPresetsLoader
     };
 
     /// <summary>
-    /// Resolves the materials file path. Prefers <c>assets/materials.json</c>
-    /// relative to the current working directory (repo root). Falls back to
-    /// the executable's directory for published builds.
+    /// Resolves <c>assets/materials.json</c> via <see cref="AssetPaths"/> so the
+    /// loader finds the repo copy even when <c>assets/</c> exists beside the exe
+    /// (cells/krl deploy) but <c>materials.json</c> has not been copied there yet.
     /// </summary>
-    private static string ResolvePath()
-    {
-        var cwdPath = Path.GetFullPath(RelativePath);
-        if (File.Exists(cwdPath) || Directory.Exists(Path.GetDirectoryName(cwdPath)!))
-            return cwdPath;
-
-        // Fallback: walk up from the executable to find the assets folder.
-        var dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 6; i++)
-        {
-            var candidate = Path.Combine(dir, RelativePath);
-            if (File.Exists(candidate)) return candidate;
-            var parent = Directory.GetParent(dir);
-            if (parent is null) break;
-            dir = parent.FullName;
-        }
-
-        return cwdPath; // best effort
-    }
+    private static string ResolvePath() => AssetPaths.Resolve(RelativePath);
 
     public static List<MaterialPreset> Load()
     {

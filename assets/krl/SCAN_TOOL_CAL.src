@@ -1,0 +1,111 @@
+&ACCESS RVP
+&REL 1
+&PARAM EDITMASK = *
+&PARAM TEMPLATE = C:\KRC\Roboter\Template\vorgabe
+DEF SCAN_TOOL_CAL ( )
+; 3D scan-tool (hand-eye) calibration sweep with closed-loop in-frame retry.
+; Jog the scanner to a good view of the calibration card in the bed centre, then run this.
+; It nutates the WRIST (A4/A5/A6) about that starting pose to give diverse views of the card.
+;
+; Handshake with the host (MassiveSlicer):
+;   $FLAG[1]=TRUE  : robot in position, waiting for the host to capture a scan
+;   $FLAG[1]=FALSE : host releases the robot (set by the host after each capture)
+;   $FLAG[2]=TRUE  : sweep finished (set by the robot at the end)
+;   $FLAG[3]=TRUE  : host wants THIS pose re-presented at a reduced tilt because the
+;                    calibration card was partially / fully out of frame.
+; When the host releases with $FLAG[3]=TRUE, the robot halves this pose's tilt toward the
+; centred (home) view and presents it again; otherwise it advances to the next pose.
+; Base deltas are deliberately modest so the card usually stays in the field of view; the
+; per-pose retry recovers the poses that still clip the frame.
+
+DECL E6AXIS home
+DECL E6AXIS p
+DECL INT i
+DECL REAL s
+DECL REAL dA4[9]
+DECL REAL dA5[9]
+DECL REAL dA6[9]
+
+;FOLD INI
+  ;FOLD BASISTECH INI
+    GLOBAL INTERRUPT DECL 3 WHEN $STOPMESS==TRUE DO IR_STOPM ( )
+    INTERRUPT ON 3
+    BAS (#INITMOV,0 )
+  ;ENDFOLD (BASISTECH INI)
+;ENDFOLD (INI)
+
+$IPO_MODE = #BASE
+$ADVANCE = 3
+
+BAS (#BASE,1)
+PDAT_ACT = PDEFAULT
+BAS (#PTP_DAT )
+BAS (#VEL_PTP,15 )      ; gentle 15% PTP for calibration moves
+
+; Calibrate with the UNCALIBRATED scan tool TOOL_DATA[5]; the computed result is saved as the
+; calibrated TOOL_DATA[6] by the host. (Hand-eye uses the flange, so the active tool doesn't
+; affect the sweep — this just keeps the controller on the working scan tool.)
+$ACT_TOOL = 5
+$TOOL = TOOL_DATA[5]
+
+$FLAG[1] = FALSE
+$FLAG[2] = FALSE
+$FLAG[3] = FALSE
+
+home = $AXIS_ACT        ; operator's starting pose, scanner aimed at the card
+
+; Wrist-only nutation deltas (deg). Modest magnitudes keep the card in the FOV; the host
+; can still request a gentler per-pose retry via $FLAG[3] when a view clips the frame.
+dA4[1] = 0.0
+dA5[1] = 0.0
+dA6[1] = 0.0
+dA4[2] = 0.0
+dA5[2] = 8.0
+dA6[2] = 0.0
+dA4[3] = 0.0
+dA5[3] = -8.0
+dA6[3] = 0.0
+dA4[4] = 8.0
+dA5[4] = 0.0
+dA6[4] = 0.0
+dA4[5] = -8.0
+dA5[5] = 0.0
+dA6[5] = 0.0
+dA4[6] = 0.0
+dA5[6] = 0.0
+dA6[6] = 15.0
+dA4[7] = 0.0
+dA5[7] = 0.0
+dA6[7] = -15.0
+dA4[8] = 7.0
+dA5[8] = 7.0
+dA6[8] = 0.0
+dA4[9] = -7.0
+dA5[9] = -7.0
+dA6[9] = 0.0
+
+FOR i = 1 TO 9
+  s = 1.0
+  ; present this pose; the host may ask (via $FLAG[3]) for it again at reduced tilt
+  LOOP
+    p = home
+    p.A4 = home.A4 + dA4[i] * s
+    p.A5 = home.A5 + dA5[i] * s
+    p.A6 = home.A6 + dA6[i] * s
+    PTP p
+    WAIT SEC 0.5
+    $FLAG[1] = TRUE
+    WAIT FOR ($FLAG[1] == FALSE)
+    IF $FLAG[3] == TRUE THEN
+      $FLAG[3] = FALSE
+      s = s * 0.5        ; card was out of frame — tilt half as far toward the centred view
+    ELSE
+      EXIT               ; host accepted (or gave up) — advance to the next pose
+    ENDIF
+  ENDLOOP
+ENDFOR
+
+; -- done: return home --------------------------------------------------------
+$FLAG[2] = TRUE
+PTP home
+END

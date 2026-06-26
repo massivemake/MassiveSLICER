@@ -1,17 +1,20 @@
 ﻿using System.IO;
 using Avalonia.Controls;
 using Avalonia.Platform.Storage;
+using Avalonia.Threading;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
-using MassiveSlicer.Viewport.Loading;
-using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels;
-using OpenTK.Mathematics;
+using MassiveSlicer.Viewport.Scene;
 
 namespace MassiveSlicer.App;
 
 public partial class MainWindow : Window
 {
+    private CancellationTokenSource? _cellLoadCts;
+    private int _cellLoadGeneration;
+    private MassiveSlicer.App.Console.LocalControlBridge? _controlBridge;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -22,6 +25,22 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm) return;
 
+        vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
+
+        // -- Local control bridge (external tooling reads console / sends commands) --
+        if (_controlBridge is null)
+        {
+            try
+            {
+                _controlBridge = new MassiveSlicer.App.Console.LocalControlBridge(vm);
+                int port = _controlBridge.Start();
+                vm.Console.Log(port > 0
+                    ? $"[bridge] control API on http://127.0.0.1:{port}  — GET /status, GET /console?n=N, GET /screenshot, GET|POST /materials, POST /command"
+                    : "[bridge] control API failed to start (ports busy).");
+            }
+            catch (Exception ex) { vm.Console.LogError($"[bridge] {ex.Message}"); }
+        }
+
         // -- Right panel column toggle -----------------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
@@ -31,38 +50,49 @@ public partial class MainWindow : Window
             WorkAreaGrid.ColumnDefinitions[4].Width = visible ? new GridLength(300)  : new GridLength(0);
         };
 
-        // -- Console overlay toggle --------------------------------------------
-        vm.Toolbar.PropertyChanged += (_, args) =>
-        {
-            if (args.PropertyName != nameof(ToolbarViewModel.IsConsoleVisible)) return;
-            ConsoleOverlay.IsVisible = vm.Toolbar.IsConsoleVisible;
-        };
-        ConsoleOverlay.IsVisible = vm.Toolbar.IsConsoleVisible;
+        // Apply persisted panel visibility before first layout pass.
+        bool rightVisible = vm.Toolbar.IsRightPanelVisible;
+        WorkAreaGrid.ColumnDefinitions[3].Width = rightVisible ? new GridLength(4)   : new GridLength(0);
+        WorkAreaGrid.ColumnDefinitions[4].Width = rightVisible ? new GridLength(300)  : new GridLength(0);
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
+        vm.Viewport.OnDevCellReloadRequested = SwitchCell;
+        vm.Viewport.OnDevLog = msg => vm.Console.Log(msg);
+
+        var cellsRoot = MassiveSlicer.Core.IO.CellPaths.PreferredCellsDirectory();
+        if (cellsRoot is not null)
+            vm.Console.Log($"[cell] using cells directory: {cellsRoot}");
 
         var cells = CellLoader.FindAll()
             .Select(path =>
             {
+                string full = Path.GetFullPath(path);
                 string name;
-                try   { name = CellLoader.Load(path).Name; }
-                catch { name = Path.GetFileNameWithoutExtension(path); }
-                return (name, path);
+                try   { name = CellLoader.Load(full).Name; }
+                catch { name = Path.GetFileNameWithoutExtension(full); }
+                return (name, full);
             })
             .ToList();
 
         if (cells.Count == 0)
+        {
+            vm.Console.LogError("[cell] No cell files found — robot and bed will not appear. Check assets/cells beside the .exe.");
             System.Console.Error.WriteLine("No cell files found in assets/cells/.");
+        }
+        else
+        {
+            vm.Console.Log($"[cell] discovered {cells.Count} cell(s).");
+        }
 
         vm.LeftPanel.SetCells(cells);
 
-        // Default to LFAM 3 cell if present.
-        var lfam3Idx = cells.FindIndex(c =>
-            c.name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) ||
-            c.name.Contains("LFAM3",  StringComparison.OrdinalIgnoreCase));
-        if (lfam3Idx > 0)
-            vm.LeftPanel.SelectedCellIndex = lfam3Idx;
+        // Default to LFAM 2 — empty outliner, robot not synced until user connects.
+        var lfam2Idx = cells.FindIndex(c =>
+            c.name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) ||
+            c.name.Contains("LFAM2",  StringComparison.OrdinalIgnoreCase));
+        if (cells.Count > 0)
+            vm.LeftPanel.SelectedCellIndex = lfam2Idx >= 0 ? lfam2Idx : 0;
 
         // -- Model loading -----------------------------------------------------
         vm.Toolbar.ModelLoadRequested += async (_, _) =>
@@ -88,11 +118,81 @@ public partial class MainWindow : Window
             await LoadAndAddNodeAsync(path, vm);
         };
 
+        // -- Relief heightmap picker (Subtractive tab) -------------------------
+        vm.RightPanel.Subtractive.BrowseHeightmapRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Open Relief Heightmap",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("Image Files") { Patterns = ["*.png", "*.jpg", "*.jpeg", "*.bmp", "*.tga"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.RightPanel.Subtractive.HeightmapPath = path;
+        };
+
+        // -- Workspace open / save (File menu) ---------------------------------
+        vm.Toolbar.OpenWorkspaceRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Open Workspace",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("MassiveSlicer Workspace") { Patterns = ["*.mass"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.OpenWorkspace(path);
+        };
+
+        vm.Toolbar.SaveWorkspaceRequested += (_, _) =>
+        {
+            if (!vm.TrySaveCurrentWorkspace())
+                _ = SaveWorkspaceAsAsync(vm);
+        };
+
+        vm.Toolbar.SaveWorkspaceAsRequested += async (_, _) =>
+        {
+            await SaveWorkspaceAsAsync(vm);
+        };
+
         // -- Preferences -------------------------------------------------------
         vm.Toolbar.PreferencesRequested += async (_, _) =>
         {
             var win = new Views.PreferencesWindow { DataContext = vm.Preferences };
             await win.ShowDialog(this);
+        };
+
+        // -- Import KRL (File menu) --------------------------------------------
+        vm.Toolbar.ImportKrlRequested += async (_, _) =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+            {
+                Title          = "Import KRL",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("KUKA Robot Language") { Patterns = ["*.src", "*.SRC"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+            if (files.Count == 0) return;
+
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.ImportKrlToolpath(path);
         };
     }
 
@@ -101,158 +201,111 @@ public partial class MainWindow : Window
     private void SwitchCell(string path)
     {
         if (DataContext is not MainWindowViewModel vm) return;
+        path = Path.GetFullPath(path);
 
-        CellConfig cell;
-        try   { cell = CellLoader.Load(path); }
-        catch (Exception ex)
-        {
-            System.Console.Error.WriteLine($"Failed to load cell '{path}': {ex.Message}");
-            return;
-        }
+        _cellLoadCts?.Cancel();
+        _cellLoadCts?.Dispose();
+        _cellLoadCts = new CancellationTokenSource();
+        var ct  = _cellLoadCts.Token;
+        var gen = Interlocked.Increment(ref _cellLoadGeneration);
+        var defaultTab = vm.RightPanel.ActiveTab;
+        var cacheKey   = CellSceneCache.CacheKey(path);
+        bool cacheHit  = CellSceneCache.TryGet(cacheKey, out _);
 
-        SceneNode? robotBaseNode = null;
-        if (File.Exists(cell.Robot.ModelPath))
+        vm.Console.Log(cacheHit
+            ? $"[cell] switching to {Path.GetFileNameWithoutExtension(path)} (cached)…"
+            : $"[cell] loading {Path.GetFileNameWithoutExtension(path)}…");
+
+        Task.Run(() =>
         {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
-                var robot = GltfLoader.Load(cell.Robot.ModelPath);
-                var p     = cell.Robot.WorldPosition;
-                robotBaseNode = new SceneNode
+                ct.ThrowIfCancellationRequested();
+                var payload = CellSceneLoader.Load(path, defaultTab, ct);
+                var elapsed = sw.ElapsedMilliseconds;
+                if (ct.IsCancellationRequested || gen != Volatile.Read(ref _cellLoadGeneration))
+                    return;
+
+                Dispatcher.UIThread.Post(() =>
                 {
-                    Name           = $"{cell.Name}_Robot",
-                    LocalTransform = Matrix4.CreateTranslation(p.X, p.Y, p.Z),
-                    Selectable     = false,
-                };
-                robotBaseNode.AddChild(robot);
+                    if (ct.IsCancellationRequested || gen != Volatile.Read(ref _cellLoadGeneration))
+                        return;
+
+                    var toolCount = payload.MultiTools?.Tools.Count ?? 0;
+                    vm.Console.Log(
+                        $"[cell] {payload.Config.Name}: robot={(payload.RobotBaseNode is not null)} " +
+                        $"bed={(payload.BedNode is not null)} env={payload.EnvironmentNodes.Count} tools={toolCount} " +
+                        $"rotary={(payload.RotaryBedPivot is not null)} — CPU ready in {elapsed}ms" +
+                        (cacheHit ? " (geometry cache)" : "") +
+                        " (GPU upload continues in viewport…)");
+
+                    if (payload.RobotBaseNode is null)
+                        vm.Console.LogError("[cell] Robot model did not load — check console for missing .glb paths.");
+                    if (payload.BedNode is null && payload.RotaryBedPivot is null && !payload.Config.Bed.Hidden)
+                        vm.Console.LogError("[cell] Bed model did not load.");
+                    if (payload.Config.Bed.Hidden && payload.RotaryBedPivot is null)
+                        vm.Console.Log("[cell] LFAM 3 uses a hidden flat bed; rotary bed mesh was not built.");
+
+                    var bedCfg = payload.Config.Bed;
+                    var rp     = payload.Config.Robot.WorldPosition;
+                    var marker = bedCfg.BaseMarkerWorld(rp);
+                    var grid   = bedCfg.VisualGridCorner(rp);
+                    var off    = bedCfg.VisualOffset is { } vo ? $"{vo.X:F1}, {vo.Y:F1}" : "none";
+                    vm.Console.Log(
+                        $"[bed] {payload.Config.Name}: visualOffset=({off})  BASE marker=({marker.X:F1}, {marker.Y:F1})  visual grid=({grid.X:F1}, {grid.Y:F1})");
+
+                    vm.Viewport.PendingCellSwap.Enqueue(payload);
+                    vm.Viewport.NotifyRenderNeeded();
+                });
             }
-            catch (Exception ex) { System.Console.Error.WriteLine($"Failed to load robot model: {ex.Message}"); }
-        }
-
-        SceneNode? boosterNode = null;
-        if (cell.BoosterFrame is { } frame && File.Exists(frame.ModelPath))
-        {
-            try
+            catch (OperationCanceledException) { }
+            catch (Exception ex)
             {
-                var ext  = Path.GetExtension(frame.ModelPath).ToLowerInvariant();
-                var node = (ext is ".glb" or ".gltf")
-                    ? GltfLoader.Load(frame.ModelPath)
-                    : StlLoader.Load(frame.ModelPath, $"{cell.Name}_BoosterFrame");
-                var p    = frame.WorldPosition;
-                if (p.X != 0f || p.Y != 0f || p.Z != 0f)
+                if (!ct.IsCancellationRequested)
                 {
-                    boosterNode = new SceneNode
-                    {
-                        Name           = node.Name + "_Root",
-                        LocalTransform = Matrix4.CreateTranslation(p.X, p.Y, p.Z),
-                        Selectable     = false,
-                    };
-                    boosterNode.AddChild(node);
+                    vm.Console.LogError($"[cell] Failed to load '{Path.GetFileName(path)}': {ex.Message}");
+                    System.Console.Error.WriteLine($"Failed to load cell '{path}': {ex.Message}");
                 }
-                else
-                {
-                    node.Selectable = false;
-                    boosterNode     = node;
-                }
             }
-            catch { /* non-critical */ }
-        }
-
-        SceneNode? bedNode = null;
-        if (cell.Bed.ModelPath is { } bedPath && File.Exists(bedPath))
-        {
-            try
-            {
-                var bedExt  = Path.GetExtension(bedPath).ToLowerInvariant();
-                var bed     = (bedExt is ".glb" or ".gltf")
-                    ? GltfLoader.Load(bedPath)
-                    : StlLoader.Load(bedPath, $"{cell.Name}_Bed");
-                var o       = cell.Bed.Origin;
-                var wrapper = new SceneNode
-                {
-                    Name           = bed.Name + "_Root",
-                    LocalTransform = Matrix4.CreateTranslation(o.X, o.Y, o.Z),
-                    Selectable     = false,
-                };
-                wrapper.AddChild(bed);
-                bedNode = wrapper;
-            }
-            catch { /* non-critical */ }
-        }
-
-        // Pick the tool that matches the default active tab so the viewport shows
-        // the right end-effector immediately without waiting for OnCellSwapCompleted.
-        bool cellHasScan = cell.ScanToolName is not null;
-        var defaultTabToolName = vm.RightPanel.ActiveTab switch
-        {
-            RightPanelTab.Scan when cellHasScan => cell.ScanToolName,
-            RightPanelTab.Additive              => "HV Extruder",
-            _                                   => cellHasScan ? cell.ScanToolName : "HV Extruder",
-        };
-        var firstTool = (defaultTabToolName is not null
-                            ? cell.EffectiveTools.FirstOrDefault(t => t.Name == defaultTabToolName)
-                            : null)
-                     ?? (cell.EffectiveTools.Count > 0 ? cell.EffectiveTools[0] : null);
-
-        SceneNode? toolHolder = null;
-        if (firstTool is not null && File.Exists(firstTool.ModelPath))
-        {
-            try { toolHolder = BuildToolHolder(firstTool); }
-            catch { /* non-critical */ }
-        }
-
-        vm.Viewport.PendingCellSwap.Enqueue(new CellSwapPayload(
-            cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool));
-        vm.Viewport.NotifyRenderNeeded();
+        }, ct);
     }
 
-    private async Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
+    private Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
     {
-        bool place = true;
-
-        SceneNode? node = ImportHelper.LoadAndPlace(filePath, place ? vm.Viewport.ActiveCell : null);
-        if (node is null)
-        {
+        if (!vm.ImportModelFromPath(filePath))
             System.Console.Error.WriteLine($"Failed to load model: {filePath}");
-            return;
-        }
-        vm.Viewport.AddUserNode(node);
+        return Task.CompletedTask;
     }
 
-    private static SceneNode BuildToolHolder(ToolCellConfig tool)
+    private async Task SaveWorkspaceAsAsync(MainWindowViewModel vm)
     {
-        bool isGlb = tool.ModelPath.EndsWith(".glb",  StringComparison.OrdinalIgnoreCase)
-                  || tool.ModelPath.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase);
-
-        if (isGlb)
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
         {
-            var toolRoot = GltfLoader.Load(tool.ModelPath);
-            var children = toolRoot.Children.ToList();
-            foreach (var child in children)
-                toolRoot.RemoveChild(child);
+            Title             = "Save Workspace As",
+            DefaultExtension  = "mass",
+            SuggestedFileName = vm.SuggestedWorkspaceFileName,
+            FileTypeChoices   = [new("MassiveSlicer Workspace") { Patterns = ["*.mass"] }],
+        });
+        if (file is null) return;
 
-            var holder = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            foreach (var child in children)
-                holder.AddChild(child);
-            return holder;
-        }
-        else
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        vm.SaveWorkspace(path);
+    }
+
+    /// <summary>
+    /// Captures the full application window (toolbar, panels, console, viewport) as PNG.
+    /// Refreshes the GL viewport first so the 3D frame matches what is on screen.
+    /// </summary>
+    internal async Task<byte[]?> CaptureAppScreenshotAsync()
+    {
+        await Viewport.CaptureScreenshotAsync();
+        return await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            var stlNode = StlLoader.Load(tool.ModelPath, "Tool");
-            var holder  = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateScale(1f / 1000f)
-                               * Matrix4.CreateRotationX(-MathF.PI / 2f)
-                               * Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            holder.AddChild(stlNode);
-            return holder;
-        }
+            UpdateLayout();
+            return AppScreenshotCapture.CapturePng(this);
+        });
     }
 }

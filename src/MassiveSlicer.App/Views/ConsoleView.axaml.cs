@@ -1,52 +1,81 @@
-using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Interactivity;
+using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
 
 public partial class ConsoleView : UserControl
 {
-    private Point _dragOffset;
-    private bool  _dragging;
-
     public ConsoleView()
     {
         InitializeComponent();
-        TitleBar.PointerPressed  += TitleBar_PointerPressed;
-        TitleBar.PointerMoved    += TitleBar_PointerMoved;
-        TitleBar.PointerReleased += TitleBar_PointerReleased;
+        ConsoleInput.AddHandler(InputElement.KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
+        DataContextChanged += OnDataContextChanged;
     }
 
-    private void TitleBar_PointerPressed(object? sender, PointerPressedEventArgs e)
+    private void OnDataContextChanged(object? sender, EventArgs e)
     {
-        if (!e.GetCurrentPoint(TitleBar).Properties.IsLeftButtonPressed) return;
-        var parent = Parent as Visual;
-        if (parent == null) return;
-        var pos  = e.GetPosition(parent);
-        double left = Canvas.GetLeft(this);
-        double top  = Canvas.GetTop(this);
-        if (double.IsNaN(left)) left = 0;
-        if (double.IsNaN(top))  top  = 0;
-        _dragOffset = new Point(pos.X - left, pos.Y - top);
-        _dragging = true;
-        e.Pointer.Capture(TitleBar);
-        e.Handled = true;
+        if (DataContext is ConsoleViewModel oldVm)
+            oldVm.History.CollectionChanged -= OnHistoryChanged;
+
+        if (DataContext is ConsoleViewModel vm)
+            vm.History.CollectionChanged += OnHistoryChanged;
     }
 
-    private void TitleBar_PointerMoved(object? sender, PointerEventArgs e)
+    private void OnHistoryChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        if (!_dragging) return;
-        var parent = Parent as Visual;
-        if (parent == null) return;
-        var pos = e.GetPosition(parent);
-        Canvas.SetLeft(this, pos.X - _dragOffset.X);
-        Canvas.SetTop(this,  pos.Y - _dragOffset.Y);
+        // Defer until layout completes — immediate ScrollToEnd leaves the newest line under the input.
+        Avalonia.Threading.Dispatcher.UIThread.Post(ScrollHistoryToEnd, Avalonia.Threading.DispatcherPriority.Loaded);
     }
 
-    private void TitleBar_PointerReleased(object? sender, PointerReleasedEventArgs e)
+    void ScrollHistoryToEnd()
     {
-        if (!_dragging) return;
-        _dragging = false;
-        e.Pointer.Capture(null);
+        if (HistoryScroll is null) return;
+        HistoryScroll.ScrollToEnd();
+        // Second pass after the scroll extent updates (wrap + new lines).
+        Avalonia.Threading.Dispatcher.UIThread.Post(
+            () => HistoryScroll?.ScrollToEnd(), Avalonia.Threading.DispatcherPriority.Background);
+    }
+
+    private void OnInputKeyDown(object? sender, KeyEventArgs e)
+    {
+        if (DataContext is not ConsoleViewModel vm)
+            return;
+
+        switch (e.Key)
+        {
+            case Key.Enter:
+                if (vm.SubmitCommand.CanExecute(null))
+                {
+                    vm.SubmitCommand.Execute(null);
+                    e.Handled = true;
+                }
+                break;
+
+            case Key.Tab:
+                if (vm.TryCompleteSuggestion())
+                    e.Handled = true;
+                break;
+
+            case Key.Down:
+                if (vm.TryMoveSuggestion(+1))
+                    e.Handled = true;
+                else if (vm.TryBrowseHistory(-1))
+                    e.Handled = true;
+                break;
+
+            case Key.Up:
+                if (vm.HasSuggestions && vm.TryMoveSuggestion(-1))
+                    e.Handled = true;
+                else if (vm.TryBrowseHistory(+1))
+                    e.Handled = true;
+                break;
+
+            case Key.Escape:
+                vm.InputText = string.Empty;
+                e.Handled = true;
+                break;
+        }
     }
 }

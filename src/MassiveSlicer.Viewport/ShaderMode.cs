@@ -17,4 +17,23 @@ public enum ShaderMode
     Purple,
     /// <summary>Renders world-space normals as RGB colour (X->R, Y->G, Z->B remapped to 0-1).</summary>
     Normals,
+
+    // -- Material-channel debug views (inspector). Show the raw PBR channel of the selected
+    //    mesh; cell geometry stays in the cheap fast-cell path. --
+    /// <summary>Base colour (albedo) map / factor only.</summary>
+    BaseColor,
+    /// <summary>Metalness channel as greyscale.</summary>
+    Metalness,
+    /// <summary>Roughness channel as greyscale.</summary>
+    Roughness,
+    /// <summary>Tangent-space normal map (or geometric normal when absent).</summary>
+    NormalMap,
+    /// <summary>Ambient-occlusion channel as greyscale.</summary>
+    AO,
+    /// <summary>Emissive map / factor.</summary>
+    Emission,
+    /// <summary>Procedural UV checker (magenta where UVs are missing).</summary>
+    UvChecker,
+    /// <summary>Flat (faceted) shading from face normals + a wireframe overlay — inspect topology.</summary>
+    Wireframe,
 }

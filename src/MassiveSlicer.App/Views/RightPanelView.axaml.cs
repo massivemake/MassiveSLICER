@@ -30,6 +30,18 @@ public partial class RightPanelView : UserControl
         MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
     }
 
+    private async void OnKrlPostProcessClicked(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not RightPanelViewModel vm) return;
+        if (TopLevel.GetTopLevel(this) is not Window parent) return;
+
+        var dialog = new KrlPostProcessWindow
+        {
+            DataContext = vm.Additive.KrlPostProcess,
+        };
+        await dialog.ShowDialog(parent);
+    }
+
     private async void OnEditMaterialClicked(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not RightPanelViewModel vm) return;

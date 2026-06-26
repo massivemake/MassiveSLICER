@@ -10,9 +10,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 {
     private readonly Action _notifyRender;
     private readonly Action? _onHide;
+    private readonly string? _displayName;
 
     public SceneNode Node { get; }
-    public string Name => Node.Name;
+    public string Name => _displayName ?? Node.Name;
+    /// <summary>When false the outliner hides the delete control (robot, beds, stands, etc.).</summary>
+    public bool CanDelete { get; }
     public ICommand DeleteCommand { get; }
     public ICommand ToggleVisibleCommand { get; }
 
@@ -44,12 +47,20 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasChildren));
     }
 
-    internal OutlinerItemViewModel(SceneNode node, Action notifyRender, Action<OutlinerItemViewModel> onDelete, Action? onHide = null)
+    internal OutlinerItemViewModel(
+        SceneNode node,
+        Action notifyRender,
+        Action<OutlinerItemViewModel> onDelete,
+        Action? onHide = null,
+        string? displayName = null,
+        bool canDelete = true)
     {
         Node          = node;
         _notifyRender = notifyRender;
         _onHide       = onHide;
-        DeleteCommand        = new RelayCommand(() => onDelete(this));
+        _displayName  = displayName;
+        CanDelete            = canDelete;
+        DeleteCommand        = new RelayCommand(() => onDelete(this), () => canDelete);
         ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
     }
 }

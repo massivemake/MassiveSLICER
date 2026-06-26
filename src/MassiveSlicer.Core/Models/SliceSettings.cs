@@ -5,6 +5,9 @@ namespace MassiveSlicer.Core.Models;
 /// <summary>Parameters snapshot passed to the planar slicer. All distances are in mm.</summary>
 public sealed class SliceSettings
 {
+    /// <summary>Normal = volumetric shells + infill; Surface = boundary-focused cladding paths.</summary>
+    public SlicingMode SlicingMode { get; init; } = SlicingMode.Normal;
+
     /// <summary>Height of each deposited layer in mm.</summary>
     public float LayerHeight { get; init; } = 3f;
 
@@ -19,6 +22,42 @@ public sealed class SliceSettings
 
     /// <summary>Travel move speed in m/s.</summary>
     public float TravelSpeed { get; init; } = 0.5f;
+
+    /// <summary>Lift height (mm) inserted on travel moves. 0 = disabled.</summary>
+    public float ZHopMm { get; init; }
+
+    /// <summary>Pre-travel wipe mode. None = disabled.</summary>
+    public WipeMode WipeMode { get; init; } = WipeMode.None;
+
+    /// <summary>Total wipe path length in mm.</summary>
+    public float WipeLengthMm { get; init; } = 10f;
+
+    /// <summary>Linear speed for wipe extrusion moves in m/s.</summary>
+    public float WipeSpeed { get; init; } = 0.12f;
+
+    /// <summary>
+    /// Trailing wipe ramp distance (mm). Positive: last N mm of <see cref="WipeLengthMm"/> ramps RPM to zero.
+    /// Negative: after the full wipe length, extend an additional |N| mm with ramp-down (squeeze segment).
+    /// </summary>
+    public float WipeRampMm { get; init; } = 5f;
+
+    /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
+    public float FlowRate { get; init; } = 0.463f;
+
+    /// <summary>Stepped speed/RPM ramp after each travel before full extrusion resumes.</summary>
+    public bool ResumeRampEnabled { get; init; }
+
+    /// <summary>Ramp start print speed in m/s (e.g. 0.0005 = 0.5 mm/s).</summary>
+    public float ResumeRampStartSpeedMps { get; init; } = 0.0005f;
+
+    /// <summary>Ramp start extruder motor speed in percent (e.g. 1 = 1 %).</summary>
+    public float ResumeRampStartRpmPercent { get; init; } = 1f;
+
+    /// <summary>Total ramp distance in mm along the extrusion path (e.g. 609.6 ≈ 2 ft).</summary>
+    public float ResumeRampDistanceMm { get; init; } = 609.6f;
+
+    /// <summary>Number of discrete speed/RPM steps over <see cref="ResumeRampDistanceMm"/>.</summary>
+    public int ResumeRampSteps { get; init; } = 10;
 
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
@@ -35,6 +74,9 @@ public sealed class SliceSettings
     /// Defaults to (0, 1) -- back of model (max Y).
     /// </summary>
     public Vector2 SeamDirection { get; init; } = new(0f, 1f);
+
+    /// <summary>User-placed seam guides. When non-empty, seams align to the nearest guide per contour.</summary>
+    public IReadOnlyList<SeamGuidePoint> SeamGuidePoints { get; init; } = [];
 
     /// <summary>
     /// Maximum perpendicular deviation (mm) for Douglas-Peucker simplification applied after
@@ -197,4 +239,27 @@ public sealed class SliceSettings
     /// at sharp turns. 0 = disabled (no rate limit).
     /// </summary>
     public float SmoothRotationMaxRateDegPerMm { get; init; } = 0f;
+
+    // -- Curved (interpolation / sweep) slicing -----------------------------------
+
+    /// <summary>Vertex indices on the welded mesh forming the LOW (start) boundary ring.</summary>
+    public IReadOnlyList<int> CurvedBoundaryLowVertices { get; init; } = [];
+
+    /// <summary>Vertex indices on the welded mesh forming the HIGH (end) boundary ring.</summary>
+    public IReadOnlyList<int> CurvedBoundaryHighVertices { get; init; } = [];
+
+    /// <summary>How LOW/HIGH boundaries are supplied when vertex lists are empty.</summary>
+    public CurvedBoundarySource CurvedBoundarySource { get; init; } = CurvedBoundarySource.AutoDetect;
+
+    /// <summary>Z-band tolerance (mm) for auto-detect boundary rings.</summary>
+    public float CurvedAutoDetectBandMm { get; init; } = 2f;
+
+    /// <summary>When true, split mesh at saddle points before slicing (Y-shapes / branching).</summary>
+    public bool CurvedEnableRegionSplit { get; init; } = true;
+
+    /// <summary>
+    /// Blends move normals between world +Z (0) and full surface/stacking follow (1).
+    /// Lower values keep the toolhead more vertical for body clearance on curved paths.
+    /// </summary>
+    public float OrientationFollowStrength { get; init; } = 1f;
 }

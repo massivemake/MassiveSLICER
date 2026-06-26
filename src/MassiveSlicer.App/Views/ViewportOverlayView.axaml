@@ -2,10 +2,208 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ia="https://github.com/projektanker/icons.avalonia"
              xmlns:ctrl="clr-namespace:MassiveSlicer.Controls"
+             xmlns:local="clr-namespace:MassiveSlicer.App.Views"
+             xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             xmlns:conv="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
-             x:CompileBindings="False">
+             x:DataType="vm:ViewportViewModel"
+             x:CompileBindings="True"
+             Background="Transparent">
 
-    <Grid>
+    <UserControl.Resources>
+        <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
+    </UserControl.Resources>
+
+    <Grid Background="Transparent">
+
+        <!-- Slice error overlay (progress uses footer line + console) -->
+        <Border IsVisible="{Binding ShowSliceStatus}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="#D90B1220"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="20,14"
+                MinWidth="280"
+                MaxWidth="420"
+                ZIndex="40">
+            <TextBlock Text="{Binding SliceStatusMessage}"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       FontSize="13"
+                       FontWeight="SemiBold"
+                       Foreground="#FFFF7070"/>
+        </Border>
+
+        <!-- N-key HUD — hidden until N; no always-visible tab on the viewport edge. -->
+        <StackPanel HorizontalAlignment="Left"
+                    VerticalAlignment="Center"
+                    Margin="8,8,0,8"
+                    Spacing="6"
+                    ZIndex="20"
+                    IsVisible="{Binding IsSyncHudOpen}">
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="ROBOT LIVE" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <TextBlock Text="{Binding MountedToolLabel, StringFormat=Tool: {0}}"
+                               FontSize="11" FontWeight="SemiBold"/>
+                    <TextBlock IsVisible="{Binding !IsRobotSynced}"
+                               Text="Not synced — press Sync Robot"
+                               FontSize="11" Opacity="0.55"/>
+                    <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto,Auto,Auto"
+                          IsVisible="{Binding IsRobotSynced}">
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="A1" Classes="LabelMuted" FontSize="10" Margin="0,0,6,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Robot.A1, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="A2" Classes="LabelMuted" FontSize="10" Margin="8,0,6,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="3" Text="{Binding Robot.A2, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="A3" Classes="LabelMuted" FontSize="10" Margin="0,0,6,2"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Robot.A3, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="E1" Classes="LabelMuted" FontSize="10" Margin="8,0,6,2"/>
+                        <TextBlock Grid.Row="1" Grid.Column="3" Text="{Binding Robot.E1, StringFormat={}{0:F1}°}" FontSize="11"/>
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="TCP" Classes="LabelMuted" FontSize="10" Margin="0,0,6,0"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="3"
+                                   Text="{Binding Robot.TcpX, StringFormat=X {0:F0}}"
+                                   FontSize="11"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <StackPanel Spacing="5">
+                    <TextBlock Text="EXTRUDER" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <TextBlock IsVisible="{Binding !IsRobotSynced}"
+                               Text="Targets shown when slicing"
+                               FontSize="11" Opacity="0.55"/>
+                    <StackPanel IsVisible="{Binding IsRobotSynced}" Spacing="2">
+                        <TextBlock Text="{Binding AdditiveSettings.Temperature1, StringFormat=Zone 1 target {0:F0} °C}"
+                                   FontSize="11"/>
+                        <TextBlock Text="{Binding AdditiveSettings.Temperature2, StringFormat=Zone 2 target {0:F0} °C}"
+                                   FontSize="11"/>
+                        <TextBlock Text="{Binding AdditiveSettings.SelectedPreset.Name, StringFormat=Material: {0}}"
+                                   FontSize="11" Opacity="0.75"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94"
+                    IsVisible="{Binding !IsToolpathSelected}">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="VIEW" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <Button Padding="8,5"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Classes="ToolbarButton"
+                            Background="{DynamicResource Bg2}"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Command="{Binding SaveViewCommand}"
+                            ToolTip.Tip="Save the current camera angle as this cell's default view. Persists to the cell file, so it's restored next time you (or anyone) opens the app.">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ia:Icon Value="mdi-camera-marker-outline" FontSize="14"/>
+                            <TextBlock Text="Save View" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="DEV" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <ToggleButton IsChecked="{Binding IsDevMode, Mode=TwoWay}"
+                                  Padding="8,5"
+                                  HorizontalAlignment="Stretch"
+                                  HorizontalContentAlignment="Left"
+                                  Classes="ToolbarButton"
+                                  Classes.active="{Binding IsDevMode}"
+                                  Background="{DynamicResource Bg2}"
+                                  BorderBrush="{DynamicResource Border1}"
+                                  BorderThickness="1"
+                                  CornerRadius="4"
+                                  ToolTip.Tip="Edit cell layout: select print bed, rotary bed, tool stands, or docked tools and move/rotate them.">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ia:Icon Value="mdi-wrench-outline" FontSize="14"/>
+                            <TextBlock Text="Dev Mode" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <TextBlock IsVisible="{Binding IsDevMode}"
+                               Text="Edit cell layout, or click a tool-change waypoint to edit Global_Points.dat."
+                               Classes="LabelMuted"
+                               FontSize="10"
+                               TextWrapping="Wrap"
+                               MaxWidth="240"/>
+                    <Button Padding="8,5"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Classes="ToolbarButton"
+                            Background="{DynamicResource Bg2}"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            IsVisible="{Binding IsDevMode}"
+                            Command="{Binding SaveAllDevTransformsCommand}"
+                            ToolTip.Tip="Write every stand, bed, rotary bed, and dock pose to the cell JSON, then reload.">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ia:Icon Value="mdi-content-save-all-outline" FontSize="14"/>
+                            <TextBlock Text="Save All Transforms" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Padding="8,5"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Left"
+                            Classes="ToolbarButton"
+                            Background="{DynamicResource Bg2}"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            IsVisible="{Binding IsDevObjectSelected}"
+                            Command="{Binding SaveDevTransformCommand}"
+                            ToolTip.Tip="Write position and rotation to the cell JSON file.">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ia:Icon Value="mdi-content-save-outline" FontSize="14"/>
+                            <TextBlock Text="{Binding DevSelectedLabel, StringFormat=Save {0}}" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
+        <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
+                                          ZIndex="30"/>
+
+        <local:Lfam3WorkflowTimelineView IsVisible="{Binding ShowLfam3ToolPicker}"
+                                         HorizontalAlignment="Stretch"
+                                         VerticalAlignment="Bottom"
+                                         Margin="{Binding Lfam3WorkflowMargin}"
+                                         ClipToBounds="False"
+                                         ZIndex="26"/>
 
         <!-- Data Visualization panel — bottom-left, above timeline -->
         <Border IsVisible="{Binding IsToolpathSelected}"
@@ -31,8 +229,9 @@
             </Expander>
         </Border>
 
-        <!-- Transform toolbar — top-center -->
-        <Border HorizontalAlignment="Center"
+        <!-- Transform toolbar — top-center (move / rotate / scale) -->
+        <Border
+                HorizontalAlignment="Center"
                 VerticalAlignment="Top"
                 Margin="8"
                 Background="{DynamicResource Bg2}"
@@ -105,13 +304,7 @@
                 CornerRadius="4"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <Button Content="Focus"
-                        Classes="ToolbarButton"
-                        Padding="10,4"
-                        Command="{Binding FocusCommand}"
-                        ToolTip.Tip="Focus camera on selected object (F)"/>
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="3,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
+                <!-- Transformation tools: place the object on the plate -->
                 <Button Content="Lay on Face"
                         Classes="ToolbarButton"
                         Classes.active="{Binding IsLayFlatMode}"
@@ -126,15 +319,107 @@
                         Command="{Binding DropToPlateCommand}"
                         IsVisible="{Binding !IsToolpathSelected}"
                         ToolTip.Tip="Translate the object down so its lowest point sits on the build plate"/>
+
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
+                        IsVisible="{Binding !IsToolpathSelected}"/>
+
+                <!-- Other tools: camera + mesh structure -->
+                <Button Content="Focus"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Command="{Binding FocusCommand}"
+                        ToolTip.Tip="Focus camera on selected object (F)"/>
+                <Button Content="Ungroup"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding UngroupCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Split a grouped import into separate top-level objects (e.g. OBJ with multiple parts)"/>
+                <Button Content="Explode"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding ExplodeCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Split disconnected mesh shells into separate objects. Use when Ungroup is not enough (e.g. multi-body STL)"/>
+                <Button Content="Mesh Cleanup"
+                        Classes="ToolbarButton"
+                        Padding="10,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding MeshCleanupCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Repair common mesh problems (duplicate faces, welded vertices, degenerate polygons) before slicing"/>
+
+                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
+                        IsVisible="{Binding !IsToolpathSelected}"/>
+
+                <!-- Material options: view channels + exposure/reflection adjust -->
+                <Button Classes="ToolbarButton"
+                        Padding="10,4"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        ToolTip.Tip="Material view channels and render adjustments">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <TextBlock Text="Material" VerticalAlignment="Center"/>
+                        <ia:Icon Value="mdi-chevron-down" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="210" Spacing="3">
+                                <TextBlock Text="VIEW CHANNEL" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Final Render"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Standard}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Standard"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Base Color"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="BaseColor"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Metalness"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Metalness"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Roughness"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Roughness"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Normal"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="NormalMap"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="AO"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="AO"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Emission"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Emission"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="UV Checker"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="UvChecker"/>
+                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Wireframe"
+                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
+                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Wireframe"
+                                        ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,5"/>
+                                <TextBlock Text="ADJUST" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <TextBlock Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
+                                <Slider Minimum="0.4" Maximum="2.5" Value="{Binding Exposure, Mode=TwoWay}"
+                                        ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
+                                <TextBlock Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
+                                <Slider Minimum="0" Maximum="3" Value="{Binding IblIntensity, Mode=TwoWay}"
+                                        ToolTip.Tip="Environment reflection / IBL gain"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
             </StackPanel>
         </Border>
 
         <!-- Toolpath stats — top-right -->
-        <Border IsVisible="{Binding HasToolpathStats}"
-                HorizontalAlignment="Right"
-                VerticalAlignment="Top"
-                Margin="8"
-                Background="{DynamicResource Bg2}"
+        <StackPanel HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="8"
+                    Spacing="6"
+                    ZIndex="32">
+            <!-- Toolpath stats -->
+            <Border IsVisible="{Binding HasToolpathStats}"
+                    Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
                 CornerRadius="4"
@@ -158,7 +443,148 @@
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Cost"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding StatsCost}"   Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
             </Grid>
+            </Border>
+        </StackPanel>
+
+        <!-- Seam guide point list — left side while editor is open -->
+        <Border IsVisible="{Binding IsSeamGuideLayerOpen}"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,72"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,6"
+                MaxHeight="220"
+                ZIndex="31">
+            <StackPanel Spacing="4">
+                <TextBlock Text="GUIDE POINTS" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                <TextBlock Text="Click a point to select. Drag in the viewport to move."
+                           Classes="LabelMuted" FontSize="10" TextWrapping="Wrap" MaxWidth="200"/>
+                <ListBox ItemsSource="{Binding SeamGuideDraft}"
+                         SelectedIndex="{Binding SelectedSeamGuideIndex, Mode=TwoWay}"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         MaxHeight="140"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock FontSize="11"
+                                       Text="{Binding StringFormat='Point {0:F0}, {1:F0}, {2:F0}'}"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
         </Border>
+
+        <!-- Seam guide editor toolbar -->
+        <Border IsVisible="{Binding IsSeamEditorActive}"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,6"
+                ZIndex="30">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="Select seam locations"
+                           VerticalAlignment="Center" FontSize="12" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <Button Content="Add point"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsSeamAddPointActive}"
+                            Padding="10,4"
+                            Command="{Binding SeamEditorAddPointCommand}"
+                            ToolTip.Tip="Click the bed or a model surface to place a guide"/>
+                    <Button Content="Select / move"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsSeamSelectPointActive}"
+                            Padding="10,4"
+                            Command="{Binding SeamEditorSelectPointCommand}"
+                            ToolTip.Tip="Click a guide sphere to select and drag it"/>
+                    <Button Classes="ToolbarButton" Padding="8,4"
+                            Command="{Binding ToggleSeamGuideLayerCommand}"
+                            IsVisible="{Binding HasSeamGuideDraft}"
+                            ToolTip.Tip="Show or hide the list of placed guide points">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <ia:Icon Value="mdi-layers-triple" FontSize="14"/>
+                            <TextBlock Text="{Binding SeamGuideLayerLabel}" FontSize="11" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Content="Add edge" Classes="ToolbarButton" Padding="10,4" IsEnabled="False"
+                            ToolTip.Tip="Coming soon"/>
+                    <Button Content="Draw line" Classes="ToolbarButton" Padding="10,4" IsEnabled="False"
+                            ToolTip.Tip="Coming soon"/>
+                    <Button Classes="ToolbarButton" Padding="8,4"
+                            Command="{Binding SeamEditorDeleteCommand}"
+                            ToolTip.Tip="Delete the selected guide point (or the last one)">
+                        <ia:Icon Value="mdi-delete-outline" FontSize="14"/>
+                    </Button>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Button Content="Cancel" Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding SeamEditorCancelCommand}"/>
+                    <Button Content="Save" Classes="PrimaryButton" Padding="12,4"
+                            Command="{Binding SeamEditorSaveCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Curved boundary editor toolbar -->
+        <Border IsVisible="{Binding IsBoundaryEditorActive}"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Bottom"
+                Margin="8"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="4"
+                Padding="8,6"
+                ZIndex="30">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="Curved boundaries (Sweep)"
+                           VerticalAlignment="Center" FontSize="12" Margin="0,0,12,0"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <Button Content="LOW ring"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsBoundaryLowTarget}"
+                            Padding="10,4"
+                            Command="{Binding BoundaryEditorLowTargetCommand}"
+                            ToolTip.Tip="Click mesh to set/grow the LOW (start) boundary ring"/>
+                    <Button Content="HIGH ring"
+                            Classes="ToolbarButton"
+                            Classes.active="{Binding IsBoundaryHighTarget}"
+                            Padding="10,4"
+                            Command="{Binding BoundaryEditorHighTargetCommand}"
+                            ToolTip.Tip="Click mesh to set/grow the HIGH (end) boundary ring"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6">
+                    <Button Content="Cancel" Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding BoundaryEditorCancelCommand}"/>
+                    <Button Content="Save" Classes="PrimaryButton" Padding="12,4"
+                            Command="{Binding BoundaryEditorSaveCommand}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Merge toolpaths — bottom-center, visible when 2+ toolpaths shift-selected -->
+        <Button IsVisible="{Binding CanMergeToolpaths}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,90"
+                Padding="12,6"
+                Classes="PrimaryButton"
+                ZIndex="25"
+                Command="{Binding MergeToolpathsCommand}"
+                ToolTip.Tip="Combine the selected toolpaths into one continuous path with retraction and travel between each segment">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <ia:Icon Value="mdi-vector-combine" FontSize="14"/>
+                <TextBlock Text="Merge Toolpaths" FontSize="11" VerticalAlignment="Center"/>
+            </StackPanel>
+        </Button>
 
         <!-- Horizontal timeline — bottom, visible when toolpath selected -->
         <Border IsVisible="{Binding IsToolpathSelected}"
@@ -355,6 +781,39 @@
                 </Grid>
             </StackPanel>
         </Border>
+
+        <!-- Tool-change sequence waypoint labels (projected from 3D scene) -->
+        <ItemsControl IsVisible="{Binding HasSequenceWaypointTags}"
+                      ItemsSource="{Binding SequenceWaypointTags}"
+                      ZIndex="18">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Canvas Background="Transparent"/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:SequenceWaypointTag">
+                    <Setter Property="Canvas.Left" Value="{Binding ScreenX}"/>
+                    <Setter Property="Canvas.Top" Value="{Binding ScreenY}"/>
+                </Style>
+            </ItemsControl.Styles>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:SequenceWaypointTag">
+                    <Border Background="#D8081220"
+                            BorderBrush="#4ade80"
+                            BorderThickness="1"
+                            CornerRadius="5"
+                            Padding="6,3"
+                            IsHitTestVisible="False">
+                        <TextBlock Text="{Binding Label}"
+                                   FontFamily="Consolas,Courier New,monospace"
+                                   FontSize="12"
+                                   FontWeight="Bold"
+                                   Foreground="#e5e7eb"/>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
 
     </Grid>
 

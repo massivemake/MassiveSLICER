@@ -9,10 +9,13 @@ using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Media;
 using Avalonia.Threading;
+using MassiveSlicer.App.Enums;
+using MassiveSlicer.App.Undo;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing;
+using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.FK;
@@ -32,6 +35,17 @@ public partial class ViewportView : UserControl
     private GltfNumericalIkSolver? _ikSolver;
     private SceneNode?             _currentToolNode;
     private Matrix4                _toolCorrectionMatrix = Matrix4.Identity;
+    private CellEnvironmentBuilder.CellMultiToolSet? _multiTools;
+    private SceneNode?             _rotaryBedPivot;
+    private SceneNode?             _rotaryBedRoot;   // "RotaryBed" env root — relocated when the bed is recentred
+    private bool                   _multiToolFlangeParented;
+    private readonly HashSet<SceneNode> _lfamInfrastructureNodes = [];
+    private bool                   _lastOutlinerLayerPreview;
+    private SceneNode?             _lastLayerPreviewTargetNode;
+    private const float InteractionScale = 0.55f;
+    private readonly Queue<SceneNode> _cellGpuUploadQueue = new();
+    private bool _cellGpuUploadPending;
+    private const int MaxCellGpuUploadsPerFrame = 48;
 
     // Camera drag tracking
     private Point    _lastMousePos;
@@ -64,8 +78,20 @@ public partial class ViewportView : UserControl
     private Matrix4   _kbTransformInitialLocal;
     private Vector2   _kbObjScreenCenter;
 
+    // Transform undo (panel numeric edits debounced; gizmo commits immediately)
+    private SceneNode? _lastCommittedTransformNode;
+    private Matrix4    _lastCommittedTransform = Matrix4.Identity;
+    private CancellationTokenSource? _panelTransformDebounce;
+    private CancellationTokenSource? _devAutoSaveDebounce;
+
     // Pointer capture
     private IPointer? _capturedPointer;
+
+    // Seam guide drag
+    private bool _seamGuideDragging;
+    private WeldedMesh? _boundaryEditorMesh;
+    private int _sliceStatusClearGen;
+    private int  _seamGuideDragIndex = -1;
 
     // Cached VM reference -- set on the UI thread in WireGlCanvas, read from GL thread in OnRender.
     // Avoids accessing the Avalonia DataContext property (UI-thread-only) from the GL thread.
@@ -73,6 +99,8 @@ public partial class ViewportView : UserControl
 
     // Toolpath-to-node map -- populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _toolpathByNode       = new();
+    private readonly ConcurrentDictionary<SceneNode, (float BeadWidth, float LayerHeight, NVec3 MaterialColor)> _toolpathMetaByNode = new();
+    private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
@@ -118,6 +146,19 @@ public partial class ViewportView : UserControl
     // Last joint angles forwarded to SyncTcpReadout -- skip the readout when joints haven't moved.
     private double _lastSyncA1, _lastSyncA2, _lastSyncA3, _lastSyncA4, _lastSyncA5, _lastSyncA6;
 
+    // Dev mode: editable cell environment nodes (bed, rotary bed, stands, docks).
+    private readonly Dictionary<SceneNode, (string Kind, string? Id)> _devNodeKinds = new();
+
+    // Rotary bed (E1): the bed mesh wrapper node + its centre, so E1 can spin it about the vertical axis.
+    private SceneNode? _bedNode;
+    private Vector3    _bedOriginLocal;
+    private Vector3    _bedBaseMarker;
+    private float      _bedWidth, _bedDepth, _bedDiameter;
+    private float      _bedRotationSign = -1f;   // E1→scene sign; set by config / rotation calibration
+    private double     _lastSyncE1 = double.NaN;
+    // Set on the UI thread by a manual bed edit; consumed on the GL thread (SetBedBoundary creates GL resources).
+    private (float X, float Y, float Z, float Diameter, float Sign)? _pendingBedRebuild;
+
     // Robot cell state
     private Vector3  _robrootWorldPos;
     private Vector3  _tcpOffsetLocal;
@@ -146,6 +187,7 @@ public partial class ViewportView : UserControl
 
         // Wire GL canvas events once the control is attached.
         AttachedToVisualTree += (_, _) => WireGlCanvas();
+        DataContextChanged   += (_, _) => WireGlCanvas();
 
         // Drag & drop
         AddHandler(DragDrop.DragEnterEvent, OnDragEnter);
@@ -155,11 +197,22 @@ public partial class ViewportView : UserControl
 
     // -- GL lifecycle ----------------------------------------------------------
 
+    private bool _glRenderWired;
+    private bool _vmGlWired;
+
+    /// <summary>Captures the current 3D viewport as PNG bytes (GL color buffer).</summary>
+    public Task<byte[]?> CaptureScreenshotAsync() => GlCanvas.CaptureScreenshotPngAsync();
+
     private void WireGlCanvas()
     {
-        GlCanvas.GlRender += OnRender;
+        if (!_glRenderWired)
+        {
+            _glRenderWired = true;
+            GlCanvas.GlRender += OnRender;
+        }
 
-        if (DataContext is not ViewportViewModel vm) return;
+        if (_vmGlWired || DataContext is not ViewportViewModel vm) return;
+        _vmGlWired = true;
         _vm = vm;
 
         {
@@ -174,6 +227,9 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.LightAzimuth)        or
                     nameof(ViewportViewModel.LightElevation)      or
                     nameof(ViewportViewModel.LightIntensity)      or
+                    nameof(ViewportViewModel.Exposure)            or
+                    nameof(ViewportViewModel.IblIntensity)        or
+                    nameof(ViewportViewModel.PbrMaterial)         or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
                     nameof(ViewportViewModel.ShowSeam)               or
@@ -181,12 +237,30 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
                     nameof(ViewportViewModel.ShowOrientationPreview))
                     GlCanvas.RequestNextFrameRendering();
-                else if (pe.PropertyName == nameof(ViewportViewModel.IsLayFlatMode))
-                    Cursor = vm.IsLayFlatMode ? new Cursor(StandardCursorType.Cross) : Cursor.Default;
+                else if (pe.PropertyName is nameof(ViewportViewModel.IsLayFlatMode)
+                                         or nameof(ViewportViewModel.IsSeamEditorActive)
+                                         or nameof(ViewportViewModel.IsBoundaryEditorActive))
+                    Cursor = vm.IsLayFlatMode || vm.IsSeamEditorActive || vm.IsBoundaryEditorActive
+                        ? new Cursor(StandardCursorType.Cross)
+                        : Cursor.Default;
             };
             vm.RenderNeeded       += (_, _) => GlCanvas.RequestNextFrameRendering();
+            vm.OnSeamGuidesChanged = () => UpdateSeamGuideMarkers(vm);
+            vm.OnBoundaryDraftChanged = () => UpdateBoundaryMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
+            vm.OnMillRequested        = () => RunMillAsync(vm);
+            vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
+            vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
+            vm.OnUpdateSliceRequested = () => RunUpdateSliceAsync(vm);
+            vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
+                && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
+            vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
+            vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
+            vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
+            vm.OnOutlinerSelectRequested = node => RequestSceneSelection(vm, node);
+            vm.GetSelectedSceneNode = () => _renderer.SelectedNode;
             vm.OnNodeHidden           = node =>
             {
                 if (_renderer.SelectedNode is { } sel && node.SelfAndDescendants().Any(n => n == sel))
@@ -197,14 +271,40 @@ public partial class ViewportView : UserControl
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnDropToPlateRequested = DropToPlate;
+            vm.OnUngroupRequested     = UngroupSelected;
+            vm.OnExplodeRequested     = ExplodeSelected;
+            vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnFrameAllRequested = FrameAll;
+            vm.GetCameraState = () =>
+            {
+                var c = _renderer.Camera;
+                return new MassiveSlicer.Core.Models.CameraView
+                {
+                    Azimuth   = c.Azimuth,
+                    Elevation = c.Elevation,
+                    Radius    = c.Radius,
+                    TargetX   = c.Target.X,
+                    TargetY   = c.Target.Y,
+                    TargetZ   = c.Target.Z,
+                };
+            };
+            vm.ApplyCameraState = view =>
+            {
+                _renderer.Camera.Azimuth   = view.Azimuth;
+                _renderer.Camera.Elevation = view.Elevation;
+                _renderer.Camera.Radius    = view.Radius;
+                _renderer.Camera.Target    = new Vector3(view.TargetX, view.TargetY, view.TargetZ);
+                GlCanvas.RequestNextFrameRendering();
+            };
             vm.OnPlaybackSpeedChanging = () =>
             {
                 // Freeze the current simulated position so changing speed doesn't jump the toolhead.
                 _playbackStartElapsedMs += _playbackStopwatch.Elapsed.TotalMilliseconds * (vm.PlaybackSpeed / 100.0);
                 _playbackStopwatch.Restart();
             };
+
+            WireToolChangeSequence(vm);
 
             vm.OnPlaybackToggled = playing =>
             {
@@ -295,11 +395,13 @@ public partial class ViewportView : UserControl
                 }
             };
 
-            // OverlayView is declared in the XAML Grid above GlCanvas. Because
-            // there is no native HWND, normal Avalonia z-order works -- no
-            // OverlayLayer needed. Just wire the DataContext.
-            OverlayView.DataContext = vm;
+            vm.ResetViewportOverlayState();
+            UpdateFocusOverlay();
         }
+
+        vm.OnDevModeChanged = ApplyDevModeSelectability;
+        vm.OnSaveDevTransformRequested     = () => SaveDevTransform(vm);
+        vm.OnSaveAllDevTransformsRequested = () => SaveAllDevTransforms(vm);
 
         if (vm.Robot is { } robot)
         {
@@ -307,11 +409,48 @@ public partial class ViewportView : UserControl
             {
                 if (pe.PropertyName is nameof(RobotPanelViewModel.A1) or nameof(RobotPanelViewModel.A2) or
                     nameof(RobotPanelViewModel.A3) or nameof(RobotPanelViewModel.A4) or
-                    nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6))
+                    nameof(RobotPanelViewModel.A5) or nameof(RobotPanelViewModel.A6) or
+                    nameof(RobotPanelViewModel.E1))
                     GlCanvas.RequestNextFrameRendering();
             };
             robot.OnToolSelected              = OnToolSwapRequested;
             robot.OnSaveHomePositionRequested = (name, angles) => SaveHomePosition(vm, name, angles);
+            robot.OnBedEdited = (x, y, z, dia, sign) =>
+            {
+                // GL resource rebuild must run on the render thread — queue it.
+                _pendingBedRebuild = ((float)x, (float)y, (float)z, (float)dia, (float)sign);
+                if (DataContext is ViewportViewModel vm2)
+                {
+                    vm2.NotifyRenderNeeded();
+                    if (vm2.ActiveCellPath is { } path)
+                    {
+                        MassiveSlicer.Core.IO.CellLoader.SaveBedCenter(
+                            path, (float)x, (float)y, (float)z,
+                            dia > 0 ? (float)dia : (float?)null, (float)sign);
+
+                        // On a rotary cell (LFAM 3), follow the calibrated axis centre in X/Y only.
+                        // Preserve the existing basePos.z — the table HEIGHT is a fixed model property,
+                        // not something the axis-centre fit measures (writing the fit's Z drops the bed).
+                        if (vm2.ActiveCell?.RotaryBed is { } rbCfg)
+                        {
+                            var rw = vm2.ActiveCell.Robot.WorldPosition;
+                            float keepZ = rbCfg.BasePos.Length > 2 ? rbCfg.BasePos[2] : (float)z - rw.Z;
+                            float[] basePos = [ (float)x - rw.X, (float)y - rw.Y, keepZ ];
+                            MassiveSlicer.Core.IO.CellLoader.SaveRotaryBedTransform(
+                                path, basePos, rbCfg.BaseAbc, out _);
+                        }
+                    }
+                }
+            };
+            robot.OnBedOrientationEdited = deg =>
+            {
+                if (DataContext is not ViewportViewModel vm2 || vm2.ActiveCellPath is not { } path)
+                    return;
+                if (!MassiveSlicer.Core.IO.CellLoader.SaveRotaryOrientation(path, (float)deg, out _))
+                    return;
+                MassiveSlicer.App.CellSceneCache.Invalidate(path);
+                vm2.OnDevCellReloadRequested?.Invoke(path);
+            };
             robot.OnTcpOffsetEdited = (x, y, z, a, b, c) =>
             {
                 _tcpOffsetLocal    = new Vector3((float)x, (float)y, (float)z);
@@ -337,6 +476,7 @@ public partial class ViewportView : UserControl
             node.LocalTransform = lt;
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
+            SchedulePanelTransformUndo(vm, node, "Move");
         };
         vm.OnSelectionRotated = (a, b, c) =>
         {
@@ -352,12 +492,20 @@ public partial class ViewportView : UserControl
             node.LocalTransform = lt;
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
+            SchedulePanelTransformUndo(vm, node, "Rotate");
         };
 
         vm.GetToolWorldPose = ComputeToolWorldPose;
+        vm.GetFlangeInBaseForCalibration = GetFlangeInBaseForCalibration;
 
         if (vm.AdditiveSettings is { } additive)
         {
+            additive.OnOpenSeamEditorRequested = () =>
+                vm.BeginSeamEditor(additive.BuildSeamGuideList());
+
+            additive.OnOpenCurvedBoundaryEditorRequested = () => OpenCurvedBoundaryEditor(vm, additive);
+            additive.OnImportCurvedBoundariesRequested  = () => ImportCurvedBoundariesAsync(vm, additive);
+
             additive.PropertyChanged += (_, pe) =>
             {
                 // Recompute layer-preview heatmap when any relevant setting changes.
@@ -411,12 +559,189 @@ public partial class ViewportView : UserControl
 
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.SmoothRotation)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
-                                    or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm))
+                                    or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm)
+                                    or nameof(AdditiveSettingsViewModel.OrientationFollowPercent))
                     ReapplyOrientationSmoothing(additive);
             };
 
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
+            UpdateSeamGuideMarkers(vm);
+            GlCanvas.RequestNextFrameRendering();
         }
+    }
+
+    private void UpdateSeamGuideMarkers(ViewportViewModel vm)
+    {
+        IReadOnlyList<TkVector3> guides;
+        if (vm.IsSeamEditorActive)
+        {
+            guides = vm.SeamGuideDraft
+                .Select(g => new TkVector3(g.X, g.Y, g.Z))
+                .ToList();
+        }
+        else
+        {
+            guides = vm.AdditiveSettings?.SeamGuides
+                .Select(g => new TkVector3(g.X, g.Y, g.Z))
+                .ToList() ?? [];
+        }
+        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void UpdateBoundaryMarkers(ViewportViewModel vm)
+    {
+        if (_boundaryEditorMesh is null)
+        {
+            _renderer.SetCurvedBoundaryLoops([], []);
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        IReadOnlyList<int> lowIdx, highIdx;
+        if (vm.IsBoundaryEditorActive)
+        {
+            lowIdx  = vm.BoundaryLowDraft.ToList();
+            highIdx = vm.BoundaryHighDraft.ToList();
+        }
+        else
+        {
+            lowIdx  = vm.AdditiveSettings?.BuildCurvedLowBoundaryList()  ?? [];
+            highIdx = vm.AdditiveSettings?.BuildCurvedHighBoundaryList() ?? [];
+        }
+
+        var lowPts = lowIdx
+            .Where(i => i >= 0 && i < _boundaryEditorMesh.VertexCount)
+            .Select(i => _boundaryEditorMesh.Vertices[i])
+            .Select(v => new TkVector3(v.X, v.Y, v.Z))
+            .ToList();
+        var highPts = highIdx
+            .Where(i => i >= 0 && i < _boundaryEditorMesh.VertexCount)
+            .Select(i => _boundaryEditorMesh.Vertices[i])
+            .Select(v => new TkVector3(v.X, v.Y, v.Z))
+            .ToList();
+        _renderer.SetCurvedBoundaryLoops(lowPts, highPts);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void OpenCurvedBoundaryEditor(ViewportViewModel vm, AdditiveSettingsViewModel additive)
+    {
+        var sourceItem = vm.ResolveActivePrintObjectItem();
+        if (sourceItem?.Node is null) return;
+
+        var snapshots = CollectMeshSnapshots(sourceItem, requireVisible: false);
+        if (snapshots.Count == 0) return;
+
+        var flatMeshes = new List<NVec3[]>();
+        foreach (var (positions, indices, world) in snapshots)
+        {
+            NVec3[] flat;
+            if (indices is null)
+            {
+                flat = new NVec3[positions.Length];
+                for (int i = 0; i < positions.Length; i++)
+                    flat[i] = TransformPoint(positions[i], world);
+            }
+            else
+            {
+                flat = new NVec3[indices.Length];
+                for (int i = 0; i < indices.Length; i++)
+                    flat[i] = TransformPoint(positions[indices[i]], world);
+            }
+            flatMeshes.Add(flat);
+        }
+
+        _boundaryEditorMesh = MeshGraph.Build(flatMeshes);
+        IReadOnlyList<int> low, high;
+        if (additive.BuildCurvedLowBoundaryList().Count > 0 && additive.BuildCurvedHighBoundaryList().Count > 0)
+        {
+            low  = additive.BuildCurvedLowBoundaryList();
+            high = additive.BuildCurvedHighBoundaryList();
+        }
+        else
+        {
+            (low, high) = BoundaryAutoDetect.Detect(
+                _boundaryEditorMesh, (float)additive.CurvedAutoDetectBandMm);
+        }
+
+        vm.BeginBoundaryEditor(low, high);
+        UpdateBoundaryMarkers(vm);
+    }
+
+    private async Task ImportCurvedBoundariesAsync(ViewportViewModel vm, AdditiveSettingsViewModel additive)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window window) return;
+        var files = await window.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import curved slicing boundaries",
+            AllowMultiple = true,
+            FileTypeFilter =
+            [
+                new FilePickerFileType("JSON") { Patterns = ["*.json"] },
+            ],
+        });
+        if (files.Count == 0) return;
+
+        try
+        {
+            IReadOnlyList<int> low, high;
+            if (files.Count >= 2)
+            {
+                (low, high) = BoundaryJsonIO.LoadPair(files[0].Path.LocalPath, files[1].Path.LocalPath);
+            }
+            else
+            {
+                (low, high) = BoundaryJsonIO.LoadCombined(files[0].Path.LocalPath);
+            }
+
+            additive.SetCurvedBoundaries(low, high);
+            additive.CurvedBoundarySourceDisplay = "JSON Import";
+            if (_boundaryEditorMesh is not null && vm.IsBoundaryEditorActive)
+                vm.SetBoundaryDraft(low, high);
+            UpdateBoundaryMarkers(vm);
+        }
+        catch
+        {
+            // Import errors are surfaced via empty boundary state; user can retry.
+        }
+    }
+
+    private bool TryPlaceSeamGuide(Ray ray, out System.Numerics.Vector3 hit)
+    {
+        var (node, _, meshHit) = _renderer.PickFace(ray);
+        if (node is not null && !_renderer.IsToolpathNode(node))
+        {
+            hit = new System.Numerics.Vector3(meshHit.X, meshHit.Y, meshHit.Z);
+            return true;
+        }
+
+        if (_renderer.TryPickBed(ray, out var bedHit))
+        {
+            hit = new System.Numerics.Vector3(bedHit.X, bedHit.Y, bedHit.Z);
+            return true;
+        }
+
+        hit = default;
+        return false;
+    }
+
+    private bool TryDragSeamGuide(Ray ray, ViewportViewModel vm, int index, out System.Numerics.Vector3 hit)
+    {
+        if (index < 0 || index >= vm.SeamGuideDraft.Count)
+        {
+            hit = default;
+            return false;
+        }
+
+        float planeZ = vm.SeamGuideDraft[index].Z;
+        if (SceneRenderer.TryPickHorizontalPlane(ray, planeZ, out var planeHit))
+        {
+            hit = new System.Numerics.Vector3(planeHit.X, planeHit.Y, planeHit.Z);
+            return true;
+        }
+
+        hit = default;
+        return false;
     }
 
     private void OnRender(TimeSpan delta, int w, int h)
@@ -438,30 +763,46 @@ public partial class ViewportView : UserControl
                 ? vm.ToolpathScrubIndex
                 : int.MaxValue;
             _renderer.SetToolpathColors(
-                new TkVector3(vm.ToolpathExtrudeColor.X,    vm.ToolpathExtrudeColor.Y,    vm.ToolpathExtrudeColor.Z),
-                new TkVector3(vm.ToolpathTravelColor.X,     vm.ToolpathTravelColor.Y,     vm.ToolpathTravelColor.Z),
-                new TkVector3(vm.ToolpathSeamColor.X,       vm.ToolpathSeamColor.Y,       vm.ToolpathSeamColor.Z),
-                new TkVector3(vm.ToolpathUnselectedColor.X, vm.ToolpathUnselectedColor.Y, vm.ToolpathUnselectedColor.Z));
+                new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
+                new TkVector3(vm.ToolpathTravelColor.X,      vm.ToolpathTravelColor.Y,      vm.ToolpathTravelColor.Z),
+                new TkVector3(vm.ToolpathSeamColor.X,        vm.ToolpathSeamColor.Y,        vm.ToolpathSeamColor.Z),
+                new TkVector3(vm.ToolpathUnselectedColor.X,  vm.ToolpathUnselectedColor.Y,  vm.ToolpathUnselectedColor.Z),
+                new TkVector3(vm.ToolpathWipeColor.X,        vm.ToolpathWipeColor.Y,        vm.ToolpathWipeColor.Z),
+                new TkVector3(vm.ToolpathRetractionColor.X,  vm.ToolpathRetractionColor.Y,  vm.ToolpathRetractionColor.Z));
             _renderer.GizmoEnabled   = vm.ActiveGizmoModeInternal != GizmoMode.None;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
             _renderer.ShaderMode         = vm.ActiveShaderMode;
             _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
             bool layerPreview = vm.AdditiveSettings?.ShowLayerPreview ?? false;
-            foreach (var item in vm.OutlinerItems)
+            var layerTarget = layerPreview ? vm.ResolveActivePrintObjectItem()?.Node : null;
+            if (layerPreview != _lastOutlinerLayerPreview || layerTarget != _lastLayerPreviewTargetNode)
             {
-                if (!_renderer.IsToolpathNode(item.Node))
-                    item.Node.LayerPreview = layerPreview;
+                _lastOutlinerLayerPreview    = layerPreview;
+                _lastLayerPreviewTargetNode  = layerTarget;
+                vm.SyncLayerPreviewFlags(layerPreview);
+                _renderer.InvalidateShaderAppearance();
+                if (layerPreview && layerTarget is not null)
+                    _ = ComputeLayerPreviewAsync(vm);
             }
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
             _renderer.LightIntensity = vm.LightIntensity;
+            _renderer.Exposure       = vm.Exposure;
+            _renderer.IblIntensity   = vm.IblIntensity;
+            _renderer.SyncPbrMaterial(vm.PbrMaterial);
 
             if (_renderer.BackdropPath != vm.ActiveBackdropPath)
+            {
                 _renderer.SetBackdrop(vm.ActiveBackdropPath);
+                _renderer.InvalidateShaderAppearance();
+            }
             _renderer.BackdropBlur = vm.BackdropBlur;
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
                 ApplyCellSwap(swap, vm);
+
+            if (ProcessCellGpuUploadQueue())
+                GlCanvas.RequestNextFrameRendering();
 
             while (vm.PendingLayerPreview.TryDequeue(out var lp))
                 _renderer.SetLayerPreview(lp.zBounds, lp.heights);
@@ -470,15 +811,17 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _rawToolpathByNode.TryRemove(removing, out _);
+                _toolpathMetaByNode.TryRemove(removing, out _);
+                _mergedByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
                 _scrubCacheByNode.TryRemove(removing, out _);
                 _ikSolutionsByNode.TryRemove(removing, out _);
                 _moveTimesMsByNode.TryRemove(removing, out _);
                 _singularityByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
-                foreach (var n in removing.SelfAndDescendants())
-                    n.Mesh?.Dispose();
-                _renderer.SceneRoot.RemoveChild(removing);
+                GpuMeshCache.ReleaseSubtree(removing);
+                // Detach from the node's actual parent — scans live under the rotary pivot, not SceneRoot.
+                (removing.Parent ?? _renderer.SceneRoot).RemoveChild(removing);
                 if (_renderer.SelectedNode is not null &&
                     removing.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
                     _renderer.Select(null);
@@ -487,18 +830,36 @@ public partial class ViewportView : UserControl
             while (vm.PendingNodes.TryDequeue(out var incoming))
             {
                 _renderer.SceneRoot.AddChild(incoming);
-                foreach (var n in incoming.SelfAndDescendants())
-                {
-                    if (n.PendingMesh is null) continue;
-                    n.Mesh        = new MeshRenderer(n.PendingMesh);
-                    n.PendingMesh = null;
-                }
+                UploadPendingMeshes(incoming);
+                _renderer.InvalidateShaderAppearance();
 
                 if (_fkController is null)
                     _fkController = RobotFkController.TryBuild(incoming,
                         vm.ActiveCell?.Robot.Joints ?? []);
 
                 _renderer.Select(incoming);
+                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+            }
+
+            // Scans and imports destined for the rotary turntable: parent under the E1 pivot so they
+            // rotate with the bed. Their LocalTransform is a WORLD pose; convert it to pivot-local
+            // (World = Local * ParentWorld ⇒ Local = World * ParentWorld⁻¹) so the world pose is
+            // preserved at the current E1 and every later E1 change rotates the content with the table.
+            while (vm.PendingRotaryNodes.TryDequeue(out var rotaryChild))
+            {
+                rotaryChild.Selectable = true;
+                rotaryChild.PickTier   = PickTier.Content;
+                if (_rotaryBedPivot is { } pivot)
+                {
+                    rotaryChild.LocalTransform = rotaryChild.LocalTransform * pivot.WorldTransform.Inverted();
+                    pivot.AddChild(rotaryChild);
+                }
+                else
+                    _renderer.SceneRoot.AddChild(rotaryChild);   // fallback: no pivot this cell
+
+                UploadPendingMeshes(rotaryChild);
+                _renderer.InvalidateShaderAppearance();
+                _renderer.Select(rotaryChild);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
@@ -513,6 +874,7 @@ public partial class ViewportView : UserControl
                 RebuildFrameMatrices();
                 toolNode.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
                 toolNode.Selectable     = true;
+                toolNode.PickTier       = PickTier.Content;
                 _renderer.SceneRoot.AddChild(toolNode);
                 UploadPendingMeshes(toolNode);
                 _currentToolNode = toolNode;
@@ -520,12 +882,17 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolSwap.TryDequeue(out var swap))
             {
+                if (_multiTools is not null)
+                {
+                    ApplyMultiToolMount(swap.Config, vm);
+                    continue;
+                }
+
                 if (_fkController?.FlangeNode is not { } flange) continue;
 
                 if (_currentToolNode is not null)
                 {
-                    foreach (var n in _currentToolNode.SelfAndDescendants())
-                        n.Mesh?.Dispose();
+                    GpuMeshCache.ReleaseSubtree(_currentToolNode);
                     _renderer.SceneRoot.RemoveChild(_currentToolNode);
                     _currentToolNode = null;
                 }
@@ -544,6 +911,7 @@ public partial class ViewportView : UserControl
                 RebuildFrameMatrices();
                 swap.Node.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
                 swap.Node.Selectable     = true;
+                swap.Node.PickTier       = PickTier.Content;
                 _renderer.SceneRoot.AddChild(swap.Node);
                 UploadPendingMeshes(swap.Node);
                 _currentToolNode = swap.Node;
@@ -578,20 +946,17 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
-                _toolpathByNode[entry.Node]    = entry.Toolpath;
-                _rawToolpathByNode[entry.Node] = entry.RawToolpath;
-                _scrubCacheByNode[entry.Node]  = BuildScrubCache(entry.Toolpath);
-                _renderer.AddToolpath(entry.Toolpath, entry.Node,
-                    entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
-                var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
-                _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
-                var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
-                _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
-                // Capture the centroid that AddToolpath stamped onto the node's LocalTransform.
-                // ScrubIk uses this to convert stored Toolpath positions (original world space)
-                // back to local space before applying the node's current WorldTransform.
-                var row3 = entry.Node.LocalTransform.Row3;
-                _toolpathOriginByNode[entry.Node] = new NVec3(row3.X, row3.Y, row3.Z);
+                UploadToolpathEntry(entry, addToScene: true);
+                _renderer.Select(entry.Node);
+                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+            }
+
+            while (vm.PendingToolpathReplace.TryDequeue(out var entry))
+            {
+                _ikSolutionsByNode.TryRemove(entry.Node, out _);
+                _moveTimesMsByNode.TryRemove(entry.Node, out _);
+                _singularityByNode.TryRemove(entry.Node, out _);
+                UploadToolpathEntry(entry, addToScene: false);
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
@@ -613,8 +978,22 @@ public partial class ViewportView : UserControl
                 _fkController.Apply((float)a1, (float)a2, (float)a3,
                                     (float)a4, (float)a5, (float)a6);
 
-                if (_currentToolNode is not null && _fkController.FlangeNode is { } flange && !_toolIsDragging)
+                if (_currentToolNode is not null && _fkController.FlangeNode is { } flange
+                    && !_toolIsDragging && !_multiToolFlangeParented)
                     _currentToolNode.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
+
+                if (_rotaryBedPivot is not null && vm.Robot is { } rbE1)
+                {
+                    float e1Rad = (float)(_bedRotationSign * rbE1.E1 * Math.PI / 180.0);
+                    // E1 spins the turntable about the bed's WORLD-vertical axis. The pivot lives
+                    // inside the rotary root's tilted frame (baseAbc, e.g. C=-90 to stand the GLB
+                    // up), so a local-Z rotation would tip the top over. Rotate about the local
+                    // axis that maps to world +Z under the parent's orientation.
+                    var parentWorld = _rotaryBedPivot.Parent?.WorldTransform ?? Matrix4.Identity;
+                    var axisLocal = Vector3.TransformNormal(Vector3.UnitZ, parentWorld.Inverted());
+                    axisLocal = axisLocal.LengthSquared > 1e-12f ? Vector3.Normalize(axisLocal) : Vector3.UnitZ;
+                    _rotaryBedPivot.LocalTransform = Matrix4.CreateFromAxisAngle(axisLocal, e1Rad);
+                }
 
                 if (a1 != _lastSyncA1 || a2 != _lastSyncA2 || a3 != _lastSyncA3 ||
                     a4 != _lastSyncA4 || a5 != _lastSyncA5 || a6 != _lastSyncA6)
@@ -624,9 +1003,38 @@ public partial class ViewportView : UserControl
                     SyncTcpReadout(vm);
                 }
             }
+
+            // Apply a queued manual bed edit (GL resource rebuild — safe here on the GL thread).
+            if (_pendingBedRebuild is { } pend)
+            {
+                _pendingBedRebuild = null;
+                RebuildBed(pend.X, pend.Y, pend.Z, pend.Diameter, pend.Sign);
+            }
+
+            // Rotate the rotary bed (mesh + print-grid overlay) about the vertical axis
+            // through its centre to match E1. Sign comes from rotation calibration.
+            if (vm.Robot is { } e1Robot && e1Robot.E1 != _lastSyncE1)
+            {
+                _lastSyncE1 = e1Robot.E1;
+                float e1Rad = (float)(_bedRotationSign * e1Robot.E1 * Math.PI / 180.0);
+                var c = _bedOriginLocal;
+
+                if (_bedNode is not null)
+                    _bedNode.LocalTransform =
+                        Matrix4.CreateRotationZ(e1Rad) *
+                        Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+
+                // Boundary geometry is in absolute world coords, so rotate about the centre:
+                // translate centre→origin, rotate, translate back.
+                _renderer.BedBoundaryModel =
+                    Matrix4.CreateTranslation(-c.X, -c.Y, -c.Z) *
+                    Matrix4.CreateRotationZ(e1Rad) *
+                    Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+            }
         }
 
         _renderer.Render(w, h);
+        UpdateSequenceWaypointTags(w, h);
     }
 
     // -- TCP readout -----------------------------------------------------------
@@ -731,14 +1139,15 @@ public partial class ViewportView : UserControl
         // Flange-frame vector → world.
         Vector3 ToWorld(float x, float y, float z) => x * fx + y * fy + z * fz;
 
-        // Sensor origin is the optical centre; use it for scan registration when available.
-        // Falls back to TCP (focal point) for tools without a sensor origin.
-        float ox = tool.HasSensorOrigin ? tool.SensorOriginX!.Value : tool.TcpX;
-        float oy = tool.HasSensorOrigin ? tool.SensorOriginY!.Value : tool.TcpY;
-        float oz = tool.HasSensorOrigin ? tool.SensorOriginZ!.Value : tool.TcpZ;
-        float oA = tool.HasSensorOrigin ? (tool.SensorOriginA ?? tool.TcpA) : tool.TcpA;
-        float oB = tool.HasSensorOrigin ? (tool.SensorOriginB ?? tool.TcpB) : tool.TcpB;
-        float oC = tool.HasSensorOrigin ? (tool.SensorOriginC ?? tool.TcpC) : tool.TcpC;
+        // Hand-eye calibration writes the full camera-in-flange transform as the live TCP
+        // (_tcpOffsetLocal + _tcpOrientationABC). Use that unified frame for scan registration —
+        // do NOT mix static sensorOrigin XYZ (legacy TOOL_DATA[5] optical centre) with calibrated ABC.
+        float ox = _tcpOffsetLocal.X;
+        float oy = _tcpOffsetLocal.Y;
+        float oz = _tcpOffsetLocal.Z;
+        float oA = _tcpOrientationABC.X;
+        float oB = _tcpOrientationABC.Y;
+        float oC = _tcpOrientationABC.Z;
 
         var rt = KukaIkSolver.AbcToMatrix(oA, oB, oC);
         var tx = ToWorld(rt.M11, rt.M12, rt.M13);
@@ -751,6 +1160,64 @@ public partial class ViewportView : UserControl
             ty.X,     ty.Y,     ty.Z,     0f,
             tz.X,     tz.Y,     tz.Z,     0f,
             origin.X, origin.Y, origin.Z, 1f);
+    }
+
+    /// <summary>
+    /// Current flange-to-world pose as a row-vector <see cref="System.Numerics.Matrix4x4"/>,
+    /// using the EXACT same flange frame as <see cref="ComputeToolWorldPose"/>
+    /// (rendered glTF flange × <c>_gltfToKukaLocal</c>). Hand-eye calibration feeds this
+    /// so its result is expressed in the frame registration later applies it in — the
+    /// analytic <c>KukaIkSolver.ForwardKinematics</c> flange does NOT match this frame.
+    /// Rows 0–2 are the flange X/Y/Z axes in world; row 3 is the flange origin (mm).
+    /// </summary>
+    private System.Numerics.Matrix4x4? GetFlangeInBaseForCalibration()
+    {
+        if (_fkController?.FlangeNode is not { } flange) return null;
+
+        var fw  = flange.WorldTransform;
+        var pos = fw.Row3.Xyz;
+        float sc = fw.Row0.Xyz.Length;
+
+        var gltfRot = new Matrix3(fw.Row0.Xyz / sc, fw.Row1.Xyz / sc, fw.Row2.Xyz / sc);
+        var kukaRot = _gltfToKukaLocal * gltfRot;
+        var fx = kukaRot.Row0;
+        var fy = kukaRot.Row1;
+        var fz = kukaRot.Row2;
+
+        return new System.Numerics.Matrix4x4(
+            fx.X,  fx.Y,  fx.Z,  0f,
+            fy.X,  fy.Y,  fy.Z,  0f,
+            fz.X,  fz.Y,  fz.Z,  0f,
+            pos.X, pos.Y, pos.Z, 1f);
+    }
+
+    /// <summary>
+    /// Re-applies a manually-edited rotary-bed centre/diameter to the live scene: moves the
+    /// rotation pivot + grid datum, rebuilds the boundary (circular when diameter &gt; 0), and
+    /// forces the next frame to re-apply the E1 rotation about the new centre.
+    /// </summary>
+    private void RebuildBed(float x, float y, float z, float diameter, float rotationSign)
+    {
+        _bedOriginLocal  = new Vector3(x, y, z);
+        _bedDiameter     = diameter;
+        _bedRotationSign = rotationSign;
+        // Centre-derived corner keeps a rectangular grid centred; ignored for circular beds.
+        var corner = new Vector3(x - _bedWidth * 0.5f, y - _bedDepth * 0.5f, z);
+        _renderer.SetBedBoundary(_bedBaseMarker, corner, _bedWidth, _bedDepth, new Vector3(x, y, z), diameter);
+
+        // Recentre the rotary-bed mesh in X/Y onto the calibrated axis, but PRESERVE its Z. The bed
+        // calibration measures where the rotary AXIS is (X/Y centre) and its rotation — it does not
+        // measure the table HEIGHT, which is a fixed property of the physical assembly / model. So
+        // only the in-plane translation follows the grid; the existing Z (and the baseAbc tilt in
+        // Rows 0-2) are kept, otherwise applying a calibration drops the turntable to the fit's Z.
+        if (_rotaryBedRoot is not null)
+        {
+            var lt = _rotaryBedRoot.LocalTransform;
+            lt.Row3 = new Vector4(x, y, lt.Row3.Z, 1f);   // X/Y → axis centre; Z unchanged
+            _rotaryBedRoot.LocalTransform = lt;
+        }
+
+        _lastSyncE1 = double.NaN;   // re-apply E1 rotation (mesh + boundary) about the new pivot next frame
     }
 
     private void RebuildFrameMatrices()
@@ -790,12 +1257,37 @@ public partial class ViewportView : UserControl
 
     // -- Cell swap -------------------------------------------------------------
 
+    void ClearAllViewportToolpaths()
+    {
+        _renderer.ClearAllToolpaths();
+        _toolpathByNode.Clear();
+        _rawToolpathByNode.Clear();
+        _toolpathMetaByNode.Clear();
+        _mergedByNode.Clear();
+        _toolpathOriginByNode.Clear();
+        _scrubCacheByNode.Clear();
+        _ikSolutionsByNode.Clear();
+        _moveTimesMsByNode.Clear();
+        _singularityByNode.Clear();
+        _activeScrubNode = null;
+    }
+
     private void ApplyCellSwap(CellSwapPayload swap, ViewportViewModel vm)
     {
+        // Stop tool-change playback on the UI thread before FK / multi-tool state is torn down.
+        if (Dispatcher.UIThread.CheckAccess())
+            ClearToolChangeSequence(restorePriorMount: false);
+        else
+            Dispatcher.UIThread.Invoke(() => ClearToolChangeSequence(restorePriorMount: false));
+
+        ClearAllViewportToolpaths();
+
+        _cellGpuUploadQueue.Clear();
+        _cellGpuUploadPending = false;
+
         foreach (var child in _renderer.SceneRoot.Children.ToList())
         {
-            foreach (var n in child.SelfAndDescendants())
-                n.Mesh?.Dispose();
+            GpuMeshCache.ReleaseSubtree(child);
             _renderer.SceneRoot.RemoveChild(child);
         }
         while (vm.PendingToolNodes.TryDequeue(out _)) {}
@@ -804,6 +1296,11 @@ public partial class ViewportView : UserControl
         _fkController               = null;
         _ikSolver                   = null;
         _currentToolNode            = null;
+        _multiTools                 = null;
+        _rotaryBedPivot             = null;
+        _rotaryBedRoot              = null;
+        _multiToolFlangeParented    = false;
+        _lfamInfrastructureNodes.Clear();
         _renderer.TcpFrameMatrix    = null;
         _renderer.FlangeFrameMatrix = null;
         if (vm.Robot is not null) vm.Robot.IkSolver = null;
@@ -819,11 +1316,34 @@ public partial class ViewportView : UserControl
             var posData = CellLoader.LoadPositionData(swapCellPath);
             additive.UpdateFromCell(swapCellForPost, posData.Default, posData.Positions);
             if (vm.Robot is not null)
+            {
                 vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
+                var bed = swapCellForPost.Bed;
+                float orient = swapCellForPost.RotaryBed?.OrientationOffsetDeg
+                               ?? RotaryBedCellConfig.DefaultOrientationOffsetDeg;
+                vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
+                                      bed.Diameter ?? 0f, bed.RotationSign ?? -1f, orient,
+                                      bed.Diameter is > 0f);
+            }
         });
         var b          = swap.Config.Bed;
-        var gridCorner = b.GridOrigin ?? b.Origin;
-        _renderer.SetBedBoundary(new Vector3(gridCorner.X, gridCorner.Y, gridCorner.Z), b.Width, b.Depth);
+        var rpBed      = swap.Config.Robot.WorldPosition;
+        var baseMarker = b.BaseMarkerWorld(rpBed);
+        var gridCorner = b.VisualGridCorner(rpBed);
+        var gridDatum  = b.HasVisualShift && b.GridOrigin is null
+            ? gridCorner
+            : new Float3(b.Origin.X, b.Origin.Y, gridCorner.Z);
+        _bedBaseMarker   = new Vector3(baseMarker.X, baseMarker.Y, baseMarker.Z);
+        _bedWidth        = b.Width;
+        _bedDepth        = b.Depth;
+        _bedDiameter     = b.Diameter ?? 0f;
+        _bedRotationSign = b.RotationSign ?? -1f;
+        // Blue origin marker stays at BASE 0,0,0; grid/border follow visual placement.
+        _renderer.SetBedBoundary(
+            new Vector3(baseMarker.X, baseMarker.Y, baseMarker.Z),
+            new Vector3(gridCorner.X, gridCorner.Y, gridCorner.Z),
+            b.Width, b.Depth,
+            new Vector3(gridDatum.X, gridDatum.Y, gridDatum.Z), _bedDiameter);
 
         // Focus on the centre of the print area and set radius to the bed diagonal
         // so the whole bed is comfortably in view at startup.
@@ -833,16 +1353,43 @@ public partial class ViewportView : UserControl
             gridCorner.Z);
         _renderer.Camera.Radius = MathF.Sqrt(b.Width * b.Width + b.Depth * b.Depth);
 
+        // A saved per-cell view (shared via the cell JSON) overrides the default framing.
+        if (swap.Config.View is { } sv)
+        {
+            _renderer.Camera.Azimuth   = sv.Azimuth;
+            _renderer.Camera.Elevation = sv.Elevation;
+            _renderer.Camera.Radius    = sv.Radius;
+            _renderer.Camera.Target    = new Vector3(sv.TargetX, sv.TargetY, sv.TargetZ);
+        }
+
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
         _flangeDisplayRoll = swap.Config.Robot.FlangeDisplayRoll * MathF.PI / 180f;
 
-        foreach (var node in new[] { swap.RobotBaseNode, swap.BoosterNode, swap.BedNode })
+        if (swap.RobotBaseNode is { } robot)
         {
-            if (node is null) continue;
-            _renderer.SceneRoot.AddChild(node);
-            UploadPendingMeshes(node);
+            _renderer.SceneRoot.AddChild(robot);
+            UploadVisiblePendingMeshes(robot);
+
+            // Outliner visibility for robot — selection blocked on LFAM 2/3 (see RequestSceneSelection).
+            var robotRoot = robot;
+            var pedestal  = robot.FindDescendant("KR_120_R2700-2_BASE");
+            var arm       = robot.FindDescendant("joint_1");
+            RegisterLfamInfrastructure(robotRoot, pedestal, arm);
+            Dispatcher.UIThread.Post(() => vm.SetRobotGroup(robotRoot, pedestal, arm));
         }
+        else
+            Dispatcher.UIThread.Post(() => vm.SetRobotGroup(null, null, null));
+        EnqueueCellGpuUpload(swap.BoosterNode);
+        EnqueueCellGpuUpload(swap.BedNode);
+
+        // Retain the bed wrapper so E1 can rotate it about the vertical axis through its centre.
+        _bedNode        = swap.BedNode;
+        var meshOrigin  = b.VisualMeshOrigin(rpBed);
+        _bedOriginLocal = new Vector3(meshOrigin.X, meshOrigin.Y, meshOrigin.Z);
+        if (_bedNode is not null)
+            _bedNode.LocalTransform = Matrix4.CreateTranslation(meshOrigin.X, meshOrigin.Y, meshOrigin.Z);
+        _lastSyncE1     = double.NaN;   // force the bed transform to refresh on the next frame
 
         if (swap.RobotBaseNode is not null)
             _fkController = RobotFkController.TryBuild(swap.RobotBaseNode, swap.Config.Robot.Joints);
@@ -854,34 +1401,123 @@ public partial class ViewportView : UserControl
                 _fkController.Apply(h[0], h[1], h[2], h[3], h[4], h[5]);
         }
 
-        if (swap.ToolHolder is not null && swap.FirstTool is { } firstTool
-            && _fkController?.FlangeNode is { } flange)
+        _multiTools     = swap.MultiTools;
+        _rotaryBedPivot = swap.RotaryBedPivot;
+
+        foreach (var env in swap.EnvironmentNodes)
         {
-            _tcpOffsetLocal    = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
-            _tcpOrientationABC = new Vector3(firstTool.TcpA, firstTool.TcpB, firstTool.TcpC);
-            _sensorOriginLocal = firstTool.HasSensorOrigin
-                ? new Vector3(firstTool.SensorOriginX!.Value, firstTool.SensorOriginY!.Value, firstTool.SensorOriginZ!.Value)
-                : (Vector3?)null;
-            _toolFrameRoll        = firstTool.ToolFrameRoll * MathF.PI / 180f;
-            _toolCorrectionMatrix = swap.ToolHolder.LocalTransform;
-            RebuildFrameMatrices();
-            swap.ToolHolder.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
-            swap.ToolHolder.Selectable     = true;
-            _renderer.SceneRoot.AddChild(swap.ToolHolder);
-            UploadPendingMeshes(swap.ToolHolder);
-            _currentToolNode = swap.ToolHolder;
+            _renderer.SceneRoot.AddChild(env);
+            if (env.Name == "RotaryBed")
+            {
+                _rotaryBedRoot = env;   // so bed recentring can relocate the turntable to match
+                UploadVisiblePendingMeshes(env);
+            }
+            else
+                EnqueueCellGpuUpload(env);
+        }
+
+        // Expose the rotary bed as an outliner group that scans nest under (so they ride E1).
+        var rotaryPivot = _rotaryBedPivot;
+        var cellEnvOutliner = new List<(SceneNode Node, string DisplayName)>();
+        foreach (var env in swap.EnvironmentNodes)
+        {
+            if (env.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand")
+                cellEnvOutliner.Add((env, env.Name));
+        }
+        if (swap.BedNode is { } bedNode)
+        {
+            cellEnvOutliner.Add((bedNode, "Print Bed"));
+            RegisterLfamInfrastructure(bedNode);
+        }
+
+        RegisterLfamInfrastructure(rotaryPivot, _rotaryBedRoot);
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            vm.SetCellEnvironmentOutliner(cellEnvOutliner);
+            vm.SetRotaryBedGroup(rotaryPivot, "KP1-MB2000 HW-2 Rotary Bed");
+        });
+
+        if (_fkController?.FlangeNode is { } flange)
+        {
+            if (swap.FlangeAttachment is { } aff)
+            {
+                aff.Selectable     = false;
+                aff.LocalTransform = Matrix4.CreateRotationY(MathF.PI / 2f);
+                flange.AddChild(aff);
+                EnqueueCellGpuUpload(aff);
+            }
+
+            if (_multiTools is { } mt)
+            {
+                _multiToolFlangeParented = true;
+                AddMultiToolVisualsToScene(mt, flange);
+                ApplyInitialMultiToolState(vm);
+            }
+            else if (swap.ToolHolder is not null && swap.FirstTool is { } firstTool)
+            {
+                _tcpOffsetLocal    = new Vector3(firstTool.TcpX, firstTool.TcpY, firstTool.TcpZ);
+                _tcpOrientationABC = new Vector3(firstTool.TcpA, firstTool.TcpB, firstTool.TcpC);
+                _sensorOriginLocal = firstTool.HasSensorOrigin
+                    ? new Vector3(firstTool.SensorOriginX!.Value, firstTool.SensorOriginY!.Value, firstTool.SensorOriginZ!.Value)
+                    : (Vector3?)null;
+                _toolFrameRoll        = firstTool.ToolFrameRoll * MathF.PI / 180f;
+                _toolCorrectionMatrix = swap.ToolHolder.LocalTransform;
+                RebuildFrameMatrices();
+                swap.ToolHolder.LocalTransform = _toolMeshMatrix * flange.WorldTransform;
+                swap.ToolHolder.Selectable     = true;
+                swap.ToolHolder.PickTier       = PickTier.Content;
+                _renderer.SceneRoot.AddChild(swap.ToolHolder);
+                UploadVisiblePendingMeshes(swap.ToolHolder);
+                _currentToolNode = swap.ToolHolder;
+            }
+        }
+        else if (_multiTools is { } mtNoFlange)
+        {
+            System.Console.Error.WriteLine("[cell] robot flange not found — docked tools only");
+            AddMultiToolVisualsToScene(mtNoFlange, flange: null);
+            ApplyInitialMultiToolState(vm);
         }
 
         RebuildFrameMatrices();
         RebuildIkSolver(vm);
+        RebuildDevNodeRegistry(swap);
+        ApplyDevModeSelectability(vm.IsDevMode);
+        _renderer.InvalidateShaderAppearance();
+        _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0;
+        _renderer.Select(null);
+        GlCanvas.RequestNextFrameRendering();
+
+        {
+            int pending = _cellGpuUploadQueue.Count;
+            if (pending > 0)
+                System.Console.WriteLine($"[cell] GPU upload queued: {pending} mesh(es)");
+            else if (swap.RobotBaseNode is not null)
+                System.Console.WriteLine("[cell] scene swap applied — robot visible");
+        }
 
         // Dispatch UI-thread updates: joint limits, home angles, tool library.
         Dispatcher.UIThread.InvokeAsync(() =>
         {
+            ClearToolChangeSequence(restorePriorMount: false);
+            vm.ResetViewportOverlayState();
+            UpdateFocusOverlay();
+            vm.NotifyCellChanged();
+
             if (vm.Robot is null) return;
             vm.Robot.Configure(swap.Config.Robot.Joints, swap.Config.Robot.HomePosition);
             vm.Robot.SetBridgeConfig(swap.Config.BridgeIp, swap.Config.BridgePort);
+            vm.LiveIo.SetExtruderBridgeConfig(swap.Config.ExtIp, swap.Config.ExtBridgePort);
+            vm.LiveIo.SetMillingBridgeConfig(swap.Config.MillIp, swap.Config.HasMilling, swap.Config.MillBridgePort);
             vm.Robot.SetToolLibrary(swap.Config.EffectiveTools);
+
+            if (swap.MultiTools is not null)
+                vm.MountedToolName = swap.MultiTools.MountedToolName ?? "";
+            else if (swap.FirstTool is { Name: var mountName })
+                vm.MountedToolName = mountName;
+
+            KrlToolChangeSequenceParser.KrcRootOverride = swap.Config.KrcRoot;
+            vm.RaiseToolChangeCommandsCanExecuteChanged();
 
             if (swap.FirstTool is { } tool)
             {
@@ -906,15 +1542,89 @@ public partial class ViewportView : UserControl
     {
         foreach (var n in root.SelfAndDescendants())
         {
-            if (n.PendingMesh is null) continue;
-            n.Mesh        = new MeshRenderer(n.PendingMesh);
+            if (n.PendingMesh is not { } data) continue;
+            n.Mesh        = GpuMeshCache.Acquire(data);
             n.PendingMesh = null;
         }
+    }
+
+    private static void UploadVisiblePendingMeshes(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is not { } data) continue;
+            if (!IsInVisibleSubtree(n)) continue;
+            n.Mesh        = GpuMeshCache.Acquire(data);
+            n.PendingMesh = null;
+        }
+    }
+
+    private void EnqueueCellGpuUpload(SceneNode? root)
+    {
+        if (root is null) return;
+        if (root.Parent is null)
+            _renderer.SceneRoot.AddChild(root);
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is null) continue;
+            if (!IsInVisibleSubtree(n)) continue;
+            _cellGpuUploadQueue.Enqueue(n);
+        }
+    }
+
+    private static bool HasPendingVisibleMesh(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.PendingMesh is null) continue;
+            if (IsInVisibleSubtree(n)) return true;
+        }
+        return false;
+    }
+
+    /// <returns>True when more uploads remain.</returns>
+    private bool ProcessCellGpuUploadQueue()
+    {
+        if (_cellGpuUploadQueue.Count == 0)
+        {
+            if (_cellGpuUploadPending)
+            {
+                _cellGpuUploadPending = false;
+                System.Console.WriteLine("[cell] GPU upload complete");
+            }
+            return false;
+        }
+
+        int uploaded = 0;
+        while (_cellGpuUploadQueue.Count > 0 && uploaded < MaxCellGpuUploadsPerFrame)
+        {
+            var n = _cellGpuUploadQueue.Dequeue();
+            if (n.PendingMesh is not { } data) continue;
+            n.Mesh        = GpuMeshCache.Acquire(data);
+            n.PendingMesh = null;
+            uploaded++;
+        }
+
+        _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0;
+        return _cellGpuUploadPending;
+    }
+
+    private static bool IsInVisibleSubtree(SceneNode node)
+    {
+        for (var cur = node; cur is not null; cur = cur.Parent)
+            if (!cur.Visible) return false;
+        return true;
     }
 
     private void OnToolSwapRequested(ToolCellConfig config)
     {
         if (DataContext is not ViewportViewModel vm) return;
+        if (_multiTools is not null)
+        {
+            vm.PendingToolSwap.Enqueue((config, null!));
+            vm.NotifyRenderNeeded();
+            return;
+        }
         Task.Run(() =>
         {
             try
@@ -930,14 +1640,14 @@ public partial class ViewportView : UserControl
 
     private static SceneNode? LoadToolNode(ToolCellConfig tool)
     {
-        if (!File.Exists(tool.ModelPath)) return null;
+        if (!AssetPaths.Exists(tool.ModelPath)) return null;
 
         bool isGlb = tool.ModelPath.EndsWith(".glb",  StringComparison.OrdinalIgnoreCase)
                   || tool.ModelPath.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase);
 
         if (isGlb)
         {
-            var toolRoot = GltfLoader.Load(tool.ModelPath);
+            var toolRoot = GltfLoader.Load(AssetPaths.Resolve(tool.ModelPath));
             var children = toolRoot.Children.ToList();
             foreach (var child in children) toolRoot.RemoveChild(child);
             var holder = new SceneNode
@@ -949,20 +1659,18 @@ public partial class ViewportView : UserControl
             foreach (var child in children) holder.AddChild(child);
             return holder;
         }
-        else
+
+        var stlNode = StlLoader.Load(AssetPaths.Resolve(tool.ModelPath), "Tool");
+        var stlHolder = new SceneNode
         {
-            var stlNode = StlLoader.Load(tool.ModelPath, "Tool");
-            var holder  = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateScale(1f / 1000f)
-                               * Matrix4.CreateRotationX(-MathF.PI / 2f)
-                               * Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            holder.AddChild(stlNode);
-            return holder;
-        }
+            Name           = "Tool",
+            LocalTransform = Matrix4.CreateScale(1f / 1000f)
+                           * Matrix4.CreateRotationX(-MathF.PI / 2f)
+                           * Matrix4.CreateRotationY(MathF.PI / 2f),
+            Selectable     = false,
+        };
+        stlHolder.AddChild(stlNode);
+        return stlHolder;
     }
 
     // -- Navigation helpers ----------------------------------------------------
@@ -1054,6 +1762,7 @@ public partial class ViewportView : UserControl
             {
                 _isOrbiting  = true;
                 _orbitButton = btn;
+                GlCanvas.InteractionRenderScale = InteractionScale;
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
@@ -1061,6 +1770,7 @@ public partial class ViewportView : UserControl
             {
                 _isPanning  = true;
                 _panButton  = btn;
+                GlCanvas.InteractionRenderScale = InteractionScale;
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
@@ -1086,6 +1796,21 @@ public partial class ViewportView : UserControl
             ProcessGizmoDrag((float)pos.X, (float)pos.Y);
             if (_toolIsDragging)
                 RunIkForToolDrag();
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        if (_seamGuideDragging && DataContext is ViewportViewModel dragVm)
+        {
+            _leftDragged = true;
+            float vpW = (float)GlCanvas.Bounds.Width;
+            float vpH = (float)GlCanvas.Bounds.Height;
+            var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+            if (TryDragSeamGuide(ray, dragVm, _seamGuideDragIndex, out var hit))
+            {
+                dragVm.MoveSeamGuidePoint(_seamGuideDragIndex, SeamGuidePoint.FromVector3(hit));
+                UpdateSeamGuideMarkers(dragVm);
+            }
             GlCanvas.RequestNextFrameRendering();
             return;
         }
@@ -1132,16 +1857,31 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (kind == PointerUpdateKind.LeftButtonReleased && _seamGuideDragging)
+        {
+            _seamGuideDragging  = false;
+            _seamGuideDragIndex = -1;
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            _leftDragged = false;
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonReleased)
         {
             if (_gizmoDragAxis != GizmoAxis.None)
             {
+                if (_renderer.SelectedNode is { } gzNode && DataContext is ViewportViewModel vmGz)
+                {
+                    var op = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+                    RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
+                }
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (DataContext is ViewportViewModel vmGz) SyncSelectionTransformDisplay(vmGz);
+                if (DataContext is ViewportViewModel vmGz2) SyncSelectionTransformDisplay(vmGz2);
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
@@ -1152,25 +1892,78 @@ public partial class ViewportView : UserControl
                 var ray   = _renderer.Camera.GetPickRay(
                     (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
 
-                if (DataContext is ViewportViewModel flatVm && flatVm.IsLayFlatMode)
+                if (DataContext is ViewportViewModel bndVm && bndVm.IsBoundaryEditorActive
+                    && _boundaryEditorMesh is not null
+                    && TryPlaceSeamGuide(ray, out var bndHit))
                 {
-                    var (node, normal) = _renderer.PickFace(ray);
+                    int seed = CurvedBoundaryPicker.FindNearestVertex(_boundaryEditorMesh, bndHit);
+                    float band = (float)(bndVm.AdditiveSettings?.CurvedAutoDetectBandMm ?? 2.0);
+                    bool isLow = bndVm.BoundaryEditorTarget == CurvedBoundaryEditorTarget.Low;
+                    var ring = CurvedBoundaryPicker.GrowRingFromSeed(_boundaryEditorMesh, seed, band, isLow);
+                    if (isLow)
+                        bndVm.SetBoundaryDraft(ring, bndVm.BoundaryHighDraft);
+                    else
+                        bndVm.SetBoundaryDraft(bndVm.BoundaryLowDraft, ring);
+                }
+                else if (DataContext is ViewportViewModel flatVm && flatVm.IsSeamEditorActive)
+                {
+                    int guideHit = _renderer.PickSeamGuide(
+                        (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
+                    if (guideHit >= 0)
+                    {
+                        flatVm.SelectedSeamGuideIndex = guideHit;
+                        flatVm.SeamEditorTool = SeamEditorToolKind.SelectPoint;
+                        _seamGuideDragging   = true;
+                        _seamGuideDragIndex  = guideHit;
+                        _capturedPointer     = e.Pointer;
+                        e.Pointer.Capture(this);
+                        UpdateSeamGuideMarkers(flatVm);
+                    }
+                    else if (flatVm.SeamEditorTool == SeamEditorToolKind.AddPoint
+                             && TryPlaceSeamGuide(ray, out var placeHit))
+                    {
+                        flatVm.AddSeamGuidePoint(SeamGuidePoint.FromVector3(placeHit));
+                        UpdateSeamGuideMarkers(flatVm);
+                    }
+                    else if (flatVm.SeamEditorTool == SeamEditorToolKind.SelectPoint)
+                    {
+                        flatVm.SelectedSeamGuideIndex = -1;
+                        UpdateSeamGuideMarkers(flatVm);
+                    }
+                }
+                else if (DataContext is ViewportViewModel flatVm2 && flatVm2.IsLayFlatMode)
+                {
+                    var (node, normal, _) = _renderer.PickFace(ray);
                     if (node is not null)
                     {
                         ApplyLayFlat(node, normal, _renderer.BedZ);
                         _renderer.Select(node);
                         UpdateFocusOverlay();
                     }
-                    flatVm.IsLayFlatMode = false;
+                    flatVm2.IsLayFlatMode = false;
+                }
+                else if (DataContext is ViewportViewModel seqVm
+                         && seqVm.IsDevMode
+                         && TryPickSequenceWaypoint((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH))
+                {
+                    GlCanvas.RequestNextFrameRendering();
                 }
                 else
                 {
                     float vpW2 = (float)GlCanvas.Bounds.Width;
                     float vpH2 = (float)GlCanvas.Bounds.Height;
-                    var picked = _renderer.Pick(ray)
-                        ?? _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
-                    _renderer.Select(picked);
-                    UpdateFocusOverlay();
+                    var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
+                    var picked = toolpathHit ?? _renderer.Pick(ray);
+                    var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
+                        _renderer.ToggleToolpathSelection(picked);
+                    else if (DataContext is ViewportViewModel pickVm)
+                        RequestSceneSelection(pickVm, picked);
+                    else
+                    {
+                        _renderer.Select(picked);
+                        UpdateFocusOverlay();
+                    }
                 }
 
                 GlCanvas.RequestNextFrameRendering();
@@ -1184,6 +1977,11 @@ public partial class ViewportView : UserControl
 
         if (!_isOrbiting && !_isPanning)
         {
+            if (GlCanvas.InteractionRenderScale < 1f)
+            {
+                GlCanvas.InteractionRenderScale = 1f;
+                GlCanvas.RequestNextFrameRendering();
+            }
             _capturedPointer?.Capture(null);
             _capturedPointer = null;
         }
@@ -1247,7 +2045,85 @@ public partial class ViewportView : UserControl
                     e.Handled = true;
                 }
                 break;
+            case Key.N:
+                if (DataContext is ViewportViewModel hudVm)
+                {
+                    hudVm.ToggleSyncHud();
+                    e.Handled = true;
+                }
+                break;
         }
+    }
+
+    private void AddMultiToolVisualsToScene(CellEnvironmentBuilder.CellMultiToolSet mt, SceneNode? flange)
+    {
+        foreach (var pair in mt.Tools.Values)
+        {
+            if (flange is not null)
+                flange.AddChild(pair.FlangeHolder);
+
+            if (pair.DockHolder is { } dock)
+            {
+                if (dock.Parent is null)
+                    _renderer.SceneRoot.AddChild(dock);
+                if (dock.Visible)
+                    EnqueueCellGpuUpload(dock);
+            }
+        }
+
+        RefreshMultiToolSelectability();
+    }
+
+    /// <summary>LFAM 3: all toolheads parked on docks; flange empty until a Pick simulation or manual mount.</summary>
+    void ApplyInitialMultiToolState(ViewportViewModel vm) => ApplyMultiToolUnmount(vm, updateVm: false);
+
+    private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm)
+    {
+        if (_multiTools is null) return;
+
+        _multiTools.MountedToolName = tool.Name;
+        foreach (var (name, pair) in _multiTools.Tools)
+        {
+            bool mounted = name == tool.Name;
+            pair.FlangeHolder.Visible = mounted;
+            if (pair.DockHolder is { } dock)
+                dock.Visible = !mounted;
+
+            if (mounted)
+                EnqueueCellGpuUpload(pair.FlangeHolder);
+            else if (pair.DockHolder is { } d)
+                EnqueueCellGpuUpload(d);
+        }
+
+        _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0 || _cellGpuUploadPending;
+
+        _tcpOffsetLocal    = new Vector3(tool.TcpX, tool.TcpY, tool.TcpZ);
+        _tcpOrientationABC = new Vector3(tool.TcpA, tool.TcpB, tool.TcpC);
+        _sensorOriginLocal = tool.HasSensorOrigin
+            ? new Vector3(tool.SensorOriginX!.Value, tool.SensorOriginY!.Value, tool.SensorOriginZ!.Value)
+            : null;
+        _toolFrameRoll = tool.ToolFrameRoll * MathF.PI / 180f;
+
+        _toolCorrectionMatrix = Matrix4.CreateRotationY(MathF.PI / 2f);
+        RebuildFrameMatrices();
+
+        if (_multiTools.Tools.TryGetValue(tool.Name, out var active))
+        {
+            active.FlangeHolder.LocalTransform = _toolMeshMatrix;
+            _currentToolNode = active.FlangeHolder;
+        }
+
+        RefreshMultiToolSelectability();
+        RebuildIkSolver(vm);
+        if (vm.Robot is not null)
+            SyncTcpReadout(vm);
+        PostMultiToolVmState(vm, tool.Name);
+        if (_currentToolNode is not null)
+        {
+            _renderer.Select(_currentToolNode);
+            Dispatcher.UIThread.Post(UpdateFocusOverlay);
+        }
+        Dispatcher.UIThread.Post(vm.NotifyCellChanged);
     }
 
     private void DeleteSelectedNode()
@@ -1291,169 +2167,745 @@ public partial class ViewportView : UserControl
         foreach (var file in files)
         {
             var node = ImportHelper.LoadAndPlace(file, place ? vm.ActiveCell : null);
-            if (node is not null) vm.AddUserNode(node);
+            if (node is not null) vm.AddImportNode(node);
         }
     }
 
     // -- Slice -----------------------------------------------------------------
 
+    private (OutlinerItemViewModel parent, OutlinerItemViewModel toolpathItem)? FindResliceSource(ViewportViewModel vm)
+    {
+        if (_renderer.SelectedNode is not { } selected) return null;
+        if (!_renderer.IsToolpathNode(selected)) return null;
+
+        foreach (var meshItem in vm.EnumerateUserModelItems())
+        {
+            foreach (var child in meshItem.Children)
+            {
+                if (child.Node != selected) continue;
+                if (!CollectMeshSnapshots(meshItem, requireVisible: false).Any()) return null;
+                return (meshItem, child);
+            }
+        }
+        return null;
+    }
+
+    private static List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> CollectMeshSnapshots(
+        OutlinerItemViewModel item, bool requireVisible)
+    {
+        if (requireVisible && !item.Visible) return [];
+        var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
+        foreach (var node in item.Node.SelfAndDescendants())
+        {
+            if (node.PickTier == PickTier.Environment) continue;
+            if (node.Mesh?.PickingData is not { } md) continue;
+            meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
+        }
+        return meshSnapshots;
+    }
+
+    private static SliceSettings BuildSliceSettings(AdditiveSettingsViewModel? additive)
+    {
+        if (additive is not { } s) return new SliceSettings();
+        var slicingMode = s.SlicingMode == "Surface" ? SlicingMode.Surface : SlicingMode.Normal;
+        return new SliceSettings
+        {
+            SlicingMode      = slicingMode,
+            LayerHeight      = (float)s.LayerHeight,
+            FirstLayerHeight = (float)s.FirstLayerHeight,
+            BeadWidth        = (float)s.BeadWidth,
+            PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
+            TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
+            ApproachZ        = (float)s.ApproachZ,
+            TiltAngle        = (float)s.TiltAngle,
+            TiltAngleX       = (float)s.TiltAngleX,
+            DisableContourOffset   = s.DisableContourOffset,
+            ZigZagSeam             = s.SeamMode == "Zig-zag",
+            WaveEffect    = s.WaveEffect switch
+            {
+                "Sine"     => WaveEffectType.Sine,
+                "Sawtooth" => WaveEffectType.Sawtooth,
+                "Triangle" => WaveEffectType.Triangle,
+                _          => WaveEffectType.None,
+            },
+            WaveAmplitude  = (float)s.WaveAmplitude,
+            WaveWavelength = (float)s.WaveWavelength,
+            WaveGradient         = s.WaveGradient,
+            WaveAmplitudeBottom  = (float)s.WaveAmplitudeBottom,
+            WaveAmplitudeTop     = (float)s.WaveAmplitudeTop,
+            WaveWavelengthBottom = (float)s.WaveWavelengthBottom,
+            WaveWavelengthTop    = (float)s.WaveWavelengthTop,
+            WaveGradientCenter   = (float)s.WaveGradientCenter,
+            WaveGradientCurve    = s.WaveGradientCurve switch
+            {
+                "Smooth"   => WaveGradientCurveType.Smooth,
+                "Ease In"  => WaveGradientCurveType.EaseIn,
+                "Ease Out" => WaveGradientCurveType.EaseOut,
+                _          => WaveGradientCurveType.Linear,
+            },
+            WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
+            WaveShape      = (float)s.WaveShape,
+            WaveStagger    = (float)s.WaveStagger,
+            AdaptiveLayerHeight = s.AdaptiveLayerHeight,
+            AdaptiveQuality     = (float)s.AdaptiveQuality,
+            MinLayerHeight      = (float)s.MinLayerHeight,
+            OverhangOrientation = s.OverhangOrientation,
+            MaxOverhangTiltDeg  = (float)s.MaxOverhangTiltDeg,
+            SmoothRotation                = s.SmoothRotation,
+            SmoothRotationRadius          = s.SmoothRotationRadius,
+            SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
+            InfillPattern = s.InfillPattern switch
+            {
+                "Rectilinear"     => InfillPattern.Rectilinear,
+                "Grid"            => InfillPattern.Grid,
+                "Triangle"        => InfillPattern.Triangle,
+                "Ghost Mesh Grid" => InfillPattern.GhostMeshGrid,
+                _                 => InfillPattern.None,
+            },
+            InfillSpacingMm = (float)s.InfillSpacingMm,
+            InfillAngleDeg  = (float)s.InfillAngleDeg,
+            ZHopMm          = (float)s.ZHopMm,
+            WipeMode        = s.WipeModeDisplay switch
+            {
+                "Retrace"        => WipeMode.Retrace,
+                "Same-Direction" => WipeMode.SameDirection,
+                "Natural" or "Normal" => WipeMode.SameDirection,
+                _                => WipeMode.None,
+            },
+            WipeLengthMm = (float)s.WipeLengthMm,
+            WipeRampMm   = (float)s.WipeRampMm,
+            WipeSpeed    = (float)(s.WipeSpeed / 1000.0),
+            FlowRate     = (float)(s.SelectedPreset?.FlowRate ?? 0.463),
+            ResumeRampEnabled          = s.ResumeRampEnabled,
+            ResumeRampStartSpeedMps    = (float)(s.ResumeRampStartSpeed / 1000.0),
+            ResumeRampStartRpmPercent  = (float)s.ResumeRampStartRpmPercent,
+            ResumeRampDistanceMm       = (float)s.ResumeRampDistanceMm,
+            ResumeRampSteps            = s.ResumeRampSteps,
+            SeamGuidePoints = s.BuildSeamGuideList(),
+            CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
+            CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
+            CurvedBoundarySource        = s.CurvedBoundarySource,
+            CurvedAutoDetectBandMm      = (float)s.CurvedAutoDetectBandMm,
+            CurvedEnableRegionSplit     = s.CurvedEnableRegionSplit,
+            OrientationFollowStrength   = s.OrientationFollowStrength,
+        };
+    }
+
+    private static async Task<(Toolpath smoothed, Toolpath raw, SliceSettings settings)> ComputeToolpathAsync(
+        List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> meshSnapshots,
+        SliceMethod method,
+        SliceSettings settings,
+        Action<string>? reportProgress = null)
+    {
+        void Report(string msg) => reportProgress?.Invoke(msg);
+
+        Report("Preparing mesh…");
+        var toolpath = await Task.Run(() =>
+        {
+            var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
+            foreach (var (positions, indices, world) in meshSnapshots)
+            {
+                NVec3[] flat;
+                if (indices is null)
+                {
+                    flat = new NVec3[positions.Length];
+                    for (int i = 0; i < positions.Length; i++)
+                        flat[i] = TransformPoint(positions[i], world);
+                }
+                else
+                {
+                    flat = new NVec3[indices.Length];
+                    for (int i = 0; i < indices.Length; i++)
+                        flat[i] = TransformPoint(positions[indices[i]], world);
+                }
+                flatMeshes.Add(flat);
+            }
+
+            Report(method switch
+            {
+                SliceMethod.Curved   => "Curved (Sweep): computing boundaries and layers…",
+                SliceMethod.Geodesic => "Geodesic: computing surface-distance layers…",
+                SliceMethod.Angled   => "Angled: intersecting tilted planes…",
+                _                    => "Planar: intersecting layers…",
+            });
+
+            Toolpath tp;
+            if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
+            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
+
+            Report("Applying post-processing…");
+            tp = WaveEffect.Apply(tp, settings);
+            tp = MovementPostProcessor.Apply(tp, settings);
+            return ResumeRampPostProcessor.Apply(tp, settings);
+        });
+
+        var rawToolpath = ToolpathClone.Copy(toolpath);
+        var toSmooth    = ToolpathClone.Copy(toolpath);
+        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+        var smoothedToolpath = OrientationSmoother.Apply(toSmooth, settings);
+        return (smoothedToolpath, rawToolpath, settings);
+    }
+
+    private ToolpathSnapshot? GetToolpathSnapshot(SceneNode node)
+    {
+        if (!_toolpathByNode.TryGetValue(node, out var smoothed)) return null;
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+        raw ??= smoothed;
+        _toolpathMetaByNode.TryGetValue(node, out var meta);
+        return new ToolpathSnapshot(
+            smoothed,
+            raw,
+            meta.BeadWidth > 0 ? meta.BeadWidth : 6f,
+            meta.LayerHeight > 0 ? meta.LayerHeight : 3f,
+            meta.MaterialColor);
+    }
+
+    private void StageToolpathMaps(PendingToolpathEntry entry)
+    {
+        _toolpathByNode[entry.Node]     = entry.Toolpath;
+        _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
+        _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+        _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+    }
+
+    private void UploadToolpathEntry(PendingToolpathEntry entry, bool addToScene)
+    {
+        StageToolpathMaps(entry);
+        if (addToScene)
+            _renderer.AddToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+        else
+            _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+
+        var centroidLocal = entry.Node.LocalTransform;
+
+        if (entry.PreserveRelativePose
+            && entry.PreservedLocalTransform is Matrix4 preservedLocal
+            && entry.PreservedOrigin is NVec3 preservedOrigin)
+        {
+            var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
+            Matrix4.Invert(oldOriginT, out var invOldOrigin);
+            entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+        }
+        else if (entry.LocalTransformOverride is Matrix4 lt)
+        {
+            entry.Node.LocalTransform = lt;
+        }
+
+        var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
+        _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
+        var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
+        _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
+
+        // Scrub/IK un-localise against the geometry centroid, not the user translation component.
+        var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
+            ? centroidLocal.Row3
+            : entry.Node.LocalTransform.Row3;
+        _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
+    }
+
+    private void ApplyToolpathStats(ViewportViewModel vm, Toolpath smoothedToolpath)
+    {
+        if (vm.AdditiveSettings is not { } as2) return;
+        var (t, w, c) = ComputeToolpathStats(smoothedToolpath, as2);
+        vm.StatsTime        = t;
+        vm.StatsWeight      = w;
+        vm.StatsCost        = c;
+        vm.HasToolpathStats = true;
+    }
+
+    private void SetSliceStatus(ViewportViewModel vm, string message, bool isError = false)
+    {
+        Dispatcher.UIThread.Post(() =>
+        {
+            vm.SliceStatusIsError = isError;
+            vm.SliceStatusMessage = message;
+        });
+    }
+
+    private void ScheduleClearSliceStatus(ViewportViewModel vm, int delayMs = 6000)
+    {
+        int gen = ++_sliceStatusClearGen;
+        _ = Task.Run(async () =>
+        {
+            await Task.Delay(delayMs);
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (gen != _sliceStatusClearGen || vm.IsSlicing) return;
+                vm.SliceStatusMessage = string.Empty;
+                vm.SliceStatusIsError = false;
+            });
+        });
+    }
+
+    private static string SliceMethodLabel(SliceMethod method) => method switch
+    {
+        SliceMethod.Curved   => "Curved (Sweep)",
+        SliceMethod.Geodesic => "Geodesic",
+        SliceMethod.Angled   => "Angled",
+        _                    => "Planar",
+    };
+
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
         if (vm.IsSlicing || vm.OutlinerItems.Count == 0) return;
+        _sliceStatusClearGen++;
         vm.IsSlicing = true;
+        vm.SliceStatusIsError = false;
+        SetSliceStatus(vm, "Slicing…");
 
         try
         {
-            // Snapshot mesh data on the UI thread (OutlinerItems is UI-thread-owned).
-            // Only process the outliner item that owns the currently selected node.
-            var selectedNode  = _renderer.SelectedNode;
-            var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
-            var sourceItems   = new List<OutlinerItemViewModel>();
-            foreach (var item in vm.OutlinerItems)
+            var selectedNode = _renderer.SelectedNode;
+            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
             {
-                if (!item.Visible) continue;
-                if (selectedNode is null || !item.Node.SelfAndDescendants().Any(n => n == selectedNode)) continue;
-                bool contributed = false;
-                foreach (var node in item.Node.SelfAndDescendants())
-                {
-                    if (node.Mesh?.PickingData is not { } md) continue;
-                    meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
-                    contributed = true;
-                }
-                if (contributed) sourceItems.Add(item);
+                SetSliceStatus(vm, "Slice failed: select a mesh to slice.", isError: true);
+                return;
             }
 
-            var method = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
-            var settings = vm.AdditiveSettings is { } s
-                ? new SliceSettings
-                {
-                    LayerHeight      = (float)s.LayerHeight,
-                    FirstLayerHeight = (float)s.FirstLayerHeight,
-                    BeadWidth        = (float)s.BeadWidth,
-                    PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
-                    TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
-                    ApproachZ        = (float)s.ApproachZ,
-                    TiltAngle        = (float)s.TiltAngle,
-                    TiltAngleX       = (float)s.TiltAngleX,
-                    DisableContourOffset   = s.DisableContourOffset,
-                    ZigZagSeam             = s.SeamMode == "Zig-zag",
-                    WaveEffect    = s.WaveEffect switch
-                    {
-                        "Sine"     => WaveEffectType.Sine,
-                        "Sawtooth" => WaveEffectType.Sawtooth,
-                        "Triangle" => WaveEffectType.Triangle,
-                        _          => WaveEffectType.None,
-                    },
-                    WaveAmplitude  = (float)s.WaveAmplitude,
-                    WaveWavelength = (float)s.WaveWavelength,
-                    WaveGradient         = s.WaveGradient,
-                    WaveAmplitudeBottom  = (float)s.WaveAmplitudeBottom,
-                    WaveAmplitudeTop     = (float)s.WaveAmplitudeTop,
-                    WaveWavelengthBottom = (float)s.WaveWavelengthBottom,
-                    WaveWavelengthTop    = (float)s.WaveWavelengthTop,
-                    WaveGradientCenter   = (float)s.WaveGradientCenter,
-                    WaveGradientCurve    = s.WaveGradientCurve switch
-                    {
-                        "Smooth"   => WaveGradientCurveType.Smooth,
-                        "Ease In"  => WaveGradientCurveType.EaseIn,
-                        "Ease Out" => WaveGradientCurveType.EaseOut,
-                        _          => WaveGradientCurveType.Linear,
-                    },
-                    WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
-                    WaveShape      = (float)s.WaveShape,
-                    WaveStagger    = (float)s.WaveStagger,
-                    AdaptiveLayerHeight = s.AdaptiveLayerHeight,
-                    AdaptiveQuality     = (float)s.AdaptiveQuality,
-                    MinLayerHeight      = (float)s.MinLayerHeight,
-                    OverhangOrientation = s.OverhangOrientation,
-                    MaxOverhangTiltDeg  = (float)s.MaxOverhangTiltDeg,
-                    SmoothRotation                = s.SmoothRotation,
-                    SmoothRotationRadius          = s.SmoothRotationRadius,
-                    SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
-                    InfillPattern = s.InfillPattern switch
-                    {
-                        "Rectilinear"     => InfillPattern.Rectilinear,
-                        "Grid"            => InfillPattern.Grid,
-                        "Triangle"        => InfillPattern.Triangle,
-                        "Ghost Mesh Grid" => InfillPattern.GhostMeshGrid,
-                        _                 => InfillPattern.None,
-                    },
-                    InfillSpacingMm = (float)s.InfillSpacingMm,
-                    InfillAngleDeg  = (float)s.InfillAngleDeg,
-                }
-                : new SliceSettings();
-
-            var toolpath = await Task.Run(() =>
+            var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
+            if (meshSnapshots.Count == 0)
             {
-                // Expand indexed meshes to flat triangles and convert to System.Numerics.
-                var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
-                foreach (var (positions, indices, world) in meshSnapshots)
+                SetSliceStatus(vm, "Slice failed: mesh has no geometry.", isError: true);
+                return;
+            }
+
+            // Additive stock from the material maps: print the displaced surface (low-poly mesh +
+            // PBR-map detail) inflated by a uniform allowance, so the blank carries the detail and
+            // the mill has consistent material everywhere. Map + distance come from the MILLING panel
+            // (single source of truth); additive only adds the allowance.
+            if (vm.AdditiveSettings?.UseDisplacedStock == true && vm.SubtractiveSettings is { } sub2)
+            {
+                var built = await ComputeDisplacedSurfaceAsync(vm, sub2, extraOffsetMm: (float)vm.AdditiveSettings.StockAllowanceMm);
+                if (built is { } db)
                 {
-                    NVec3[] flat;
-                    if (indices is null)
-                    {
-                        flat = new NVec3[positions.Length];
-                        for (int i = 0; i < positions.Length; i++)
-                            flat[i] = TransformPoint(positions[i], world);
-                    }
-                    else
-                    {
-                        flat = new NVec3[indices.Length];
-                        for (int i = 0; i < indices.Length; i++)
-                            flat[i] = TransformPoint(positions[indices[i]], world);
-                    }
-                    flatMeshes.Add(flat);
+                    var tkPos = Array.ConvertAll(db.result.Positions, p => new TkVector3(p.X, p.Y, p.Z));
+                    var tkIdx = Array.ConvertAll(db.result.Indices, i => (uint)i);
+                    meshSnapshots = [(tkPos, tkIdx, TkMatrix4.Identity)];
+                    System.Console.Error.WriteLine(
+                        $"[slice] additive stock from PBR maps: {db.result.VertexCount:N0} verts + " +
+                        $"{vm.AdditiveSettings.StockAllowanceMm:0.#} mm allowance.");
                 }
+                else
+                {
+                    System.Console.Error.WriteLine("[slice] displaced stock requested but unavailable; slicing raw mesh.");
+                }
+            }
 
-                Toolpath tp;
-                if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
-                else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
-                else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
-                tp = WaveEffect.Apply(tp, settings);
-                return tp;
-            });
+            var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
+            var settings = BuildSliceSettings(vm.AdditiveSettings);
+            SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
+            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
 
-            // Apply orientation smoothing on the UI thread so the raw toolpath can be cached
-            // for live re-smoothing when the user adjusts smoothing settings.
-            var rawToolpath      = toolpath;
-            var smoothedToolpath = OrientationSmoother.Apply(rawToolpath, settings);
+            int layerCount = smoothedToolpath.Layers.Count;
+            if (layerCount == 0)
+            {
+                SetSliceStatus(vm, "Slice finished with 0 layers — check mesh, boundaries, and settings.", isError: true);
+                return;
+            }
 
-            var parentItem   = sourceItems.Count == 1 ? sourceItems[0] : null;
             var toolpathName = method switch
             {
-                SliceMethod.Angled => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                  => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
             };
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
-            vm.RegisterToolpathInOutliner(toolpathNode, parentItem);
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
                 && asp.SelectedPresetIndex < asp.MaterialPresets.Count
                 ? asp.MaterialPresets[asp.SelectedPresetIndex] : null;
-            vm.PendingToolpath.Enqueue((
-                smoothedToolpath, rawToolpath, toolpathNode,
-                (float)(vm.AdditiveSettings?.BeadWidth   ?? 6.0),
-                (float)(vm.AdditiveSettings?.LayerHeight  ?? 3.0),
-                MapMaterialColor(selectedPreset?.Color)));
-
-            // Compute and display stats overlay.
-            if (vm.AdditiveSettings is { } as2)
+            vm.PendingToolpath.Enqueue(new PendingToolpathEntry
             {
-                var (t, w, c) = ComputeToolpathStats(smoothedToolpath, as2);
-                vm.StatsTime        = t;
-                vm.StatsWeight      = w;
-                vm.StatsCost        = c;
-                vm.HasToolpathStats = true;
-            }
+                Toolpath      = smoothedToolpath,
+                RawToolpath   = rawToolpath,
+                Node          = toolpathNode,
+                BeadWidth     = (float)(vm.AdditiveSettings?.BeadWidth  ?? 6.0),
+                LayerHeight   = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0),
+                MaterialColor = MapMaterialColor(selectedPreset?.Color),
+            });
 
-            // Hide source meshes so the toolpath is unobstructed, then drop selection.
-            foreach (var item in sourceItems)
-                item.Visible = false;
+            ApplyToolpathStats(vm, smoothedToolpath);
+
+            sourceItem.Visible = false;
 
             _renderer.Select(null);
             UpdateFocusOverlay();
-
             GlCanvas.RequestNextFrameRendering();
+
+            int moveCount = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
+            SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+            ScheduleClearSliceStatus(vm);
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Slice failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[slice] {ex}");
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
+    {
+        ToolDiameterMm    = (float)s.ToolDiameterMm,
+        ToolEnd           = s.BallEnd ? MassiveSlicer.Core.Models.ToolEndType.Ball
+                                      : MassiveSlicer.Core.Models.ToolEndType.Flat,
+        StepoverMm        = (float)s.StepoverMm,
+        StepdownMm        = (float)s.StepdownMm,
+        FinishAllowanceMm = (float)s.FinishAllowanceMm,
+        FeedRateMmMin     = (float)s.FeedRateMmMin,
+        PlungeFeedMmMin   = (float)s.PlungeFeedMmMin,
+        RapidZMm          = (float)s.RapidZMm,
+        SpindleRpm        = (float)s.SpindleRpm,
+        MaxDepthMm        = s.MaxDepthMm > 0 ? (float)s.MaxDepthMm : float.PositiveInfinity,
+    };
+
+    /// <summary>Generates a relief-milling toolpath from the subtractive heightmap, referencing
+    /// the selected blank's nominal top face (v1). Carves into the blank; the blank stays visible.</summary>
+    private async Task RunMillAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+        if (string.IsNullOrWhiteSpace(sub.HeightmapPath) || !System.IO.File.Exists(sub.HeightmapPath))
+        {
+            System.Console.Error.WriteLine("[mill] no heightmap selected (set one in the Subtractive tab).");
+            return;
+        }
+
+        vm.IsSlicing = true;
+        try
+        {
+            var selectedNode = _renderer.SelectedNode;
+            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
+            {
+                System.Console.Error.WriteLine("[mill] select the blank mesh first.");
+                return;
+            }
+
+            var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
+            if (meshSnapshots.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] select the blank mesh first.");
+                return;
+            }
+
+            // World-space AABB of the selected blank (for auto reference plane + footprint).
+            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+            foreach (var (positions, _, world) in meshSnapshots)
+                foreach (var p in positions)
+                {
+                    var w = TransformPoint(p, world);
+                    if (w.X < minX) minX = w.X; if (w.X > maxX) maxX = w.X;
+                    if (w.Y < minY) minY = w.Y; if (w.Y > maxY) maxY = w.Y;
+                    if (w.Z > maxZ) maxZ = w.Z;
+                }
+
+            float refZ = sub.AutoReferenceFromTop ? maxZ : (float)sub.ReferencePlaneZ;
+            float ox   = sub.AutoFootprint ? minX : (float)sub.FootprintOriginX;
+            float oy   = sub.AutoFootprint ? minY : (float)sub.FootprintOriginY;
+            float fw   = sub.AutoFootprint ? (maxX - minX) : (float)sub.FootprintWidthMm;
+            float fl   = sub.AutoFootprint ? (maxY - minY) : (float)sub.FootprintLengthMm;
+
+            var map  = MassiveSlicer.App.Services.ReliefMapLoader.LoadFromImage(
+                sub.HeightmapPath, ox, oy, fw, fl, (float)sub.HeightScaleMm, sub.InvertHeightmap, refZ);
+            var mill = BuildMillSettings(sub);
+
+            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.ReliefMillSlicer.Slice(map, mill));
+            if (toolpath.Layers.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] relief produced no cuts (check height scale / footprint).");
+                return;
+            }
+
+            var toolpathNode = new SceneNode
+            {
+                Name = $"Relief Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
+                Selectable = true,
+            };
+            vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
+            vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = toolpath,
+                RawToolpath   = toolpath,
+                Node          = toolpathNode,
+                BeadWidth     = (float)sub.ToolDiameterMm,
+                LayerHeight   = mill.StepdownMm,
+                MaterialColor = MapMaterialColor(null),
+            });
+
+            ApplyToolpathStats(vm, toolpath);
+            // Keep the blank visible — milling carves into it.
+            _renderer.Select(null);
+            UpdateFocusOverlay();
+            GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>
+    /// Builds the world-space displaced surface for the selected model (low-poly mesh pushed along
+    /// its normals by a PBR-map height field) — the detailed geometry both the preview and the
+    /// multi-axis mill use. World space, so the displacement distance is true mm regardless of the
+    /// model's transform. Returns null (with a logged reason) when the selection can't be displaced.
+    /// </summary>
+    private async Task<(MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Result result, MeshData source)?>
+        ComputeDisplacedSurfaceAsync(ViewportViewModel vm, SubtractiveSettingsViewModel sub, float extraOffsetMm = 0f)
+    {
+        if (_renderer.SelectedNode is not { } selected)
+        {
+            System.Console.Error.WriteLine("[displace] select a model first.");
+            return null;
+        }
+        var meshNode = selected.SelfAndDescendants()
+            .FirstOrDefault(n => n.Mesh?.PickingData is { Uvs: not null });
+        if (meshNode?.Mesh?.PickingData is not { } mesh || mesh.Uvs is null)
+        {
+            System.Console.Error.WriteLine("[displace] selected model has no UVs — cannot sample its maps.");
+            return null;
+        }
+
+        var height = MassiveSlicer.App.Services.PbrHeightFieldFactory.FromMaterial(
+            mesh.Material,
+            string.IsNullOrWhiteSpace(sub.HeightmapPath) ? null : sub.HeightmapPath,
+            sub.InvertHeightmap);
+        if (height is null)
+        {
+            System.Console.Error.WriteLine(
+                "[displace] no displacement/height image supplied and no normal map on this model.");
+            return null;
+        }
+
+        var world = meshNode.WorldTransform;
+        float distance = (float)sub.DisplacementDistanceMm;
+        int vcount = mesh.Positions.Length;
+
+        // Lift to world space so the displacement distance is true mm.
+        var wpos = new NVec3[vcount];
+        var wnrm = new NVec3[vcount];
+        var uv   = new System.Numerics.Vector2[vcount];
+        for (int i = 0; i < vcount; i++)
+        {
+            wpos[i] = TransformPoint(mesh.Positions[i], world);
+            wnrm[i] = TransformNormalWorld(mesh.Normals[i], world);
+            uv[i]   = new System.Numerics.Vector2(mesh.Uvs[i].X, mesh.Uvs[i].Y);
+        }
+        int[] idx = mesh.Indices is { } mi
+            ? Array.ConvertAll(mi, u => (int)u)
+            : System.Linq.Enumerable.Range(0, vcount).ToArray();
+
+        var result = await Task.Run(() => MassiveSlicer.Core.Slicing.DisplacedSurfaceBuilder.Build(
+            wpos, wnrm, uv, idx, height, distance, bias: 0f, extraOffsetMm: extraOffsetMm));
+
+        if (result.VertexCount == 0)
+        {
+            System.Console.Error.WriteLine("[displace] produced no geometry.");
+            return null;
+        }
+        return (result, mesh);
+    }
+
+    /// <summary>Builds the displaced surface and adds it to the scene as a textured preview mesh.</summary>
+    private async Task RunPreviewDisplacedAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+
+        vm.IsSlicing = true;
+        try
+        {
+            if (await ComputeDisplacedSurfaceAsync(vm, sub) is not { } built) return;
+            var (result, mesh) = built;
+            float distance = (float)sub.DisplacementDistanceMm;
+
+            var tkPos = Array.ConvertAll(result.Positions, p => new TkVector3(p.X, p.Y, p.Z));
+            var tkNrm = Array.ConvertAll(result.Normals,   p => new TkVector3(p.X, p.Y, p.Z));
+            var tkUv  = Array.ConvertAll(result.Uvs, p => new OpenTK.Mathematics.Vector2(p.X, p.Y));
+            var tkIdx = Array.ConvertAll(result.Indices, i => (uint)i);
+
+            // Keep the model's material so the displaced surface stays textured.
+            var meshData = new MeshData(tkPos, tkNrm, tkIdx,
+                $"Displaced surface ({distance:0.#} mm)", mesh.BaseColor, mesh.Metallic, mesh.Roughness,
+                tkUv, null, mesh.Material);
+
+            var previewNode = new SceneNode
+            {
+                Name           = meshData.Name,
+                PendingMesh    = meshData,
+                LocalTransform = TkMatrix4.Identity,
+                Selectable     = true,
+            };
+            vm.AddImportNode(previewNode);
+            System.Console.Error.WriteLine(
+                $"[displace] {result.VertexCount:N0} verts, {result.TriangleCount:N0} tris @ {distance:0.#} mm.");
+            GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>
+    /// Generates a multi-axis surface-following finish toolpath over the displaced surface
+    /// (tool axis follows the surface normal) and registers it as a toolpath node.
+    /// </summary>
+    private async Task RunMultiAxisMillAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        var sub = vm.SubtractiveSettings;
+        if (sub is null) return;
+
+        vm.IsSlicing = true;
+        try
+        {
+            if (await ComputeDisplacedSurfaceAsync(vm, sub) is not { } built) return;
+            var result = built.result;
+            var mill   = BuildMillSettings(sub);
+
+            var toolpath = await Task.Run(() => MassiveSlicer.Core.Slicing.SurfaceFollowMillGenerator.GenerateMultiAxis(
+                result.Positions, result.Normals, result.Indices, mill));
+            if (toolpath.Layers.Count == 0)
+            {
+                System.Console.Error.WriteLine("[mill] multi-axis pass produced no cuts.");
+                return;
+            }
+
+            var toolpathNode = new SceneNode
+            {
+                Name = $"Multi-Axis Mill D{mill.ToolDiameterMm:0.#} SO{mill.StepoverMm:0.#}",
+                Selectable = true,
+            };
+            vm.RegisterToolpathInOutliner(toolpathNode, null);
+            vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = toolpath,
+                RawToolpath   = toolpath,
+                Node          = toolpathNode,
+                BeadWidth     = (float)sub.ToolDiameterMm,
+                LayerHeight   = mill.StepdownMm,
+                MaterialColor = MapMaterialColor(null),
+            });
+            ApplyToolpathStats(vm, toolpath);
+            _renderer.Select(null);
+            UpdateFocusOverlay();
+            GlCanvas.RequestNextFrameRendering();
+            int moves = toolpath.Layers.Sum(l => l.Moves.Count);
+            System.Console.Error.WriteLine($"[mill] multi-axis surface pass: {moves:N0} moves.");
+
+            // Fail-rate analysis: how much of the ideal surface the tool over-cuts vs leaves proud.
+            float toolR = (float)sub.ToolDiameterMm / 2f;
+            float tol   = (float)sub.AnalysisToleranceMm;
+            var report  = await Task.Run(() => MassiveSlicer.Core.Slicing.ToolpathSurfaceDeviation.Analyze(
+                result.Positions, toolpath, toolR, tol));
+            string summary = $"Fail {report.FailPct:F1}%  —  gouge {report.GougePct:F1}% (max {report.MaxGougeMm:F2} mm) / " +
+                             $"residual {report.ResidualPct:F1}% (max {report.MaxResidualMm:F2} mm)  @ tol {report.ToleranceMm:F2} mm";
+            sub.MillAnalysisText = summary;
+            System.Console.Error.WriteLine($"[mill] {summary}");
+        }
+        finally
+        {
+            vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>Transforms a normal by the matrix's 3x3 (row-vector convention) and renormalizes.</summary>
+    private static NVec3 TransformNormalWorld(TkVector3 n, TkMatrix4 m)
+    {
+        float x = n.X * m.M11 + n.Y * m.M21 + n.Z * m.M31;
+        float y = n.X * m.M12 + n.Y * m.M22 + n.Z * m.M32;
+        float z = n.X * m.M13 + n.Y * m.M23 + n.Z * m.M33;
+        var v = new NVec3(x, y, z);
+        return v.LengthSquared() > 1e-12f ? NVec3.Normalize(v) : new NVec3(0, 0, 1);
+    }
+
+    private async Task RunUpdateSliceAsync(ViewportViewModel vm)
+    {
+        if (vm.IsSlicing) return;
+        if (FindResliceSource(vm) is not { } source) return;
+
+        _sliceStatusClearGen++;
+        vm.IsSlicing = true;
+        vm.SliceStatusIsError = false;
+        SetSliceStatus(vm, "Updating slice…");
+        try
+        {
+            var (parentItem, toolpathItem) = source;
+            var toolpathNode = toolpathItem.Node;
+            var meshSnapshots = CollectMeshSnapshots(parentItem, requireVisible: false);
+            if (meshSnapshots.Count == 0)
+            {
+                SetSliceStatus(vm, "Update failed: source mesh has no geometry.", isError: true);
+                return;
+            }
+
+            var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
+            var settings = BuildSliceSettings(vm.AdditiveSettings);
+            var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+
+            if (smoothedToolpath.Layers.Count == 0)
+            {
+                SetSliceStatus(vm, "Update finished with 0 layers.", isError: true);
+                return;
+            }
+
+            toolpathNode.Name = method switch
+            {
+                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
+            };
+
+            var selectedPreset = vm.AdditiveSettings is { } asp
+                && asp.SelectedPresetIndex >= 0
+                && asp.SelectedPresetIndex < asp.MaterialPresets.Count
+                ? asp.MaterialPresets[asp.SelectedPresetIndex] : null;
+
+            _validationCts?.Cancel();
+            _validationDone = false;
+
+            var preservedLocal = toolpathNode.LocalTransform;
+            if (!_toolpathOriginByNode.TryGetValue(toolpathNode, out var preservedOrigin))
+            {
+                preservedOrigin = new NVec3(
+                    preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+            }
+
+            vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath               = smoothedToolpath,
+                RawToolpath            = rawToolpath,
+                Node                   = toolpathNode,
+                BeadWidth              = (float)(vm.AdditiveSettings?.BeadWidth  ?? 6.0),
+                LayerHeight            = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0),
+                MaterialColor          = MapMaterialColor(selectedPreset?.Color),
+                PreserveRelativePose   = true,
+                PreservedLocalTransform = preservedLocal,
+                PreservedOrigin        = preservedOrigin,
+            });
+
+            ApplyToolpathStats(vm, smoothedToolpath);
+            vm.ResetScrubIndex(smoothedToolpath.Layers.Sum(l => l.Moves.Count), smoothedToolpath);
+            GlCanvas.RequestNextFrameRendering();
+
+            SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+            ScheduleClearSliceStatus(vm);
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Update failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[slice] update: {ex}");
         }
         finally
         {
@@ -1466,18 +2918,9 @@ public partial class ViewportView : UserControl
     private async Task ComputeLayerPreviewAsync(ViewportViewModel vm)
     {
         if (vm.AdditiveSettings is not { ShowLayerPreview: true } s) return;
+        if (vm.ResolveActivePrintObjectItem() is not { } sourceItem) return;
 
-        // Snapshot mesh data on the UI thread.
-        var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>();
-        foreach (var item in vm.OutlinerItems)
-        {
-            if (!item.Visible || _renderer.IsToolpathNode(item.Node)) continue;
-            foreach (var node in item.Node.SelfAndDescendants())
-            {
-                if (node.Mesh?.PickingData is not { } md) continue;
-                meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
-            }
-        }
+        var meshSnapshots = CollectMeshSnapshots(sourceItem, requireVisible: true);
         if (meshSnapshots.Count == 0) return;
 
         float layerH   = (float)s.LayerHeight;
@@ -1564,6 +3007,7 @@ public partial class ViewportView : UserControl
     {
         double printMmS   = s.PrintSpeed;
         double travelMmS  = s.TravelSpeed;
+        double wipeMmS    = s.WipeSpeed;
         double beadW      = s.BeadWidth;
         double layerH     = s.LayerHeight;
 
@@ -1578,7 +3022,8 @@ public partial class ViewportView : UserControl
             foreach (var move in layer.Moves)
             {
                 double dist = NVec3.Distance(move.From, move.To);
-                if (move.Kind == MoveKind.Extrude) { timeSecs += dist / printMmS;  volMm3 += dist * beadW * layerH; }
+                if (move.IsWipe)                   { timeSecs += dist / wipeMmS; }
+                else if (move.Kind == MoveKind.Extrude) { timeSecs += dist / printMmS;  volMm3 += dist * beadW * layerH; }
                 else                               { timeSecs += dist / travelMmS; }
             }
 
@@ -1612,6 +3057,189 @@ public partial class ViewportView : UserControl
         node.LocalTransform = node.LocalTransform
             * TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    private static MeshData CloneMeshData(MeshData mesh) =>
+        new(mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
+            mesh.BaseColor, mesh.Metallic, mesh.Roughness,
+            mesh.Uvs, mesh.Tangents, mesh.Material);
+
+    private static bool HasExplodableMeshes(SceneNode root)
+    {
+        foreach (var node in root.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is { } mesh && MeshConnectedComponents.HasMultipleComponents(mesh))
+                return true;
+        }
+        return false;
+    }
+
+    private void UngroupSelected()
+    {
+        if (_renderer.SelectedNode is not { } root) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (root.Children.Count == 0) return;
+
+        var outlinerItem = vm.FindOutlinerItem(root);
+        var promoted = new List<SceneNode>();
+
+        foreach (var child in root.Children.ToList())
+        {
+            root.RemoveChild(child);
+            child.LocalTransform  = child.WorldTransform;
+            child.SourceFilePath ??= root.SourceFilePath;
+            promoted.Add(child);
+        }
+
+        if (root.Mesh is not null)
+        {
+            var meshNode = new SceneNode
+            {
+                Name           = root.Name,
+                LocalTransform = root.WorldTransform,
+                Mesh           = root.Mesh,
+                Selectable     = root.Selectable,
+                CullFaces      = root.CullFaces,
+                Visible        = root.Visible,
+                LayerPreview   = root.LayerPreview,
+                SourceFilePath = root.SourceFilePath,
+            };
+            root.Mesh = null;
+            promoted.Insert(0, meshNode);
+        }
+
+        if (promoted.Count == 0 || outlinerItem is null) return;
+
+        vm.OutlinerItems.Remove(outlinerItem);
+        foreach (var child in outlinerItem.Children)
+            vm.PendingRemoveNodes.Enqueue(child.Node);
+        vm.PendingRemoveNodes.Enqueue(root);
+
+        for (int i = 0; i < promoted.Count; i++)
+            vm.AttachUserNode(promoted[i], i == 0 ? outlinerItem : null);
+
+        _renderer.Select(promoted[0]);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void ExplodeSelected()
+    {
+        if (_renderer.SelectedNode is not { } root) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!HasExplodableMeshes(root)) return;
+
+        var outlinerItem = vm.FindOutlinerItem(root);
+        var newNodes = new List<SceneNode>();
+
+        foreach (var meshNode in root.SelfAndDescendants())
+        {
+            if (meshNode.Mesh?.PickingData is not { } mesh) continue;
+
+            var parts = MeshConnectedComponents.Split(mesh);
+            var world = meshNode.WorldTransform;
+
+            if (parts.Count <= 1)
+            {
+                newNodes.Add(new SceneNode
+                {
+                    Name           = mesh.Name,
+                    PendingMesh    = CloneMeshData(mesh),
+                    LocalTransform = world,
+                    Selectable     = root.Selectable,
+                    CullFaces      = root.CullFaces,
+                    Visible        = root.Visible,
+                    LayerPreview   = root.LayerPreview,
+                    SourceFilePath = root.SourceFilePath,
+                });
+                continue;
+            }
+
+            foreach (var part in parts)
+            {
+                newNodes.Add(new SceneNode
+                {
+                    Name           = part.Name,
+                    PendingMesh    = part,
+                    LocalTransform = world,
+                    Selectable     = root.Selectable,
+                    CullFaces      = root.CullFaces,
+                    Visible        = root.Visible,
+                    LayerPreview   = root.LayerPreview,
+                    SourceFilePath = root.SourceFilePath,
+                });
+            }
+        }
+
+        if (newNodes.Count <= 1 || outlinerItem is null) return;
+
+        vm.OutlinerItems.Remove(outlinerItem);
+        foreach (var child in outlinerItem.Children)
+            vm.PendingRemoveNodes.Enqueue(child.Node);
+        vm.PendingRemoveNodes.Enqueue(root);
+
+        for (int i = 0; i < newNodes.Count; i++)
+            vm.AttachUserNode(newNodes[i], i == 0 ? outlinerItem : null);
+
+        _renderer.Select(newNodes[0]);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private async Task MeshCleanupSelectedAsync()
+    {
+        if (_renderer.SelectedNode is not { } root) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!HasCleanableMeshes(root)) return;
+        if (TopLevel.GetTopLevel(this) is not Window parent) return;
+
+        var dialog = new MeshCleanupDialog
+        {
+            DataContext = new MeshCleanupDialogViewModel(),
+        };
+        var options = await dialog.ShowDialog<MeshCleanupOptions?>(parent);
+        if (options is null) return;
+
+        int meshCount = 0;
+        int removedDegenerate = 0, removedDuplicate = 0, mergedVerts = 0, removedColinear = 0, insertedGaps = 0;
+
+        foreach (var node in root.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is not { } mesh) continue;
+
+            var result = MeshCleanup.Clean(mesh, options);
+            GpuMeshCache.Release(node.Mesh);
+            node.Mesh = GpuMeshCache.Acquire(result.Mesh);
+            meshCount++;
+            removedDegenerate += result.RemovedDegenerateTriangles;
+            removedDuplicate  += result.RemovedDuplicateTriangles;
+            mergedVerts       += result.MergedVertices;
+            removedColinear   += result.RemovedColinearVertices;
+            insertedGaps      += result.InsertedGapVertices;
+        }
+
+        if (meshCount == 0) return;
+
+        var msg = $"[mesh] Cleanup on {meshCount} mesh(es): " +
+                  $"{removedDegenerate} degenerate, {removedDuplicate} duplicate, " +
+                  $"{mergedVerts} welded, {removedColinear} colinear, {insertedGaps} gap splits.";
+        if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log(msg);
+        else
+            System.Console.WriteLine(msg);
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private static bool HasCleanableMeshes(SceneNode root)
+    {
+        foreach (var node in root.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is not { } mesh) continue;
+            int triCount = mesh.Indices is { } idx ? idx.Length / 3 : mesh.Positions.Length / 3;
+            if (triCount > 0) return true;
+        }
+        return false;
     }
 
     private static void ApplyLayFlat(SceneNode node, TkVector3 worldFaceNormal, float bedZ)
@@ -1689,6 +3317,127 @@ public partial class ViewportView : UserControl
         return minZ;
     }
 
+    // -- LFAM tool TCP selection (robot/bed blocked; IK follows drag) ----------
+
+    static bool IsLfamProductionCell(ViewportViewModel vm)
+        => vm.ActiveCell?.Name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) == true
+        || vm.ActiveCell?.Name.Contains("LFAM 3", StringComparison.OrdinalIgnoreCase) == true;
+
+    void RegisterLfamInfrastructure(params SceneNode?[] nodes)
+    {
+        foreach (var node in nodes)
+        {
+            if (node is not null)
+                _lfamInfrastructureNodes.Add(node);
+        }
+    }
+
+    bool IsLfamInfrastructureNode(SceneNode? node)
+    {
+        if (node is null) return false;
+        for (var cur = node; cur is not null; cur = cur.Parent)
+        {
+            if (_lfamInfrastructureNodes.Contains(cur))
+                return true;
+        }
+        return false;
+    }
+
+    static bool IsSameOrDescendant(SceneNode root, SceneNode node)
+    {
+        if (node == root) return true;
+        foreach (var d in root.SelfAndDescendants())
+        {
+            if (d == node) return true;
+        }
+        return false;
+    }
+
+    bool TryResolveMultiToolPick(SceneNode picked, out string toolName, out SceneNode toolRoot, out bool onDock)
+    {
+        toolName = "";
+        toolRoot = picked;
+        onDock   = false;
+        if (_multiTools is null) return false;
+
+        foreach (var (name, pair) in _multiTools.Tools)
+        {
+            if (IsSameOrDescendant(pair.FlangeHolder, picked))
+            {
+                toolName = name;
+                toolRoot = pair.FlangeHolder;
+                onDock   = false;
+                return true;
+            }
+
+            if (pair.DockHolder is { } dock && IsSameOrDescendant(dock, picked))
+            {
+                toolName = name;
+                toolRoot = dock;
+                onDock   = true;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void RefreshMultiToolSelectability()
+    {
+        if (_multiTools is null) return;
+
+        foreach (var pair in _multiTools.Tools.Values)
+        {
+            bool mounted = pair.FlangeHolder.Visible;
+            pair.FlangeHolder.Selectable = mounted;
+            pair.FlangeHolder.PickTier   = PickTier.Content;
+
+            if (pair.DockHolder is { } dock)
+            {
+                bool docked = dock.Visible;
+                dock.Selectable = docked;
+                dock.PickTier   = PickTier.Content;
+            }
+        }
+    }
+
+    void RequestSceneSelection(ViewportViewModel vm, SceneNode? node)
+    {
+        if (node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
+        {
+            if (_currentToolNode is not null)
+                node = _currentToolNode;
+            else
+                node = null;
+        }
+        else if (node is not null && _multiTools is not null
+                 && TryResolveMultiToolPick(node, out var toolName, out var toolRoot, out var onDock))
+        {
+            if (onDock && vm.ActiveCell is { } cell)
+            {
+                var cfg = cell.EffectiveTools.FirstOrDefault(t => t.Name == toolName);
+                if (cfg is not null)
+                {
+                    ApplyMultiToolMount(cfg, vm);
+                    node = _currentToolNode;
+                }
+                else
+                    node = toolRoot;
+            }
+            else
+                node = toolRoot;
+        }
+        else if (node is not null && _currentToolNode is not null
+                 && IsSameOrDescendant(_currentToolNode, node))
+        {
+            node = _currentToolNode;
+        }
+
+        _renderer.Select(node);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
     // -- Toolhead selection check ----------------------------------------------
 
     private bool IsToolNodeSelected()
@@ -1746,6 +3495,8 @@ public partial class ViewportView : UserControl
         _toolIsDragging = (node == _currentToolNode);
         if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
         {
+            if (DataContext is ViewportViewModel { Robot: { } kbRobot })
+                kbRobot.Desync();
             _ikDragTcpOffset = tcpMat.Row3.Xyz - node.WorldTransform.Row3.Xyz;
             if (DataContext is ViewportViewModel { Robot: { } robot })
                 _ikDragTargetRot = _ikSolver.TargetRotFromKukaAbc(
@@ -1800,12 +3551,15 @@ public partial class ViewportView : UserControl
 
     private void CommitKbTransform()
     {
+        if (_renderer.SelectedNode is { } node && DataContext is ViewportViewModel vmCb)
+            RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
+
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
-        if (DataContext is ViewportViewModel vmCb) SyncSelectionTransformDisplay(vmCb);
+        if (DataContext is ViewportViewModel vmCb2) SyncSelectionTransformDisplay(vmCb2);
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
     }
@@ -1958,6 +3712,243 @@ public partial class ViewportView : UserControl
         node.LocalTransform = lt;
     }
 
+    private static string TransformUndoLabel(GizmoMode mode) => mode switch
+    {
+        GizmoMode.Translate => "Move",
+        GizmoMode.Rotate    => "Rotate",
+        GizmoMode.Scale     => "Scale",
+        _                   => "Transform",
+    };
+
+    private void RememberCommittedTransform(SceneNode node)
+    {
+        _lastCommittedTransformNode = node;
+        _lastCommittedTransform     = node.LocalTransform;
+    }
+
+    private void RecordTransformUndo(
+        ViewportViewModel vm,
+        SceneNode node,
+        Matrix4 before,
+        Matrix4 after,
+        string description)
+    {
+        if (Matrix4Util.NearlyEquals(before, after)) return;
+        vm.UndoRedo?.Push(new NodeTransformAction(
+            node, before, after, description, () => OnTransformApplied(vm)));
+        RememberCommittedTransform(node);
+        if (DataContext is ViewportViewModel devVm && devVm.IsDevMode && IsDevNode(node))
+            ScheduleDevTransformAutoSave(devVm, node);
+    }
+
+    private void OnTransformApplied(ViewportViewModel vm)
+    {
+        SyncSelectionTransformDisplay(vm);
+        GlCanvas.RequestNextFrameRendering();
+        RevalidateSelectedToolpath();
+        if (_renderer.SelectedNode is { } node)
+            RememberCommittedTransform(node);
+    }
+
+    private void RebuildDevNodeRegistry(CellSwapPayload swap)
+    {
+        _devNodeKinds.Clear();
+        foreach (var stand in swap.Config.Stands)
+        {
+            var node = swap.EnvironmentNodes.FirstOrDefault(n => n.Name == stand.Name);
+            if (node is not null)
+                _devNodeKinds[node] = ("stand", stand.Id);
+        }
+        foreach (var env in swap.EnvironmentNodes)
+        {
+            if (env.Name == "RotaryBed")
+                _devNodeKinds[env] = ("rotary", null);
+        }
+        if (_multiTools is not null)
+        {
+            foreach (var (toolName, pair) in _multiTools.Tools)
+            {
+                if (pair.DockHolder is { } dock)
+                    _devNodeKinds[dock] = ("dock", toolName);
+            }
+        }
+        if (_bedNode is not null)
+            _devNodeKinds[_bedNode] = ("bed", null);
+    }
+
+    private void ApplyDevModeSelectability(bool enabled)
+    {
+        foreach (var node in _devNodeKinds.Keys)
+            node.Selectable = enabled;
+
+        if (!enabled && _renderer.SelectedNode is { } sel && IsDevNode(sel))
+        {
+            _renderer.Select(null);
+            UpdateFocusOverlay();
+        }
+    }
+
+    private bool IsDevNode(SceneNode? node)
+        => node is not null && _devNodeKinds.ContainsKey(node);
+
+    private string DevLabel(SceneNode node)
+    {
+        if (!_devNodeKinds.TryGetValue(node, out var meta)) return node.Name;
+        return meta.Kind switch
+        {
+            "stand"  => $"Stand: {node.Name}",
+            "rotary" => "Rotary bed",
+            "dock"   => $"Dock: {meta.Id}",
+            "bed"    => "Print bed",
+            _        => node.Name,
+        };
+    }
+
+    private static void DevLog(ViewportViewModel vm, string message)
+    {
+        System.Console.WriteLine(message);
+        vm.OnDevLog?.Invoke(message);
+    }
+
+    private void SaveDevTransform(ViewportViewModel vm)
+        => SaveDevTransforms(vm, _renderer.SelectedNode is { } n && _devNodeKinds.ContainsKey(n)
+            ? [n]
+            : [], reloadScene: false);
+
+    private void SaveAllDevTransforms(ViewportViewModel vm)
+        => SaveDevTransforms(vm, _devNodeKinds.Keys.ToList(), reloadScene: true);
+
+    private void ScheduleDevTransformAutoSave(ViewportViewModel vm, SceneNode node)
+    {
+        _devAutoSaveDebounce?.Cancel();
+        _devAutoSaveDebounce = new CancellationTokenSource();
+        var token = _devAutoSaveDebounce.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(700, token);
+                Dispatcher.UIThread.Post(() =>
+                    SaveDevTransforms(vm, [node], reloadScene: false, quiet: true));
+            }
+            catch (TaskCanceledException) { }
+        }, token);
+    }
+
+    private void SaveDevTransforms(
+        ViewportViewModel vm,
+        IReadOnlyList<SceneNode> nodes,
+        bool reloadScene,
+        bool quiet = false)
+    {
+        if (nodes.Count == 0
+            || vm.ActiveCellPath is not { } path
+            || vm.ActiveCell is not { } cell)
+            return;
+
+        path = System.IO.Path.GetFullPath(path);
+        int saved = 0;
+        string? lastError = null;
+
+        foreach (var node in nodes)
+        {
+            if (!_devNodeKinds.TryGetValue(node, out var meta)) continue;
+            if (!CellDevTransformSaver.TrySave(path, cell, node, meta.Kind, meta.Id, out var error))
+            {
+                lastError = error ?? "unknown error";
+                if (!quiet)
+                    DevLog(vm, $"[dev] Failed to save {DevLabel(node)}: {lastError}");
+                continue;
+            }
+
+            saved++;
+            if (!quiet)
+                DevLog(vm, $"[dev] Saved {DevLabel(node)}");
+        }
+
+        if (saved == 0)
+        {
+            if (!quiet)
+                DevLog(vm, "[dev] Nothing saved — check console for errors.");
+            return;
+        }
+
+        CellSceneCache.Invalidate(path);
+        vm.ActiveCell = CellLoader.Load(path);
+        if (reloadScene)
+        {
+            DevLog(vm, $"[dev] Wrote {saved} transform(s) → {path}");
+            vm.OnDevCellReloadRequested?.Invoke(path);
+        }
+        else
+        {
+            RefreshDevPlacementsInPlace(vm);
+            if (!quiet)
+                DevLog(vm, $"[dev] Auto-saved {saved} transform(s) → {path}");
+        }
+    }
+
+    private void RefreshDevPlacementsInPlace(ViewportViewModel vm)
+    {
+        if (vm.ActiveCell is not { } config) return;
+
+        var envNodes = _renderer.SceneRoot.Children
+            .Where(n => n.Name is "Extruder Stand" or "Scanner Stand" or "Spindle Stand" or "RotaryBed")
+            .ToList();
+
+        var payload = new CellSwapPayload(
+            config,
+            vm.ActiveCellPath ?? "",
+            RobotBaseNode: null,
+            BoosterNode: null,
+            BedNode: _bedNode,
+            ToolHolder: null,
+            FirstTool: config.EffectiveTools.FirstOrDefault(),
+            EnvironmentNodes: envNodes,
+            RotaryBedPivot: _rotaryBedPivot,
+            MultiTools: _multiTools,
+            FlangeAttachment: null);
+
+        CellEnvironmentBuilder.RefreshPlacements(payload);
+
+        if (_bedNode is not null && config.Bed is { } bed)
+        {
+            var rp   = config.Robot.WorldPosition;
+            var mesh = bed.VisualMeshOrigin(rp);
+            _bedNode.LocalTransform = Matrix4.CreateTranslation(mesh.X, mesh.Y, mesh.Z);
+            _bedOriginLocal = new Vector3(mesh.X, mesh.Y, mesh.Z);
+            _lastSyncE1     = double.NaN;
+        }
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void SchedulePanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
+    {
+        _panelTransformDebounce?.Cancel();
+        _panelTransformDebounce = new CancellationTokenSource();
+        var token = _panelTransformDebounce.Token;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(400, token);
+                Dispatcher.UIThread.Post(() => CommitPanelTransformUndo(vm, node, description));
+            }
+            catch (TaskCanceledException) { }
+        }, token);
+    }
+
+    private void CommitPanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
+    {
+        if (_renderer.SelectedNode != node) return;
+
+        var before = _lastCommittedTransformNode == node
+            ? _lastCommittedTransform
+            : node.LocalTransform;
+        RecordTransformUndo(vm, node, before, node.LocalTransform, description);
+    }
+
     private void SyncSelectionTransformDisplay(ViewportViewModel vm)
     {
         if (_renderer.SelectedNode is not { } node) return;
@@ -1974,6 +3965,7 @@ public partial class ViewportView : UserControl
         vm.SyncSelectionDisplay(
             Math.Round(pos.X, 2), Math.Round(pos.Y, 2), Math.Round(pos.Z, 2),
             Math.Round(a, 2), Math.Round(b, 2), Math.Round(c, 2));
+        RememberCommittedTransform(node);
     }
 
     private void UpdateFocusOverlay()
@@ -1983,11 +3975,31 @@ public partial class ViewportView : UserControl
         var selected = _renderer.SelectedNode;
         vm.HasSelection       = selected is not null;
         bool isToolpath       = selected is not null && _renderer.IsToolpathNode(selected);
-        vm.IsToolpathSelected = isToolpath;
-        vm.HasMeshSelected    = selected is not null && !isToolpath && !IsToolNodeSelected();
+        bool isToolNode       = IsToolNodeSelected();
+        bool isDevNode        = vm.IsDevMode && IsDevNode(selected);
+        bool multiToolpath    = _renderer.SelectedToolpathCount >= 2;
+        vm.CanMergeToolpaths  = multiToolpath;
+        vm.IsToolpathSelected = isToolpath && !multiToolpath;
+        bool isMerged = isToolpath && selected is not null && _mergedByNode.ContainsKey(selected);
+        vm.IsMergedToolpathSelected = isMerged;
+        if (isMerged && _mergedByNode.TryGetValue(selected!, out var mergedRec))
+            vm.SyncMergedSettingsDisplay(mergedRec.RetractionHeightMm, mergedRec.TravelSpeedMps * 1000.0);
+        vm.UpdateSliceCommand?.RaiseCanExecuteChanged();
+        vm.IsDevObjectSelected = isDevNode;
+        vm.DevSelectedLabel    = isDevNode && selected is not null ? DevLabel(selected) : "";
+        vm.HasMeshSelected     = selected is not null && !isToolpath && !isToolNode && !isDevNode
+                                 && vm.FindUserMeshOutlinerItem(selected) is not null;
+        vm.CanUngroup         = selected is not null && !isToolpath && !isToolNode && selected.Children.Count > 0;
+        vm.CanExplode         = selected is not null && !isToolpath && !isToolNode && HasExplodableMeshes(selected);
+        vm.CanMeshCleanup     = selected is not null && !isToolpath && !isToolNode && HasCleanableMeshes(selected);
 
         if (selected is null)
             SetGizmoMode(GizmoMode.None);
+        else if (isToolNode)
+        {
+            vm.Robot?.Desync();
+            SetGizmoMode(GizmoMode.Translate);
+        }
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
@@ -2267,8 +4279,9 @@ public partial class ViewportView : UserControl
             // Velocity profile: time (ms) per move accounting for C_VEL corner blending.
             float printMmS       = addSettings is not null ? (float)addSettings.PrintSpeed  : 60f;
             float travelMmS      = addSettings is not null ? (float)addSettings.TravelSpeed : 150f;
+            float wipeMmS        = addSettings is not null ? (float)addSettings.WipeSpeed   : 120f;
             float apoCvelFrac    = addSettings is not null ? (float)(addSettings.ApoCvel / 100.0) : 0.5f;
-            var (moveTimes, peakVelocities) = BuildMoveProfile(toolpath, printMmS, travelMmS, apoCvelFrac);
+            var (moveTimes, peakVelocities) = BuildMoveProfile(toolpath, printMmS, travelMmS, wipeMmS, apoCvelFrac);
 
             // Singularity detection: flag moves where |A5| < 5° (wrist singularity).
             var singularity = new bool[total];
@@ -2314,10 +4327,13 @@ public partial class ViewportView : UserControl
             SmoothRotation                = s.SmoothRotation,
             SmoothRotationRadius          = s.SmoothRotationRadius,
             SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
+            OrientationFollowStrength     = s.OrientationFollowStrength,
         };
         foreach (var (node, raw) in _rawToolpathByNode)
         {
-            var smoothed = OrientationSmoother.Apply(raw, smoothSettings);
+            var blended  = ToolpathClone.Copy(raw);
+            OrientationBlender.ApplyInPlace(blended, smoothSettings.OrientationFollowStrength);
+            var smoothed = OrientationSmoother.Apply(blended, smoothSettings);
             _toolpathByNode[node]   = smoothed;
             _scrubCacheByNode[node] = BuildScrubCache(smoothed);
             _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
@@ -2344,7 +4360,7 @@ public partial class ViewportView : UserControl
             var curSegs = new List<(NVec3, NVec3)>();
             foreach (var move in layer.Moves)
             {
-                if (move.Kind == MoveKind.Extrude)
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
                     if (prevSegs is { Count: > 0 })
                     {
@@ -2498,7 +4514,7 @@ public partial class ViewportView : UserControl
     /// </para>
     /// </summary>
     private static (float[] timesMs, float[] peakVelocities) BuildMoveProfile(
-        Toolpath tp, float printMmS, float travelMmS,
+        Toolpath tp, float printMmS, float travelMmS, float wipeMmS,
         float apoCvelFraction = 0.5f, float accelMmS2 = 2000f)
     {
         var moves = new List<ToolpathMove>(tp.Layers.Sum(l => l.Moves.Count));
@@ -2511,7 +4527,8 @@ public partial class ViewportView : UserControl
         var dist  = new float[n];
         for (int i = 0; i < n; i++)
         {
-            vProg[i] = moves[i].Kind == MoveKind.Extrude ? printMmS : travelMmS;
+            vProg[i] = moves[i].IsWipe ? wipeMmS
+                       : moves[i].Kind == MoveKind.Extrude ? printMmS : travelMmS;
             dist[i]  = NVec3.Distance(moves[i].From, moves[i].To);
         }
 
@@ -2773,6 +4790,8 @@ public partial class ViewportView : UserControl
         _toolIsDragging = (node == _currentToolNode);
         if (_toolIsDragging && _ikSolver is not null && _renderer.TcpFrameMatrix is { } tcpMat)
         {
+            if (DataContext is ViewportViewModel { Robot: { } dragRobot })
+                dragRobot.Desync();
             _ikDragTcpOffset = tcpMat.Row3.Xyz - node.WorldTransform.Row3.Xyz;
             if (DataContext is ViewportViewModel { Robot: { } robot })
                 _ikDragTargetRot = _ikSolver.TargetRotFromKukaAbc(
@@ -2958,6 +4977,139 @@ public partial class ViewportView : UserControl
         robot.SetNextPositionName(data.Positions.Count + 1);
     }
 
+    private void MergeToolpaths(ViewportViewModel vm)
+    {
+        var nodes = _renderer.SelectedToolpaths.ToList();
+        if (nodes.Count < 2) return;
+
+        var sources = new List<MergeSourceEntry>();
+        float beadWidth = 6f, layerHeight = 3f;
+        NVec3 materialColor = default;
+
+        foreach (var node in nodes)
+        {
+            if (!_toolpathByNode.TryGetValue(node, out var local)) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            _toolpathMetaByNode.TryGetValue(node, out var meta);
+            if (meta.BeadWidth > 0) beadWidth = meta.BeadWidth;
+            if (meta.LayerHeight > 0) layerHeight = meta.LayerHeight;
+            materialColor = meta.MaterialColor;
+
+            var wt = node.WorldTransform;
+            sources.Add(new MergeSourceEntry
+            {
+                LocalToolpath  = DeepCopyToolpath(local),
+                Origin         = origin,
+                WorldTransform = ToSysMatrix4(wt),
+                BeadWidth      = meta.BeadWidth > 0 ? meta.BeadWidth : 6f,
+                LayerHeight    = meta.LayerHeight > 0 ? meta.LayerHeight : 3f,
+                MaterialColor  = meta.MaterialColor,
+            });
+        }
+
+        if (sources.Count < 2) return;
+
+        float retraction = (float)(vm.AdditiveSettings?.ZHopMm ?? vm.MergedRetractionHeightMm);
+        float travelMps  = (float)((vm.AdditiveSettings?.TravelSpeed ?? vm.MergedTravelSpeed) / 1000.0);
+
+        var record = new MergedToolpathRecord
+        {
+            Sources              = sources,
+            RetractionHeightMm   = retraction,
+            TravelSpeedMps       = travelMps,
+        };
+
+        var merged     = BuildMergedToolpath(record);
+        var mergedNode = new SceneNode { Name = $"Merged Toolpath ({sources.Count})", Selectable = true, Visible = true };
+        vm.RegisterToolpathInOutliner(mergedNode, parentItem: null);
+        _mergedByNode[mergedNode] = record;
+
+        foreach (var sourceNode in nodes)
+        {
+            if (vm.FindToolpathOutlinerItem(sourceNode) is { } sourceItem)
+                sourceItem.Visible = false;
+            else
+                sourceNode.Visible = false;
+        }
+
+        var pending = new PendingToolpathEntry
+        {
+            Toolpath      = merged,
+            RawToolpath   = DeepCopyToolpath(merged),
+            Node          = mergedNode,
+            BeadWidth     = beadWidth,
+            LayerHeight   = layerHeight,
+            MaterialColor = materialColor,
+        };
+        StageToolpathMaps(pending);
+        vm.PendingToolpath.Enqueue(pending);
+
+        _renderer.Select(mergedNode);
+        vm.SyncMergedSettingsDisplay(retraction, travelMps * 1000.0);
+        UpdateFocusOverlay();
+        ApplyToolpathStats(vm, merged);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void RebuildMergedToolpath(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node || !_mergedByNode.TryGetValue(node, out var record)) return;
+
+        record.RetractionHeightMm = (float)vm.MergedRetractionHeightMm;
+        record.TravelSpeedMps     = (float)(vm.MergedTravelSpeed / 1000.0);
+
+        var merged = BuildMergedToolpath(record);
+        var src    = record.Sources[0];
+        vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath      = merged,
+            RawToolpath   = DeepCopyToolpath(merged),
+            Node          = node,
+            BeadWidth     = src.BeadWidth,
+            LayerHeight   = src.LayerHeight,
+            MaterialColor = src.MaterialColor,
+        });
+
+        if (_renderer.SelectedNode == node)
+        {
+            vm.ResetScrubIndex(merged.Layers.Sum(l => l.Moves.Count), merged);
+            ApplyToolpathStats(vm, merged);
+            ValidateToolpathAsync(node, merged);
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private static Toolpath BuildMergedToolpath(MergedToolpathRecord record)
+    {
+        var worldPaths = record.Sources
+            .Select(s => ToolpathMerger.ToWorldSpace(s.LocalToolpath, s.Origin, s.WorldTransform))
+            .ToList();
+        return ToolpathMerger.Merge(worldPaths, record.RetractionHeightMm, record.TravelSpeedMps);
+    }
+
+    private static Toolpath DeepCopyToolpath(Toolpath source)
+    {
+        var copy = new Toolpath();
+        foreach (var layer in source.Layers)
+        {
+            var newLayer = new ToolpathLayer(layer.Index, layer.Z)
+            {
+                Height      = layer.Height,
+                PlaneNormal = layer.PlaneNormal,
+            };
+            foreach (var move in layer.Moves)
+                newLayer.Moves.Add(move with { });
+            copy.Layers.Add(newLayer);
+        }
+        return copy;
+    }
+
+    private static System.Numerics.Matrix4x4 ToSysMatrix4(TkMatrix4 wt)
+        => new(wt.M11, wt.M12, wt.M13, wt.M14,
+               wt.M21, wt.M22, wt.M23, wt.M24,
+               wt.M31, wt.M32, wt.M33, wt.M34,
+               wt.M41, wt.M42, wt.M43, wt.M44);
+
     private async Task ExportKrlAsync(ViewportViewModel vm)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -2982,7 +5134,52 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        // Convert OpenTK Matrix4 -> System.Numerics.Matrix4x4 (same row-vector layout).
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+    }
+
+    private async Task SendToRobotAsync(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+
+        if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        var robotFolder = RobotKrlPaths.UncDFolder(cell);
+        var startFolder = await topLevel.StorageProvider.TryGetFolderFromPathAsync(robotFolder);
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title                  = $"Send to Robot — {cell.Name}",
+            DefaultExtension       = "src",
+            SuggestedFileName      = RobotKrlPaths.SuggestedFileName(node.Name),
+            SuggestedStartLocation = startFolder,
+            FileTypeChoices        = [new("KRL Source") { Patterns = ["*.src"] }],
+        });
+        if (file is null) return;
+
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        path = RobotKrlPaths.ToExtendedUncPath(path);
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+
+        if (topLevel.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log($"[krl] Sent to {cell.Name} ({cell.BridgeIp}): {path}");
+    }
+
+    private async Task WriteKrlAsync(
+        ViewportViewModel vm,
+        Toolpath toolpath,
+        SceneNode node,
+        CellConfig cell,
+        AdditiveSettingsViewModel settings,
+        string path)
+    {
         var wt    = node.WorldTransform;
         var sysWt = new System.Numerics.Matrix4x4(
             wt.M11, wt.M12, wt.M13, wt.M14,
@@ -2992,29 +5189,64 @@ public partial class ViewportView : UserControl
 
         _toolpathOriginByNode.TryGetValue(node, out var origin);
 
-        var selectedPreset = settings.SelectedPresetIndex >= 0 &&
-                             settings.SelectedPresetIndex < settings.MaterialPresets.Count
-            ? settings.MaterialPresets[settings.SelectedPresetIndex]
-            : null;
+        // Relief-milling toolpath: export a spindle program (LIN cuts + rapids), not extrusion.
+        bool isMill = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
+        if (isMill && vm.SubtractiveSettings is { } sub)
+        {
+            int spindleIdx = cell.EffectiveTools
+                ?.FirstOrDefault(t => t.Name.Contains("Spindle", StringComparison.OrdinalIgnoreCase))?.KrlIndex ?? 3;
+
+            var millExport = new KrlExportSettings
+            {
+                ProgramName      = Path.GetFileNameWithoutExtension(path),
+                ToolDataIndex    = spindleIdx,
+                BaseDataIndex    = settings.BaseDataIndex,
+                IsMilling        = true,
+                SpindleRpm       = (float)sub.SpindleRpm,
+                CuttingFeedMmMin = (float)sub.FeedRateMmMin,
+                PlungeFeedMmMin  = (float)sub.PlungeFeedMmMin,
+                TravelSpeedMps   = (float)(settings.TravelSpeed / 1000.0),
+                ApproachZMm      = (float)sub.RapidZMm,
+                HomePosition     = settings.SelectedHomeAngles,
+                ApoCvel          = (int)settings.ApoCvel,
+                NodeWorldTransform = sysWt,
+                NodeOrigin       = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
+                RobrootWorldPos  = new System.Numerics.Vector3(
+                    cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z),
+                BaseDataOffset   = new System.Numerics.Vector3(
+                    cell.Bed.BaseData.X, cell.Bed.BaseData.Y, cell.Bed.BaseData.Z),
+                HeaderTemplate   = string.IsNullOrWhiteSpace(sub.HeaderTemplate) ? null : sub.HeaderTemplate,
+                FooterTemplate   = string.IsNullOrWhiteSpace(sub.FooterTemplate) ? null : sub.FooterTemplate,
+            };
+            var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
+            await File.WriteAllTextAsync(path, millKrl);
+            return;
+        }
+
+        var selectedPreset = settings.SelectedPreset;
+        var postProcess    = settings.KrlPostProcess.ToSettings();
+        float exportTemp   = settings.GetEffectiveExportTemperature();
+        float flow         = (float)(selectedPreset?.FlowRate ?? 0.463);
 
         var exportSettings = new KrlExportSettings
         {
-            ProgramName         = System.IO.Path.GetFileNameWithoutExtension(path),
+            ProgramName         = Path.GetFileNameWithoutExtension(path),
             ToolDataIndex       = settings.ToolDataIndex,
             BaseDataIndex       = settings.BaseDataIndex,
             PrintSpeedMps       = (float)(settings.PrintSpeed / 1000.0),
             TravelSpeedMps      = (float)(settings.TravelSpeed / 1000.0),
+            WipeSpeedMps        = (float)(settings.WipeSpeed / 1000.0),
             AccelerationPercent = settings.Acceleration,
             ApproachZMm         = (float)settings.ApproachZ,
             ToolheadOffsetA     = (float)settings.ToolheadA,
             ToolheadOffsetB     = (float)settings.ToolheadB,
             ToolheadOffsetC     = (float)settings.ToolheadC,
-            Temperature1        = (float)settings.Temperature1,
-            Temperature2        = (float)settings.Temperature2,
-            Temperature3        = (float)settings.Temperature3,
+            Temperature1        = exportTemp,
+            Temperature2        = exportTemp,
+            Temperature3        = exportTemp,
             BeadWidthMm         = (float)settings.BeadWidth,
             LayerHeightMm       = (float)settings.LayerHeight,
-            FlowRate            = (float)(selectedPreset?.FlowRate ?? 1.0),
+            FlowRate            = flow,
             HomePosition              = settings.SelectedHomeAngles,
             ApoCvel                   = (int)settings.ApoCvel,
             OrientationLookAheadMm    = (float)settings.OrientationLookAheadMm,
@@ -3029,9 +5261,15 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.X,
                 cell.Bed.BaseData.Y,
                 cell.Bed.BaseData.Z),
+            TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
+            HeaderTemplate      = postProcess.HeaderText,
+            FooterTemplate      = postProcess.FooterText,
+            ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
+            ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
+            ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
         };
 
         var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
-        await System.IO.File.WriteAllTextAsync(path, krl);
+        await File.WriteAllTextAsync(path, krl);
     }
 }

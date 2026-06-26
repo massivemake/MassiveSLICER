@@ -84,6 +84,8 @@ public sealed class AppPreferences
 
     public string ToolpathExtrudeColor    { get; set; } = "#FF1A73E6";
     public string ToolpathTravelColor     { get; set; } = "#FFD92E2E";
+    public string ToolpathWipeColor       { get; set; } = "#FFFF8800";
+    public string ToolpathRetractionColor { get; set; } = "#FF9C27B0";
     public string ToolpathSeamColor       { get; set; } = "#FFFFE600";
     public string ToolpathUnselectedColor { get; set; } = "#FF616161";
 
@@ -100,6 +102,9 @@ public sealed class AppPreferences
 
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
+
+    /// <summary>Normal or Surface slicing strategy for planar/angled methods.</summary>
+    public string SlicingMode { get; set; } = "Normal";
 
     /// <summary>Pass rotation angle in degrees.</summary>
     public double PassAngle { get; set; } = 0.0;
@@ -122,6 +127,35 @@ public sealed class AppPreferences
     /// <summary>Approach Z height above part in mm.</summary>
     public double ApproachZ { get; set; } = 50.0;
 
+    /// <summary>Vertical z-hop on travel moves in mm.</summary>
+    public double ZHopMm { get; set; }
+
+    /// <summary>Wipe mode display: Off, Retrace, Same-Direction.</summary>
+    public string WipeModeDisplay { get; set; } = "Off";
+
+    public double WipeLengthMm { get; set; } = 10.0;
+    public double WipeRampMm { get; set; } = 5.0;
+    public double WipeSpeed { get; set; } = 120.0;
+    public double ExtrusionStartWaitSec { get; set; } = 1.0;
+    public double ExtrusionResumeWaitSec { get; set; }
+
+    public bool ResumeRampEnabled { get; set; }
+    public double ResumeRampStartSpeed { get; set; } = 0.5;
+    public double ResumeRampStartRpmPercent { get; set; } = 1.0;
+    public double ResumeRampDistanceMm { get; set; } = 609.6;
+    public int ResumeRampSteps { get; set; } = 10;
+
+    /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
+    public List<float[]> SeamGuidePoints { get; set; } = [];
+
+    /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
+    public string CurvedBoundarySource { get; set; } = "Auto";
+
+    public double CurvedAutoDetectBandMm { get; set; } = 2.0;
+    public bool CurvedEnableRegionSplit { get; set; } = true;
+    public List<int> CurvedBoundaryLowVertices { get; set; } = [];
+    public List<int> CurvedBoundaryHighVertices { get; set; } = [];
+
     /// <summary>KUKA TOOL_DATA index (1–16).</summary>
     public int ToolDataIndex { get; set; } = 1;
 
@@ -136,6 +170,9 @@ public sealed class AppPreferences
 
     /// <summary>Toolhead C angle in degrees.</summary>
     public double ToolheadC { get; set; } = 0.0;
+
+    /// <summary>Surface follow strength percent (0 = vertical, 100 = full follow).</summary>
+    public double OrientationFollowPercent { get; set; } = 100.0;
 
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
     public double ApoCvel { get; set; } = 100.0;
@@ -154,4 +191,15 @@ public sealed class AppPreferences
     /// <summary>KUKA BASE_DATA index used while scanning (1–32).</summary>
     public int ScanBaseDataIndex { get; set; } = 1;
 
+    /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
+    public string? LastWorkspacePath { get; set; }
+
+    // ── UI layout state ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Open/closed state of collapsible panels, keyed by a stable panel id (e.g. "bed-settings").
+    /// Restored on next launch so expanders stay how the user left them. Written by the
+    /// <c>PersistExpander</c> attached behaviour.
+    /// </summary>
+    public Dictionary<string, bool> ExpandedPanels { get; set; } = [];
 }

@@ -22,7 +22,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\MassiveSlicer.App\MassiveSlicer.App.csproj" />
     <ProjectReference Include="..\MassiveSlicer.Core\MassiveSlicer.Core.csproj" />
+    <ProjectReference Include="..\MassiveSlicer.Viewport\MassiveSlicer.Viewport.csproj" />
   </ItemGroup>
 
 </Project>
