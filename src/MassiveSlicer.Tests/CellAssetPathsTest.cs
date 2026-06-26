@@ -17,7 +17,8 @@ public class CellAssetPathsTest
 
         Assert.Contains(paths, p => p.Contains("LFAM1RobotRail", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(paths, p => p.Contains("LFAM1Robot", StringComparison.OrdinalIgnoreCase));
-        Assert.True(paths.Count >= 3);
+        Assert.Contains(paths, p => p.Contains("lfam1_bed", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(paths, p => p.Contains("lfam2_bed", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
