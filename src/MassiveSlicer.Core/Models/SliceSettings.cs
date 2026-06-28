@@ -59,6 +59,18 @@ public sealed class SliceSettings
     /// <summary>Number of discrete speed/RPM steps over <see cref="ResumeRampDistanceMm"/>.</summary>
     public int ResumeRampSteps { get; init; } = 10;
 
+    /// <summary>When true, print speed and RPM scale per layer between min and max rates.</summary>
+    public bool LayerSpeedAdaptEnabled { get; init; }
+
+    /// <summary>Layer metric used for speed interpolation.</summary>
+    public LayerSpeedBasis LayerSpeedBasis { get; init; } = LayerSpeedBasis.CutLength;
+
+    /// <summary>Print speed (mm/s) applied to the shortest/lightest layer.</summary>
+    public float LayerSpeedMinMmS { get; init; } = 10f;
+
+    /// <summary>Print speed (mm/s) applied to the longest/busiest layer.</summary>
+    public float LayerSpeedMaxMmS { get; init; } = 100f;
+
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
 

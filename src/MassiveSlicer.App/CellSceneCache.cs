@@ -120,7 +120,8 @@ internal static class CellSceneCache
             env,
             rotaryPivot,
             multi,
-            CloneOpt(src.FlangeAttachment));
+            CloneOpt(src.FlangeAttachment),
+            src.Generation);
     }
 
     private static SceneNode? CloneOpt(SceneNode? node)

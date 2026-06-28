@@ -15,9 +15,9 @@ namespace MassiveSlicer.Viewport.FK;
 public sealed class GltfNumericalIkSolver
 {
     private readonly Matrix4[] _restPose;
-    private readonly Matrix4   _chainRoot;      // WorldTransform of joint_1's parent (exact scene FK base)
+    private Matrix4   _chainRoot;      // WorldTransform of joint_1's parent (exact scene FK base)
     private readonly Matrix4   _tcpLocal;       // TCP offset as a local transform in GLTF space
-    private readonly Vector3   _robotWorldPos;  // ROBROOT origin in scene space (for ROBROOT ↔ scene conversion)
+    private Vector3   _robotWorldPos;  // ROBROOT origin in scene space (for ROBROOT ↔ scene conversion)
     private readonly float     _toolFrameRoll;  // rotation around flange outward axis (radians), matches SyncTcpReadout
 
     private readonly JointConfig[] _jcfg;
@@ -26,10 +26,10 @@ public sealed class GltfNumericalIkSolver
     // Sampling A2/A3 over their full joint ranges gives the exact TCP reach envelope
     // for this specific GLTF model and TCP offset — no assumption about which FK
     // iteration corresponds to the wrist center.
-    private readonly float _minReachFromShoulder;
-    private readonly float _maxReachFromShoulder;
-    private readonly float _shoulderZ;       // ROBROOT Z of the A2 (shoulder) pivot
-    private readonly float _shoulderHorizR;  // horizontal offset of shoulder from A1 axis
+    private float _minReachFromShoulder;
+    private float _maxReachFromShoulder;
+    private float _shoulderZ;       // ROBROOT Z of the A2 (shoulder) pivot
+    private float _shoulderHorizR;  // horizontal offset of shoulder from A1 axis
 
     /// <param name="restPoses">Per-joint rest-pose local transforms, from <see cref="RobotFkController.RestPoses"/>.</param>
     /// <param name="chainRoot">WorldTransform of joint_1's parent, from <see cref="RobotFkController.ChainRootTransform"/>.</param>
@@ -47,16 +47,30 @@ public sealed class GltfNumericalIkSolver
         _tcpLocal      = tcpLocal;
         _toolFrameRoll = toolFrameRoll;
         _jcfg          = jointConfigs.ToArray();
+        RecomputeWorkspaceMetrics();
+    }
 
+    /// <summary>
+    /// Refreshes the FK chain root and ROBROOT origin after the robot base moves
+    /// (e.g. LFAM 1 E1 rail carriage). Re-samples the TCP reach envelope.
+    /// </summary>
+    public void UpdateSceneBase(Matrix4 chainRoot, Vector3 robotWorldPos)
+    {
+        _chainRoot     = chainRoot;
+        _robotWorldPos = robotWorldPos;
+        RecomputeWorkspaceMetrics();
+    }
+
+    private void RecomputeWorkspaceMetrics()
+    {
         // FK iteration 1 (i=0 only) → A2 pivot (shoulder) in scene space.
-        var home         = new float[6];
+        var home          = new float[6];
         var shoulderScene = ComputePartialFkPos(home, 1);
-        var shoulder      = shoulderScene - robotWorldPos;
+        var shoulder      = shoulderScene - _robotWorldPos;
         _shoulderZ      = shoulder.Z;
         _shoulderHorizR = MathF.Sqrt(shoulder.X * shoulder.X + shoulder.Y * shoulder.Y);
 
         // Sample A2 × A3 over full joint ranges to get the real TCP reach envelope.
-        // 25×25 = 625 FK evaluations at construction — negligible cost.
         const int Steps = 24;
         float minD = float.MaxValue, maxD = 0f;
         var θ = new float[6];

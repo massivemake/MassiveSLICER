@@ -71,6 +71,157 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _showContactShadows = true;
+
+    /// <summary>Soft ground-contact shadows beneath robot, rail, and print bed.</summary>
+    public bool ShowContactShadows
+    {
+        get => _showContactShadows;
+        set
+        {
+            if (SetField(ref _showContactShadows, value))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _contactShadowSize = 1f;
+
+    /// <summary>Contact shadow spread. 1 = default; higher = larger/softer footprint.</summary>
+    public float ContactShadowSize
+    {
+        get => _contactShadowSize;
+        set
+        {
+            if (SetField(ref _contactShadowSize, Math.Clamp(value, 0.25f, 3f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _contactShadowDarkness = 1f;
+
+    /// <summary>Contact shadow strength. 0 = off; 1 = default; higher = darker.</summary>
+    public float ContactShadowDarkness
+    {
+        get => _contactShadowDarkness;
+        set
+        {
+            if (SetField(ref _contactShadowDarkness, Math.Clamp(value, 0f, 2f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _contactShadowBlur = 1f;
+
+    /// <summary>Contact shadow edge softness. 0 = sharp; 1 = default; higher = softer.</summary>
+    public float ContactShadowBlur
+    {
+        get => _contactShadowBlur;
+        set
+        {
+            if (SetField(ref _contactShadowBlur, Math.Clamp(value, 0f, 3f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private bool _cavityEnabled;
+
+    /// <summary>Blender-style ridge/valley cavity accentuation on viewport shading.</summary>
+    public bool CavityEnabled
+    {
+        get => _cavityEnabled;
+        set
+        {
+            if (SetField(ref _cavityEnabled, value))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private CavityMode _cavityMode = CavityMode.Both;
+
+    public CavityMode CavityMode
+    {
+        get => _cavityMode;
+        set
+        {
+            if (!SetField(ref _cavityMode, value)) return;
+            _cavityModeOption = value.ToString();
+            OnPropertyChanged(nameof(CavityModeOption));
+            NotifyRenderNeeded();
+        }
+    }
+
+    public IReadOnlyList<string> CavityModeOptions { get; } = ["Screen", "World", "Both"];
+
+    private string _cavityModeOption = "Both";
+
+    public string CavityModeOption
+    {
+        get => _cavityModeOption;
+        set
+        {
+            if (!SetField(ref _cavityModeOption, value)) return;
+            if (Enum.TryParse<CavityMode>(value, out var mode))
+                CavityMode = mode;
+            else
+                OnPropertyChanged(nameof(CavityModeOption));
+        }
+    }
+
+    private float _cavityScreenRidge = 1f;
+    public float CavityScreenRidge
+    {
+        get => _cavityScreenRidge;
+        set
+        {
+            if (SetField(ref _cavityScreenRidge, Math.Clamp(value, 0f, 2f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _cavityScreenValley = 1f;
+    public float CavityScreenValley
+    {
+        get => _cavityScreenValley;
+        set
+        {
+            if (SetField(ref _cavityScreenValley, Math.Clamp(value, 0f, 2f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _cavityWorldRidge = 1f;
+    public float CavityWorldRidge
+    {
+        get => _cavityWorldRidge;
+        set
+        {
+            if (SetField(ref _cavityWorldRidge, Math.Clamp(value, 0f, 2f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _cavityWorldValley = 1f;
+    public float CavityWorldValley
+    {
+        get => _cavityWorldValley;
+        set
+        {
+            if (SetField(ref _cavityWorldValley, Math.Clamp(value, 0f, 2f)))
+                NotifyRenderNeeded();
+        }
+    }
+
+    private float _cavityWorldDistance = 5f;
+    public float CavityWorldDistance
+    {
+        get => _cavityWorldDistance;
+        set
+        {
+            if (SetField(ref _cavityWorldDistance, Math.Clamp(value, 0.5f, 50f)))
+                NotifyRenderNeeded();
+        }
+    }
+
     private bool _showBead = false;
     public bool ShowBead
     {
@@ -213,6 +364,12 @@ public sealed class ViewportViewModel : ViewModelBase
     /// loop clears the current scene and rebuilds it atomically on the GL thread.
     /// </summary>
     internal ConcurrentQueue<CellSwapPayload> PendingCellSwap { get; } = new();
+
+    /// <summary>Generation of the last cell swap applied to the GL scene.</summary>
+    internal int AcceptedCellSwapGeneration { get; set; }
+
+    /// <summary>When set, the next <see cref="PendingCellSwap"/> enqueue uses this generation.</summary>
+    internal int? WorkspaceCellLoadGeneration { get; set; }
 
     /// <summary>
     /// Reference to the robot panel ViewModel. Set by <c>MainWindowViewModel</c>
@@ -926,6 +1083,19 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private float _backdropOpacity = 1f;
+
+    /// <summary>Backdrop blend over shader background. 0 = shader only, 1 = full HDR.</summary>
+    public float BackdropOpacity
+    {
+        get => _backdropOpacity;
+        set
+        {
+            if (SetField(ref _backdropOpacity, Math.Clamp(value, 0f, 1f)))
+                NotifyRenderNeeded();
+        }
+    }
+
     // -- World light -----------------------------------------------------------
 
     private float _lightAzimuth   = 45f;
@@ -1019,6 +1189,7 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand GizmoMoveCommand   { get; }
     public RelayCommand GizmoRotateCommand { get; }
     public RelayCommand GizmoScaleCommand  { get; }
+    public RelayCommand RecenterCommand    { get; }
 
     // -- Selection transform readout / input -----------------------------------
 
@@ -1098,6 +1269,61 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _devSelectedLabel, value);
     }
 
+    private bool _isPrintBedSelected;
+
+    /// <summary>True when a rectangular print bed is selected in dev mode (N-menu grid sizing).</summary>
+    public bool IsPrintBedSelected
+    {
+        get => _isPrintBedSelected;
+        set => SetField(ref _isPrintBedSelected, value);
+    }
+
+    private double _bedGridWidth = 3000;
+    private double _bedGridDepth = 3000;
+    private bool _suppressBedGridCallback;
+
+    /// <summary>Print-area grid extent along +X (mm). Editable when <see cref="IsPrintBedSelected"/>.</summary>
+    public double BedGridWidth
+    {
+        get => _bedGridWidth;
+        set
+        {
+            if (value < 1) value = 1;
+            if (SetField(ref _bedGridWidth, Math.Round(value, 1)))
+                FireBedGridSizeEdited();
+        }
+    }
+
+    /// <summary>Print-area grid extent along +Y (mm). Editable when <see cref="IsPrintBedSelected"/>.</summary>
+    public double BedGridDepth
+    {
+        get => _bedGridDepth;
+        set
+        {
+            if (value < 1) value = 1;
+            if (SetField(ref _bedGridDepth, Math.Round(value, 1)))
+                FireBedGridSizeEdited();
+        }
+    }
+
+    /// <summary>Invoked when <see cref="BedGridWidth"/> or <see cref="BedGridDepth"/> is edited.</summary>
+    internal Action<double, double>? OnBedGridSizeEdited { get; set; }
+
+    private void FireBedGridSizeEdited()
+    {
+        if (!_suppressBedGridCallback)
+            OnBedGridSizeEdited?.Invoke(_bedGridWidth, _bedGridDepth);
+    }
+
+    /// <summary>Loads bed grid dimensions from the active cell (no callback fired).</summary>
+    public void SyncBedGridSize(double width, double depth)
+    {
+        _suppressBedGridCallback = true;
+        BedGridWidth = Math.Round(width, 1);
+        BedGridDepth = Math.Round(depth, 1);
+        _suppressBedGridCallback = false;
+    }
+
     private bool _hasMeshSelected;
 
     /// <summary>True when a sliceable user mesh (not a toolpath or toolhead) is selected.</summary>
@@ -1107,7 +1333,10 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (SetField(ref _hasMeshSelected, value))
+            {
                 SliceCommand?.RaiseCanExecuteChanged();
+                RecenterCommand?.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -1525,6 +1754,8 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnFocusRequested      { get; set; }
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
+
+    internal Action? OnRecenterRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to ungroup the selection.</summary>
     internal Action? OnUngroupRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to explode disconnected mesh shells.</summary>
@@ -1579,6 +1810,7 @@ public sealed class ViewportViewModel : ViewModelBase
         BoundaryEditorHighTargetCommand = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.High, () => IsBoundaryEditorActive);
         FocusCommand          = new RelayCommand(() => OnFocusRequested?.Invoke());
         DropToPlateCommand    = new RelayCommand(() => OnDropToPlateRequested?.Invoke());
+        RecenterCommand       = new RelayCommand(() => OnRecenterRequested?.Invoke(), () => HasMeshSelected);
         UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
         ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
         MeshCleanupCommand    = new RelayCommand(() => OnMeshCleanupRequested?.Invoke(), () => CanMeshCleanup);
@@ -1678,13 +1910,9 @@ public sealed class ViewportViewModel : ViewModelBase
             () => ActiveToolChangeSequenceId is not null && IsToolChangePlaybackExpanded);
 
         var options = new List<BackdropOption> { new("None", null) };
-        if (Directory.Exists("assets/Images"))
-        {
-            options.AddRange(
-                Directory.EnumerateFiles("assets/Images", "*.hdr", SearchOption.AllDirectories)
-                    .Order()
-                    .Select(f => new BackdropOption(Path.GetFileNameWithoutExtension(f), f)));
-        }
+        options.AddRange(
+            AssetPaths.EnumerateBackdropHdrPaths()
+                .Select(p => new BackdropOption(Path.GetFileNameWithoutExtension(p), p)));
         AvailableBackdrops = options;
         // Default to a soft, balanced HDRI so imported models get environment lighting
         // (reflections + fill) out of the box. Falls back to the first available image,
@@ -2068,6 +2296,34 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _statsCost, value);
     }
 
+    private string _statsLongestLayerLength = "";
+    public string StatsLongestLayerLength
+    {
+        get => _statsLongestLayerLength;
+        set => SetField(ref _statsLongestLayerLength, value);
+    }
+
+    private string _statsShortestLayerLength = "";
+    public string StatsShortestLayerLength
+    {
+        get => _statsShortestLayerLength;
+        set => SetField(ref _statsShortestLayerLength, value);
+    }
+
+    private string _statsLongestLayerTime = "";
+    public string StatsLongestLayerTime
+    {
+        get => _statsLongestLayerTime;
+        set => SetField(ref _statsLongestLayerTime, value);
+    }
+
+    private string _statsShortestLayerTime = "";
+    public string StatsShortestLayerTime
+    {
+        get => _statsShortestLayerTime;
+        set => SetField(ref _statsShortestLayerTime, value);
+    }
+
     private string _statsReachability = "";
     public string StatsReachability
     {
@@ -2109,6 +2365,12 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Selects a scene node when the user clicks it in the outliner.</summary>
     internal Action<SceneNode>? OnOutlinerSelectRequested { get; set; }
 
+    /// <summary>Reloads an outliner model from its saved source path. Wired by MainWindow.</summary>
+    internal Action<SceneNode>? OnModelReloadRequested { get; set; }
+
+    /// <summary>Opens a file picker to replace the outliner model. Wired by MainWindow.</summary>
+    internal Action<SceneNode>? OnModelReplaceRequested { get; set; }
+
     /// <summary>
     /// Set by nested <c>OutlinerItemView</c> row clicks so the parent ListBox
     /// <c>SelectionChanged</c> handler does not overwrite the child selection.
@@ -2143,7 +2405,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// library, bridge config, and IK data are up to date. Used to fire one-time
     /// startup actions (tool selection, auto-sync).
     /// </summary>
-    internal Action? OnCellSwapCompleted { get; set; }
+    internal Action<int>? OnCellSwapCompleted { get; set; }
 
     /// <summary>Viewport plays a KUKA tool-change path overlay (Pick/Deposit simulation).</summary>
     internal Action<string>? OnSimulateToolChangeRequested { get; set; }
@@ -2183,6 +2445,14 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Nodes queued for GL-thread removal and GPU resource disposal.</summary>
     public ConcurrentQueue<SceneNode> PendingRemoveNodes { get; } = new();
+
+    /// <summary>Nodes whose subtree was reloaded on the UI thread and need GPU refresh.</summary>
+    public ConcurrentQueue<SceneNode> PendingModelRefresh { get; } = new();
+
+    /// <summary>Pivot recenter jobs — geometry + transform applied atomically on the GL thread.</summary>
+    internal ConcurrentQueue<PendingRecenterJob> PendingRecenterJobs { get; } = new();
+
+    internal readonly record struct PendingRecenterJob(SceneNode Node);
 
     /// <summary>
     /// Layer boundary data queued after each slice so the GL thread can upload the
@@ -2275,12 +2545,12 @@ public sealed class ViewportViewModel : ViewModelBase
         var parentObject = ResolveScanParentOutlinerItem();
         EnqueueRotarySceneNode(node);
 
-        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        var item = CreateOutlinerItem(node, child =>
         {
             parentObject?.RemoveChild(child);
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(node));
+        }, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
 
         if (parentObject is not null)
             parentObject.AddChild(item);
@@ -2366,12 +2636,12 @@ public sealed class ViewportViewModel : ViewModelBase
             return;
         }
 
-        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, child =>
+        var item = CreateOutlinerItem(node, child =>
         {
             _rotaryGroupItem?.RemoveChild(child);
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(node));
+        }, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
         _rotaryGroupItem.AddChild(item);
         AdoptToolpaths(adoptToolpathsFrom, item);
         SliceCommand.RaiseCanExecuteChanged();
@@ -2419,6 +2689,12 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         return null;
     }
+
+    /// <summary>
+    /// True when <paramref name="node"/> belongs to a user import or scan. Such nodes are often
+    /// parented under the LFAM bed / rotary pivot and must not be treated as cell infrastructure.
+    /// </summary>
+    internal bool IsUserModelSceneNode(SceneNode? node) => FindUserMeshOutlinerItem(node) is not null;
 
     // ── Rotary scan diagnostics ───────────────────────────────────────────────
     // Stash each registered scan's capture-time WORLD points + E1 so we can export them and solve
@@ -2522,9 +2798,48 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>Reloads an outliner model from its saved <see cref="SceneNode.SourceFilePath"/>.</summary>
+    public bool ReloadModelFromSource(SceneNode node)
+    {
+        var path = OutlinerModelOps.ResolveSourceFilePath(node);
+        if (path is null)
+            return false;
+        return ReloadModel(node, path);
+    }
+
+    /// <summary>Reloads or replaces an outliner model from disk, preserving its scene transform.</summary>
+    public bool ReloadModel(SceneNode node, string path)
+    {
+        path = Path.GetFullPath(path);
+        if (!ImportHelper.IsSupported(path))
+            return false;
+        if (!File.Exists(path))
+            return false;
+        if (!ImportHelper.TryReloadInto(node, path))
+            return false;
+
+        PendingModelRefresh.Enqueue(node);
+        NotifyRenderNeeded();
+        return true;
+    }
+
+    private OutlinerItemViewModel CreateOutlinerItem(
+        SceneNode node,
+        Action<OutlinerItemViewModel> onDelete,
+        Action? onHide = null,
+        string? displayName = null,
+        bool canDelete = true,
+        bool modelFileOps = false)
+        => new(
+            node, NotifyRenderNeeded, onDelete, onHide, displayName, canDelete,
+            modelFileOps ? OutlinerModelOps.CanReload : null,
+            modelFileOps ? OutlinerModelOps.CanReplace : null,
+            modelFileOps ? item => OnModelReloadRequested?.Invoke(item.Node) : null,
+            modelFileOps ? item => OnModelReplaceRequested?.Invoke(item.Node) : null);
+
     private OutlinerItemViewModel RegisterOutlinerItem(SceneNode node)
     {
-        var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, RemoveUserNode, () => OnNodeHidden?.Invoke(node));
+        var item = CreateOutlinerItem(node, RemoveUserNode, () => OnNodeHidden?.Invoke(node), modelFileOps: true);
         OutlinerItems.Add(item);
         return item;
     }
@@ -2584,13 +2899,13 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void RegisterToolpathInOutliner(SceneNode toolpathNode, OutlinerItemViewModel? parentItem)
     {
-        var item = new OutlinerItemViewModel(toolpathNode, NotifyRenderNeeded, child =>
+        var item = CreateOutlinerItem(toolpathNode, child =>
         {
             parentItem?.RemoveChild(child);
             if (parentItem is null) OutlinerItems.Remove(child);
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
-        }, () => OnNodeHidden?.Invoke(toolpathNode));
+        }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
 
         if (parentItem is not null)
             parentItem.AddChild(item);

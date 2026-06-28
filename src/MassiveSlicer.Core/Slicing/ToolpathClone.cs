@@ -30,6 +30,7 @@ public static class ToolpathClone
                     IsZHop            = move.IsZHop,
                     IsMergeConnector  = move.IsMergeConnector,
                     TravelSpeedMps    = move.TravelSpeedMps,
+                    PrintSpeedScale   = move.PrintSpeedScale,
                 });
             }
             copy.Layers.Add(layerCopy);

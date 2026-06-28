@@ -18,6 +18,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     public bool CanDelete { get; }
     public ICommand DeleteCommand { get; }
     public ICommand ToggleVisibleCommand { get; }
+    public ICommand ReloadModelCommand { get; }
+    public ICommand ReplaceModelCommand { get; }
 
     public bool Visible
     {
@@ -47,13 +49,23 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasChildren));
     }
 
+    internal void RefreshModelCommands()
+    {
+        (ReloadModelCommand as RelayCommand)?.RaiseCanExecuteChanged();
+        (ReplaceModelCommand as RelayCommand)?.RaiseCanExecuteChanged();
+    }
+
     internal OutlinerItemViewModel(
         SceneNode node,
         Action notifyRender,
         Action<OutlinerItemViewModel> onDelete,
         Action? onHide = null,
         string? displayName = null,
-        bool canDelete = true)
+        bool canDelete = true,
+        Func<OutlinerItemViewModel, bool>? canReloadModel = null,
+        Func<OutlinerItemViewModel, bool>? canReplaceModel = null,
+        Action<OutlinerItemViewModel>? onReloadModel = null,
+        Action<OutlinerItemViewModel>? onReplaceModel = null)
     {
         Node          = node;
         _notifyRender = notifyRender;
@@ -62,5 +74,11 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         CanDelete            = canDelete;
         DeleteCommand        = new RelayCommand(() => onDelete(this), () => canDelete);
         ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
+        ReloadModelCommand   = new RelayCommand(
+            () => onReloadModel?.Invoke(this),
+            () => onReloadModel is not null && (canReloadModel?.Invoke(this) ?? false));
+        ReplaceModelCommand  = new RelayCommand(
+            () => onReplaceModel?.Invoke(this),
+            () => onReplaceModel is not null && (canReplaceModel?.Invoke(this) ?? false));
     }
 }

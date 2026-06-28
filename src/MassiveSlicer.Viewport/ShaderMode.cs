@@ -7,6 +7,11 @@ public enum ShaderMode
     Standard,
     /// <summary>Overrides all materials with a flat warm-clay appearance.</summary>
     Clay,
+    /// <summary>
+    /// Rhino-style Arctic presentation: white matte clay, soft studio light,
+    /// crease ambient occlusion, white shader background (backdrop blends via opacity).
+    /// </summary>
+    Arctic,
     /// <summary>Overrides all materials with a metallic appearance and Fresnel rim.</summary>
     Metal,
     /// <summary>Overrides all materials with a highly reflective chrome finish.</summary>

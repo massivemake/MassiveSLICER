@@ -976,6 +976,58 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50));
     }
 
+    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Cut length", "Layer time"];
+
+    private bool _layerSpeedAdaptEnabled;
+
+    /// <summary>Scale print speed and extrusion RPM per layer between low and high rates.</summary>
+    public bool LayerSpeedAdaptEnabled
+    {
+        get => _layerSpeedAdaptEnabled;
+        set
+        {
+            if (!SetField(ref _layerSpeedAdaptEnabled, value)) return;
+            if (!value) return;
+            _layerSpeedMinMmS = PrintSpeed;
+            _layerSpeedMaxMmS = PrintSpeed;
+            OnPropertyChanged(nameof(LayerSpeedMinMmS));
+            OnPropertyChanged(nameof(LayerSpeedMaxMmS));
+        }
+    }
+
+    private string _layerSpeedBasisDisplay = "Cut length";
+
+    /// <summary>Layer metric used for adaptive speed (display string).</summary>
+    public string LayerSpeedBasisDisplay
+    {
+        get => _layerSpeedBasisDisplay;
+        set => SetField(ref _layerSpeedBasisDisplay, value);
+    }
+
+    public LayerSpeedBasis LayerSpeedBasis => _layerSpeedBasisDisplay switch
+    {
+        "Layer time" => LayerSpeedBasis.LayerTime,
+        _            => LayerSpeedBasis.CutLength,
+    };
+
+    private double _layerSpeedMinMmS = 10.0;
+
+    /// <summary>Robot speed (mm/s) for the shortest/lightest layer.</summary>
+    public double LayerSpeedMinMmS
+    {
+        get => _layerSpeedMinMmS;
+        set => SetField(ref _layerSpeedMinMmS, Math.Clamp(value, 0.1, 2000.0));
+    }
+
+    private double _layerSpeedMaxMmS = 100.0;
+
+    /// <summary>Robot speed (mm/s) for the longest/busiest layer.</summary>
+    public double LayerSpeedMaxMmS
+    {
+        get => _layerSpeedMaxMmS;
+        set => SetField(ref _layerSpeedMaxMmS, Math.Clamp(value, 0.1, 2000.0));
+    }
+
     private static double ParseSignedOffset(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

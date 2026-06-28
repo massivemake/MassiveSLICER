@@ -92,21 +92,21 @@
   "bed": {
     "modelPath": "assets/cells/LFAM3/LFAM3Bed.glb",
     "origin": {
-      "x": 2134.51,
-      "y": -52.99,
-      "z": 893.11
+      "x": 2134.44,
+      "y": -52.88,
+      "z": 893.67
     },
     "width": 1800,
     "depth": 1800,
     "gridOrigin": {
-      "x": 1234.51,
-      "y": -952.98987,
-      "z": 893.11
+      "x": 1234.44,
+      "y": -952.8799,
+      "z": 893.67
     },
     "baseData": {
-      "x": 2134.51,
-      "y": -52.99,
-      "z": -106.890015
+      "x": 2134.44,
+      "y": -52.88,
+      "z": -106.33002
     },
     "diameter": 1828.8,
     "rotationSign": -1,
@@ -175,8 +175,8 @@
     "bottomPath": "assets/cells/LFAM3/rotary_bed_bottom.glb",
     "topPath": "assets/cells/LFAM3/rotary_bed_top.glb",
     "basePos": [
-      2134.51,
-      -52.99,
+      2134.44,
+      -52.88,
       -663.75757
     ],
     "baseAbc": [
@@ -185,7 +185,7 @@
       -90
     ],
     "e1Sign": 1,
-    "orientationOffsetDeg": -0.97
+    "orientationOffsetDeg": -0.99
   },
   "tools": [
     {
@@ -212,20 +212,20 @@
     {
       "name": "Scanner",
       "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
-      "tcpX": -55.42,
-      "tcpY": -103.74,
-      "tcpZ": 260.68,
-      "tcpA": 0.073,
-      "tcpB": 2.421,
-      "tcpC": -1.357,
+      "tcpX": -55.57,
+      "tcpY": -103.6,
+      "tcpZ": 260.57,
+      "tcpA": 0.077,
+      "tcpB": 2.434,
+      "tcpC": -1.349,
       "toolFrameRoll": 0,
       "krlIndex": 6,
-      "sensorOriginX": -55.42,
-      "sensorOriginY": -103.74,
-      "sensorOriginZ": 260.68,
-      "sensorOriginA": 0.073,
-      "sensorOriginB": 2.421,
-      "sensorOriginC": -1.357,
+      "sensorOriginX": -55.57,
+      "sensorOriginY": -103.6,
+      "sensorOriginZ": 260.57,
+      "sensorOriginA": 0.077,
+      "sensorOriginB": 2.434,
+      "sensorOriginC": -1.349,
       "dock": {
         "x": 1340.3301,
         "y": -2028.6117,
@@ -301,12 +301,12 @@
   "millBridgePort": 8765,
   "hasMilling": false,
   "view": {
-    "azimuth": -55.800037,
-    "elevation": 7.600103,
-    "radius": 2840.4136,
-    "targetX": 1014.16766,
-    "targetY": -863.8506,
-    "targetZ": 1049.0698
+    "azimuth": -59.400043,
+    "elevation": 19.2001,
+    "radius": 2727.478,
+    "targetX": 1128.0677,
+    "targetY": -722.60706,
+    "targetZ": 1125.4166
   },
   "bedScan": {
     "scanPose": [
@@ -322,6 +322,53 @@
     "bedCalVantageOffsetsY": [
       0,
       -300
+    ],
+    "scanCalWristDeltas": [
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": 8,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": -4,
+        "a6": 0
+      },
+      {
+        "a4": 8,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": -8,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": 15
+      },
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": -15
+      },
+      {
+        "a4": 7,
+        "a5": 7,
+        "a6": 0
+      },
+      {
+        "a4": -7,
+        "a5": -7,
+        "a6": 0
+      }
     ]
   },
   "waypoints": [
