@@ -96,8 +96,8 @@
       "y": -708.56,
       "z": 272.93
     },
-    "width": 1200,
-    "depth": 800,
+    "width": 2375,
+    "depth": 5750,
     "baseData": {
       "x": 1496.3605,
       "y": -577.8923,
@@ -113,13 +113,13 @@
       "z": 500
     }
   },
+  "stands": [],
   "robotRail": {
     "axis": "Y",
     "minMm": -4650,
     "maxMm": 150,
     "e1Sign": -1
   },
-  "stands": [],
   "tools": [
     {
       "name": "HF Extruder",
@@ -149,12 +149,12 @@
   "hasMilling": false,
   "krcRoot": "\\\\192.168.0.151\\krc\\ROBOTER\\KRC\\R1",
   "view": {
-    "azimuth": -22.600056,
-    "elevation": 4.0000267,
-    "radius": 4038.6013,
-    "targetX": 1024.8336,
-    "targetY": 1807.4492,
-    "targetZ": 1421.2273
+    "azimuth": -66.600075,
+    "elevation": 3.2000246,
+    "radius": 4397.016,
+    "targetX": 847.14087,
+    "targetY": 2257.8938,
+    "targetZ": 1039.5425
   },
   "waypoints": []
 }

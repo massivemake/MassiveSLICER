@@ -1,5 +1,6 @@
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
@@ -9,7 +10,8 @@ namespace MassiveSlicer.App;
 /// <summary>Builds and restores <see cref="WorkspaceDocument"/> from live application state.</summary>
 internal static class WorkspaceService
 {
-    public static WorkspaceDocument Build(
+    /// <summary>Captures workspace state on the UI thread (clones toolpaths; no JSON serialization yet).</summary>
+    public static WorkspaceCaptureState Capture(
         ViewModels.ViewportViewModel viewport,
         ViewModels.RightPanelViewModel rightPanel,
         AppPreferences prefs,
@@ -17,11 +19,13 @@ internal static class WorkspaceService
     {
         var doc = new WorkspaceDocument
         {
-            CellPath       = viewport.ActiveCellPath,
+            CellPath       = WorkspaceCellPath.NormalizeForSave(viewport.ActiveCellPath),
             Camera         = viewport.GetCameraState?.Invoke(),
             RightPanelTab  = rightPanel.ActiveTab.ToString(),
             Settings       = ClonePreferences(prefs),
         };
+
+        var state = new WorkspaceCaptureState { Document = doc };
 
         string meshDir = WorkspaceLoader.MeshesDirFor(savePath);
         Directory.CreateDirectory(meshDir);
@@ -29,12 +33,11 @@ internal static class WorkspaceService
         foreach (var item in viewport.EnumerateUserModelItems())
         {
             var node = item.Node;
-            // Persist world pose so rotary-bed children restore correctly at any E1.
             var entry = new WorkspaceModelEntry
             {
-                Name          = node.Name,
-                Visible       = node.Visible,
-                LayerPreview  = node.LayerPreview,
+                Name           = node.Name,
+                Visible        = node.Visible,
+                LayerPreview   = node.LayerPreview,
                 LocalTransform = ToArray(node.WorldTransform),
             };
 
@@ -59,7 +62,7 @@ internal static class WorkspaceService
                 if (viewport.GetToolpathSnapshot?.Invoke(child.Node) is not { } snap)
                     continue;
 
-                entry.Toolpaths.Add(new WorkspaceToolpathEntry
+                var tpEntry = new WorkspaceToolpathEntry
                 {
                     Name           = child.Node.Name,
                     Visible        = child.Visible,
@@ -72,17 +75,24 @@ internal static class WorkspaceService
                         snap.MaterialColor.Y,
                         snap.MaterialColor.Z,
                     ],
-                    Data    = ToolpathSerializer.ToData(snap.Smoothed),
-                    RawData = ReferenceEquals(snap.Smoothed, snap.Raw)
-                        ? null
-                        : ToolpathSerializer.ToData(snap.Raw),
-                });
+                };
+                entry.Toolpaths.Add(tpEntry);
+                state.ToolpathEntries.Add((tpEntry, ToolpathClone.Copy(snap.Raw)));
             }
 
             doc.Models.Add(entry);
         }
 
-        return doc;
+        return state;
+    }
+
+    /// <summary>Serializes captured toolpaths and writes the workspace file (safe on a worker thread).</summary>
+    public static void FinalizeAndSave(WorkspaceCaptureState state, string savePath)
+    {
+        foreach (var (entry, raw) in state.ToolpathEntries)
+            entry.RawData = ToolpathSerializer.ToData(raw);
+
+        WorkspaceLoader.Save(state.Document, savePath);
     }
 
     public static void RestoreModels(
@@ -97,6 +107,8 @@ internal static class WorkspaceService
             string? loadPath = null;
             if (entry.SourcePath is { } src && File.Exists(src))
                 loadPath = src;
+            else if (entry.SourcePath is { } missingSrc)
+                loadPath = TryResolveModelBesideWorkspace(workspacePath, missingSrc);
             else if (entry.EmbeddedMeshPath is { } rel)
             {
                 string embedded = WorkspaceLoader.ResolveMeshPath(workspacePath, rel);
@@ -122,10 +134,12 @@ internal static class WorkspaceService
 
             foreach (var tpEntry in entry.Toolpaths)
             {
-                var smoothed = ToolpathSerializer.FromData(tpEntry.Data);
-                var raw      = tpEntry.RawData is not null
+                var raw = tpEntry.RawData is { Layers.Count: > 0 }
                     ? ToolpathSerializer.FromData(tpEntry.RawData)
-                    : smoothed;
+                    : ToolpathSerializer.FromData(tpEntry.Data);
+                var smoothed = tpEntry.Data is { Layers.Count: > 0 } && tpEntry.RawData is { Layers.Count: > 0 }
+                    ? ToolpathSerializer.FromData(tpEntry.Data)
+                    : raw;
 
                 var tpNode = new SceneNode
                 {
@@ -164,6 +178,23 @@ internal static class WorkspaceService
             if (n.Mesh?.PickingData is { } gpu) return gpu;
         }
         return null;
+    }
+
+    /// <summary>
+    /// When the saved source path (e.g. <c>Z:\...</c>) is missing, try the same filename beside the
+    /// <c>.mass</c> file — common when projects live on NAS but drive letters differ per PC.
+    /// </summary>
+    private static string? TryResolveModelBesideWorkspace(string workspacePath, string originalSource)
+    {
+        workspacePath = PathNormalization.Normalize(workspacePath);
+        string fileName = Path.GetFileName(originalSource);
+        if (fileName.Length == 0) return null;
+
+        string? dir = Path.GetDirectoryName(workspacePath);
+        if (dir is null) return null;
+
+        string sibling = Path.Combine(dir, fileName);
+        return File.Exists(sibling) ? sibling : null;
     }
 
     private static AppPreferences ClonePreferences(AppPreferences src)

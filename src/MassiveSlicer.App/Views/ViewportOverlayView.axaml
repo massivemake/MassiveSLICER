@@ -192,6 +192,52 @@
                     </Button>
                 </StackPanel>
             </Border>
+
+            <Border Background="#CC0B1220"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94"
+                    IsVisible="{Binding IsPrintBedSelected}">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="PRINT BED GRID" Classes="LabelMuted" FontSize="10" LetterSpacing="1"/>
+                    <TextBlock Text="Overall print-area size (mm). Back-left corner stays fixed; edits apply live and save to the cell."
+                               Classes="LabelMuted"
+                               FontSize="10"
+                               TextWrapping="Wrap"
+                               MaxWidth="240"/>
+                    <Grid ColumnDefinitions="Auto,*,Auto,*" RowDefinitions="Auto" ColumnSpacing="6">
+                        <TextBlock Grid.Column="0" Text="W" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"
+                                   ToolTip.Tip="Grid width along +X (mm)"/>
+                        <NumericUpDown Grid.Column="1"
+                                       Value="{Binding BedGridWidth, Mode=TwoWay}"
+                                       FormatString="F0"
+                                       Minimum="1"
+                                       Maximum="20000"
+                                       Increment="50"
+                                       AllowSpin="False"
+                                       ShowButtonSpinner="True"
+                                       FontSize="11"
+                                       Padding="4,2"
+                                       VerticalContentAlignment="Center"/>
+                        <TextBlock Grid.Column="2" Text="D" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center" Margin="4,0,0,0"
+                                   ToolTip.Tip="Grid depth along +Y (mm)"/>
+                        <NumericUpDown Grid.Column="3"
+                                       Value="{Binding BedGridDepth, Mode=TwoWay}"
+                                       FormatString="F0"
+                                       Minimum="1"
+                                       Maximum="20000"
+                                       Increment="50"
+                                       AllowSpin="False"
+                                       ShowButtonSpinner="True"
+                                       FontSize="11"
+                                       Padding="4,2"
+                                       VerticalContentAlignment="Center"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
         </StackPanel>
 
         <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
@@ -257,6 +303,13 @@
                             Command="{Binding GizmoScaleCommand}">
                         <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
                     </Button>
+                    <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2,4,2"/>
+                    <Button Content="Recenter"
+                            Classes="ToolbarButton"
+                            Padding="8,4"
+                            Command="{Binding RecenterCommand}"
+                            IsEnabled="{Binding HasMeshSelected}"
+                            ToolTip.Tip="Move origin to bottom center of mesh (keeps world placement)"/>
                 </StackPanel>
                 <!-- XYZ position inputs — visible when Move is active -->
                 <StackPanel Orientation="Horizontal" Spacing="4"

@@ -52,6 +52,9 @@ public sealed class MainWindowViewModel : ViewModelBase
     public UndoRedoService UndoRedo { get; } = new();
 
     private (WorkspaceDocument Doc, string Path)? _pendingWorkspaceRestore;
+    private int _cellLoadRequestId;
+    private int _workspaceRestoreGeneration;
+    private bool _cellSceneReady;
     private bool _applyingUndoRedo;
     private string _lastCommittedPrefsJson = "";
     private CancellationTokenSource? _settingsUndoDebounce;
@@ -311,8 +314,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         };
 
         // After each cell swap: populate KRL dropdowns and select tool for active tab.
-        Viewport.OnCellSwapCompleted = () =>
+        Viewport.OnCellSwapCompleted = generation =>
         {
+            _cellSceneReady = true;
             var cell = Viewport.ActiveCell;
             if (cell is not null)
                 robot.SetKrlFrameOptions(
@@ -342,11 +346,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             SyncLfam3WorkflowSidebar();
             SyncKrlFrameIndicesToActiveTab();
 
-            if (_pendingWorkspaceRestore is { } pending)
-            {
-                _pendingWorkspaceRestore = null;
-                ApplyWorkspaceState(pending.Doc, pending.Path);
-            }
+            TryApplyPendingWorkspaceRestore(generation);
         };
     }
 
@@ -1899,6 +1899,37 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    public bool ReloadOutlinerModel(MassiveSlicer.Viewport.Scene.SceneNode node)
+    {
+        var path = OutlinerModelOps.ResolveSourceFilePath(node);
+        if (path is null)
+        {
+            Console.LogError($"[import] No source file to reload for '{node.Name}'.");
+            return false;
+        }
+
+        if (!Viewport.ReloadModel(node, path))
+        {
+            Console.LogError($"[import] Failed to reload '{node.Name}' from '{path}'.");
+            return false;
+        }
+
+        Console.Log($"[import] Reloaded '{node.Name}' from '{System.IO.Path.GetFileName(path)}'.");
+        return true;
+    }
+
+    public bool ReplaceOutlinerModel(MassiveSlicer.Viewport.Scene.SceneNode node, string path)
+    {
+        if (!Viewport.ReloadModel(node, path))
+        {
+            Console.LogError($"[import] Failed to replace '{node.Name}' from '{path}'.");
+            return false;
+        }
+
+        Console.Log($"[import] Replaced '{node.Name}' from '{System.IO.Path.GetFileName(path)}'.");
+        return true;
+    }
+
     public bool ImportModelFromPath(string path)
     {
         path = System.IO.Path.GetFullPath(path);
@@ -1944,11 +1975,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    /// <summary>Called when a cell load begins so workspace restore waits for the bed scene.</summary>
+    internal void NotifyCellLoadStarted() => _cellSceneReady = false;
+
     /// <summary>
     /// Loads a <c>.mass</c> workspace from <paramref name="path"/> (File â†’ Open).
+    /// Models restore only after the workspace cell scene (bed/robot) is ready.
     /// </summary>
     public void OpenWorkspace(string path)
     {
+        path = PathNormalization.Normalize(path);
         var doc = WorkspaceLoader.Load(path);
         if (doc is null)
         {
@@ -1956,18 +1992,72 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (doc.CellPath is { } cellPath)
+        _pendingWorkspaceRestore = (doc, path);
+        _workspaceRestoreGeneration = 0;
+        QueueWorkspaceRestoreAfterCellReady(doc);
+    }
+
+    private void QueueWorkspaceRestoreAfterCellReady(WorkspaceDocument doc)
+    {
+        string? resolved = WorkspaceCellPath.Resolve(doc.CellPath, LeftPanel.DiscoveredCellPaths);
+        if (resolved is null)
         {
-            int idx = LeftPanel.FindCellIndex(cellPath);
-            if (idx >= 0 && idx != LeftPanel.SelectedCellIndex)
-            {
-                _pendingWorkspaceRestore = (doc, path);
-                LeftPanel.SelectedCellIndex = idx;
-                return;
-            }
+            if (doc.CellPath is { Length: > 0 } saved)
+                Console.Log($"[workspace] Saved cell '{saved}' not found — using the active cell.");
+            TryApplyPendingWorkspaceRestore(0);
+            return;
         }
 
-        ApplyWorkspaceState(doc, path);
+        bool cellReady = _cellSceneReady
+                      && WorkspaceCellPath.Matches(doc.CellPath, Viewport.ActiveCellPath, LeftPanel.DiscoveredCellPaths);
+
+        if (cellReady)
+        {
+            Console.Log($"[workspace] Cell {Path.GetFileNameWithoutExtension(resolved)} already active — restoring.");
+            TryApplyPendingWorkspaceRestore(Viewport.AcceptedCellSwapGeneration);
+            return;
+        }
+
+        int gen = Interlocked.Increment(ref _cellLoadRequestId);
+        _workspaceRestoreGeneration = gen;
+        Viewport.WorkspaceCellLoadGeneration = gen;
+        Viewport.AcceptedCellSwapGeneration = gen - 1;
+
+        Console.Log($"[workspace] Waiting for cell {Path.GetFileNameWithoutExtension(resolved)} before restore…");
+
+        int idx = LeftPanel.FindCellIndex(resolved);
+        if (idx >= 0)
+        {
+            if (idx != LeftPanel.SelectedCellIndex)
+                LeftPanel.SelectedCellIndex = idx;
+            else
+                LeftPanel.OnCellSelected?.Invoke(resolved);
+            return;
+        }
+
+        LeftPanel.OnCellSelected?.Invoke(resolved);
+    }
+
+    private void TryApplyPendingWorkspaceRestore(int generation)
+    {
+        if (_pendingWorkspaceRestore is not { } pending)
+            return;
+
+        if (_workspaceRestoreGeneration > 0 && generation != _workspaceRestoreGeneration)
+            return;
+
+        if (!WorkspaceCellPath.Matches(
+                pending.Doc.CellPath,
+                Viewport.ActiveCellPath,
+                LeftPanel.DiscoveredCellPaths))
+            return;
+
+        string cellName = Viewport.ActiveCell?.Name ?? Path.GetFileNameWithoutExtension(Viewport.ActiveCellPath ?? "cell");
+        _pendingWorkspaceRestore = null;
+        _workspaceRestoreGeneration = 0;
+        Viewport.WorkspaceCellLoadGeneration = null;
+        ApplyWorkspaceState(pending.Doc, pending.Path);
+        Console.Log($"[workspace] Restored on {cellName}.");
     }
 
     /// <summary>
@@ -1983,21 +2073,53 @@ public sealed class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    private bool _workspaceSaveInProgress;
+
     /// <summary>
     /// Saves all outliner models, camera, cell, and settings to <paramref name="path"/>.
+    /// Toolpath serialization runs off the UI thread so large slices do not freeze the app.
     /// </summary>
-    public void SaveWorkspace(string path)
+    public async Task SaveWorkspaceAsync(string path)
     {
+        if (_workspaceSaveInProgress)
+        {
+            Console.Log("[workspace] Save already in progress.");
+            return;
+        }
+
         if (!path.EndsWith(".mass", StringComparison.OrdinalIgnoreCase))
             path += ".mass";
 
-        PersistSettings();
-        var doc = WorkspaceService.Build(Viewport, RightPanel, AppPreferences, path);
-        WorkspaceLoader.Save(doc, path);
-        AppPreferences.LastWorkspacePath = path;
-        PreferencesLoader.Save(AppPreferences);
-        Console.Log($"[workspace] Saved {doc.Models.Count} model(s) and settings to {path}");
+        _workspaceSaveInProgress = true;
+        try
+        {
+            PersistSettings();
+            Console.Log("[workspace] Saving…");
+
+            var capture = WorkspaceService.Capture(Viewport, RightPanel, AppPreferences, path);
+            int toolpathCount = capture.ToolpathEntries.Count;
+            int modelCount    = capture.Document.Models.Count;
+
+            await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
+
+            AppPreferences.LastWorkspacePath = path;
+            PreferencesLoader.Save(AppPreferences);
+            Console.Log(toolpathCount > 0
+                ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
+                : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[workspace] Save failed: {ex.Message}");
+        }
+        finally
+        {
+            _workspaceSaveInProgress = false;
+        }
     }
+
+    /// <summary>Fire-and-forget wrapper for callers that cannot await.</summary>
+    public void SaveWorkspace(string path) => _ = SaveWorkspaceAsync(path);
 
     /// <summary>Suggested filename for the Save As dialog (last save or default).</summary>
     internal string SuggestedWorkspaceFileName =>
@@ -2119,7 +2241,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.AntiAliasing           = copy.AntiAliasing;
         live.ActiveTheme            = copy.ActiveTheme;
         live.DefaultBackdropPath    = copy.DefaultBackdropPath;
-        live.DefaultBackdropBlur    = copy.DefaultBackdropBlur;
+        live.DefaultBackdropBlur     = copy.DefaultBackdropBlur;
+        live.DefaultBackdropOpacity  = copy.DefaultBackdropOpacity;
         live.ShowGrid               = copy.ShowGrid;
         live.ShowAxes               = copy.ShowAxes;
         live.ShowBedGrid            = copy.ShowBedGrid;
@@ -2130,7 +2253,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightIntensity         = copy.LightIntensity;
         live.ShaderMode             = copy.ShaderMode;
         live.ShowEdges              = copy.ShowEdges;
-        live.ShadowCatcherEnabled     = copy.ShadowCatcherEnabled;
+        live.ShadowCatcherEnabled      = copy.ShadowCatcherEnabled;
+        live.ContactShadowSize         = copy.ContactShadowSize;
+        live.ContactShadowDarkness     = copy.ContactShadowDarkness;
+        live.ContactShadowBlur         = copy.ContactShadowBlur;
+        live.CavityEnabled             = copy.CavityEnabled;
+        live.CavityMode                = copy.CavityMode;
+        live.CavityScreenRidge         = copy.CavityScreenRidge;
+        live.CavityScreenValley        = copy.CavityScreenValley;
+        live.CavityWorldRidge          = copy.CavityWorldRidge;
+        live.CavityWorldValley         = copy.CavityWorldValley;
+        live.CavityWorldDistance       = copy.CavityWorldDistance;
         live.ToolpathExtrudeColor    = copy.ToolpathExtrudeColor;
         live.ToolpathTravelColor     = copy.ToolpathTravelColor;
         live.ToolpathSeamColor       = copy.ToolpathSeamColor;
@@ -2149,6 +2282,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ResumeRampStartRpmPercent = copy.ResumeRampStartRpmPercent;
         live.ResumeRampDistanceMm      = copy.ResumeRampDistanceMm;
         live.ResumeRampSteps           = copy.ResumeRampSteps;
+        live.LayerSpeedAdaptEnabled    = copy.LayerSpeedAdaptEnabled;
+        live.LayerSpeedBasisDisplay    = copy.LayerSpeedBasisDisplay;
+        live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
+        live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.CurvedBoundarySource       = copy.CurvedBoundarySource;
         live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
@@ -2158,6 +2295,33 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerHeight            = copy.LayerHeight;
         live.BeadWidth              = copy.BeadWidth;
         live.FirstLayerHeight       = copy.FirstLayerHeight;
+        live.AdaptiveLayerHeight    = copy.AdaptiveLayerHeight;
+        live.AdaptiveQuality        = copy.AdaptiveQuality;
+        live.MinLayerHeight         = copy.MinLayerHeight;
+        live.DisableContourOffset   = copy.DisableContourOffset;
+        live.SeamMode               = copy.SeamMode;
+        live.OverhangOrientation    = copy.OverhangOrientation;
+        live.MaxOverhangTiltDeg     = copy.MaxOverhangTiltDeg;
+        live.SmoothRotation                = copy.SmoothRotation;
+        live.SmoothRotationRadius          = copy.SmoothRotationRadius;
+        live.SmoothRotationMaxRateDegPerMm = copy.SmoothRotationMaxRateDegPerMm;
+        live.InfillPattern          = copy.InfillPattern;
+        live.InfillSpacingMm        = copy.InfillSpacingMm;
+        live.InfillAngleDeg         = copy.InfillAngleDeg;
+        live.WaveEffect             = copy.WaveEffect;
+        live.WaveAmplitude          = copy.WaveAmplitude;
+        live.WaveFrequencyMode      = copy.WaveFrequencyMode;
+        live.WaveWavelength         = copy.WaveWavelength;
+        live.WaveCycles             = copy.WaveCycles;
+        live.WaveShape              = copy.WaveShape;
+        live.WaveStagger            = copy.WaveStagger;
+        live.WaveGradient           = copy.WaveGradient;
+        live.WaveAmplitudeBottom    = copy.WaveAmplitudeBottom;
+        live.WaveAmplitudeTop       = copy.WaveAmplitudeTop;
+        live.WaveWavelengthBottom   = copy.WaveWavelengthBottom;
+        live.WaveWavelengthTop      = copy.WaveWavelengthTop;
+        live.WaveGradientCenter     = copy.WaveGradientCenter;
+        live.WaveGradientCurve      = copy.WaveGradientCurve;
         live.SliceMethod            = copy.SliceMethod;
         live.SlicingMode            = copy.SlicingMode;
         live.PassAngle              = copy.PassAngle;
@@ -2172,6 +2336,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ToolheadA              = copy.ToolheadA;
         live.ToolheadB              = copy.ToolheadB;
         live.ToolheadC              = copy.ToolheadC;
+        live.OrientationFollowPercent = copy.OrientationFollowPercent;
+        live.OrientationLookAheadMm   = copy.OrientationLookAheadMm;
+        live.OrientationSigmaMm       = copy.OrientationSigmaMm;
         live.ApoCvel                = copy.ApoCvel;
         live.ScanCameraIp           = copy.ScanCameraIp;
         live.ScanOutputDirectory    = copy.ScanOutputDirectory;
@@ -2226,7 +2393,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         var add  = RightPanel.Additive;
 
         // Viewport visibility & navigation
-        vp.ShowGrid     = p.ShowGrid;
+        vp.ShowGrid            = p.ShowGrid;
+        vp.ShowContactShadows       = p.ShadowCatcherEnabled;
+        vp.ContactShadowSize        = p.ContactShadowSize;
+        vp.ContactShadowDarkness    = p.ContactShadowDarkness;
+        vp.ContactShadowBlur        = p.ContactShadowBlur;
+        vp.CavityEnabled            = p.CavityEnabled;
+        vp.CavityModeOption         = p.CavityMode;
+        vp.CavityScreenRidge        = p.CavityScreenRidge;
+        vp.CavityScreenValley       = p.CavityScreenValley;
+        vp.CavityWorldRidge         = p.CavityWorldRidge;
+        vp.CavityWorldValley        = p.CavityWorldValley;
+        vp.CavityWorldDistance      = p.CavityWorldDistance;
         vp.ShowAxes     = p.ShowAxes;
         vp.ShowBedGrid  = p.ShowBedGrid;
         vp.ActivePreset = p.ActivePreset;
@@ -2251,10 +2429,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Backdrop
         if (p.DefaultBackdropPath is { } backdropPath)
         {
-            var match = vp.AvailableBackdrops.FirstOrDefault(b => b.Path == backdropPath);
+            var match = vp.AvailableBackdrops.FirstOrDefault(b =>
+                AssetPaths.BackdropPathsEqual(b.Path, backdropPath));
             if (match is not null) vp.ActiveBackdrop = match;
         }
-        vp.BackdropBlur = p.DefaultBackdropBlur;
+        vp.BackdropBlur     = p.DefaultBackdropBlur;
+        vp.BackdropOpacity  = p.DefaultBackdropOpacity;
 
         // Theme: update swatch selection and apply visually
         if (Enum.TryParse<AppTheme>(p.ActiveTheme, out var theme))
@@ -2263,12 +2443,51 @@ public sealed class MainWindowViewModel : ViewModelBase
             (Application.Current as MassiveSlicer.App.App)?.ApplyTheme(theme);
         }
         view.ShowEdges            = p.ShowEdges;
-        view.ShadowCatcherEnabled = p.ShadowCatcherEnabled;
+        view.ShadowCatcherEnabled = vp.ShowContactShadows;
 
         // Additive slicing settings
         add.LayerHeight      = p.LayerHeight;
         add.BeadWidth        = p.BeadWidth;
         add.FirstLayerHeight = p.FirstLayerHeight;
+        add.AdaptiveLayerHeight = p.AdaptiveLayerHeight;
+        add.AdaptiveQuality     = p.AdaptiveQuality;
+        add.MinLayerHeight      = p.MinLayerHeight;
+        add.DisableContourOffset = p.DisableContourOffset;
+        add.SeamMode = p.SeamMode is "Zig-zag" ? "Zig-zag" : "Normal";
+        add.OverhangOrientation = p.OverhangOrientation;
+        add.MaxOverhangTiltDeg  = p.MaxOverhangTiltDeg;
+        add.SmoothRotation                = p.SmoothRotation;
+        add.SmoothRotationRadius          = p.SmoothRotationRadius;
+        add.SmoothRotationMaxRateDegPerMm = p.SmoothRotationMaxRateDegPerMm;
+        add.InfillPattern    = p.InfillPattern;
+        add.InfillSpacingMm  = p.InfillSpacingMm;
+        add.InfillAngleDeg   = p.InfillAngleDeg;
+        add.WaveEffect = p.WaveEffect switch
+        {
+            "Sine"     => "Sine",
+            "Sawtooth" => "Sawtooth",
+            "Triangle" => "Triangle",
+            _          => "None",
+        };
+        add.WaveAmplitude        = p.WaveAmplitude;
+        add.WaveFrequencyMode    = p.WaveFrequencyMode is "Cycles" ? "Cycles" : "Wavelength";
+        add.WaveWavelength       = p.WaveWavelength;
+        add.WaveCycles           = p.WaveCycles;
+        add.WaveShape            = p.WaveShape;
+        add.WaveStagger          = p.WaveStagger;
+        add.WaveGradient         = p.WaveGradient;
+        add.WaveAmplitudeBottom  = p.WaveAmplitudeBottom;
+        add.WaveAmplitudeTop     = p.WaveAmplitudeTop;
+        add.WaveWavelengthBottom = p.WaveWavelengthBottom;
+        add.WaveWavelengthTop    = p.WaveWavelengthTop;
+        add.WaveGradientCenter     = p.WaveGradientCenter;
+        add.WaveGradientCurve    = p.WaveGradientCurve switch
+        {
+            "Smooth"   => "Smooth",
+            "Ease In"  => "Ease In",
+            "Ease Out" => "Ease Out",
+            _          => "Linear",
+        };
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
         add.SlicingMode   = p.SlicingMode is "Surface" ? "Surface" : "Normal";
@@ -2291,6 +2510,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent;
         add.ResumeRampDistanceMm      = p.ResumeRampDistanceMm;
         add.ResumeRampSteps           = p.ResumeRampSteps;
+        add.LayerSpeedAdaptEnabled    = p.LayerSpeedAdaptEnabled;
+        add.LayerSpeedBasisDisplay    = p.LayerSpeedBasisDisplay;
+        add.LayerSpeedMinMmS          = p.LayerSpeedMinMmS;
+        add.LayerSpeedMaxMmS          = p.LayerSpeedMaxMmS;
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
@@ -2309,6 +2532,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
         add.OrientationFollowPercent = p.OrientationFollowPercent;
+        add.OrientationLookAheadMm   = p.OrientationLookAheadMm;
+        add.OrientationSigmaMm       = p.OrientationSigmaMm;
         add.ApoCvel                = p.ApoCvel;
 
         // Scan settings
@@ -2403,7 +2628,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         var add  = RightPanel.Additive;
 
         // Viewport visibility & navigation
-        p.ShowGrid     = vp.ShowGrid;
+        p.ShowGrid              = vp.ShowGrid;
+        p.ShadowCatcherEnabled      = vp.ShowContactShadows;
+        p.ContactShadowSize         = vp.ContactShadowSize;
+        p.ContactShadowDarkness     = vp.ContactShadowDarkness;
+        p.ContactShadowBlur         = vp.ContactShadowBlur;
+        p.CavityEnabled             = vp.CavityEnabled;
+        p.CavityMode                = vp.CavityModeOption;
+        p.CavityScreenRidge         = vp.CavityScreenRidge;
+        p.CavityScreenValley        = vp.CavityScreenValley;
+        p.CavityWorldRidge          = vp.CavityWorldRidge;
+        p.CavityWorldValley         = vp.CavityWorldValley;
+        p.CavityWorldDistance       = vp.CavityWorldDistance;
         p.ShowAxes     = vp.ShowAxes;
         p.ShowBedGrid  = vp.ShowBedGrid;
         p.ActivePreset = vp.ActivePreset;
@@ -2416,17 +2652,44 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Shader mode & backdrop
         p.ShaderMode          = vp.ActiveShaderMode.ToString();
         p.DefaultBackdropPath = vp.ActiveBackdropPath;
-        p.DefaultBackdropBlur = vp.BackdropBlur;
+        p.DefaultBackdropBlur    = vp.BackdropBlur;
+        p.DefaultBackdropOpacity = vp.BackdropOpacity;
 
         // View settings panel
-        p.ActiveTheme          = view.ActiveTheme.ToString();
-        p.ShowEdges            = view.ShowEdges;
-        p.ShadowCatcherEnabled = view.ShadowCatcherEnabled;
+        p.ActiveTheme = view.ActiveTheme.ToString();
+        p.ShowEdges   = view.ShowEdges;
 
         // Additive slicing settings
         p.LayerHeight      = add.LayerHeight;
         p.BeadWidth        = add.BeadWidth;
         p.FirstLayerHeight = add.FirstLayerHeight;
+        p.AdaptiveLayerHeight = add.AdaptiveLayerHeight;
+        p.AdaptiveQuality     = add.AdaptiveQuality;
+        p.MinLayerHeight      = add.MinLayerHeight;
+        p.DisableContourOffset = add.DisableContourOffset;
+        p.SeamMode            = add.SeamMode;
+        p.OverhangOrientation = add.OverhangOrientation;
+        p.MaxOverhangTiltDeg  = add.MaxOverhangTiltDeg;
+        p.SmoothRotation                = add.SmoothRotation;
+        p.SmoothRotationRadius          = add.SmoothRotationRadius;
+        p.SmoothRotationMaxRateDegPerMm = add.SmoothRotationMaxRateDegPerMm;
+        p.InfillPattern    = add.InfillPattern;
+        p.InfillSpacingMm  = add.InfillSpacingMm;
+        p.InfillAngleDeg   = add.InfillAngleDeg;
+        p.WaveEffect           = add.WaveEffect;
+        p.WaveAmplitude        = add.WaveAmplitude;
+        p.WaveFrequencyMode    = add.WaveFrequencyMode;
+        p.WaveWavelength       = add.WaveWavelength;
+        p.WaveCycles           = add.WaveCycles;
+        p.WaveShape            = add.WaveShape;
+        p.WaveStagger          = add.WaveStagger;
+        p.WaveGradient         = add.WaveGradient;
+        p.WaveAmplitudeBottom  = add.WaveAmplitudeBottom;
+        p.WaveAmplitudeTop     = add.WaveAmplitudeTop;
+        p.WaveWavelengthBottom = add.WaveWavelengthBottom;
+        p.WaveWavelengthTop    = add.WaveWavelengthTop;
+        p.WaveGradientCenter   = add.WaveGradientCenter;
+        p.WaveGradientCurve    = add.WaveGradientCurve;
         p.SliceMethod      = add.Method.ToString();
         p.SlicingMode      = add.SlicingMode;
         p.PassAngle        = add.PassAngle;
@@ -2448,6 +2711,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ResumeRampStartRpmPercent = add.ResumeRampStartRpmPercent;
         p.ResumeRampDistanceMm      = add.ResumeRampDistanceMm;
         p.ResumeRampSteps           = add.ResumeRampSteps;
+        p.LayerSpeedAdaptEnabled    = add.LayerSpeedAdaptEnabled;
+        p.LayerSpeedBasisDisplay    = add.LayerSpeedBasisDisplay;
+        p.LayerSpeedMinMmS          = add.LayerSpeedMinMmS;
+        p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();
@@ -2462,6 +2729,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
         p.OrientationFollowPercent = add.OrientationFollowPercent;
+        p.OrientationLookAheadMm   = add.OrientationLookAheadMm;
+        p.OrientationSigmaMm       = add.OrientationSigmaMm;
         p.ApoCvel                = add.ApoCvel;
 
         // Scan settings

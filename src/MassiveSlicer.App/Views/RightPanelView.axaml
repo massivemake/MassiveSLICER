@@ -406,7 +406,7 @@
                             <CheckBox Margin="8,2,8,4"
                                       Content="Adaptive layer height"
                                       FontSize="11"
-                                      IsChecked="{Binding Additive.AdaptiveLayerHeight}"
+                                      IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
                                       IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
                                       ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
 
@@ -416,7 +416,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
@@ -1045,6 +1045,121 @@
 
                     <!-- Options — shown only when a toolpath is selected -->
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
+
+                    <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasToolpathStats}" Margin="0,0,0,8">
+                        <TextBlock Text="SLICE STATISTICS" Classes="SectionHeader"/>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Longest layer length" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Cut path length (extrude + mill) for the busiest layer"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsLongestLayerLength}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Shortest layer length" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Cut path length (extrude + mill) for the lightest layer"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsShortestLayerLength}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Longest layer time" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Estimated print time for the slowest layer (all moves)"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsLongestLayerTime}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Shortest layer time" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Estimated print time for the fastest layer (all moves)"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsShortestLayerTime}"/>
+                        </Grid>
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    </StackPanel>
+
+                    <Border Margin="8,0,8,10" CornerRadius="8"
+                            Background="{DynamicResource Bg3}"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            Padding="10,8">
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Adaptive Speed and Flow"
+                                      IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
+                                      Margin="0,0,0,2"/>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                       Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
+
+                            <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
+                                <Grid Margin="0,2,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Scale by" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" MinWidth="120"
+                                              ItemsSource="{Binding Additive.LayerSpeedBasisOptions}"
+                                              SelectedItem="{Binding Additive.LayerSpeedBasisDisplay, Mode=TwoWay}"/>
+                                </Grid>
+
+                                <Border Height="10" CornerRadius="5" ClipToBounds="True">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                                            <GradientStop Color="#D94F3D" Offset="0"/>
+                                            <GradientStop Color="#E8A43B" Offset="0.5"/>
+                                            <GradientStop Color="#3DB87A" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Short layers (low)" Classes="LabelMuted" FontSize="10"/>
+                                    <TextBlock Grid.Column="2" Text="Long layers (high)" Classes="LabelMuted" FontSize="10" HorizontalAlignment="Right"/>
+                                </Grid>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Low speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                               VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Column="1"
+                                                   Value="{Binding Additive.LayerSpeedMinMmS, Mode=TwoWay}"
+                                                   Minimum="0.1" Maximum="2000" Increment="1"
+                                                   FormatString="F0" FontSize="11"/>
+                                    <TextBlock Grid.Column="2" Text="→" Classes="LabelMuted"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="3" Text="High speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                               VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                    <NumericUpDown Grid.Column="4"
+                                                   Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
+                                                   Minimum="0.1" Maximum="2000" Increment="1"
+                                                   FormatString="F0" FontSize="11"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
 
                     <Expander Classes="SectionExpander" Header="GLOBAL" IsExpanded="False" Margin="0,0,0,4">
                         <StackPanel>

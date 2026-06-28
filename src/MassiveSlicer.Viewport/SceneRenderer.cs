@@ -1,4 +1,5 @@
-﻿using MassiveSlicer.Core.Models;
+﻿using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.Rendering;
 using MassiveSlicer.Viewport.Scene;
@@ -14,7 +15,9 @@ namespace MassiveSlicer.Viewport;
 /// </summary>
 public sealed class SceneRenderer : IDisposable
 {
-    private GridRenderer?        _grid;
+    private GridRenderer?            _grid;
+    private ContactShadowRenderer?   _contactShadows;
+    private CavityRenderer?          _cavity;
     private AxisRenderer?        _axes;
     private AxisRenderer?        _tcpAxes;
     private AxisRenderer?        _flangeAxes;
@@ -84,7 +87,8 @@ public sealed class SceneRenderer : IDisposable
     private int _layerBoundaryTex;
     private int _layerBoundaryCount;
 
-    private int _sceneFbo,    _sceneColorTex, _sceneDepthRbo;
+    private int _sceneFbo,    _sceneColorTex, _sceneDepthTex;
+    private int _normalFbo,   _sceneNormalTex;
     private int _maskFbo,     _maskColorTex;
     private int _fsqVao,      _fsqVbo;          // fullscreen quad
     private Shader? _maskShader;                // flat-white mask renderer
@@ -135,23 +139,109 @@ public sealed class SceneRenderer : IDisposable
         in vec2 vUV;
         uniform sampler2D uScene;
         uniform sampler2D uMask;
+        uniform sampler2D uDepth;
+        uniform sampler2D uNormal;
         uniform vec2  uTexelSize;
+        uniform vec2  uViewportSize;
         uniform float uHasSelection;
+        uniform float uCavityEnabled;
+        uniform int   uCavityType;
+        uniform float uScreenRidge;
+        uniform float uScreenValley;
+        uniform float uWorldRidge;
+        uniform float uWorldValley;
+        uniform float uWorldDistance;
 
         out vec4 fragColor;
 
+        const vec2 kDirs[8] = vec2[8](
+            vec2( 1.0,  0.0), vec2(-1.0,  0.0), vec2( 0.0,  1.0), vec2( 0.0, -1.0),
+            vec2( 0.707,  0.707), vec2(-0.707,  0.707), vec2( 0.707, -0.707), vec2(-0.707, -0.707)
+        );
+
+        bool readNormal(vec2 uv, float centerDepth, out vec3 n) {
+            float d = texture(uDepth, uv).r;
+            if (abs(d - centerDepth) > 0.002) return false;
+            n = texture(uNormal, uv).rgb * 2.0 - 1.0;
+            float len = length(n);
+            if (len < 0.05) return false;
+            n /= len;
+            return true;
+        }
+
+        void sampleCavity(vec2 uv, vec2 texel, float radius, float centerDepth, vec3 cNorm,
+                          out float ridge, out float valley) {
+            ridge = 0.0;
+            valley = 0.0;
+            for (int i = 0; i < 8; i++) {
+                vec2 suv = uv + kDirs[i] * texel * radius;
+                vec3 sn;
+                if (!readNormal(suv, centerDepth, sn)) continue;
+                float nd = dot(cNorm, sn);
+                float crease = 1.0 - nd;
+                valley += crease * crease;
+                ridge  += max(0.0, nd - 0.992) * 50.0;
+            }
+            ridge  *= 0.125;
+            valley *= 0.125;
+        }
+
+        vec3 applyCavity(vec3 color, vec2 uv, vec2 texel) {
+            float depth = texture(uDepth, uv).r;
+            if (depth > 0.9999) return color;
+
+            vec3 cNorm;
+            if (!readNormal(uv, depth, cNorm)) return color;
+
+            float screenR = 0.0, screenV = 0.0;
+            float worldR  = 0.0, worldV  = 0.0;
+
+            if (uCavityType == 0 || uCavityType == 2) {
+                float r, v;
+                sampleCavity(uv, texel, 1.5, depth, cNorm, r, v);
+                screenR = r;
+                screenV = v;
+            }
+
+            if (uCavityType == 1 || uCavityType == 2) {
+                float r, v;
+                float pxRadius = max(1.5, uWorldDistance * max(uViewportSize.x, uViewportSize.y) * 0.00012);
+                sampleCavity(uv, texel, pxRadius, depth, cNorm, r, v);
+                worldR = r;
+                worldV = v;
+            }
+
+            float ridge  = 0.0;
+            float valley = 0.0;
+            if (uCavityType == 0) {
+                ridge  = screenR * uScreenRidge;
+                valley = screenV * uScreenValley;
+            } else if (uCavityType == 1) {
+                ridge  = worldR * uWorldRidge;
+                valley = worldV * uWorldValley;
+            } else {
+                ridge  = (screenR * uScreenRidge  + worldR * uWorldRidge)  * 0.5;
+                valley = (screenV * uScreenValley + worldV * uWorldValley) * 0.5;
+            }
+
+            ridge  = clamp(ridge,  0.0, 1.0);
+            valley = clamp(valley, 0.0, 1.0);
+            color = mix(color, vec3(0.0), valley);
+            color = mix(color, vec3(1.0), ridge);
+            return color;
+        }
+
         void main() {
             vec4 scene = texture(uScene, vUV);
+            vec3 rgb = scene.rgb;
+            if (uCavityEnabled > 0.5)
+                rgb = applyCavity(rgb, vUV, uTexelSize);
 
             if (uHasSelection < 0.5) {
-                fragColor = scene;
+                fragColor = vec4(rgb, scene.a);
                 return;
             }
 
-            // Cardinal-direction edge detection on the selection mask.
-            // The mask uses linear filtering so bilinear interpolation at
-            // sub-pixel offsets provides anti-aliasing for free.
-            // Sampling at 1px and 2px radii keeps the line ~2px wide at all angles.
             vec2 ts = uTexelSize;
             float c  = texture(uMask, vUV).r;
 
@@ -169,8 +259,8 @@ public sealed class SceneRenderer : IDisposable
             float e2 = max(max(abs(c - r2), abs(c - l2)), max(abs(c - u2), abs(c - d2)));
             float edge = smoothstep(0.05, 0.95, max(e1, e2));
 
-            vec3 outlineColor = vec3(0.35, 1.0, 0.05); // lime green (was bed grid colour)
-            fragColor = vec4(mix(scene.rgb, outlineColor, edge), 1.0);
+            vec3 outlineColor = vec3(0.35, 1.0, 0.05);
+            fragColor = vec4(mix(rgb, outlineColor, edge), 1.0);
         }
         """;
 
@@ -263,6 +353,12 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>When false the gizmo is not rendered and handle hit-testing is skipped.</summary>
     public bool GizmoEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Optional world-space gizmo pivot (e.g. robot TCP). When set, overrides the
+    /// selected node's origin for gizmo display and hit-testing.
+    /// </summary>
+    public Vector3? GizmoPivotWorld { get; set; }
+
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
 
@@ -271,6 +367,29 @@ public sealed class SceneRenderer : IDisposable
 
     /// <summary>When false the print-bed boundary grid overlay is not rendered.</summary>
     public bool ShowBedGrid { get; set; } = true;
+
+    /// <summary>When true, soft ground-contact shadows are drawn beneath cell infrastructure.</summary>
+    public bool ShowContactShadows { get; set; } = true;
+
+    /// <summary>Contact shadow spread multiplier (1 = default tuned size).</summary>
+    public float ContactShadowSize { get; set; } = 1f;
+
+    /// <summary>Contact shadow darkness multiplier (1 = default tuned strength).</summary>
+    public float ContactShadowDarkness { get; set; } = 1f;
+
+    /// <summary>Contact shadow blur multiplier (1 = default tuned softness).</summary>
+    public float ContactShadowBlur { get; set; } = 1f;
+
+    /// <summary>Enables Blender-style ridge/valley cavity accentuation in the composite pass.</summary>
+    public bool CavityEnabled { get; set; }
+
+    public CavityMode CavityMode { get; set; } = CavityMode.Both;
+
+    public float CavityScreenRidge  { get; set; } = 1f;
+    public float CavityScreenValley { get; set; } = 1f;
+    public float CavityWorldRidge   { get; set; } = 1f;
+    public float CavityWorldValley  { get; set; } = 1f;
+    public float CavityWorldDistance { get; set; } = 5f;
 
     public bool ShowExtrusionMoves { get; set; } = true;
     public bool ShowTravelMoves    { get; set; } = true;
@@ -317,6 +436,12 @@ public sealed class SceneRenderer : IDisposable
 
     /// <summary>Mipmap LOD level for backdrop blur. 0 = sharp, 7 = maximum blur.</summary>
     public float BackdropBlur { get; set; } = 2.5f;
+
+    /// <summary>Backdrop blend over the shader background. 0 = shader only, 1 = full HDR.</summary>
+    public float BackdropOpacity { get; set; } = 1f;
+
+    private static readonly Vector3 DarkShaderBackground  = new(0.027f, 0.035f, 0.059f);
+    private static readonly Vector3 ArcticShaderBackground = new(1f, 1f, 1f);
 
     /// <summary>
     /// Updates toolpath line colours for all registered renderers. Must be called on the GL thread.
@@ -585,9 +710,12 @@ public sealed class SceneRenderer : IDisposable
         BackdropPath = path;
         if (path is null) return;
 
-        try   { _backdrop = new BackdropRenderer(path); }
+        var resolved = AssetPaths.Exists(path) ? AssetPaths.Resolve(path) : path;
+        try   { _backdrop = new BackdropRenderer(resolved); }
         catch { BackdropPath = null; }   // unsupported or corrupt image -- silently clear
     }
+
+
 
     /// <summary>
     /// Initialises all GPU resources. Must be called on the GL thread
@@ -606,6 +734,8 @@ public sealed class SceneRenderer : IDisposable
         GL.Enable(EnableCap.TextureCubeMapSeamless);
 
         _grid             = new GridRenderer();
+        _contactShadows   = new ContactShadowRenderer();
+        _cavity           = new CavityRenderer();
         _axes             = new AxisRenderer();
         _tcpAxes          = new AxisRenderer();
         _flangeAxes       = new AxisRenderer();
@@ -659,14 +789,18 @@ public sealed class SceneRenderer : IDisposable
         Matrix4.Invert(mvp, out var invVP);
 
         // -- Scene pass --------------------------------------------------------
+        bool arcticPresentation = _shaderMode == ShaderMode.Arctic;
+        var shaderBg = arcticPresentation ? ArcticShaderBackground : DarkShaderBackground;
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
-        GL.ClearColor(0.027f, 0.035f, 0.059f, 1f);
+        GL.ClearColor(shaderBg.X, shaderBg.Y, shaderBg.Z, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
         GL.Viewport(0, 0, viewportWidth, viewportHeight);
 
-        // Draw backdrop before any 3-D content, with depth writes and testing off
-        // so it never interferes with the scene depth buffer.
-        if (_backdrop is not null)
+        if (_contactShadows is not null)
+            _contactShadows.ArcticPresentation = arcticPresentation;
+
+        // Draw backdrop before any 3-D content, blended over the shader background.
+        if (_backdrop is not null && BackdropOpacity > 0f)
         {
             // Strip camera translation from the view matrix before inverting.
             // The backdrop is at infinity -- only rotation and FOV matter.
@@ -679,15 +813,16 @@ public sealed class SceneRenderer : IDisposable
             GL.Disable(EnableCap.DepthTest);
             GL.Disable(EnableCap.CullFace);
             GL.DepthMask(false);
-            _backdrop.Draw(invVPRot, BackdropBlur);
+            _backdrop.Draw(invVPRot, BackdropBlur, BackdropOpacity, shaderBg);
             GL.Enable(EnableCap.DepthTest);
             GL.Enable(EnableCap.CullFace);
             GL.DepthMask(true);
         }
 
-        if (ShowGrid)    _grid?.Draw(mvp);
+        if (ShowGrid && !arcticPresentation) _grid?.Draw(mvp);
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid) _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
+        if (ShowBedGrid && !arcticPresentation)
+            _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
         // Unit 0 is left for other samplers; unit 1 stays bound for all mesh draws.
@@ -741,6 +876,15 @@ public sealed class SceneRenderer : IDisposable
         }
         GL.Disable(EnableCap.PolygonOffsetFill);
 
+        // Geometry-projected ground shadows (multiply blend) on the contact plane.
+        if (ShowContactShadows && _contactShadows is not null)
+        {
+            _contactShadows.SizeScale     = ContactShadowSize;
+            _contactShadows.DarknessScale = ContactShadowDarkness;
+            _contactShadows.BlurScale     = ContactShadowBlur;
+            _contactShadows.Draw(SceneRoot, mvp);
+        }
+
         // Draw toolpaths after meshes so the polygon-offset pass has written depth first.
         foreach (var (tpNode, entry) in _toolpaths)
         {
@@ -756,6 +900,19 @@ public sealed class SceneRenderer : IDisposable
 
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
+
+        // -- Cavity normal prepass (world normals for screen/world cavity) -----
+        if (_cavity is not null && CavityEnabled)
+        {
+            _cavity.Enabled          = true;
+            _cavity.Mode             = CavityMode;
+            _cavity.ScreenRidge      = CavityScreenRidge;
+            _cavity.ScreenValley     = CavityScreenValley;
+            _cavity.WorldRidge       = CavityWorldRidge;
+            _cavity.WorldValley      = CavityWorldValley;
+            _cavity.WorldDistance    = CavityWorldDistance;
+            _cavity.RenderNormalPrepass(SceneRoot, mvp, _normalFbo);
+        }
 
         // -- Selection mask pass -----------------------------------------------
         if (SelectedNode is not null && _maskShader is not null)
@@ -797,10 +954,34 @@ public sealed class SceneRenderer : IDisposable
             GL.BindTexture(TextureTarget.Texture2D, _maskColorTex);
             _compositeShader.SetInt("uMask", 1);
 
+            GL.ActiveTexture(TextureUnit.Texture2);
+            GL.BindTexture(TextureTarget.Texture2D, _sceneDepthTex);
+            _compositeShader.SetInt("uDepth", 2);
+
+            GL.ActiveTexture(TextureUnit.Texture3);
+            GL.BindTexture(TextureTarget.Texture2D, _sceneNormalTex);
+            _compositeShader.SetInt("uNormal", 3);
+
             _compositeShader.SetVector2("uTexelSize",
                 new Vector2(1f / viewportWidth, 1f / viewportHeight));
             _compositeShader.SetFloat("uHasSelection",
                 SelectedNode is not null ? 1f : 0f);
+
+            if (_cavity is not null)
+            {
+                _cavity.Enabled          = CavityEnabled;
+                _cavity.Mode             = CavityMode;
+                _cavity.ScreenRidge      = CavityScreenRidge;
+                _cavity.ScreenValley     = CavityScreenValley;
+                _cavity.WorldRidge       = CavityWorldRidge;
+                _cavity.WorldValley      = CavityWorldValley;
+                _cavity.WorldDistance    = CavityWorldDistance;
+                _cavity.BindCompositeUniforms(_compositeShader, viewportWidth, viewportHeight);
+            }
+            else
+            {
+                _compositeShader.SetFloat("uCavityEnabled", 0f);
+            }
 
             GL.BindVertexArray(_fsqVao);
             GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
@@ -810,9 +991,9 @@ public sealed class SceneRenderer : IDisposable
         // Unbind all texture units so Avalonia's subsequent compositor pass
         // starts with a clean texture state (AMD is sensitive to stale bindings).
         GL.ActiveTexture(TextureUnit.Texture3);
-        GL.BindTexture(TextureTarget.Texture1D, 0);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture2);
-        GL.BindTexture(TextureTarget.Texture1D, 0);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture1);
         GL.BindTexture(TextureTarget.Texture2D, 0);
         GL.ActiveTexture(TextureUnit.Texture0);
@@ -921,7 +1102,7 @@ public sealed class SceneRenderer : IDisposable
         // (even when gizmo handles are hidden). Handles only render when GizmoEnabled.
         if (SelectedNode is { } sel && _gizmo is not null)
         {
-            var nodePos = sel.WorldTransform.Row3.Xyz;
+            var nodePos = GizmoPivotWorld ?? sel.WorldTransform.Row3.Xyz;
             float dist  = (Camera.Eye - nodePos).Length;
             float scale = MathF.Max(dist * 0.12f, 1f);
 
@@ -1248,7 +1429,7 @@ public sealed class SceneRenderer : IDisposable
         if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
             return GizmoAxis.None;
 
-        var nodePos = SelectedNode.WorldTransform.Row3.Xyz;
+        var nodePos = GizmoPivotWorld ?? SelectedNode.WorldTransform.Row3.Xyz;
         float dist  = (Camera.Eye - nodePos).Length;
         float scale = MathF.Max(dist * 0.12f, 1f);
 
@@ -1266,6 +1447,8 @@ public sealed class SceneRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
         _grid?.Dispose();
+        _contactShadows?.Dispose();
+        _cavity?.Dispose();
         _axes?.Dispose();
         _tcpAxes?.Dispose();
         _flangeAxes?.Dispose();
@@ -1292,6 +1475,7 @@ public sealed class SceneRenderer : IDisposable
     // -- Shader mode -----------------------------------------------------------
 
     private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(1.00f, 0.55f, 0.30f, 1f);
+    private static readonly OpenTK.Mathematics.Vector4 ArcticColor  = new(0.93f, 0.93f, 0.95f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MetalColor     = new(0.60f, 0.60f, 0.65f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 ChromeColor    = new(1.00f, 1.00f, 1.00f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.07f, 0.07f, 0.07f, 1f);
@@ -1308,6 +1492,7 @@ public sealed class SceneRenderer : IDisposable
     {
         bool debugChannel = IsMaterialDebug(_shaderMode);
         bool wireframe = _shaderMode == ShaderMode.Wireframe;
+        bool arctic = _shaderMode == ShaderMode.Arctic;
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
@@ -1315,10 +1500,13 @@ public sealed class SceneRenderer : IDisposable
             mesh.Exposure         = _exposure;
             mesh.IblGain          = _iblIntensity;
             // Skip expensive env IBL on cell geometry; keep it for user-imported meshes.
-            mesh.HasEnvMap        = hasEnv && n.Selectable;
+            mesh.HasEnvMap        = hasEnv && n.Selectable && !arctic;
+            mesh.ArcticMode       = arctic;
+            mesh.FloorZ           = BedZ;
             // Cell geometry stays on the cheap path for Standard + inspect modes
             // (debug channels / wireframe are meant to inspect imported meshes, not the robot).
-            mesh.FastCellMode     = !n.Selectable && (_shaderMode == ShaderMode.Standard || debugChannel || wireframe);
+            mesh.FastCellMode     = !arctic && !n.Selectable
+                                    && (_shaderMode == ShaderMode.Standard || debugChannel || wireframe);
             mesh.LayerPreviewMode = false;
             mesh.MaterialChannel  = 0;
             mesh.SuppressTextures = false;
@@ -1393,6 +1581,16 @@ public sealed class SceneRenderer : IDisposable
                     mesh.SpecularStrength = 0f;
                     mesh.Shininess        = 1f;
                     break;
+                case ShaderMode.Arctic:
+                    mesh.NormalsMode      = false;
+                    mesh.SuppressTextures = true;
+                    mesh.Metallic         = 0f;
+                    mesh.RoughnessFactor  = 1f;
+                    mesh.Color            = ArcticColor;
+                    mesh.SpecularStrength = 0f;
+                    mesh.Shininess        = 1f;
+                    mesh.HasEnvMap        = false;
+                    break;
                 case ShaderMode.Metal:
                     mesh.NormalsMode      = false;
                     mesh.SuppressTextures = true;
@@ -1456,156 +1654,155 @@ public sealed class SceneRenderer : IDisposable
 
     // -- FBO management --------------------------------------------------------
 
+    private static void InitColorTexture(int tex, int w, int h, bool linearFilter)
+    {
+        GL.BindTexture(TextureTarget.Texture2D, tex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
+                      w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+                        (int)(linearFilter ? TextureMinFilter.Linear : TextureMinFilter.Nearest));
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+                        (int)(linearFilter ? TextureMagFilter.Linear : TextureMagFilter.Nearest));
+        if (linearFilter)
+        {
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+                            (int)TextureWrapMode.ClampToEdge);
+            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+                            (int)TextureWrapMode.ClampToEdge);
+        }
+    }
+
+    private static int CreateDepthTexture(int w, int h)
+    {
+        int tex = GL.GenTexture();
+        GL.BindTexture(TextureTarget.Texture2D, tex);
+        GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Depth24Stencil8,
+                      w, h, 0, PixelFormat.DepthStencil, PixelType.UnsignedInt248, IntPtr.Zero);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
+                        (int)TextureMinFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
+                        (int)TextureMagFilter.Nearest);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
+                        (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
+                        (int)TextureWrapMode.ClampToEdge);
+        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode,
+                        (int)TextureCompareMode.None);
+        return tex;
+    }
+
+    private void AttachSceneFbo(int colorTex, int depthTex)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                  FramebufferAttachment.ColorAttachment0,
+                                  TextureTarget.Texture2D, colorTex, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.DepthStencilAttachment,
+                                TextureTarget.Texture2D, depthTex, 0);
+        ValidateFbo("sceneFbo");
+    }
+
+    private void AttachMaskFbo(int colorTex, int depthTex)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.ColorAttachment0,
+                                TextureTarget.Texture2D, colorTex, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.DepthStencilAttachment,
+                                TextureTarget.Texture2D, depthTex, 0);
+        ValidateFbo("maskFbo");
+    }
+
+    private void AttachNormalFbo(int colorTex, int depthTex)
+    {
+        GL.BindFramebuffer(FramebufferTarget.Framebuffer, _normalFbo);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.ColorAttachment0,
+                                TextureTarget.Texture2D, colorTex, 0);
+        GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                FramebufferAttachment.DepthStencilAttachment,
+                                TextureTarget.Texture2D, depthTex, 0);
+        ValidateFbo("normalFbo");
+    }
+
     private void EnsureFbos(int w, int h)
     {
         if (w == _fboWidth && h == _fboHeight) return;
 
         if (_fboWidth == 0)
         {
-            // -- First-time creation --------------------------------------------
-
-            // Scene FBO: colour texture + depth renderbuffer
             _sceneFbo = GL.GenFramebuffer();
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
+            _maskFbo  = GL.GenFramebuffer();
+            _normalFbo = GL.GenFramebuffer();
 
-            _sceneColorTex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _sceneColorTex);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                          w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-                            (int)TextureMinFilter.Nearest);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-                            (int)TextureMagFilter.Nearest);
-            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
-                                    FramebufferAttachment.ColorAttachment0,
-                                    TextureTarget.Texture2D, _sceneColorTex, 0);
+            _sceneColorTex  = GL.GenTexture();
+            _sceneDepthTex  = CreateDepthTexture(w, h);
+            _sceneNormalTex = GL.GenTexture();
+            _maskColorTex   = GL.GenTexture();
 
-            _sceneDepthRbo = GL.GenRenderbuffer();
-            GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer,
-                                   RenderbufferStorage.Depth24Stencil8, w, h);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            ValidateFbo("sceneFbo(create)");
+            InitColorTexture(_sceneColorTex, w, h, linearFilter: false);
+            InitColorTexture(_sceneNormalTex, w, h, linearFilter: false);
+            InitColorTexture(_maskColorTex, w, h, linearFilter: true);
 
-            // Mask FBO: colour texture + shared scene depth.
-            // Sharing the depth buffer means the mask pass respects scene occlusion
-            // without a blit -- selected surfaces behind other objects stay masked out.
-            _maskFbo = GL.GenFramebuffer();
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
-
-            _maskColorTex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _maskColorTex);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                          w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-            // Linear filtering for sub-pixel anti-aliasing in the composite edge pass.
-            // ClampToEdge stops the 2px cardinal samples wrapping at the viewport border.
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-                            (int)TextureMinFilter.Linear);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-                            (int)TextureMagFilter.Linear);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
-                            (int)TextureWrapMode.ClampToEdge);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
-                            (int)TextureWrapMode.ClampToEdge);
-            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
-                                    FramebufferAttachment.ColorAttachment0,
-                                    TextureTarget.Texture2D, _maskColorTex, 0);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            ValidateFbo("maskFbo(create)");
+            AttachSceneFbo(_sceneColorTex, _sceneDepthTex);
+            AttachMaskFbo(_maskColorTex, _sceneDepthTex);
+            AttachNormalFbo(_sceneNormalTex, _sceneDepthTex);
         }
         else
         {
-            // -- Resize: detach -> delete -> create new -> re-attach -------------
-            // AMD's driver (atio6axx.dll) faults when TexImage2D or
-            // RenderbufferStorage is called on an existing object to make it
-            // LARGER, regardless of whether the object is currently attached to
-            // an FBO. The only safe path is to delete the old objects and create
-            // new ones. The FBO objects themselves are kept alive to avoid the
-            // rapid GenFramebuffer/DeleteFramebuffer churn that caused a separate
-            // crash in an earlier fix attempt.
             GL.Finish();
 
-            // Detach from both FBOs before deleting their attachments
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
             GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
                                     FramebufferAttachment.ColorAttachment0,
                                     TextureTarget.Texture2D, 0, 0);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, 0);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.DepthStencilAttachment,
+                                    TextureTarget.Texture2D, 0, 0);
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
             GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
                                     FramebufferAttachment.ColorAttachment0,
                                     TextureTarget.Texture2D, 0, 0);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, 0);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.DepthStencilAttachment,
+                                    TextureTarget.Texture2D, 0, 0);
+
+            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _normalFbo);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.ColorAttachment0,
+                                    TextureTarget.Texture2D, 0, 0);
+            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
+                                    FramebufferAttachment.DepthStencilAttachment,
+                                    TextureTarget.Texture2D, 0, 0);
 
             GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
             GL.Finish();
 
-            // Delete old attachments
             GL.DeleteTexture(_sceneColorTex);
-            GL.DeleteRenderbuffer(_sceneDepthRbo);
+            GL.DeleteTexture(_sceneDepthTex);
+            GL.DeleteTexture(_sceneNormalTex);
             GL.DeleteTexture(_maskColorTex);
             GL.Finish();
 
-            // Create new attachments
-            _sceneColorTex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _sceneColorTex);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                          w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-                            (int)TextureMinFilter.Nearest);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-                            (int)TextureMagFilter.Nearest);
+            _sceneColorTex  = GL.GenTexture();
+            _sceneDepthTex  = CreateDepthTexture(w, h);
+            _sceneNormalTex = GL.GenTexture();
+            _maskColorTex   = GL.GenTexture();
 
-            _sceneDepthRbo = GL.GenRenderbuffer();
-            GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer,
-                                   RenderbufferStorage.Depth24Stencil8, w, h);
+            InitColorTexture(_sceneColorTex, w, h, linearFilter: false);
+            InitColorTexture(_sceneNormalTex, w, h, linearFilter: false);
+            InitColorTexture(_maskColorTex, w, h, linearFilter: true);
 
-            _maskColorTex = GL.GenTexture();
-            GL.BindTexture(TextureTarget.Texture2D, _maskColorTex);
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8,
-                          w, h, 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter,
-                            (int)TextureMinFilter.Linear);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter,
-                            (int)TextureMagFilter.Linear);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS,
-                            (int)TextureWrapMode.ClampToEdge);
-            GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT,
-                            (int)TextureWrapMode.ClampToEdge);
-
-            // Re-attach new objects to the existing FBOs
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
-            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
-                                    FramebufferAttachment.ColorAttachment0,
-                                    TextureTarget.Texture2D, _sceneColorTex, 0);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            ValidateFbo("sceneFbo(resize)");
-
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
-            GL.FramebufferTexture2D(FramebufferTarget.Framebuffer,
-                                    FramebufferAttachment.ColorAttachment0,
-                                    TextureTarget.Texture2D, _maskColorTex, 0);
-            GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer,
-                                       FramebufferAttachment.DepthStencilAttachment,
-                                       RenderbufferTarget.Renderbuffer, _sceneDepthRbo);
-            ValidateFbo("maskFbo(resize)");
+            AttachSceneFbo(_sceneColorTex, _sceneDepthTex);
+            AttachMaskFbo(_maskColorTex, _sceneDepthTex);
+            AttachNormalFbo(_sceneNormalTex, _sceneDepthTex);
         }
 
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GL.BindTexture(TextureTarget.Texture2D, 0);
-        GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, 0);
 
         _fboWidth  = w;
         _fboHeight = h;
@@ -1624,9 +1821,11 @@ public sealed class SceneRenderer : IDisposable
         GL.Finish();
         GL.DeleteFramebuffer(_sceneFbo);
         GL.DeleteFramebuffer(_maskFbo);
+        GL.DeleteFramebuffer(_normalFbo);
         GL.DeleteTexture(_sceneColorTex);
+        GL.DeleteTexture(_sceneDepthTex);
+        GL.DeleteTexture(_sceneNormalTex);
         GL.DeleteTexture(_maskColorTex);
-        GL.DeleteRenderbuffer(_sceneDepthRbo);
         _fboWidth = _fboHeight = 0;
     }
 

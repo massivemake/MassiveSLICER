@@ -39,6 +39,7 @@
   <ItemGroup>
     <!-- Canonical app icon lives in repo assets/Icons (generated from Square44x44Logo PNGs). -->
     <AvaloniaResource Include="..\..\assets\Icons\icon.ico" Link="Assets\icon.ico"/>
+    <None Include="..\..\assets\Icons\icon.ico" Link="icon.ico" CopyToOutputDirectory="PreserveNewest" />
     <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
   </ItemGroup>
 
@@ -56,6 +57,11 @@
   <ItemGroup>
     <None Include="..\..\assets\materials.json" Link="assets\materials.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\..\assets\krl_postprocess.json" Link="assets\krl_postprocess.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- HDR environment backdrops for the viewport BACKDROP selector. -->
+  <ItemGroup>
+    <None Include="..\..\assets\Images\*.hdr" Link="assets\Images\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

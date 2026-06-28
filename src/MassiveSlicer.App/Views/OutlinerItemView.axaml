@@ -12,7 +12,16 @@
 
     <StackPanel>
         <Grid Margin="0,0,4,0"
-              PointerPressed="OnRowPressed">
+              PointerPressed="OnRowPressed"
+              PointerReleased="OnRowReleased">
+            <Grid.ContextMenu>
+                <ContextMenu x:Name="RowContextMenu">
+                    <MenuItem Header="Reload Model"
+                              Command="{Binding ReloadModelCommand}"/>
+                    <MenuItem Header="Replace Model"
+                              Command="{Binding ReplaceModelCommand}"/>
+                </ContextMenu>
+            </Grid.ContextMenu>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>

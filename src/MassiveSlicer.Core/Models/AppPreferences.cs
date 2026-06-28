@@ -40,6 +40,9 @@ public sealed class AppPreferences
     /// <summary>Mipmap LOD blur level (0 = sharp, 7 = max).</summary>
     public float DefaultBackdropBlur { get; set; } = 2.5f;
 
+    /// <summary>Backdrop blend over shader background (0 = shader only, 1 = full HDR).</summary>
+    public float DefaultBackdropOpacity { get; set; } = 1f;
+
     /// <summary>Whether the ground-plane grid lines are rendered.</summary>
     public bool ShowGrid { get; set; } = true;
 
@@ -78,7 +81,27 @@ public sealed class AppPreferences
     public bool ShowEdges { get; set; } = false;
 
     /// <summary>Whether the ground-plane shadow catcher is active.</summary>
-    public bool ShadowCatcherEnabled { get; set; } = false;
+    public bool ShadowCatcherEnabled { get; set; } = true;
+
+    /// <summary>Contact shadow spread multiplier (1 = default tuned size).</summary>
+    public float ContactShadowSize { get; set; } = 1f;
+
+    /// <summary>Contact shadow darkness multiplier (1 = default tuned strength).</summary>
+    public float ContactShadowDarkness { get; set; } = 1f;
+
+    public float ContactShadowBlur { get; set; } = 1f;
+
+    /// <summary>Blender-style viewport cavity accentuation.</summary>
+    public bool CavityEnabled { get; set; }
+
+    /// <summary>Cavity sampling mode: Screen, World, or Both.</summary>
+    public string CavityMode { get; set; } = "Both";
+
+    public float CavityScreenRidge  { get; set; } = 1f;
+    public float CavityScreenValley { get; set; } = 1f;
+    public float CavityWorldRidge   { get; set; } = 1f;
+    public float CavityWorldValley  { get; set; } = 1f;
+    public float CavityWorldDistance { get; set; } = 5f;
 
     // ── Toolpath colors (AARRGGBB hex) ────────────────────────────────────
 
@@ -99,6 +122,56 @@ public sealed class AppPreferences
 
     /// <summary>First-layer height override in mm.</summary>
     public double FirstLayerHeight { get; set; } = 3.0;
+
+    /// <summary>When true, planar slicing adapts layer spacing to local surface slope.</summary>
+    public bool AdaptiveLayerHeight { get; set; }
+
+    /// <summary>0 = finest adaptive detail, 1 = fastest adaptive print.</summary>
+    public double AdaptiveQuality { get; set; } = 0.5;
+
+    /// <summary>Minimum layer height used by adaptive slicing (mm).</summary>
+    public double MinLayerHeight { get; set; } = 1.0;
+
+    /// <summary>Skip bead-width/2 contour inset; print centerline on surface.</summary>
+    public bool DisableContourOffset { get; set; }
+
+    /// <summary>Seam mode display: Normal or Zig-zag.</summary>
+    public string SeamMode { get; set; } = "Normal";
+
+    /// <summary>When true, tool tilts toward mesh surface on overhangs.</summary>
+    public bool OverhangOrientation { get; set; }
+
+    /// <summary>Maximum tool tilt from vertical for overhang orientation (degrees).</summary>
+    public double MaxOverhangTiltDeg { get; set; } = 45.0;
+
+    /// <summary>Smooth per-move toolhead normals after slicing.</summary>
+    public bool SmoothRotation { get; set; }
+
+    public int SmoothRotationRadius { get; set; } = 5;
+    public double SmoothRotationMaxRateDegPerMm { get; set; }
+
+    /// <summary>Infill pattern display: None, Rectilinear, Grid, Triangle, Ghost Mesh Grid.</summary>
+    public string InfillPattern { get; set; } = "None";
+
+    public double InfillSpacingMm { get; set; }
+    public double InfillAngleDeg { get; set; }
+
+    /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
+    public string WaveEffect { get; set; } = "None";
+
+    public double WaveAmplitude { get; set; } = 3.0;
+    public string WaveFrequencyMode { get; set; } = "Wavelength";
+    public double WaveWavelength { get; set; } = 20.0;
+    public int WaveCycles { get; set; }
+    public double WaveShape { get; set; } = 1.0;
+    public double WaveStagger { get; set; }
+    public bool WaveGradient { get; set; }
+    public double WaveAmplitudeBottom { get; set; }
+    public double WaveAmplitudeTop { get; set; } = 3.0;
+    public double WaveWavelengthBottom { get; set; } = 20.0;
+    public double WaveWavelengthTop { get; set; } = 20.0;
+    public double WaveGradientCenter { get; set; } = 0.5;
+    public string WaveGradientCurve { get; set; } = "Linear";
 
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
@@ -145,6 +218,11 @@ public sealed class AppPreferences
     public double ResumeRampDistanceMm { get; set; } = 609.6;
     public int ResumeRampSteps { get; set; } = 10;
 
+    public bool LayerSpeedAdaptEnabled { get; set; }
+    public string LayerSpeedBasisDisplay { get; set; } = "Cut length";
+    public double LayerSpeedMinMmS { get; set; } = 10.0;
+    public double LayerSpeedMaxMmS { get; set; } = 100.0;
+
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
 
@@ -173,6 +251,12 @@ public sealed class AppPreferences
 
     /// <summary>Surface follow strength percent (0 = vertical, 100 = full follow).</summary>
     public double OrientationFollowPercent { get; set; } = 100.0;
+
+    /// <summary>Forward-biased Gaussian look-ahead for KRL ABC smoothing (mm). 0 = off.</summary>
+    public double OrientationLookAheadMm { get; set; }
+
+    /// <summary>Width of the KRL orientation transition ramp (mm).</summary>
+    public double OrientationSigmaMm { get; set; } = 30.0;
 
     /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
     public double ApoCvel { get; set; } = 100.0;

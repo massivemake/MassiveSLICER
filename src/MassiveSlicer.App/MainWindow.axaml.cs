@@ -87,11 +87,12 @@ public partial class MainWindow : Window
 
         vm.LeftPanel.SetCells(cells);
 
-        // Default to LFAM 2 — empty outliner, robot not synced until user connects.
+        // When opening a .mass at startup, let OpenWorkspace load the saved cell first.
+        // Otherwise default to LFAM 2.
         var lfam2Idx = cells.FindIndex(c =>
             c.name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) ||
             c.name.Contains("LFAM2",  StringComparison.OrdinalIgnoreCase));
-        if (cells.Count > 0)
+        if (App.StartupWorkspacePath is null && cells.Count > 0)
             vm.LeftPanel.SelectedCellIndex = lfam2Idx >= 0 ? lfam2Idx : 0;
 
         // -- Model loading -----------------------------------------------------
@@ -116,6 +117,31 @@ public partial class MainWindow : Window
             if (path is null) return;
 
             await LoadAndAddNodeAsync(path, vm);
+        };
+
+        vm.Viewport.OnModelReloadRequested = node => vm.ReloadOutlinerModel(node);
+
+        vm.Viewport.OnModelReplaceRequested = async node =>
+        {
+            var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+            {
+                Title          = "Replace Model",
+                AllowMultiple  = false,
+                FileTypeFilter = [
+                    new("3D Files") { Patterns = ["*.glb", "*.gltf", "*.stl", "*.obj", "*.3mf"] },
+                    new("GL Transmission Format") { Patterns = ["*.glb", "*.gltf"] },
+                    new("STL Files") { Patterns = ["*.stl"] },
+                    new("OBJ Files") { Patterns = ["*.obj"] },
+                    new("3MF Files") { Patterns = ["*.3mf"] },
+                    new("All Files") { Patterns = ["*.*"] },
+                ],
+            });
+
+            if (files.Count == 0) return;
+            var path = files[0].TryGetLocalPath();
+            if (path is null) return;
+
+            vm.ReplaceOutlinerModel(node, path);
         };
 
         // -- Relief heightmap picker (Subtractive tab) -------------------------
@@ -194,6 +220,9 @@ public partial class MainWindow : Window
 
             vm.ImportKrlToolpath(path);
         };
+
+        if (App.StartupWorkspacePath is { } startupWorkspace)
+            vm.OpenWorkspace(startupWorkspace);
     }
 
     // -- Cell switching --------------------------------------------------------
@@ -202,12 +231,25 @@ public partial class MainWindow : Window
     {
         if (DataContext is not MainWindowViewModel vm) return;
         path = Path.GetFullPath(path);
+        vm.NotifyCellLoadStarted();
 
         _cellLoadCts?.Cancel();
         _cellLoadCts?.Dispose();
         _cellLoadCts = new CancellationTokenSource();
         var ct  = _cellLoadCts.Token;
-        var gen = Interlocked.Increment(ref _cellLoadGeneration);
+        // Workspace opens assign a generation from MainWindowViewModel; keep the stale-load
+        // guard (_cellLoadGeneration) in sync or the payload is dropped before enqueue.
+        int gen;
+        if (vm.Viewport.WorkspaceCellLoadGeneration is int workspaceGen)
+        {
+            gen = workspaceGen;
+            Volatile.Write(ref _cellLoadGeneration, workspaceGen);
+            vm.Viewport.WorkspaceCellLoadGeneration = null;
+        }
+        else
+        {
+            gen = Interlocked.Increment(ref _cellLoadGeneration);
+        }
         var defaultTab = vm.RightPanel.ActiveTab;
         var cacheKey   = CellSceneCache.CacheKey(path);
         bool cacheHit  = CellSceneCache.TryGet(cacheKey, out _);
@@ -255,7 +297,7 @@ public partial class MainWindow : Window
                     vm.Console.Log(
                         $"[bed] {payload.Config.Name}: visualOffset=({off})  BASE marker=({marker.X:F1}, {marker.Y:F1})  visual grid=({grid.X:F1}, {grid.Y:F1})");
 
-                    vm.Viewport.PendingCellSwap.Enqueue(payload);
+                    vm.Viewport.PendingCellSwap.Enqueue(payload with { Generation = gen });
                     vm.Viewport.NotifyRenderNeeded();
                 });
             }
@@ -292,7 +334,7 @@ public partial class MainWindow : Window
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        vm.SaveWorkspace(path);
+        await vm.SaveWorkspaceAsync(path);
     }
 
     /// <summary>

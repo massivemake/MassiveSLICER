@@ -167,7 +167,7 @@ internal static class CellSceneLoader
         var payload = new CellSwapPayload(
             cell, path, robotBaseNode, boosterNode, bedNode, toolHolder, firstTool,
             environment.EnvironmentNodes, environment.RotaryBedPivot, environment.MultiTools,
-            flangeAttachment);
+            flangeAttachment, Generation: 0);
 
         CellSceneCache.Store(cacheKey, payload);
 

@@ -19,4 +19,5 @@ internal record CellSwapPayload(
     IReadOnlyList<SceneNode>                EnvironmentNodes,
     SceneNode?                              RotaryBedPivot,
     CellEnvironmentBuilder.CellMultiToolSet? MultiTools,
-    SceneNode?                              FlangeAttachment);
+    SceneNode?                              FlangeAttachment,
+    int                                     Generation = 0);

@@ -38,6 +38,8 @@ public sealed class BackdropRenderer : IDisposable
         in vec3 vRayDir;
         uniform sampler2D uTex;
         uniform float uBlurLevel;
+        uniform float uOpacity;
+        uniform vec3  uBgColor;
         const float PI = 3.14159265;
         out vec4 fragColor;
         void main() {
@@ -46,7 +48,8 @@ public sealed class BackdropRenderer : IDisposable
             float v = 0.5 - asin(clamp(dir.z, -1.0, 1.0)) / PI;
             vec3 color = textureLod(uTex, vec2(u, v), uBlurLevel).rgb;
             color = pow(max(color, vec3(0.0)), vec3(1.0 / 2.2));
-            fragColor = vec4(color, 1.0);
+            float a = clamp(uOpacity, 0.0, 1.0);
+            fragColor = vec4(mix(uBgColor, color, a), 1.0);
         }
         """;
 
@@ -98,7 +101,9 @@ public sealed class BackdropRenderer : IDisposable
     /// of <c>view × proj</c> used to unproject frustum-corner rays into world space.
     /// Caller must disable depth writes and depth testing before this call.
     /// </summary>
-    public void Draw(Matrix4 invViewProj, float blurLevel = 2.5f)
+    /// <param name="opacity">0 = shader background only, 1 = full backdrop.</param>
+    /// <param name="bgColor">Shader-mode clear colour (sRGB) to blend against.</param>
+    public void Draw(Matrix4 invViewProj, float blurLevel, float opacity, Vector3 bgColor)
     {
         var bl = RayDir(-1f, -1f, invViewProj);
         var br = RayDir( 1f, -1f, invViewProj);
@@ -120,6 +125,8 @@ public sealed class BackdropRenderer : IDisposable
 
         _shader.Use();
         _shader.SetFloat("uBlurLevel", blurLevel);
+        _shader.SetFloat("uOpacity", opacity);
+        _shader.SetVector3("uBgColor", bgColor);
         _shader.SetInt("uTex", 0);
 
         GL.ActiveTexture(TextureUnit.Texture0);
