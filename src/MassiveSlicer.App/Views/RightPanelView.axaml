@@ -690,6 +690,49 @@
                               IsVisible="{Binding Scan.IsCaptureSubTab}">
                     <StackPanel Margin="0,8">
 
+                        <!-- QUICK POSITIONS -->
+                        <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+                                <TextBlock Classes="LabelMuted" Margin="8,4,8,6" TextWrapping="Wrap"
+                                           Text="Recall saved scan poses. Robot must be synced before moving or saving."/>
+
+                                <ItemsControl ItemsSource="{Binding Scan.QuickPositions}" Margin="8,0,8,4">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Content="{Binding Label}"
+                                                    Classes="PrimaryButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    Margin="0,0,0,4"
+                                                    Command="{Binding MoveCommand}"
+                                                    ToolTip.Tip="Move the robot to this saved position"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="Save current pose" Classes="LabelMuted" Margin="8,4,8,2"
+                                           ToolTip.Tip="Captures the synced robot pose ($POS_ACT / $AXIS_ACT) as a new quick position"/>
+                                <Grid Margin="8,0,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0"
+                                             Classes="PanelTextBox"
+                                             Text="{Binding Scan.NewQuickPositionName, Mode=TwoWay}"
+                                             PlaceholderText="Position name"/>
+                                    <Button Grid.Column="2"
+                                            Content="Save"
+                                            Classes="ToolbarButton"
+                                            Command="{Binding Scan.SaveQuickPositionCommand}"
+                                            ToolTip.Tip="Save the current synced robot pose as a quick position"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Scan.QuickPositionStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+
                         <!-- CAMERA -->
                         <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="False">
                             <StackPanel Margin="0,2,0,6">

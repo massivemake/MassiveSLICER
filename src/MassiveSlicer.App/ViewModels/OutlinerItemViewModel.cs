@@ -16,6 +16,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     public string Name => _displayName ?? Node.Name;
     /// <summary>When false the outliner hides the delete control (robot, beds, stands, etc.).</summary>
     public bool CanDelete { get; }
+    /// <summary>Row click controls visibility (LFAM 3 toolheads); hides the eye toggle.</summary>
+    public bool UsesExclusiveVisibility { get; }
+    public bool ShowVisibilityToggle => !UsesExclusiveVisibility;
     public ICommand DeleteCommand { get; }
     public ICommand ToggleVisibleCommand { get; }
     public ICommand ReloadModelCommand { get; }
@@ -36,6 +39,50 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     public ObservableCollection<OutlinerItemViewModel> Children { get; } = [];
     public bool HasChildren => Children.Count > 0;
+
+    private bool _isScanMultiSelected;
+    private bool _isOutlinerSelected;
+    private bool _isRowHighlighted;
+
+    /// <summary>True when this scan row is part of a multi-selected merge set.</summary>
+    public bool IsScanMultiSelected
+    {
+        get => _isScanMultiSelected;
+        internal set
+        {
+            if (_isScanMultiSelected == value) return;
+            _isScanMultiSelected = value;
+            OnPropertyChanged();
+            SyncRowHighlighted();
+        }
+    }
+
+    /// <summary>True when this row matches the active viewport / outliner selection.</summary>
+    public bool IsOutlinerSelected
+    {
+        get => _isOutlinerSelected;
+        internal set
+        {
+            if (_isOutlinerSelected == value) return;
+            _isOutlinerSelected = value;
+            OnPropertyChanged();
+            SyncRowHighlighted();
+        }
+    }
+
+    /// <summary>Bound to the outliner row highlight brushes (scan or import selection).</summary>
+    public bool IsRowHighlighted
+    {
+        get => _isRowHighlighted;
+        private set
+        {
+            if (_isRowHighlighted == value) return;
+            _isRowHighlighted = value;
+            OnPropertyChanged();
+        }
+    }
+
+    void SyncRowHighlighted() => IsRowHighlighted = _isScanMultiSelected || _isOutlinerSelected;
 
     public void AddChild(OutlinerItemViewModel child)
     {
@@ -62,6 +109,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         Action? onHide = null,
         string? displayName = null,
         bool canDelete = true,
+        bool usesExclusiveVisibility = false,
         Func<OutlinerItemViewModel, bool>? canReloadModel = null,
         Func<OutlinerItemViewModel, bool>? canReplaceModel = null,
         Action<OutlinerItemViewModel>? onReloadModel = null,
@@ -71,8 +119,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         _notifyRender = notifyRender;
         _onHide       = onHide;
         _displayName  = displayName;
-        CanDelete            = canDelete;
-        DeleteCommand        = new RelayCommand(() => onDelete(this), () => canDelete);
+        CanDelete                 = canDelete;
+        UsesExclusiveVisibility   = usesExclusiveVisibility;
+        DeleteCommand             = new RelayCommand(() => onDelete(this), () => canDelete);
         ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
         ReloadModelCommand   = new RelayCommand(
             () => onReloadModel?.Invoke(this),

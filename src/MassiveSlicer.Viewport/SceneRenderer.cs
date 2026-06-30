@@ -327,12 +327,19 @@ public sealed class SceneRenderer : IDisposable
 
     private readonly HashSet<SceneNode> _selectedToolpaths = [];
     private readonly List<SceneNode> _selectedToolpathOrder = [];
+    private readonly List<SceneNode> _selectedScanOrder = [];
 
     /// <summary>Toolpath nodes in the current multi-selection (shift+click), in pick order.</summary>
     public IReadOnlyList<SceneNode> SelectedToolpaths => _selectedToolpathOrder;
 
     /// <summary>Number of toolpaths in the current multi-selection.</summary>
     public int SelectedToolpathCount => _selectedToolpathOrder.Count;
+
+    /// <summary>Scan nodes in the current outliner multi-selection.</summary>
+    public IReadOnlyList<SceneNode> SelectedScans => _selectedScanOrder;
+
+    /// <summary>Number of scans in the current multi-selection.</summary>
+    public int SelectedScanCount => _selectedScanOrder.Count;
 
     /// <summary>Returns <c>true</c> when <paramref name="node"/> is highlighted as selected.</summary>
     public bool IsToolpathHighlighted(SceneNode node)
@@ -915,22 +922,29 @@ public sealed class SceneRenderer : IDisposable
         }
 
         // -- Selection mask pass -----------------------------------------------
-        if (SelectedNode is not null && _maskShader is not null)
+        if (_maskShader is not null)
         {
-            GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
-            GL.ClearColor(0f, 0f, 0f, 0f);
-            GL.Clear(ClearBufferMask.ColorBufferBit);
-
-            GL.DepthMask(false);
-            _maskShader.Use();
-            foreach (var n in SelectedNode.SelfAndDescendants())
+            var maskRoots = GetSelectionMaskRoots().ToList();
+            if (maskRoots.Count > 0)
             {
-                if (n.Mesh is null) continue;
-                var nodeMvp = n.WorldTransform * mvp;
-                _maskShader.SetMatrix4("uMVP", ref nodeMvp);
-                n.Mesh.DrawRaw();
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, _maskFbo);
+                GL.ClearColor(0f, 0f, 0f, 0f);
+                GL.Clear(ClearBufferMask.ColorBufferBit);
+
+                GL.DepthMask(false);
+                _maskShader.Use();
+                foreach (var root in maskRoots)
+                {
+                    foreach (var n in root.SelfAndDescendants())
+                    {
+                        if (n.Mesh is null) continue;
+                        var nodeMvp = n.WorldTransform * mvp;
+                        _maskShader.SetMatrix4("uMVP", ref nodeMvp);
+                        n.Mesh.DrawRaw();
+                    }
+                }
+                GL.DepthMask(true);
             }
-            GL.DepthMask(true);
         }
 
         // -- Composite pass ----------------------------------------------------
@@ -965,7 +979,7 @@ public sealed class SceneRenderer : IDisposable
             _compositeShader.SetVector2("uTexelSize",
                 new Vector2(1f / viewportWidth, 1f / viewportHeight));
             _compositeShader.SetFloat("uHasSelection",
-                SelectedNode is not null ? 1f : 0f);
+                GetSelectionMaskRoots().Any() ? 1f : 0f);
 
             if (_cavity is not null)
             {
@@ -1131,11 +1145,47 @@ public sealed class SceneRenderer : IDisposable
         SelectedNode = node;
         _selectedToolpaths.Clear();
         _selectedToolpathOrder.Clear();
+        _selectedScanOrder.Clear();
         if (node is not null && IsToolpathNode(node))
         {
             _selectedToolpaths.Add(node);
             _selectedToolpathOrder.Add(node);
         }
+    }
+
+    /// <summary>Syncs outliner scan multi-select into the viewport highlight mask.</summary>
+    public void SetScanSelection(IReadOnlyList<SceneNode> scans, SceneNode? primary = null)
+    {
+        _selectedScanOrder.Clear();
+        _selectedToolpaths.Clear();
+        _selectedToolpathOrder.Clear();
+        foreach (var scan in scans)
+        {
+            if (scan is null) continue;
+            if (_selectedScanOrder.Contains(scan)) continue;
+            _selectedScanOrder.Add(scan);
+        }
+
+        // Only drive SelectedNode from scans when there's an actual scan/primary pick. With an
+        // empty scan list, leave the current selection intact — otherwise clearing the scan
+        // multi-select (ClearScanOutlinerSelection → OnScanSelectionChanged → here) would wipe a
+        // freshly-set non-scan selection (e.g. a user import or mesh), which made imports
+        // impossible to select on LFAM cells.
+        if (primary is not null || _selectedScanOrder.Count > 0)
+            SelectedNode = primary ?? _selectedScanOrder[^1];
+    }
+
+    IEnumerable<SceneNode> GetSelectionMaskRoots()
+    {
+        if (_selectedScanOrder.Count > 0)
+        {
+            foreach (var scan in _selectedScanOrder)
+                yield return scan;
+            yield break;
+        }
+
+        if (SelectedNode is not null)
+            yield return SelectedNode;
     }
 
     /// <summary>Shift+click toggle for toolpath multi-selection.</summary>

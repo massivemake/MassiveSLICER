@@ -193,7 +193,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             // Skip transient capture-progress properties.
             if (e.PropertyName is nameof(ScanSettingsViewModel.IsScanning)
-                                or nameof(ScanSettingsViewModel.ScanStatus))
+                                or nameof(ScanSettingsViewModel.ScanStatus)
+                                or nameof(ScanSettingsViewModel.QuickPositionStatus))
                 return;
             OnSettingsChanged();
         };
@@ -219,6 +220,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         Toolbar.SyncRobotRequested += (_, _) => robot.ConnectCommand.Execute(null);
 
         RightPanel.Scan.OnTestScanRequested = RunTestScan;
+        RightPanel.Scan.OnMoveQuickPositionRequested = name => _ = MoveQuickPositionAsync(name);
+        RightPanel.Scan.OnSaveQuickPositionRequested = name => _ = SaveQuickPositionAsync(name);
 
         // Wire hand-eye calibration: provide the live flange pose and apply result to TCP fields.
         // CRITICAL: calibration must use the SAME flange frame the viewport applies scans in
@@ -345,9 +348,53 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             SyncLfam3WorkflowSidebar();
             SyncKrlFrameIndicesToActiveTab();
+            RightPanel.Scan.RefreshQuickPositions(cell);
+            Viewport.FlattenScansToBedGroup();
 
             TryApplyPendingWorkspaceRestore(generation);
         };
+    }
+
+    async Task MoveQuickPositionAsync(string waypointName)
+    {
+        var scan = RightPanel.Scan;
+        bool ok = await GoToWaypointAsync(waypointName);
+        var label = scan.QuickPositions.FirstOrDefault(p =>
+            p.WaypointName.Equals(waypointName, StringComparison.OrdinalIgnoreCase))?.Label
+            ?? waypointName;
+        scan.QuickPositionStatus = ok
+            ? $"At {label}."
+            : "Move timed out — check MASSIVE_SERVER / CELL.";
+    }
+
+    async Task SaveQuickPositionAsync(string displayName)
+    {
+        var scan = RightPanel.Scan;
+        displayName = (displayName ?? string.Empty).Trim();
+        if (displayName.Length == 0)
+        {
+            scan.QuickPositionStatus = "Enter a name for the position.";
+            return;
+        }
+
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected)
+        {
+            scan.QuickPositionStatus = "Robot not connected — Sync first.";
+            return;
+        }
+
+        string slug = ScanSettingsViewModel.SlugifyQuickPositionName(displayName);
+        scan.QuickPositionStatus = $"Saving {displayName}…";
+        bool ok = await SaveWaypointFromRobotAsync(slug, displayName, [ScanSettingsViewModel.QuickPositionTag]);
+        if (!ok)
+        {
+            scan.QuickPositionStatus = $"Couldn't save {displayName} — see console.";
+            return;
+        }
+
+        scan.RefreshQuickPositions(Viewport.ActiveCell);
+        scan.QuickPositionStatus = $"Saved {displayName}.";
     }
 
     /// <summary>
@@ -1428,26 +1475,26 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Moves the robot to a saved cell waypoint (joint or Cartesian per <see cref="CellWaypointConfig.PreferJoints"/>).</summary>
-    public async Task GoToWaypointAsync(string name, int velOverride = -1)
+    public async Task<bool> GoToWaypointAsync(string name, int velOverride = -1)
     {
         if (Viewport.ActiveCellPath is not { } path)
         {
             Console.LogError("[waypoint] No active cell.");
-            return;
+            return false;
         }
 
         var cell = CellLoader.Load(path);
         if (CellLoader.FindWaypoint(cell, name) is not { } wp)
         {
             Console.LogError($"[waypoint] '{name}' not found â€” run `waypoint list`.");
-            return;
+            return false;
         }
 
         var robot = RightPanel.Settings.Robot;
         if (!robot.IsConnected)
         {
             Console.LogError("[waypoint] Robot not connected â€” Sync first.");
-            return;
+            return false;
         }
 
         robot.PauseStreaming();
@@ -1457,8 +1504,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(ok
                 ? $"[waypoint] At {wp.Name}."
                 : "[waypoint] Move timed out â€” check MASSIVE_SERVER / CELL.");
+            return ok;
         }
-        catch (Exception ex) { Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
         finally { robot.ResumeStreaming(); }
     }
 
@@ -1727,26 +1779,26 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>Captures the live robot pose and saves it as a named waypoint in the active cell JSON.</summary>
-    public async Task SaveWaypointFromRobotAsync(string name, string? description = null, IReadOnlyList<string>? tags = null)
+    public async Task<bool> SaveWaypointFromRobotAsync(string name, string? description = null, IReadOnlyList<string>? tags = null)
     {
         if (Viewport.ActiveCellPath is not { } path)
         {
             Console.LogError("[waypoint] No active cell.");
-            return;
+            return false;
         }
 
         name = (name ?? string.Empty).Trim();
         if (name.Length == 0)
         {
             Console.LogError("[waypoint] usage: waypoint save <name>");
-            return;
+            return false;
         }
 
         var robot = RightPanel.Settings.Robot;
         if (!robot.IsConnected)
         {
             Console.LogError("[waypoint] Robot not connected â€” Sync first.");
-            return;
+            return false;
         }
 
         robot.PauseStreaming();
@@ -1780,7 +1832,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (!CellLoader.SaveWaypoint(path, wp, out var err))
             {
                 Console.LogError($"[waypoint] Save failed: {err}");
-                return;
+                return false;
             }
 
             CellSceneCache.Invalidate(path);
@@ -1792,9 +1844,26 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(string.Format(inv,
                 "  joints A1={0:F2} A2={1:F2} A3={2:F2} A4={3:F2} A5={4:F2} A6={5:F2} E1={6:F2}",
                 j[0], j[1], j[2], j[3], j[4], j[5], e1));
+            return true;
         }
-        catch (Exception ex) { Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            Console.LogError($"[waypoint] {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
         finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>Resets the viewport robot to the selected home preset (no real-robot move).</summary>
+    public string ApplyViewportHome()
+    {
+        var home = Viewport.AdditiveSettings?.SelectedHomeAngles
+                   ?? [0f, -90f, 90f, 0f, 15f, 0f];
+        RightPanel.Settings.Robot.ApplyViewportJoints(home);
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        return string.Format(inv,
+            "[viewport-home] A1={0:F2} A2={1:F2} A3={2:F2} A4={3:F2} A5={4:F2} A6={5:F2}",
+            home[0], home[1], home[2], home[3], home[4], home[5]);
     }
 
     /// <summary>Switches to a cell whose display name matches <paramref name="name"/>
@@ -1802,7 +1871,17 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string SwitchCellByName(string name)
     {
         name = (name ?? string.Empty).Trim();
-        if (name.Length == 0) return "[cell] usage: cell <name>";
+        if (name.Length == 0) return "[cell] usage: cell <name> [--home]";
+
+        bool resetHome = false;
+        var parts = name.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length > 1
+            && (parts[^1].Equals("--home", StringComparison.OrdinalIgnoreCase)
+                || parts[^1].Equals("home", StringComparison.OrdinalIgnoreCase)))
+        {
+            resetHome = true;
+            name = string.Join(' ', parts[..^1]);
+        }
 
         var names = LeftPanel.CellNames;
         int idx = -1;
@@ -1817,10 +1896,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (idx < 0)
             return $"[cell] no cell matching '{name}'. Available: {string.Join(", ", names)}";
         if (LeftPanel.SelectedCellIndex == idx)
-            return $"[cell] already on {names[idx]}.";
+        {
+            if (resetHome) return ApplyViewportHome();
+            return $"[cell] already on {names[idx]}. (append --home to reset viewport pose)";
+        }
 
         LeftPanel.SelectedCellIndex = idx; // fires the async cell load
-        return $"[cell] switching to {names[idx]}â€¦";
+        return $"[cell] switching to {names[idx]}…";
     }
 
     /// <summary>Syncs (connects) the robot over C3Bridge if not already connected.</summary>
@@ -2152,6 +2234,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             RightPanel.ActiveTab = tab;
 
         WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
+        Viewport.FlattenScansToBedGroup();
 
         if (doc.Camera is { } camera)
             Viewport.ApplyCameraState?.Invoke(camera);

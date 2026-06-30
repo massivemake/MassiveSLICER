@@ -2,7 +2,9 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>..\..\assets\Icons\icon.ico</ApplicationIcon>
@@ -64,11 +66,33 @@
     <None Include="..\..\assets\Images\*.hdr" Link="assets\Images\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <Target Name="CopyIjwhostToAppOutput" AfterTargets="Build">
+    <Copy SourceFiles="$(OutDir)occt\x64\Ijwhost.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(OutDir)occt\x64\Ijwhost.dll')" />
+  </Target>
+
+  <Target Name="CopyOcctToPublishDir" AfterTargets="Publish">
+    <ItemGroup>
+      <_OcctNative Include="$(OutputPath)occt\x64\**\*.*" Condition="Exists('$(OutputPath)occt\x64')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_OcctNative)"
+          DestinationFiles="@(_OcctNative -> '$(PublishDir)occt\x64\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true"
+          Condition="'@( _OcctNative)' != ''" />
+    <Copy SourceFiles="$(OutputPath)Ijwhost.dll"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(OutputPath)Ijwhost.dll')" />
+  </Target>
+
   <ItemGroup>
     <PackageReference Include="Avalonia" Version="12.0.4" />
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.0.4" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.4" />
     <PackageReference Include="Avalonia.Themes.Simple" Version="12.0.4" />
+    <PackageReference Include="Occt.NET" Version="7.9.0" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="Optris.Icons.Avalonia" Version="12.0.6" />
     <PackageReference Include="Optris.Icons.Avalonia.MaterialDesign" Version="12.0.6" />

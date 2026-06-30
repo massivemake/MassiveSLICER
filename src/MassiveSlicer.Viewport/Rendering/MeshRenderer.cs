@@ -125,6 +125,8 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
+    private readonly bool _renderAsPoints;
+
     // -- GLSL source ----------------------------------------------------------
 
     internal static readonly string VertSrc = """
@@ -456,8 +458,9 @@ public sealed class MeshRenderer : IDisposable
     /// </summary>
     public MeshRenderer(MeshData data)
     {
-        PickingData = data;
-        Color       = data.BaseColor;
+        PickingData      = data;
+        _renderAsPoints  = data.RenderAsPoints;
+        Color            = data.BaseColor;
         Metallic    = data.Metallic;
 
         float smoothness = 1f - data.Roughness;
@@ -563,14 +566,16 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetInt("uHasEnv",             HasEnvMap ? 1 : 0);
 
         GL.BindVertexArray(_vao);
+        var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
+        if (_renderAsPoints) GL.PointSize(2.5f);
         if (_indexed)
-            GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(primitive, _count, DrawElementsType.UnsignedInt, 0);
         else
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+            GL.DrawArrays(primitive, 0, _count);
 
         // Wireframe overlay: redraw the triangles as lines, pulled slightly toward the
         // camera so the edges sit on top of the flat fill.
-        if (WireframeMode)
+        if (WireframeMode && !_renderAsPoints)
         {
             _shader.SetInt("uWireframe", 1);
             GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
@@ -603,10 +608,12 @@ public sealed class MeshRenderer : IDisposable
     internal void DrawRaw()
     {
         GL.BindVertexArray(_vao);
+        var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
+        if (_renderAsPoints) GL.PointSize(2.5f);
         if (_indexed)
-            GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(primitive, _count, DrawElementsType.UnsignedInt, 0);
         else
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+            GL.DrawArrays(primitive, 0, _count);
         GL.BindVertexArray(0);
     }
 

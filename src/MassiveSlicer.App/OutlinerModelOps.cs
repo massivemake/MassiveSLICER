@@ -10,6 +10,18 @@ internal static class OutlinerModelOps
     public static bool IsToolpath(SceneNode node)
         => node.Name.Contains("Toolpath", StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsScan(SceneNode node)
+        => node.Name.StartsWith("Scan ", StringComparison.OrdinalIgnoreCase)
+           || node.Name.StartsWith("scan_", StringComparison.OrdinalIgnoreCase)
+           || node.Name.StartsWith("Armature Scan", StringComparison.OrdinalIgnoreCase)
+           || node.Name.StartsWith("Merged Scan", StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsScanItem(OutlinerItemViewModel item)
+        => IsScan(item.Node);
+
+    public static bool IsToolheadItem(OutlinerItemViewModel item)
+        => item.UsesExclusiveVisibility;
+
     public static bool HasMeshGeometry(SceneNode node)
     {
         if (IsToolpath(node)) return false;

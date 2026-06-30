@@ -280,9 +280,26 @@ public partial class ViewportView : UserControl
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
+            vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
-            vm.OnOutlinerSelectRequested = node => RequestSceneSelection(vm, node);
+            vm.OnOutlinerSelectRequested = node =>
+            {
+                vm.SetOutlinerSelection(node);
+                RequestSceneSelection(vm, node);
+            };
+            vm.OnOutlinerMultiScanViewportSync = _ => SyncScanSelectionToRenderer(vm);
+            vm.OnScanSelectionChanged = () => SyncScanSelectionToRenderer(vm);
+            vm.OnOutlinerToolheadSelected = toolName => ApplyExclusiveToolheadFromOutliner(toolName, vm);
+            vm.OnExportScanPointCloudRequested = node => ExportScanPointCloudAsync(vm, node);
+            vm.OnExportScanMeshRequested       = node => ExportScanMeshAsync(vm, node);
             vm.GetSelectedSceneNode = () => _renderer.SelectedNode;
+            vm.ForceSelectNode = node =>
+            {
+                _renderer.Select(node);
+                vm.SetOutlinerSelection(node);
+                UpdateFocusOverlay();
+                GlCanvas.RequestNextFrameRendering();
+            };
             vm.OnNodeHidden           = node =>
             {
                 if (_renderer.SelectedNode is { } sel && node.SelfAndDescendants().Any(n => n == sel))
@@ -535,6 +552,7 @@ public partial class ViewportView : UserControl
 
             additive.OnOpenCurvedBoundaryEditorRequested = () => OpenCurvedBoundaryEditor(vm, additive);
             additive.OnImportCurvedBoundariesRequested  = () => ImportCurvedBoundariesAsync(vm, additive);
+            additive.OnHomePositionSelected = angles => vm.Robot?.ApplyViewportJoints(angles);
 
             additive.PropertyChanged += (_, pe) =>
             {
@@ -891,8 +909,10 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingNodes.TryDequeue(out var incoming))
             {
+                MarkUserImportSubtree(incoming);
                 AttachUserImportToCell(incoming);
                 UploadPendingMeshes(incoming);
+                MarkUserImportSubtree(incoming);
                 _renderer.InvalidateShaderAppearance();
 
                 if (_fkController is null)
@@ -909,8 +929,7 @@ public partial class ViewportView : UserControl
             // preserved at the current E1 and every later E1 change rotates the content with the table.
             while (vm.PendingRotaryNodes.TryDequeue(out var rotaryChild))
             {
-                rotaryChild.Selectable = true;
-                rotaryChild.PickTier   = PickTier.Content;
+                MarkUserImportSubtree(rotaryChild);
                 if (_rotaryBedPivot is { } pivot)
                 {
                     rotaryChild.LocalTransform = rotaryChild.LocalTransform * pivot.WorldTransform.Inverted();
@@ -920,9 +939,15 @@ public partial class ViewportView : UserControl
                     _renderer.SceneRoot.AddChild(rotaryChild);   // fallback: no pivot this cell
 
                 UploadPendingMeshes(rotaryChild);
+                MarkUserImportSubtree(rotaryChild);
                 _renderer.InvalidateShaderAppearance();
                 _renderer.Select(rotaryChild);
-                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is ViewportViewModel syncVm)
+                        syncVm.SetOutlinerSelection(rotaryChild);
+                    UpdateFocusOverlay();
+                });
             }
 
             while (vm.PendingToolNodes.TryDequeue(out var toolNode))
@@ -1383,23 +1408,33 @@ public partial class ViewportView : UserControl
         _activeScrubNode = null;
     }
 
-    /// <summary>Parents a user import under the bed / rotary pivot when present, else scene root.</summary>
+    /// <summary>
+    /// Parents a user import under the rotary pivot when the cell has one (LFAM 3 turntable).
+    /// Flat-bed cells (LFAM 1/2) attach at scene root so picks are not treated as cell infrastructure.
+    /// </summary>
     private void AttachUserImportToCell(SceneNode node)
     {
         var world = node.WorldTransform;
+        node.Parent?.RemoveChild(node);
+
         if (_rotaryBedPivot is { } pivot)
         {
             node.LocalTransform = world * pivot.WorldTransform.Inverted();
             pivot.AddChild(node);
         }
-        else if (_bedNode is { } bed)
-        {
-            node.LocalTransform = world * bed.WorldTransform.Inverted();
-            bed.AddChild(node);
-        }
         else
         {
+            node.LocalTransform = world;
             _renderer.SceneRoot.AddChild(node);
+        }
+    }
+
+    private static void MarkUserImportSubtree(SceneNode root)
+    {
+        foreach (var n in root.SelfAndDescendants())
+        {
+            n.Selectable = true;
+            n.PickTier   = PickTier.Content;
         }
     }
 
@@ -1511,24 +1546,7 @@ public partial class ViewportView : UserControl
         vm.ActiveCellPath = swap.CellPath;
         var swapCellForPost = swap.Config;
         var swapCellPath    = swap.CellPath;
-        Dispatcher.UIThread.Post(() =>
-        {
-            var additive = vm.AdditiveSettings;
-            if (additive is null) return;
-            var posData = CellLoader.LoadPositionData(swapCellPath);
-            additive.UpdateFromCell(swapCellForPost, posData.Default, posData.Positions);
-            if (vm.Robot is not null)
-            {
-                vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
-                var bed = swapCellForPost.Bed;
-                float orient = swapCellForPost.RotaryBed?.OrientationOffsetDeg
-                               ?? RotaryBedCellConfig.DefaultOrientationOffsetDeg;
-                vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
-                                      bed.Diameter ?? 0f, bed.RotationSign ?? -1f, orient,
-                                      bed.Diameter is > 0f);
-                vm.Robot.ConfigureRail(swapCellForPost.RobotRail);
-            }
-        });
+        // Cell home presets + robot panel limits are applied together on the UI thread (see InvokeAsync below).
         var b          = swap.Config.Bed;
         var rpBed      = swap.Config.Robot.WorldPosition;
         var baseMarker = b.BaseMarkerWorld(rpBed);
@@ -1642,6 +1660,16 @@ public partial class ViewportView : UserControl
         {
             vm.SetCellEnvironmentOutliner(cellEnvOutliner);
             vm.SetRotaryBedGroup(rotaryPivot, "KP1-MB2000 HW-2 Rotary Bed");
+            if (swap.MultiTools is { } mt)
+            {
+                var toolEntries = swap.Config.EffectiveTools
+                    .Where(t => mt.Tools.ContainsKey(t.Name))
+                    .Select(t => (t.Name, mt.Tools[t.Name].FlangeHolder))
+                    .ToList();
+                vm.SetMultiToolOutliner(toolEntries);
+            }
+            else
+                vm.SetMultiToolOutliner([]);
         });
 
         if (_fkController?.FlangeNode is { } flange)
@@ -1712,8 +1740,27 @@ public partial class ViewportView : UserControl
             UpdateFocusOverlay();
             vm.NotifyCellChanged();
 
+            var posData = CellLoader.LoadPositionData(swap.CellPath);
+            if (vm.AdditiveSettings is { } additive)
+                additive.UpdateFromCell(swap.Config, posData.Default, posData.Positions);
+
             if (vm.Robot is null) return;
-            vm.Robot.Configure(swap.Config.Robot.Joints, swap.Config.Robot.HomePosition);
+
+            vm.Robot.SetNextPositionName(posData.Positions.Count + 1);
+            var bed = swap.Config.Bed;
+            float orient = swap.Config.RotaryBed?.OrientationOffsetDeg
+                           ?? RotaryBedCellConfig.DefaultOrientationOffsetDeg;
+            vm.Robot.ConfigureBed(bed.Origin.X, bed.Origin.Y, bed.Origin.Z,
+                                  bed.Diameter ?? 0f, bed.RotationSign ?? -1f, orient,
+                                  bed.Diameter is > 0f);
+            vm.Robot.ConfigureRail(swap.Config.RobotRail);
+
+            var home = vm.AdditiveSettings?.SelectedHomeAngles ?? swap.Config.Robot.HomePosition;
+            vm.Robot.Configure(swap.Config.Robot.Joints, home);
+            vm.Robot.SetDefaultToolheadOrientation(
+                swap.Config.Robot.DefaultToolheadA,
+                swap.Config.Robot.DefaultToolheadB,
+                swap.Config.Robot.DefaultToolheadC);
             vm.Robot.SetBridgeConfig(swap.Config.BridgeIp, swap.Config.BridgePort);
             vm.LiveIo.SetExtruderBridgeConfig(swap.Config.ExtIp, swap.Config.ExtBridgePort);
             vm.LiveIo.SetMillingBridgeConfig(swap.Config.MillIp, swap.Config.HasMilling, swap.Config.MillBridgePort);
@@ -1729,7 +1776,6 @@ public partial class ViewportView : UserControl
 
             if (swap.FirstTool is { } tool)
             {
-                var bed = swap.Config.Bed;
                 vm.Robot.SetIkData(
                     new System.Numerics.Vector3(
                         bed.BaseData.X + bed.Width  / 2f,
@@ -2157,22 +2203,26 @@ public partial class ViewportView : UserControl
                 {
                     GlCanvas.RequestNextFrameRendering();
                 }
+                else if (DataContext is ViewportViewModel pickVm)
+                {
+                    float vpW2 = (float)GlCanvas.Bounds.Width;
+                    float vpH2 = (float)GlCanvas.Bounds.Height;
+                    var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
+                    var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
+                    var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
+                        _renderer.ToggleToolpathSelection(picked);
+                    else
+                        RequestSceneSelection(pickVm, picked);
+                }
                 else
                 {
                     float vpW2 = (float)GlCanvas.Bounds.Width;
                     float vpH2 = (float)GlCanvas.Bounds.Height;
                     var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
                     var picked = toolpathHit ?? _renderer.Pick(ray);
-                    var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
-                        _renderer.ToggleToolpathSelection(picked);
-                    else if (DataContext is ViewportViewModel pickVm)
-                        RequestSceneSelection(pickVm, picked);
-                    else
-                    {
-                        _renderer.Select(picked);
-                        UpdateFocusOverlay();
-                    }
+                    _renderer.Select(picked);
+                    UpdateFocusOverlay();
                 }
 
                 GlCanvas.RequestNextFrameRendering();
@@ -2286,7 +2336,17 @@ public partial class ViewportView : UserControl
     /// <summary>LFAM 3: all toolheads parked on docks; flange empty until a Pick simulation or manual mount.</summary>
     void ApplyInitialMultiToolState(ViewportViewModel vm) => ApplyMultiToolUnmount(vm, updateVm: false);
 
-    private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm)
+    void ApplyExclusiveToolheadFromOutliner(string toolName, ViewportViewModel vm)
+    {
+        if (_multiTools is null || vm.ActiveCell is not { } cell) return;
+        var cfg = cell.EffectiveTools.FirstOrDefault(t => t.Name == toolName);
+        if (cfg is null) return;
+
+        ApplyMultiToolMount(cfg, vm, hideAllDocks: true);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void ApplyMultiToolMount(ToolCellConfig tool, ViewportViewModel vm, bool hideAllDocks = false)
     {
         if (_multiTools is null) return;
 
@@ -2296,11 +2356,11 @@ public partial class ViewportView : UserControl
             bool mounted = name == tool.Name;
             pair.FlangeHolder.Visible = mounted;
             if (pair.DockHolder is { } dock)
-                dock.Visible = !mounted;
+                dock.Visible = hideAllDocks ? false : !mounted;
 
             if (mounted)
                 EnqueueCellGpuUpload(pair.FlangeHolder);
-            else if (pair.DockHolder is { } d)
+            else if (!hideAllDocks && pair.DockHolder is { } d)
                 EnqueueCellGpuUpload(d);
         }
 
@@ -2330,6 +2390,7 @@ public partial class ViewportView : UserControl
         if (_currentToolNode is not null)
         {
             _renderer.Select(_currentToolNode);
+            _lastOutlinerSyncedNode = _currentToolNode;
             Dispatcher.UIThread.Post(UpdateFocusOverlay);
         }
         Dispatcher.UIThread.Post(vm.NotifyCellChanged);
@@ -3753,19 +3814,46 @@ public partial class ViewportView : UserControl
         }
     }
 
+    void SyncScanSelectionToRenderer(ViewportViewModel vm)
+    {
+        var scans = vm.SelectedScanItems.Select(i => i.Node).ToList();
+        var primary = scans.Count > 0 ? scans[^1] : null;
+        _renderer.SetScanSelection(scans, primary);
+        _lastOutlinerSyncedNode = primary;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    SceneNode? PickForSceneSelection(ViewportViewModel vm, Ray ray)
+    {
+        // On LFAM cells the mounted tool often occludes the print volume — prefer user imports/scans.
+        if (IsLfamProductionCell(vm) && !vm.IsDevMode)
+        {
+            var userHit = Picker.PickWhere(
+                ray, _renderer.SceneRoot, n => vm.IsUserModelSceneNode(n), out _);
+            if (userHit is not null)
+                return Picker.FindSelectableRoot(userHit, _renderer.SceneRoot);
+        }
+
+        return _renderer.Pick(ray);
+    }
+
     void RequestSceneSelection(ViewportViewModel vm, SceneNode? node)
     {
-        // User imports are parented under the bed / rotary pivot for world-transform consistency.
-        // They remain infrastructure descendants, but must stay selectable (and Recenter-able).
-        if (node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node)
-            && !vm.IsUserModelSceneNode(node))
+        // Resolve mesh-leaf picks to the owning import/scan outliner root for gizmo + transform UI.
+        if (node is not null && vm.FindUserMeshOutlinerItem(node)?.Node is { } userRoot)
+            node = userRoot;
+
+        bool isUserContent = node is not null && vm.IsUserModelSceneNode(node);
+
+        // LFAM production cells block infrastructure picks unless they are user imports/scans.
+        if (!isUserContent && node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
         {
             if (_currentToolNode is not null)
                 node = _currentToolNode;
             else
                 node = null;
         }
-        else if (node is not null && _multiTools is not null
+        else if (!isUserContent && node is not null && _multiTools is not null
                  && TryResolveMultiToolPick(node, out var toolName, out var toolRoot, out var onDock))
         {
             if (onDock && vm.ActiveCell is { } cell)
@@ -3782,13 +3870,20 @@ public partial class ViewportView : UserControl
             else
                 node = toolRoot;
         }
-        else if (node is not null && _currentToolNode is not null
+        else if (!isUserContent && node is not null && _currentToolNode is not null
                  && IsSameOrDescendant(_currentToolNode, node))
         {
             node = _currentToolNode;
         }
 
-        _renderer.Select(node);
+        if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
+            SyncScanSelectionToRenderer(vm);
+        else
+        {
+            _renderer.Select(node);
+            vm.SetOutlinerSelection(node);
+        }
+
         UpdateFocusOverlay();
         GlCanvas.RequestNextFrameRendering();
     }
@@ -4393,11 +4488,19 @@ public partial class ViewportView : UserControl
         RememberCommittedTransform(node);
     }
 
+    private SceneNode? _lastOutlinerSyncedNode;
+
     private void UpdateFocusOverlay()
     {
         if (DataContext is not ViewportViewModel vm) return;
 
         var selected = _renderer.SelectedNode;
+        if (!ReferenceEquals(selected, _lastOutlinerSyncedNode) && vm.SelectedScanCount < 2)
+        {
+            vm.SetOutlinerSelection(selected);
+            _lastOutlinerSyncedNode = selected;
+        }
+
         vm.HasSelection       = selected is not null;
         bool isToolpath       = selected is not null && _renderer.IsToolpathNode(selected);
         bool isToolNode       = IsToolNodeSelected();
@@ -5411,6 +5514,56 @@ public partial class ViewportView : UserControl
         robot.SetNextPositionName(data.Positions.Count + 1);
     }
 
+    private void MergeSelectedScans(ViewportViewModel vm, ScanMergeOutput output)
+    {
+        var items = vm.SelectedScanItems.ToList();
+        if (items.Count < 2)
+        {
+            System.Console.WriteLine($"[scan-merge] need 2+ scans, have {items.Count}");
+            return;
+        }
+
+        var nodes = items.Select(i => i.Node).ToList();
+        var result = ScanMerger.Merge(nodes, output);
+        if (result is null)
+        {
+            System.Console.WriteLine("[scan-merge] no geometry to merge");
+            return;
+        }
+
+        var label = output == ScanMergeOutput.PointCloud
+            ? $"Merged Scan ({result.SourceCount} clouds)"
+            : $"Merged Scan ({result.SourceCount} meshes)";
+
+        var anchorWorld = nodes[0].WorldTransform;
+        var localMesh   = ScanMerger.ToLocalFrame(result.Mesh, anchorWorld);
+
+        var merged = new SceneNode
+        {
+            Name            = label,
+            PendingMesh     = localMesh,
+            LocalTransform  = anchorWorld,
+            Selectable      = true,
+            Visible         = true,
+            CullFaces       = false,
+            PickTier        = PickTier.Content,
+        };
+
+        vm.AddScanNode(merged);
+
+        foreach (var item in items)
+            item.Visible = false;
+
+        vm.ClearScanOutlinerSelection();
+        _renderer.Select(merged);
+        vm.SetOutlinerSelection(merged);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+
+        System.Console.WriteLine(
+            $"[scan-merge] {label}: {result.PointCount:N0} points, {result.TriangleCount:N0} triangles");
+    }
+
     private void MergeToolpaths(ViewportViewModel vm)
     {
         var nodes = _renderer.SelectedToolpaths.ToList();
@@ -5543,6 +5696,70 @@ public partial class ViewportView : UserControl
                wt.M21, wt.M22, wt.M23, wt.M24,
                wt.M31, wt.M32, wt.M33, wt.M34,
                wt.M41, wt.M42, wt.M43, wt.M44);
+
+    private async Task ExportScanPointCloudAsync(ViewportViewModel vm, SceneNode node)
+    {
+        if (!OutlinerModelOps.IsScan(node)) return;
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        var safeName = string.Join('_', node.Name.Split(Path.GetInvalidFileNameChars()));
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Point Cloud",
+            DefaultExtension  = "ply",
+            SuggestedFileName = safeName,
+            FileTypeChoices   = [new("PLY Point Cloud") { Patterns = ["*.ply"] }],
+        });
+        if (file is null) return;
+
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        try
+        {
+            await Task.Run(() => ScanGeometryExporter.ExportPointCloud(path, node));
+            if (topLevel.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log($"[export] Point cloud → {path}");
+        }
+        catch (Exception ex)
+        {
+            if (topLevel.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log($"[export] Failed: {ex.Message}");
+        }
+    }
+
+    private async Task ExportScanMeshAsync(ViewportViewModel vm, SceneNode node)
+    {
+        if (!OutlinerModelOps.IsScan(node)) return;
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        var safeName = string.Join('_', node.Name.Split(Path.GetInvalidFileNameChars()));
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Mesh",
+            DefaultExtension  = "stl",
+            SuggestedFileName = safeName,
+            FileTypeChoices   = [new("STL Mesh") { Patterns = ["*.stl"] }],
+        });
+        if (file is null) return;
+
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+
+        try
+        {
+            await Task.Run(() => ScanGeometryExporter.ExportMesh(path, node));
+            if (topLevel.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log($"[export] Mesh → {path}");
+        }
+        catch (Exception ex)
+        {
+            if (topLevel.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log($"[export] Failed: {ex.Message}");
+        }
+    }
 
     private async Task ExportKrlAsync(ViewportViewModel vm)
     {

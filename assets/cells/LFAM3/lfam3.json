@@ -212,12 +212,12 @@
     {
       "name": "Scanner",
       "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
-      "tcpX": -55.57,
-      "tcpY": -103.6,
-      "tcpZ": 260.57,
-      "tcpA": 0.077,
-      "tcpB": 2.434,
-      "tcpC": -1.349,
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
       "toolFrameRoll": 0,
       "krlIndex": 6,
       "sensorOriginX": -55.57,
@@ -301,12 +301,12 @@
   "millBridgePort": 8765,
   "hasMilling": false,
   "view": {
-    "azimuth": -59.400043,
-    "elevation": 19.2001,
-    "radius": 2727.478,
-    "targetX": 1128.0677,
-    "targetY": -722.60706,
-    "targetZ": 1125.4166
+    "azimuth": -33.80002,
+    "elevation": 14.000105,
+    "radius": 1640.2579,
+    "targetX": 1832.4707,
+    "targetY": 56.76979,
+    "targetZ": 1061.0533
   },
   "bedScan": {
     "scanPose": [
@@ -393,6 +393,32 @@
         -46.19,
         197,
         0
+      ],
+      "tool": 6,
+      "base": 0,
+      "velocityPct": 20,
+      "preferJoints": true
+    },
+    {
+      "name": "down-45-deg",
+      "description": "DOWN 45 Deg",
+      "tags": [
+        "scan-quick"
+      ],
+      "tcpX": -73.08354,
+      "tcpY": 160.37422,
+      "tcpZ": 196.8648,
+      "tcpA": -88.99168,
+      "tcpB": -42.59595,
+      "tcpC": 178.87498,
+      "joints": [
+        -18.044012,
+        -58.327705,
+        106.933044,
+        -136.62622,
+        -63.415775,
+        149.5646,
+        60
       ],
       "tool": 6,
       "base": 0,

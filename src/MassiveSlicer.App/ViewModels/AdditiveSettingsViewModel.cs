@@ -1071,8 +1071,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (value is null) return;
             if (!SetField(ref _selectedHomePositionName, value)) return;
             _selectedHomePositionIndex = Math.Max(0, _homePositions.FindIndex(p => p.Name == value));
+            OnHomePositionSelected?.Invoke(SelectedHomeAngles);
         }
     }
+
+    /// <summary>Raised when the user picks a home preset — viewport applies joint angles locally.</summary>
+    internal Action<float[]>? OnHomePositionSelected { get; set; }
 
     /// <summary>Joint angles (A1-A6, KRL degrees) for the currently selected home position.</summary>
     public float[] SelectedHomeAngles

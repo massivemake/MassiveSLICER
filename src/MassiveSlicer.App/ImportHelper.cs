@@ -12,7 +12,7 @@ namespace MassiveSlicer.App;
 /// </summary>
 internal static class ImportHelper
 {
-    private static readonly HashSet<string> SupportedExtensions = [".glb", ".gltf", ".stl", ".obj", ".3mf"];
+    private static readonly HashSet<string> SupportedExtensions = [".glb", ".gltf", ".stl", ".obj", ".3mf", ".stp", ".step"];
 
     /// <summary>Fraction of rotary radius used when scaling oversized imports to fit the table.</summary>
     private const float RotaryFitMargin = 0.96f;
@@ -101,10 +101,11 @@ internal static class ImportHelper
             var ext = Path.GetExtension(filePath).ToLowerInvariant();
             var node = ext switch
             {
-                ".stl" => StlLoader.Load(filePath),
-                ".obj" => ObjLoader.Load(filePath),
-                ".3mf" => ThreeMfLoader.Load(filePath),
-                _      => GltfLoader.Load(filePath),
+                ".stl"  => StlLoader.Load(filePath),
+                ".obj"  => ObjLoader.Load(filePath),
+                ".3mf"  => ThreeMfLoader.Load(filePath),
+                ".stp" or ".step" => StepLoader.Load(filePath),
+                _       => GltfLoader.Load(filePath),
             };
             node.CullFaces     = false;
             node.SourceFilePath = Path.GetFullPath(filePath);

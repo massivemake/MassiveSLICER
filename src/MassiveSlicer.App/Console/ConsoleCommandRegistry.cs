@@ -130,7 +130,7 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "import",
             Aliases = ["import-model", "model"],
-            Description = "Import a 3D model (.glb, .stl, .obj, .3mf)",
+            Description = "Import a 3D model (.glb, .stl, .obj, .3mf, .stp)",
             Usage = "import [path]",
             Execute = (ctx, args) =>
             {
@@ -273,6 +273,14 @@ public sealed class ConsoleCommandRegistry
             },
         });
 
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "viewport-home",
+            Aliases = ["vhome", "reset-viewport"],
+            Description = "Reset viewport robot joints to the selected home preset (no real-robot move)",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.ApplyViewportHome()),
+        });
+
         RegisterRelativeMove("move-up", ["up"], "Up (+Z)", dzMm: +1);
         RegisterRelativeMove("move-down", ["down"], "Down (−Z)", dzMm: -1);
         RegisterRelativeMove("move-forward", ["forward", "fwd"], "Forward (+X)", dxMm: +1);
@@ -306,6 +314,39 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "objects",
+            Aliases = ["ls", "list-objects"],
+            Description = "List user content objects (imports/scans/toolpaths) with mesh/pick info",
+            Execute = (ctx, _) =>
+            {
+                foreach (var line in ctx.Main.Viewport.ListContentObjects().Split('\n'))
+                    ctx.Log(line.TrimEnd('\r'));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "select",
+            Aliases = ["sel"],
+            Description = "Select a content object by name (drives the outliner selection path)",
+            Usage = "select <name>",
+            Execute = (ctx, args) =>
+            {
+                if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: select <name>  (run `objects` to list)"); return; }
+                ctx.Log(ctx.Main.Viewport.SelectByName(args));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "selection",
+            Aliases = ["selected"],
+            Description = "Report the renderer's current selection (what would be highlighted)",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.DescribeSelection()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "move-joints",
             Aliases = ["movejoints", "jmove"],
             Description = "PTP to a joint target via MS_AXIS (use when move-pose hits soft limits)",
@@ -317,8 +358,8 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "cell",
             Aliases = ["switch-cell"],
-            Description = "Switch to a robot cell by name (e.g. cell LFAM 3)",
-            Usage = "cell <name>",
+            Description = "Switch to a robot cell by name (e.g. cell LFAM 3). Append --home to reset viewport pose on the active cell.",
+            Usage = "cell <name> [--home]",
             Execute = (ctx, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: cell <name>   e.g.  cell LFAM 3"); return; }

@@ -78,11 +78,12 @@ internal static class CellSceneLoader
                         Selectable     = false,
                     };
                     boosterNode.AddChild(node);
+                    boosterNode.MarkEnvironmentSubtree();
                 }
                 else
                 {
-                    node.Selectable = false;
-                    boosterNode     = node;
+                    boosterNode = node;
+                    boosterNode.MarkEnvironmentSubtree();
                 }
             }
             catch { /* non-critical */ }

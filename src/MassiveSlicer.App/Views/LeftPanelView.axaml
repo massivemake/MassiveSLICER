@@ -84,35 +84,19 @@
             <!-- Tab content -->
             <Grid Grid.Row="4">
 
-                <!-- Outliner tab -->
-                <ListBox x:Name="OutlinerList"
-                         ItemsSource="{Binding OutlinerItems}"
-                         Background="Transparent"
-                         BorderThickness="0"
-                         Padding="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         IsVisible="{Binding IsOutlinerTabActive}"
-                         SelectionChanged="OnOutlinerSelectionChanged">
-                    <ListBox.Resources>
-                        <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#21273a"/>
-                        <SolidColorBrush x:Key="ThemeAccentBrush4"             Color="#1e3800"/>
-                        <SolidColorBrush x:Key="ThemeAccentBrush3"             Color="#253300"/>
-                        <SolidColorBrush x:Key="ThemeAccentBrush2"             Color="#2c3c00"/>
-                    </ListBox.Resources>
-                    <ListBox.Styles>
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                            <Setter Property="Padding" Value="0"/>
-                            <Setter Property="Background" Value="Transparent"/>
-                        </Style>
-                    </ListBox.Styles>
-
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <views:OutlinerItemView Margin="6,0,0,0"/>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <!-- Outliner tab (ItemsControl — not ListBox — so nested scan rows don't highlight the bed parent) -->
+                <ScrollViewer IsVisible="{Binding IsOutlinerTabActive}"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Background="Transparent">
+                    <ItemsControl ItemsSource="{Binding OutlinerItems}" Padding="0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <views:OutlinerItemView Margin="6,0,0,0"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
 
                 <!-- Viewport tab -->
                 <ScrollViewer IsVisible="{Binding IsViewportTabActive}"
