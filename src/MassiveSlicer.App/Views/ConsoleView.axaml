@@ -8,8 +8,39 @@
              VerticalAlignment="Stretch">
 
     <UserControl.Styles>
+        <!-- History lines -->
+        <Style Selector="SelectableTextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+            <Setter Property="SelectionBrush" Value="{DynamicResource Bg4}"/>
+            <Setter Property="SelectionForegroundBrush" Value="{DynamicResource TextPrimary}"/>
+        </Style>
         <Style Selector="SelectableTextBlock.error">
             <Setter Property="Foreground" Value="#ff6b6b"/>
+            <Setter Property="SelectionForegroundBrush" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+
+        <!-- Autocomplete suggestions — dark row highlight + light text (not green-on-green) -->
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem">
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Background" Value="Transparent"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource Bg4}"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:selected /template/ ContentPresenter">
+            <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:pointerover TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:selected TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:pointerover TextBlock.suggestionName">
+            <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
+        </Style>
+        <Style Selector="ListBox.ConsoleSuggestions ListBoxItem:selected TextBlock.suggestionName">
+            <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
         </Style>
     </UserControl.Styles>
 
@@ -46,15 +77,21 @@
                         BorderBrush="{DynamicResource Border1}"
                         BorderThickness="0,0,0,1"
                         MaxHeight="140">
-                    <ListBox ItemsSource="{Binding Suggestions}"
+                    <ListBox Classes="ConsoleSuggestions"
+                             ItemsSource="{Binding Suggestions}"
                              SelectedIndex="{Binding SelectedSuggestionIndex}"
                              Background="Transparent"
                              BorderThickness="0"
                              Padding="0">
+                        <ListBox.Resources>
+                            <SolidColorBrush x:Key="ThemeControlHighlightMidBrush" Color="#21273a"/>
+                            <SolidColorBrush x:Key="ThemeControlHighlightLowBrush" Color="#1e3800"/>
+                        </ListBox.Resources>
                         <ListBox.ItemTemplate>
                             <DataTemplate>
                                 <Grid ColumnDefinitions="Auto,*,Auto" Margin="8,3">
                                     <TextBlock Grid.Column="0"
+                                               Classes="suggestionName"
                                                Text="{Binding Name}"
                                                FontFamily="Consolas,Courier New,monospace"
                                                FontSize="11"

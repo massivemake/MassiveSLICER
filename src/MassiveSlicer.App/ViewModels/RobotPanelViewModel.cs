@@ -411,11 +411,27 @@ public sealed class RobotPanelViewModel : ViewModelBase
             MinA5 = joints[4].MinDeg; MaxA5 = joints[4].MaxDeg;
             MinA6 = joints[5].MinDeg; MaxA6 = joints[5].MaxDeg;
         }
-        if (home.Length >= 6)
-        {
-            A1 = home[0]; A2 = home[1]; A3 = home[2];
-            A4 = home[3]; A5 = home[4]; A6 = home[5];
-        }
+        ApplyViewportJoints(home);
+    }
+
+    /// <summary>Sets the viewport robot to <paramref name="home"/> (A1–A6, KRL degrees) without moving the real robot.</summary>
+    public void ApplyViewportJoints(float[] home)
+    {
+        if (home.Length < 6) return;
+        A1 = home[0]; A2 = home[1]; A3 = home[2];
+        A4 = home[3]; A5 = home[4]; A6 = home[5];
+    }
+
+    private float _defaultToolheadA;
+    private float _defaultToolheadB;
+    private float _defaultToolheadC;
+
+    /// <summary>Cell default toolhead ABC (KUKA ZYX deg) — used by Go To Bed Center IK orientation.</summary>
+    public void SetDefaultToolheadOrientation(double a, double b, double c)
+    {
+        _defaultToolheadA = (float)a;
+        _defaultToolheadB = (float)b;
+        _defaultToolheadC = (float)c;
     }
 
     // -- TCP readout -----------------------------------------------------------
@@ -805,7 +821,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
         var target = new OpenTK.Mathematics.Vector3(_bedCenterRobot.X, _bedCenterRobot.Y, _bedCenterRobot.Z);
         var seed   = new float[] { (float)A1, (float)A2, (float)A3, (float)A4, (float)A5, (float)A6 };
-        var rot    = IkSolver.TargetRotFromKukaAbc(0f, 90f, 0f);
+        var rot    = IkSolver.TargetRotFromKukaAbc(_defaultToolheadA, _defaultToolheadB, _defaultToolheadC);
         var result = IkSolver.Solve(target, seed, rot);
         if (result is null) return;
 

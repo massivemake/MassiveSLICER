@@ -1041,4 +1041,15 @@
         </Setter>
     </Style>
 
+    <!-- Outliner row selection (global — local Border.Styles miss class bindings in nested templates) -->
+    <Style Selector="Border.outlinerRowSelected">
+        <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="Border.outlinerRowSelected TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
 </Styles>
