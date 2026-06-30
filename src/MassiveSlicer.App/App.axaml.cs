@@ -1,3 +1,4 @@
+using System.IO;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
@@ -10,17 +11,43 @@ namespace MassiveSlicer.App;
 
 public partial class App : Application
 {
+    /// <summary>Workspace path from a double-clicked <c>.mass</c> file or drag onto the exe.</summary>
+    internal static string? StartupWorkspacePath { get; private set; }
+
     public override void Initialize() => AvaloniaXamlLoader.Load(this);
 
     public override void OnFrameworkInitializationCompleted()
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
             desktop.MainWindow = new MainWindow();
             desktop.ShutdownRequested += (_, _) => MassiveSlicer.Core.Scanning.ZividScanService.Disconnect();
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    internal static string? ResolveStartupWorkspacePath(string[]? args)
+    {
+        if (args is not { Length: > 0 }) return null;
+
+        foreach (var raw in args)
+        {
+            var path = raw.Trim().Trim('"');
+            if (path.Length == 0) continue;
+            if (!path.EndsWith(".mass", StringComparison.OrdinalIgnoreCase)) continue;
+            try
+            {
+                var full = Path.GetFullPath(path);
+                if (File.Exists(full))
+                    return full;
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        return null;
     }
 
     /// <summary>

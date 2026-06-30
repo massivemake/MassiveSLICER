@@ -34,6 +34,7 @@ public static class ToolpathSerializer
                     ResumeSpeedScale = move.ResumeSpeedScale,
                     ResumeRpmScale   = move.ResumeRpmScale,
                     IsZHop           = move.IsZHop,
+                    PrintSpeedScale  = move.PrintSpeedScale,
                 });
             }
             data.Layers.Add(layerDto);
@@ -66,6 +67,7 @@ public static class ToolpathSerializer
                     ResumeSpeedScale = moveDto.ResumeSpeedScale,
                     ResumeRpmScale   = moveDto.ResumeRpmScale,
                     IsZHop           = moveDto.IsZHop,
+                    PrintSpeedScale  = moveDto.PrintSpeedScale,
                 });
             }
             toolpath.Layers.Add(layer);

@@ -1,4 +1,6 @@
+using System.Collections.ObjectModel;
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
@@ -17,12 +19,21 @@ public sealed class ScanSettingsViewModel : ViewModelBase
     private bool _isScanning;
     private string _scanStatus = "";
     private bool _isCaptureSubTab = true;
+    private string _newQuickPositionName = "Quick Position 1";
+    private string _quickPositionStatus = "";
+
+    public const string ScannerDownWaypointName = "scanner-down-bed";
+    public const string ScannerDownLabel      = "Scanner Down";
+    public const string QuickPositionTag      = "scan-quick";
 
     public ScanSettingsViewModel()
     {
         TestScanCommand        = new RelayCommand(() => OnTestScanRequested?.Invoke(), () => !IsScanning);
         ShowCaptureCommand     = new RelayCommand(() => IsCaptureSubTab = true);
         ShowCalibrationCommand = new RelayCommand(() => IsCaptureSubTab = false);
+        SaveQuickPositionCommand = new RelayCommand(
+            () => OnSaveQuickPositionRequested?.Invoke(NewQuickPositionName),
+            () => !string.IsNullOrWhiteSpace(NewQuickPositionName));
     }
 
     /// <summary>Triggers a single capture from the Zivid camera.</summary>
@@ -36,6 +47,33 @@ public sealed class ScanSettingsViewModel : ViewModelBase
 
     /// <summary>Calibration workflow state — pose collection and hand-eye computation.</summary>
     public ScanCalibrationViewModel Calibration { get; } = new();
+
+    /// <summary>Named scan poses (built-in + user-saved) shown as recall buttons.</summary>
+    public ObservableCollection<ScanQuickPositionItem> QuickPositions { get; } = [];
+
+    /// <summary>Name for the next user-saved quick position.</summary>
+    public string NewQuickPositionName
+    {
+        get => _newQuickPositionName;
+        set
+        {
+            if (!SetField(ref _newQuickPositionName, value)) return;
+            SaveQuickPositionCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>Status line under the save control (move/save feedback).</summary>
+    public string QuickPositionStatus
+    {
+        get => _quickPositionStatus;
+        set => SetField(ref _quickPositionStatus, value);
+    }
+
+    /// <summary>Saves the synced robot pose as a new quick position.</summary>
+    public RelayCommand SaveQuickPositionCommand { get; }
+
+    internal Action<string>? OnMoveQuickPositionRequested { get; set; }
+    internal Action<string>? OnSaveQuickPositionRequested { get; set; }
 
     // -- Sub-tab selection ----------------------------------------------------
 
@@ -105,4 +143,54 @@ public sealed class ScanSettingsViewModel : ViewModelBase
         get => _outputDirectory;
         set => SetField(ref _outputDirectory, value);
     }
+
+    /// <summary>Rebuilds quick-position buttons from the active cell waypoints.</summary>
+    public void RefreshQuickPositions(CellConfig? cell)
+    {
+        QuickPositions.Clear();
+        QuickPositions.Add(new ScanQuickPositionItem(
+            ScannerDownLabel, ScannerDownWaypointName, MoveQuickPosition));
+
+        if (cell is not null)
+        {
+            foreach (var wp in cell.Waypoints)
+            {
+                if (!wp.Tags.Any(t => t.Equals(QuickPositionTag, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                if (wp.Name.Equals(ScannerDownWaypointName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                var label = string.IsNullOrWhiteSpace(wp.Description)
+                    ? HumanizeWaypointName(wp.Name)
+                    : wp.Description!;
+                QuickPositions.Add(new ScanQuickPositionItem(label, wp.Name, MoveQuickPosition));
+            }
+        }
+
+        SuggestNextQuickPositionName(cell);
+    }
+
+    internal void SuggestNextQuickPositionName(CellConfig? cell = null)
+    {
+        int userCount = cell?.Waypoints.Count(w =>
+            w.Tags.Any(t => t.Equals(QuickPositionTag, StringComparison.OrdinalIgnoreCase))) ?? 0;
+        NewQuickPositionName = $"Quick Position {userCount + 1}";
+    }
+
+    private void MoveQuickPosition(string waypointName)
+    {
+        QuickPositionStatus = $"Moving to {waypointName}…";
+        OnMoveQuickPositionRequested?.Invoke(waypointName);
+    }
+
+    internal static string SlugifyQuickPositionName(string displayName)
+    {
+        var parts = displayName.Trim().ToLowerInvariant()
+            .Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length == 0 ? "quick-position" : string.Join("-", parts);
+    }
+
+    private static string HumanizeWaypointName(string name)
+        => string.Join(' ', name.Split('-', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(static p => char.ToUpperInvariant(p[0]) + p[1..]));
 }

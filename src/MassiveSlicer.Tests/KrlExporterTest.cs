@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Numerics;
+using System.Text.RegularExpressions;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 
@@ -201,5 +203,66 @@ public sealed class KrlExporterTest
         Assert.Contains("$VEL.CP = 0.000500", krl);
         Assert.Contains("$ANOUT[4] = 0.5 ; RPM ramp", krl);
         Assert.Contains("$VEL.CP = 0.100000", krl);
+    }
+
+    [Fact]
+    public void Export_lfam1_slice_bed_lift_maps_visual_bed_to_kuka_base_z()
+    {
+        // LFAM 1: visual slice plane at origin.z=272.93, KUKA BASE Z=0 at robroot+baseData=778.
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 3f)
+        {
+            Height      = 3f,
+            PlaneNormal = Vector3.UnitZ,
+        };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(1500, 900, 275.93f),
+            new Vector3(1600, 900, 275.93f),
+            MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        var settings = new KrlExportSettings
+        {
+            ProgramName        = "lfam1_z",
+            RobrootWorldPos    = new Vector3(0, 0, 500),
+            BaseDataOffset     = new Vector3(1496.36f, -577.89f, 278f),
+            SliceBedWorldZ     = 272.93f,
+            ApproachZMm        = 50f,
+            TravelSetAnout4Zero = true,
+        };
+
+        var krl = KrlExporter.Export(tp, settings);
+
+        var zValues = Regex.Matches(krl, @"Z (-?\d+\.\d+)")
+            .Select(m => float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture))
+            .Take(3)
+            .ToArray();
+
+        Assert.Equal(3, zValues.Length);
+        Assert.InRange(zValues[0], 52f, 54f);   // approach: layer Z 3 + 50 mm
+        Assert.InRange(zValues[1], 2.5f, 3.5f);  // first layer touch-down at BASE Z ≈ 0
+    }
+
+    [Fact]
+    public void Export_lfam1_home_ptp_includes_e1_rail_position()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 3), new Vector3(10, 0, 3), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var settings = new KrlExportSettings
+        {
+            ProgramName    = "rail_home",
+            HomeE1Mm       = -1100.52f,
+            TravelSetAnout4Zero = true,
+        };
+
+        var krl = KrlExporter.Export(tp, settings);
+        Assert.Contains("PTP {A1 0.000, A2 -90.000, A3 90.000, A4 0.000, A5 15.000, A6 0.000, E1 -1100.520}", krl);
     }
 }

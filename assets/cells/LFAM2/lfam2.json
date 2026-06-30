@@ -165,11 +165,12 @@
   "millBridgePort": 8765,
   "hasMilling": false,
   "view": {
-    "azimuth": -39.000046,
-    "elevation": 8,
-    "radius": 3480.3018,
-    "targetX": 2171.2898,
-    "targetY": 217.61844,
-    "targetZ": 1231.4637
-  }
+    "azimuth": -63.400032,
+    "elevation": 4.7999997,
+    "radius": 3018.7478,
+    "targetX": 2399.967,
+    "targetY": 350.15335,
+    "targetZ": 1198.2921
+  },
+  "waypoints": []
 }

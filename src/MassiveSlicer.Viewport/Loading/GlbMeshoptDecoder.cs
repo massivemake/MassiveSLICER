@@ -22,6 +22,22 @@ internal static class GlbMeshoptDecoder
 
     private static readonly object CacheLock = new();
 
+    /// <summary>Drops the decoded meshopt cache for <paramref name="path"/> (current mtime/size).</summary>
+    public static void Invalidate(string path)
+    {
+        var full = Path.GetFullPath(path);
+        try
+        {
+            if (!File.Exists(full))
+                return;
+
+            var cached = CachePath(full);
+            if (File.Exists(cached))
+                File.Delete(cached);
+        }
+        catch { /* best effort */ }
+    }
+
     public static string EnsureDecoded(string path)
     {
         var full = Path.GetFullPath(path);

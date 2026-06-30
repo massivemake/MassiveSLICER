@@ -20,7 +20,9 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
-        OpenSeamEditorCommand         = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
+        OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
+        OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
+        ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
 
         PropertyChanged += (_, e) =>
         {
@@ -133,8 +135,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public bool SurfaceModeActive => _slicingMode == "Surface";
 
-    /// <summary>Surface mode is for planar/angled strategies (not geodesic).</summary>
-    public bool ShowSlicingMode => _method != SliceMethod.Geodesic;
+    /// <summary>Surface mode is for planar/angled strategies (not geodesic/curved).</summary>
+    public bool ShowSlicingMode => _method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private double _adaptiveQuality = 0.5;
 
@@ -172,11 +174,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowSlicingMode));
+                OnPropertyChanged(nameof(ShowCurvedControls));
+                OnPropertyChanged(nameof(IsCurvedMethod));
             }
         }
     }
 
-    public string[] AvailableMethodNames { get; } = ["Planar", "Angled", "Geodesic (Experimental)"];
+    public string[] AvailableMethodNames { get; } =
+        ["Planar", "Angled", "Geodesic (Experimental)", "Curved (Sweep)"];
 
     public string MethodDisplayName
     {
@@ -184,6 +189,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         {
             SliceMethod.Angled   => "Angled",
             SliceMethod.Geodesic => "Geodesic (Experimental)",
+            SliceMethod.Curved   => "Curved (Sweep)",
             _                    => "Planar",
         };
         set => Method = value switch
@@ -191,12 +197,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             "Angled"                  => SliceMethod.Angled,
             "Geodesic (Experimental)" => SliceMethod.Geodesic,
             "Geodesic"                => SliceMethod.Geodesic,
+            "Curved (Sweep)"          => SliceMethod.Curved,
+            "Curved"                  => SliceMethod.Curved,
             _                         => SliceMethod.Planar,
         };
     }
 
+    public bool IsCurvedMethod          => Method == SliceMethod.Curved;
+    public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
-    public bool ShowContourOffsetOption => Method != SliceMethod.Geodesic;
+    public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private bool _disableContourOffset;
 
@@ -237,6 +247,69 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public RelayCommand OpenSeamEditorCommand { get; }
 
     internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    // -- Curved slicing boundaries --------------------------------------------
+
+    public string[] CurvedBoundarySourceOptions { get; } = ["Auto", "Viewport Pick", "JSON Import"];
+
+    private string _curvedBoundarySource = "Auto";
+
+    public string CurvedBoundarySourceDisplay
+    {
+        get => _curvedBoundarySource;
+        set
+        {
+            if (SetField(ref _curvedBoundarySource, value))
+                OnPropertyChanged(nameof(CurvedBoundarySummary));
+        }
+    }
+
+    public CurvedBoundarySource CurvedBoundarySource => _curvedBoundarySource switch
+    {
+        "Viewport Pick" => CurvedBoundarySource.ViewportPick,
+        "JSON Import"   => CurvedBoundarySource.JsonImport,
+        _               => CurvedBoundarySource.AutoDetect,
+    };
+
+    private double _curvedAutoDetectBandMm = 2.0;
+
+    public double CurvedAutoDetectBandMm
+    {
+        get => _curvedAutoDetectBandMm;
+        set => SetField(ref _curvedAutoDetectBandMm, Math.Clamp(value, 0.1, 50.0));
+    }
+
+    private bool _curvedEnableRegionSplit = true;
+
+    public bool CurvedEnableRegionSplit
+    {
+        get => _curvedEnableRegionSplit;
+        set => SetField(ref _curvedEnableRegionSplit, value);
+    }
+
+    public ObservableCollection<int> CurvedBoundaryLowVertices  { get; } = [];
+    public ObservableCollection<int> CurvedBoundaryHighVertices { get; } = [];
+
+    public string CurvedBoundarySummary =>
+        $"LOW: {CurvedBoundaryLowVertices.Count} verts, HIGH: {CurvedBoundaryHighVertices.Count} verts";
+
+    public void SetCurvedBoundaries(IEnumerable<int> low, IEnumerable<int> high)
+    {
+        CurvedBoundaryLowVertices.Clear();
+        CurvedBoundaryHighVertices.Clear();
+        foreach (var v in low)  CurvedBoundaryLowVertices.Add(v);
+        foreach (var v in high) CurvedBoundaryHighVertices.Add(v);
+        OnPropertyChanged(nameof(CurvedBoundarySummary));
+    }
+
+    public IReadOnlyList<int> BuildCurvedLowBoundaryList()  => [.. CurvedBoundaryLowVertices];
+    public IReadOnlyList<int> BuildCurvedHighBoundaryList() => [.. CurvedBoundaryHighVertices];
+
+    public RelayCommand OpenCurvedBoundaryEditorCommand { get; }
+    public RelayCommand ImportCurvedBoundariesCommand { get; }
+
+    internal Action? OnOpenCurvedBoundaryEditorRequested { get; set; }
+    internal Func<Task>? OnImportCurvedBoundariesRequested { get; set; }
 
     private double _passAngle;
 
@@ -556,6 +629,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _maxOverhangTiltDeg;
         set => SetField(ref _maxOverhangTiltDeg, Math.Clamp(value, 0.0, 89.0));
     }
+
+    // -- Surface follow (vertical ↔ path-normal blend) --------------------------
+
+    private double _orientationFollowPercent = 100.0;
+
+    /// <summary>
+    /// How strongly the tool follows surface/stacking normals (0–100%).
+    /// 0 = vertical (world +Z), 100 = full path/surface follow.
+    /// </summary>
+    public double OrientationFollowPercent
+    {
+        get => _orientationFollowPercent;
+        set => SetField(ref _orientationFollowPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    public float OrientationFollowStrength => (float)(OrientationFollowPercent / 100.0);
 
     // -- Orientation smoothing ------------------------------------------------
 
@@ -887,6 +976,58 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _resumeRampSteps, Math.Clamp(value, 1, 50));
     }
 
+    public IReadOnlyList<string> LayerSpeedBasisOptions { get; } = ["Cut length", "Layer time"];
+
+    private bool _layerSpeedAdaptEnabled;
+
+    /// <summary>Scale print speed and extrusion RPM per layer between low and high rates.</summary>
+    public bool LayerSpeedAdaptEnabled
+    {
+        get => _layerSpeedAdaptEnabled;
+        set
+        {
+            if (!SetField(ref _layerSpeedAdaptEnabled, value)) return;
+            if (!value) return;
+            _layerSpeedMinMmS = PrintSpeed;
+            _layerSpeedMaxMmS = PrintSpeed;
+            OnPropertyChanged(nameof(LayerSpeedMinMmS));
+            OnPropertyChanged(nameof(LayerSpeedMaxMmS));
+        }
+    }
+
+    private string _layerSpeedBasisDisplay = "Cut length";
+
+    /// <summary>Layer metric used for adaptive speed (display string).</summary>
+    public string LayerSpeedBasisDisplay
+    {
+        get => _layerSpeedBasisDisplay;
+        set => SetField(ref _layerSpeedBasisDisplay, value);
+    }
+
+    public LayerSpeedBasis LayerSpeedBasis => _layerSpeedBasisDisplay switch
+    {
+        "Layer time" => LayerSpeedBasis.LayerTime,
+        _            => LayerSpeedBasis.CutLength,
+    };
+
+    private double _layerSpeedMinMmS = 10.0;
+
+    /// <summary>Robot speed (mm/s) for the shortest/lightest layer.</summary>
+    public double LayerSpeedMinMmS
+    {
+        get => _layerSpeedMinMmS;
+        set => SetField(ref _layerSpeedMinMmS, Math.Clamp(value, 0.1, 2000.0));
+    }
+
+    private double _layerSpeedMaxMmS = 100.0;
+
+    /// <summary>Robot speed (mm/s) for the longest/busiest layer.</summary>
+    public double LayerSpeedMaxMmS
+    {
+        get => _layerSpeedMaxMmS;
+        set => SetField(ref _layerSpeedMaxMmS, Math.Clamp(value, 0.1, 2000.0));
+    }
+
     private static double ParseSignedOffset(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -930,8 +1071,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (value is null) return;
             if (!SetField(ref _selectedHomePositionName, value)) return;
             _selectedHomePositionIndex = Math.Max(0, _homePositions.FindIndex(p => p.Name == value));
+            OnHomePositionSelected?.Invoke(SelectedHomeAngles);
         }
     }
+
+    /// <summary>Raised when the user picks a home preset — viewport applies joint angles locally.</summary>
+    internal Action<float[]>? OnHomePositionSelected { get; set; }
 
     /// <summary>Joint angles (A1-A6, KRL degrees) for the currently selected home position.</summary>
     public float[] SelectedHomeAngles

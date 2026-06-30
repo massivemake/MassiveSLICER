@@ -42,6 +42,12 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>When true, uses a cheap Lambert pass (cell robot/stands/tools).</summary>
     public bool FastCellMode { get; set; }
 
+    /// <summary>When true, renders the white matte Arctic presentation shader.</summary>
+    public bool ArcticMode { get; set; }
+
+    /// <summary>Bed / floor Z (mm) for Arctic ground-contact darkening.</summary>
+    public float FloorZ { get; set; }
+
     /// <summary>Layer height (mm) used to scale the stripe frequency in LayerPreview mode.</summary>
     public float LayerHeight { get; set; } = 3f;
 
@@ -119,6 +125,8 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
+    private readonly bool _renderAsPoints;
+
     // -- GLSL source ----------------------------------------------------------
 
     internal static readonly string VertSrc = """
@@ -165,7 +173,7 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uShininess;      // legacy (unused by PBR path)
         uniform float     uMetallic;       // legacy alias (see uMetallicFactor)
         uniform float     uLightIntensity; // scales the directional light
-        uniform int       uShadingMode;    // 0=PBR,1=normals,2=layer,3=fastcell,4..10=debug channels
+        uniform int       uShadingMode;    // 0=PBR,1=normals,2=layer,3=fastcell,4..10=debug,11=wire,12=arctic
         uniform int       uLayerOverlay;   // 1 = composite layer heatmap over PBR (textured meshes)
         uniform float     uLayerOverlayStrength;
         uniform float     uLayerHeight;
@@ -188,6 +196,7 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uAlphaCutoff;
         uniform float     uExposure;       // pre-tonemap exposure (1 = neutral)
         uniform float     uIblGain;        // environment/IBL gain (1 = neutral)
+        uniform float     uFloorZ;         // bed surface Z for Arctic grounding (mm)
         uniform int       uWireframe;      // 1 during the wireframe line pass
         uniform int       uHasUv;
         uniform int       uHasTangent;
@@ -311,6 +320,26 @@ public sealed class MeshRenderer : IDisposable
                 return;
             }
 
+            // Rhino-style Arctic: white clay, soft top light, crease AO, no specular/IBL.
+            if (uShadingMode == 12) {
+                vec3 Nm = N;
+                if (!gl_FrontFacing) Nm = -Nm;
+                vec3 key = normalize(vec3(0.12, 0.08, 1.0));
+                float NdotL = max(dot(Nm, key), 0.0);
+                float sky = clamp(Nm.z * 0.5 + 0.5, 0.0, 1.0);
+                vec3 hemi = mix(vec3(0.72), vec3(0.94), sky);
+                vec3 dN = fwidth(Nm);
+                float crease = 1.0 - clamp(length(dN) * 9.0, 0.0, 0.50);
+                float cavity = 1.0 - clamp((1.0 - NdotL) * 0.35, 0.0, 0.18);
+                vec3 base = vec3(0.93, 0.93, 0.95);
+                vec3 lit = base * hemi * (0.82 + 0.18 * NdotL * uLightIntensity) * crease * cavity;
+                float h = max(vWorldPos.z - uFloorZ, 0.0);
+                float vertGround = exp(-h / 28.0);
+                lit *= mix(1.0, 0.78, vertGround * 0.55);
+                fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
+                return;
+            }
+
             if (uShadingMode == 2) {
                 // Untextured meshes: heatmap-only preview (no PBR maps to show through).
                 fragColor = vec4(evalLayerPreview(vWorldPos, N), 1.0);
@@ -429,8 +458,9 @@ public sealed class MeshRenderer : IDisposable
     /// </summary>
     public MeshRenderer(MeshData data)
     {
-        PickingData = data;
-        Color       = data.BaseColor;
+        PickingData      = data;
+        _renderAsPoints  = data.RenderAsPoints;
+        Color            = data.BaseColor;
         Metallic    = data.Metallic;
 
         float smoothness = 1f - data.Roughness;
@@ -492,10 +522,11 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uLightIntensity",   lightIntensity);
         bool hasPbrMaps   = _baseColorTex != 0 || _mrTex != 0;
         bool layerOverlay = LayerPreviewMode && hasPbrMaps && LayerOverlayEnabled;
-        int shadingMode = LayerPreviewMode && !hasPbrMaps ? 2
-                        : NormalsMode      ? 1
-                        : FastCellMode     ? 3
-                        : WireframeMode    ? 11
+        int shadingMode = ArcticMode                       ? 12
+                        : LayerPreviewMode && !hasPbrMaps ? 2
+                        : NormalsMode                     ? 1
+                        : FastCellMode                    ? 3
+                        : WireframeMode                   ? 11
                         : MaterialChannel > 0 ? 3 + MaterialChannel   // 1..7 -> 4..10
                         : 0;
         _shader.SetInt("uShadingMode",           shadingMode);
@@ -513,6 +544,7 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uAlphaCutoff",      AlphaCutoff);
         _shader.SetFloat("uExposure",         Exposure);
         _shader.SetFloat("uIblGain",          IblGain);
+        _shader.SetFloat("uFloorZ",           FloorZ);
         _shader.SetInt("uHasUv",              _hasUv ? 1 : 0);
         _shader.SetInt("uHasTangent",         _hasTangent ? 1 : 0);
 
@@ -534,14 +566,16 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetInt("uHasEnv",             HasEnvMap ? 1 : 0);
 
         GL.BindVertexArray(_vao);
+        var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
+        if (_renderAsPoints) GL.PointSize(2.5f);
         if (_indexed)
-            GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(primitive, _count, DrawElementsType.UnsignedInt, 0);
         else
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+            GL.DrawArrays(primitive, 0, _count);
 
         // Wireframe overlay: redraw the triangles as lines, pulled slightly toward the
         // camera so the edges sit on top of the flat fill.
-        if (WireframeMode)
+        if (WireframeMode && !_renderAsPoints)
         {
             _shader.SetInt("uWireframe", 1);
             GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
@@ -574,10 +608,12 @@ public sealed class MeshRenderer : IDisposable
     internal void DrawRaw()
     {
         GL.BindVertexArray(_vao);
+        var primitive = _renderAsPoints ? PrimitiveType.Points : PrimitiveType.Triangles;
+        if (_renderAsPoints) GL.PointSize(2.5f);
         if (_indexed)
-            GL.DrawElements(PrimitiveType.Triangles, _count, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(primitive, _count, DrawElementsType.UnsignedInt, 0);
         else
-            GL.DrawArrays(PrimitiveType.Triangles, 0, _count);
+            GL.DrawArrays(primitive, 0, _count);
         GL.BindVertexArray(0);
     }
 

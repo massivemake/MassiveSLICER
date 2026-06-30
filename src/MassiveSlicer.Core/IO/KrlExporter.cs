@@ -66,6 +66,8 @@ public sealed record KrlExportSettings
     /// </summary>
     public float ExtrusionResumeWaitSec { get; init; }
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
+    /// <summary>LFAM 1 rail: E1 position (mm) emitted in the header HOME PTP. NaN = omit.</summary>
+    public float HomeE1Mm { get; init; } = float.NaN;
     /// <summary>
     /// How far ahead of each point (mm) to centre the Gaussian normal-smoothing kernel.
     /// At 60 mm/s print speed, 60 mm = 1 second of pre-rotation, so the robot begins
@@ -92,6 +94,12 @@ public sealed record KrlExportSettings
     public Vector3 RobrootWorldPos { get; init; }
     /// <summary>BASE_DATA offset relative to ROBROOT (mm). Assumes zero BASE rotation.</summary>
     public Vector3 BaseDataOffset { get; init; }
+    /// <summary>
+    /// World Z of the slicer build plane (<c>SceneRenderer.BedZ</c>). When it differs from
+    /// <c>RobrootWorldPos.Z + BaseDataOffset.Z</c> (KUKA BASE Z=0 surface), export lifts
+    /// toolpath Z so BASE coordinates match the controller — e.g. LFAM 1 visual bed vs BASE_DATA.
+    /// </summary>
+    public float SliceBedWorldZ { get; init; } = float.NaN;
 
     /// <summary>Emit <c>$ANOUT[4] = 0</c> before travel moves instead of a TRIGGER idle pulse.</summary>
     public bool TravelSetAnout4Zero { get; init; } = true;
@@ -259,6 +267,8 @@ public static class KrlExporter
         bool needsRpmOn = true;
         bool isFirstPrintStart = true;
         bool inZHopSequence = false;
+        float lastExtrudeSpeedMps = -1f;
+        float lastExtrudeRpmScale = -1f;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
         // kernel before ABC conversion. This prevents the KRL exporter from producing
@@ -347,6 +357,8 @@ public static class KrlExporter
 
                     if (move.IsResumeRamp)
                     {
+                        float rpmScale  = EffectiveRpmScale(move);
+                        float speedMps  = EffectivePrintSpeedMps(move, s);
                         if (needsRpmOn)
                         {
                             float waitSec = isFirstPrintStart
@@ -355,13 +367,13 @@ public static class KrlExporter
                             if (waitSec > 0f)
                             {
                                 sb.AppendLine(FormatDirectAnout4(
-                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                                    ResolveAnout4ExtrudeText(s, rpmScale), "RPM ramp"));
                                 sb.AppendLine(FormatWaitSec(waitSec));
                             }
                             else
                             {
                                 sb.AppendLine(FormatDirectAnout4(
-                                    ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                                    ResolveAnout4ExtrudeText(s, rpmScale), "RPM ramp"));
                             }
 
                             isFirstPrintStart = false;
@@ -370,16 +382,22 @@ public static class KrlExporter
                         else
                         {
                             sb.AppendLine(FormatDirectAnout4(
-                                ResolveAnout4ExtrudeText(s, move.ResumeRpmScale), "RPM ramp"));
+                                ResolveAnout4ExtrudeText(s, rpmScale), "RPM ramp"));
                         }
 
-                        float rampSpeed = s.PrintSpeedMps * move.ResumeSpeedScale;
-                        sb.AppendLine($"$VEL.CP = {rampSpeed.ToString("F6", Inv)}");
+                        sb.AppendLine($"$VEL.CP = {speedMps.ToString("F6", Inv)}");
                         sb.AppendLine(FormatLin(to, ma, mb, mc));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
+                        lastExtrudeSpeedMps = speedMps;
+                        lastExtrudeRpmScale = rpmScale;
                         continue;
                     }
+
+                    float extrudeRpmScale = EffectiveRpmScale(move);
+                    float extrudeSpeedMps = EffectivePrintSpeedMps(move, s);
+                    bool speedChanged = Math.Abs(extrudeSpeedMps - lastExtrudeSpeedMps) > 1e-7f
+                                     || Math.Abs(extrudeRpmScale - lastExtrudeRpmScale) > 1e-5f;
 
                     if (needsRpmOn)
                     {
@@ -388,17 +406,28 @@ public static class KrlExporter
                             : s.ExtrusionResumeWaitSec;
                         if (waitSec > 0f)
                         {
-                            sb.AppendLine(FormatDirectAnout4(ResolveAnout4ExtrudeText(s), "RPM on"));
+                            sb.AppendLine(FormatDirectAnout4(
+                                ResolveAnout4ExtrudeText(s, extrudeRpmScale), "RPM on"));
                             sb.AppendLine(FormatWaitSec(waitSec));
                         }
                         else
-                            sb.AppendLine(FormatTriggerAnout4(ResolveAnout4ExtrudeText(s), "RPM on"));
+                            sb.AppendLine(FormatTriggerAnout4(
+                                ResolveAnout4ExtrudeText(s, extrudeRpmScale), "RPM on"));
 
-                        sb.AppendLine($"$VEL.CP = {s.PrintSpeedMps.ToString("F6", Inv)}");
+                        sb.AppendLine($"$VEL.CP = {extrudeSpeedMps.ToString("F6", Inv)}");
                         isFirstPrintStart = false;
                         needsRpmOn = false;
                     }
+                    else if (speedChanged)
+                    {
+                        sb.AppendLine(FormatDirectAnout4(
+                            ResolveAnout4ExtrudeText(s, extrudeRpmScale), "layer speed"));
+                        sb.AppendLine($"$VEL.CP = {extrudeSpeedMps.ToString("F6", Inv)}");
+                    }
+
                     sb.AppendLine(FormatLin(to, ma, mb, mc));
+                    lastExtrudeSpeedMps = extrudeSpeedMps;
+                    lastExtrudeRpmScale = extrudeRpmScale;
                     lastAbc = (ma, mb, mc);
                 }
 
@@ -489,7 +518,10 @@ public static class KrlExporter
         var h = s.HomePosition;
         var homePtp = $"PTP {{A1 {h[0].ToString("F3", Inv)}, A2 {h[1].ToString("F3", Inv)}, " +
                       $"A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, " +
-                      $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}}}";
+                      $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}";
+        if (!float.IsNaN(s.HomeE1Mm))
+            homePtp += $", E1 {s.HomeE1Mm.ToString("F3", Inv)}";
+        homePtp += "}";
 
         return template
             .Replace("{{PROGRAM_NAME}}", programName)
@@ -525,6 +557,9 @@ public static class KrlExporter
         // stored positions are in original slice world space;
         // (stored - origin) * wt maps them to current world space.
         var world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
+        float kukaBedZ = s.RobrootWorldPos.Z + s.BaseDataOffset.Z;
+        if (!float.IsNaN(s.SliceBedWorldZ) && MathF.Abs(s.SliceBedWorldZ - kukaBedZ) > 0.5f)
+            world.Z += kukaBedZ - s.SliceBedWorldZ;
         return world - s.RobrootWorldPos - s.BaseDataOffset;
     }
 
@@ -743,6 +778,24 @@ public static class KrlExporter
         => string.IsNullOrWhiteSpace(s.Anout4IdleText)
             ? KrlAnout.RpmIdleAnoutText
             : s.Anout4IdleText.Trim();
+
+    private static float EffectivePrintSpeedMps(ToolpathMove move, KrlExportSettings s)
+    {
+        float scale = Math.Max(move.PrintSpeedScale, 1e-6f);
+        if (move.IsResumeRamp)
+            scale *= Math.Max(move.ResumeSpeedScale, 1e-6f);
+        return s.PrintSpeedMps * scale;
+    }
+
+    private static float EffectiveRpmScale(ToolpathMove move)
+    {
+        if (move.IsWipe)
+            return move.WipeRpmScale;
+        float scale = Math.Max(move.PrintSpeedScale, 1e-6f);
+        if (move.IsResumeRamp)
+            scale *= Math.Max(move.ResumeRpmScale, 1e-6f);
+        return scale;
+    }
 
     private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
     {

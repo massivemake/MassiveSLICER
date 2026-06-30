@@ -46,4 +46,12 @@ public sealed class KrlAnoutTest
         float anout = KrlAnout.RpmToAnout(6f, 3f, 0.1f, 0.463f);
         Assert.Equal(0.5f, anout, precision: 3);
     }
+
+    [Fact]
+    public void RpmToAnout_calibration_point_asa_gf_flow_rate()
+    {
+        // W=6, H=3, v=45 mm/s, FlowRate=0.4115 → 20% RPM → $ANOUT[4]=0.2
+        float anout = KrlAnout.RpmToAnout(6f, 3f, 0.045f, 0.4115f);
+        Assert.Equal(0.2f, anout, precision: 3);
+    }
 }

@@ -10,4 +10,6 @@ Set-Location $repo
 dotnet publish 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release -o $outDir
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+& (Join-Path $repo 'scripts\register-mass-file-association.ps1') -InstallDir $outDir
+
 Start-Process -FilePath (Join-Path $outDir 'MassiveSlicer.App.exe') -WorkingDirectory $outDir

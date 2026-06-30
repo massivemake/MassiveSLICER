@@ -20,6 +20,23 @@ internal static class AssetLocalCache
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "MassiveSlicer", "asset-cache");
 
+    /// <summary>Drops the cached local copy for a UNC/network asset (forces re-copy on next load).</summary>
+    public static void Invalidate(string sourcePath)
+    {
+        var full = Path.GetFullPath(sourcePath);
+        if (!full.StartsWith(@"\\", StringComparison.Ordinal))
+            return;
+
+        try
+        {
+            var hash   = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(full.ToLowerInvariant())))[..20];
+            var cached = Path.Combine(CacheRoot, hash + Path.GetExtension(full));
+            if (File.Exists(cached))
+                File.Delete(cached);
+        }
+        catch { /* best effort */ }
+    }
+
     public static string EnsureLocal(string sourcePath)
     {
         var full = Path.GetFullPath(sourcePath);

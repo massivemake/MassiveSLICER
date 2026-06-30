@@ -44,6 +44,9 @@ public sealed class LeftPanelViewModel : ViewModelBase
     internal string? GetCellPath(int index)
         => (uint)index < (uint)_cellPaths.Count ? _cellPaths[index] : null;
 
+    /// <summary>All discovered cell JSON paths (for workspace cell resolution).</summary>
+    internal IReadOnlyList<string> DiscoveredCellPaths => _cellPaths;
+
     /// <summary>Finds the index of a cell by path (case-insensitive full-path match).</summary>
     internal int FindCellIndex(string cellPath)
     {

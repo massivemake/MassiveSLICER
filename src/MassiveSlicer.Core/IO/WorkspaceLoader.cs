@@ -24,12 +24,20 @@ public static class WorkspaceLoader
     public static string MeshesDirFor(string workspacePath)
         => Path.Combine(Path.GetDirectoryName(workspacePath)!, "workspace_meshes");
 
-    private static readonly JsonSerializerOptions Options = new()
+    private static readonly JsonSerializerOptions LoadOptions = new()
     {
         WriteIndented               = true,
         PropertyNameCaseInsensitive = true,
         ReadCommentHandling         = JsonCommentHandling.Skip,
         AllowTrailingCommas         = true,
+        Converters                  = { new JsonStringEnumConverter() },
+    };
+
+    private static readonly JsonSerializerOptions SaveOptions = new()
+    {
+        WriteIndented               = false,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingDefault,
         Converters                  = { new JsonStringEnumConverter() },
     };
 
@@ -39,11 +47,12 @@ public static class WorkspaceLoader
     public static WorkspaceDocument? Load(string? path = null)
     {
         path ??= ResolveDefaultLoadPath();
+        path = PathNormalization.Normalize(path);
         if (!File.Exists(path)) return null;
         try
         {
             string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<WorkspaceDocument>(json, Options);
+            return JsonSerializer.Deserialize<WorkspaceDocument>(json, LoadOptions);
         }
         catch
         {
@@ -57,7 +66,8 @@ public static class WorkspaceLoader
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, JsonSerializer.Serialize(doc, Options));
+            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
+            JsonSerializer.Serialize(fs, doc, SaveOptions);
         }
         catch { /* non-fatal */ }
     }

@@ -50,6 +50,9 @@ public sealed class MeshData
     /// <summary>Full PBR material (factors + textures), or <c>null</c> for factor-only meshes.</summary>
     public MaterialData? Material { get; }
 
+    /// <summary>When true the GPU draws vertices as points instead of triangles.</summary>
+    public bool RenderAsPoints { get; init; }
+
     public MeshData(Vector3[] positions, Vector3[] normals, uint[]? indices,
                     string name = "Mesh", Vector4? baseColor = null,
                     float metallic = 0f, float roughness = 1f)

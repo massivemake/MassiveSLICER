@@ -121,7 +121,9 @@ public enum SliceMethod
     /// <summary>Planes tilted at a fixed angle (reduces stair-stepping on curved faces).</summary>
     Angled,
     /// <summary>Surface-following conformal toolpaths.</summary>
-    Geodesic
+    Geodesic,
+    /// <summary>Non-planar layers interpolating between LOW/HIGH surface boundaries (ETH sweep).</summary>
+    Curved
 }
 
 /// <summary>Application colour theme.</summary>
