@@ -19,9 +19,15 @@ public static class CellLoader
     /// <summary>Deserialises a cell JSON file. Throws on malformed input.</summary>
     public static CellConfig Load(string path)
     {
+        if (!File.Exists(path))
+            throw new FileNotFoundException($"Cell file not found: {path}", path);
+
         string json = File.ReadAllText(path);
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidDataException($"Cell file is empty (0 bytes) — restore from git or a backup: {path}");
+
         return JsonSerializer.Deserialize<CellConfig>(json, Options)
-            ?? throw new InvalidDataException($"Cell file is empty: {path}");
+            ?? throw new InvalidDataException($"Cell file deserialized to null: {path}");
     }
 
     /// <summary>Returns paths of all <c>*.json</c> files under the given directory (recursive).</summary>
@@ -397,6 +403,25 @@ public static class CellLoader
     }
 
     /// <summary>
+    /// Writes <c>bed.width</c> and <c>bed.depth</c> into the cell JSON at
+    /// <paramref name="cellPath"/>, preserving all other cell settings.
+    /// </summary>
+    public static bool SaveBedGridSize(string cellPath, float width, float depth, out string? error)
+    {
+        error = null;
+        if (width < 1f || depth < 1f)
+        {
+            error = "width and depth must be at least 1 mm";
+            return false;
+        }
+
+        return TryWrite(cellPath, c => c with
+        {
+            Bed = c.Bed with { Width = width, Depth = depth },
+        }, out error);
+    }
+
+    /// <summary>
     /// Persists dev-mode bed moves. Shifts <c>origin</c> + <c>gridOrigin</c> on LFAM 3,
     /// or updates <c>visualOffset</c> when the bed uses a BASE-relative visual shift.
     /// </summary>
@@ -497,5 +522,17 @@ public static class CellLoader
     }
 
     static void WriteCellJson(string path, CellConfig cell)
-        => File.WriteAllText(path, JsonSerializer.Serialize(cell, WriteOptions));
+    {
+        string json = JsonSerializer.Serialize(cell, WriteOptions);
+        if (string.IsNullOrWhiteSpace(json))
+            throw new InvalidDataException($"Refusing to write empty cell JSON: {path}");
+
+        string? dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        string temp = path + ".tmp";
+        File.WriteAllText(temp, json);
+        File.Move(temp, path, overwrite: true);
+    }
 }

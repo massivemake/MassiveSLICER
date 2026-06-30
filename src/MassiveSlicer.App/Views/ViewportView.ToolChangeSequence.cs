@@ -430,6 +430,7 @@ public partial class ViewportView
 
         _cellGpuUploadPending = _cellGpuUploadQueue.Count > 0 || _cellGpuUploadPending;
         _currentToolNode = null;
+        RefreshMultiToolSelectability();
     }
 
     void ApplyMultiToolUnmount(ViewportViewModel vm, bool updateVm = true)
@@ -445,6 +446,7 @@ public partial class ViewportView
         if (Dispatcher.UIThread.CheckAccess())
         {
             vm.MountedToolName = mountedToolName;
+            vm.SetActiveToolheadOutliner(string.IsNullOrEmpty(mountedToolName) ? null : mountedToolName);
             vm.RaiseToolChangeCommandsCanExecuteChanged();
             return;
         }
@@ -452,6 +454,7 @@ public partial class ViewportView
         Dispatcher.UIThread.Post(() =>
         {
             vm.MountedToolName = mountedToolName;
+            vm.SetActiveToolheadOutliner(string.IsNullOrEmpty(mountedToolName) ? null : mountedToolName);
             vm.RaiseToolChangeCommandsCanExecuteChanged();
         });
     }

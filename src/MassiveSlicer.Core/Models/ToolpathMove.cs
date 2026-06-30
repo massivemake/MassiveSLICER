@@ -47,4 +47,10 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
 
     /// <summary>Override travel speed (m/s) for this move during KRL export. Null uses global travel speed.</summary>
     public float? TravelSpeedMps { get; init; }
+
+    /// <summary>
+    /// Layer-adaptive print speed scale [0, 1+] relative to global print speed.
+    /// Also scales extrusion RPM for KRL <c>$ANOUT[4]</c> export.
+    /// </summary>
+    public float PrintSpeedScale { get; init; } = 1f;
 }

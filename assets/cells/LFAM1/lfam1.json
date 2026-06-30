@@ -1,0 +1,160 @@
+{
+  "name": "LFAM 1",
+  "robot": {
+    "modelPath": "assets/cells/LFAM1/LFAM1Robot.glb",
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 500
+    },
+    "joints": [
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -60,
+        "maxDeg": 60,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 90,
+        "krlSign": -1,
+        "minDeg": -120,
+        "maxDeg": 70,
+        "axis": "X"
+      },
+      {
+        "krlOffset": -90,
+        "krlSign": -1,
+        "minDeg": -120,
+        "maxDeg": 168,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -125,
+        "maxDeg": 125,
+        "axis": "X"
+      },
+      {
+        "krlOffset": 0,
+        "krlSign": -1,
+        "minDeg": -350,
+        "maxDeg": 350,
+        "axis": "Y"
+      }
+    ],
+    "homePosition": [
+      0,
+      -90,
+      90,
+      0,
+      15,
+      0
+    ],
+    "homePositions": [
+      {
+        "name": "Home",
+        "angles": [
+          0,
+          -90,
+          90,
+          0,
+          15,
+          0
+        ]
+      },
+      {
+        "name": "Service",
+        "angles": [
+          0,
+          -90,
+          110,
+          0,
+          35,
+          0
+        ]
+      }
+    ],
+    "defaultHomePosition": "Home",
+    "flangeDisplayRoll": 0,
+    "defaultToolheadA": 0,
+    "defaultToolheadB": 0,
+    "defaultToolheadC": 0
+  },
+  "bed": {
+    "modelPath": "assets/cells/LFAM1/lfam1_bed.glb",
+    "origin": {
+      "x": 1345.21,
+      "y": -708.56,
+      "z": 272.93
+    },
+    "width": 2375,
+    "depth": 5750,
+    "baseData": {
+      "x": 1496.3605,
+      "y": -577.8923,
+      "z": 278
+    },
+    "hidden": false
+  },
+  "boosterFrame": {
+    "modelPath": "assets/cells/LFAM1/LFAM1RobotRail.glb",
+    "worldPosition": {
+      "x": 0,
+      "y": 0,
+      "z": 500
+    }
+  },
+  "stands": [],
+  "robotRail": {
+    "axis": "Y",
+    "minMm": -4650,
+    "maxMm": 150,
+    "e1Sign": -1
+  },
+  "tools": [
+    {
+      "name": "HF Extruder",
+      "modelPath": "assets/cells/LFAM1/CREHF_Extruder.glb",
+      "tcpX": 901.2,
+      "tcpY": -165,
+      "tcpZ": 249.99,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": -90,
+      "krlIndex": 1,
+      "default": true
+    }
+  ],
+  "krlBases": [
+    {
+      "name": "massiveb1",
+      "index": 1
+    }
+  ],
+  "bridgeIp": "192.168.0.151",
+  "bridgePort": 7000,
+  "extIp": "192.168.0.195",
+  "extBridgePort": 8765,
+  "millBridgePort": 8765,
+  "hasMilling": false,
+  "krcRoot": "\\\\192.168.0.151\\krc\\ROBOTER\\KRC\\R1",
+  "view": {
+    "azimuth": -66.600075,
+    "elevation": 3.2000246,
+    "radius": 4397.016,
+    "targetX": 847.14087,
+    "targetY": 2257.8938,
+    "targetZ": 1039.5425
+  },
+  "waypoints": []
+}

@@ -98,4 +98,5 @@ public sealed class WorkspaceToolpathMoveData
     public float ResumeSpeedScale { get; set; } = 1f;
     public float ResumeRpmScale { get; set; } = 1f;
     public bool IsZHop { get; set; }
+    public float PrintSpeedScale { get; set; } = 1f;
 }

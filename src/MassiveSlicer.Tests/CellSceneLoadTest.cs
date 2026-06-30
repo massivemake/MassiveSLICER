@@ -29,6 +29,32 @@ public class CellSceneLoadTest(ITestOutputHelper output)
     }
 
     [Fact]
+    public void Lfam1_cell_loads_robot_and_rail_from_publish_layout()
+    {
+        var cellPath = ResolveCellJson("LFAM1", "lfam1.json");
+        if (cellPath is null)
+        {
+            output.WriteLine("SKIP: lfam1.json not found.");
+            return;
+        }
+
+        var cell    = CellLoader.Load(cellPath);
+        var payload = CellSceneLoader.Load(cellPath, RightPanelTab.Additive, default);
+        var meshes  = CountPendingMeshes(payload.RobotBaseNode) + CountEnvironmentMeshes(payload);
+
+        output.WriteLine($"Name={cell.Name} Rail={payload.BoosterNode is not null} RobotBase={payload.RobotBaseNode is not null} meshes={meshes}");
+
+        Assert.Equal("LFAM 1", cell.Name);
+        Assert.NotNull(payload.RobotBaseNode);
+        Assert.NotNull(payload.BoosterNode);
+        Assert.Contains("LFAM1Robot", cell.Robot.ModelPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LFAM1RobotRail", cell.BoosterFrame!.ModelPath, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("lfam1_bed", cell.Bed.ModelPath!, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(payload.BedNode);
+        Assert.True(meshes > 0);
+    }
+
+    [Fact]
     public void Lfam3_cell_loads_robot_and_rotary_bed_from_publish_layout()
     {
         var cellPath = ResolveCellJson("LFAM3", "lfam3.json");

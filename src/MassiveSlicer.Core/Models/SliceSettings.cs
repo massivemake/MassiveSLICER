@@ -59,6 +59,18 @@ public sealed class SliceSettings
     /// <summary>Number of discrete speed/RPM steps over <see cref="ResumeRampDistanceMm"/>.</summary>
     public int ResumeRampSteps { get; init; } = 10;
 
+    /// <summary>When true, print speed and RPM scale per layer between min and max rates.</summary>
+    public bool LayerSpeedAdaptEnabled { get; init; }
+
+    /// <summary>Layer metric used for speed interpolation.</summary>
+    public LayerSpeedBasis LayerSpeedBasis { get; init; } = LayerSpeedBasis.CutLength;
+
+    /// <summary>Print speed (mm/s) applied to the shortest/lightest layer.</summary>
+    public float LayerSpeedMinMmS { get; init; } = 10f;
+
+    /// <summary>Print speed (mm/s) applied to the longest/busiest layer.</summary>
+    public float LayerSpeedMaxMmS { get; init; } = 100f;
+
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
 
@@ -239,4 +251,27 @@ public sealed class SliceSettings
     /// at sharp turns. 0 = disabled (no rate limit).
     /// </summary>
     public float SmoothRotationMaxRateDegPerMm { get; init; } = 0f;
+
+    // -- Curved (interpolation / sweep) slicing -----------------------------------
+
+    /// <summary>Vertex indices on the welded mesh forming the LOW (start) boundary ring.</summary>
+    public IReadOnlyList<int> CurvedBoundaryLowVertices { get; init; } = [];
+
+    /// <summary>Vertex indices on the welded mesh forming the HIGH (end) boundary ring.</summary>
+    public IReadOnlyList<int> CurvedBoundaryHighVertices { get; init; } = [];
+
+    /// <summary>How LOW/HIGH boundaries are supplied when vertex lists are empty.</summary>
+    public CurvedBoundarySource CurvedBoundarySource { get; init; } = CurvedBoundarySource.AutoDetect;
+
+    /// <summary>Z-band tolerance (mm) for auto-detect boundary rings.</summary>
+    public float CurvedAutoDetectBandMm { get; init; } = 2f;
+
+    /// <summary>When true, split mesh at saddle points before slicing (Y-shapes / branching).</summary>
+    public bool CurvedEnableRegionSplit { get; init; } = true;
+
+    /// <summary>
+    /// Blends move normals between world +Z (0) and full surface/stacking follow (1).
+    /// Lower values keep the toolhead more vertical for body clearance on curved paths.
+    /// </summary>
+    public float OrientationFollowStrength { get; init; } = 1f;
 }

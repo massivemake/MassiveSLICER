@@ -47,6 +47,51 @@
                                    Width="100" FontSize="11"
                                    ToolTip.Tip="Normal: solid volume with shells and infill. Surface: cladding/boundary paths on mesh intersections; tool stays vertical unless Overhang orientation is enabled."/>
                     </Grid>
+
+                    <!-- Curved (Sweep) boundary controls -->
+                    <StackPanel Spacing="4" IsVisible="{Binding Additive.ShowCurvedControls}">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Boundary source" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <ComboBox Grid.Column="1"
+                                      ItemsSource="{Binding Additive.CurvedBoundarySourceOptions}"
+                                      SelectedItem="{Binding Additive.CurvedBoundarySourceDisplay, Mode=TwoWay}"
+                                      Width="120" FontSize="11"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Grid.Column="0" Text="Auto-detect band (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.CurvedAutoDetectBandMm}"/>
+                        </Grid>
+                        <TextBlock Text="{Binding Additive.CurvedBoundarySummary}" FontSize="10" Opacity="0.75" Margin="0,2,0,0"/>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <Button Grid.Column="0"
+                                    Content="Edit boundaries"
+                                    Classes="ToolbarButton"
+                                    Padding="10,4"
+                                    Margin="0,0,4,0"
+                                    Command="{Binding Additive.OpenCurvedBoundaryEditorCommand}"
+                                    ToolTip.Tip="Pick LOW/HIGH edge loops on the mesh (or preview auto-detected rings)."/>
+                            <Button Grid.Column="1"
+                                    Content="Import JSON"
+                                    Classes="ToolbarButton"
+                                    Padding="10,4"
+                                    Command="{Binding Additive.ImportCurvedBoundariesCommand}"
+                                    ToolTip.Tip="Load compas_slicer boundaryLOW.json / boundaryHIGH.json vertex indices."/>
+                        </Grid>
+                        <CheckBox Content="Region split for branching (Y-shapes)"
+                                  IsChecked="{Binding Additive.CurvedEnableRegionSplit, Mode=TwoWay}"
+                                  Margin="0,2,0,0"/>
+                        <Grid ColumnDefinitions="*,*,56" Margin="0,4,0,0">
+                            <TextBlock Grid.Column="0" Text="Surface follow (%)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="0 = vertical toolhead. 100 = full stacking normal."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
                 </StackPanel>
 
                 <ScrollViewer Grid.Row="1"
@@ -361,7 +406,7 @@
                             <CheckBox Margin="8,2,8,4"
                                       Content="Adaptive layer height"
                                       FontSize="11"
-                                      IsChecked="{Binding Additive.AdaptiveLayerHeight}"
+                                      IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
                                       IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
                                       ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
 
@@ -371,7 +416,7 @@
                                     <ColumnDefinition Width="80"/>
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight}"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
                             </Grid>
 
                             <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
@@ -609,6 +654,12 @@
                             HorizontalAlignment="Stretch"
                             Margin="8,8,8,4"
                             Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+                    <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SliceStatusMessage}"
+                               Margin="8,0,8,6"
+                               FontSize="10"
+                               TextWrapping="Wrap"
+                               Opacity="0.8"
+                               IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceStatus}"/>
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -638,6 +689,49 @@
                               Background="{DynamicResource Bg2}"
                               IsVisible="{Binding Scan.IsCaptureSubTab}">
                     <StackPanel Margin="0,8">
+
+                        <!-- QUICK POSITIONS -->
+                        <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+                                <TextBlock Classes="LabelMuted" Margin="8,4,8,6" TextWrapping="Wrap"
+                                           Text="Recall saved scan poses. Robot must be synced before moving or saving."/>
+
+                                <ItemsControl ItemsSource="{Binding Scan.QuickPositions}" Margin="8,0,8,4">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Content="{Binding Label}"
+                                                    Classes="PrimaryButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    Margin="0,0,0,4"
+                                                    Command="{Binding MoveCommand}"
+                                                    ToolTip.Tip="Move the robot to this saved position"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="Save current pose" Classes="LabelMuted" Margin="8,4,8,2"
+                                           ToolTip.Tip="Captures the synced robot pose ($POS_ACT / $AXIS_ACT) as a new quick position"/>
+                                <Grid Margin="8,0,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0"
+                                             Classes="PanelTextBox"
+                                             Text="{Binding Scan.NewQuickPositionName, Mode=TwoWay}"
+                                             PlaceholderText="Position name"/>
+                                    <Button Grid.Column="2"
+                                            Content="Save"
+                                            Classes="ToolbarButton"
+                                            Command="{Binding Scan.SaveQuickPositionCommand}"
+                                            ToolTip.Tip="Save the current synced robot pose as a quick position"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Scan.QuickPositionStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
 
                         <!-- CAMERA -->
                         <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="False">
@@ -995,6 +1089,121 @@
                     <!-- Options — shown only when a toolpath is selected -->
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
 
+                    <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasToolpathStats}" Margin="0,0,0,8">
+                        <TextBlock Text="SLICE STATISTICS" Classes="SectionHeader"/>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Longest layer length" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Cut path length (extrude + mill) for the busiest layer"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsLongestLayerLength}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Shortest layer length" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Cut path length (extrude + mill) for the lightest layer"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsShortestLayerLength}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Longest layer time" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Estimated print time for the slowest layer (all moves)"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsLongestLayerTime}"/>
+                        </Grid>
+                        <Grid Margin="8,2,8,6">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Shortest layer time" Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="Estimated print time for the fastest layer (all moves)"/>
+                            <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                       Text="{Binding $parent[Window].DataContext.Viewport.StatsShortestLayerTime}"/>
+                        </Grid>
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                    </StackPanel>
+
+                    <Border Margin="8,0,8,10" CornerRadius="8"
+                            Background="{DynamicResource Bg3}"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            Padding="10,8">
+                        <StackPanel Spacing="6">
+                            <CheckBox Content="Adaptive Speed and Flow"
+                                      IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
+                                      Margin="0,0,0,2"/>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                       Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
+
+                            <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
+                                <Grid Margin="0,2,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Scale by" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" MinWidth="120"
+                                              ItemsSource="{Binding Additive.LayerSpeedBasisOptions}"
+                                              SelectedItem="{Binding Additive.LayerSpeedBasisDisplay, Mode=TwoWay}"/>
+                                </Grid>
+
+                                <Border Height="10" CornerRadius="5" ClipToBounds="True">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                                            <GradientStop Color="#D94F3D" Offset="0"/>
+                                            <GradientStop Color="#E8A43B" Offset="0.5"/>
+                                            <GradientStop Color="#3DB87A" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                </Border>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Short layers (low)" Classes="LabelMuted" FontSize="10"/>
+                                    <TextBlock Grid.Column="2" Text="Long layers (high)" Classes="LabelMuted" FontSize="10" HorizontalAlignment="Right"/>
+                                </Grid>
+
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                        <ColumnDefinition Width="20"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Low speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                               VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Column="1"
+                                                   Value="{Binding Additive.LayerSpeedMinMmS, Mode=TwoWay}"
+                                                   Minimum="0.1" Maximum="2000" Increment="1"
+                                                   FormatString="F0" FontSize="11"/>
+                                    <TextBlock Grid.Column="2" Text="→" Classes="LabelMuted"
+                                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                    <TextBlock Grid.Column="3" Text="High speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                               VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                    <NumericUpDown Grid.Column="4"
+                                                   Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
+                                                   Minimum="0.1" Maximum="2000" Increment="1"
+                                                   FormatString="F0" FontSize="11"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <Expander Classes="SectionExpander" Header="GLOBAL" IsExpanded="False" Margin="0,0,0,4">
                         <StackPanel>
 
@@ -1134,6 +1343,32 @@
                                        ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
                         </Grid>
+
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                        <TextBlock Text="SURFACE FOLLOW" Classes="SectionHeader"
+                                   ToolTip.Tip="Blend tool approach between vertical (+Z) and surface-following normals. Lower on steep curves to avoid flange collisions."/>
+
+                        <Grid Margin="8,2,8,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Strength (%)"
+                                       Classes="LabelMuted" VerticalAlignment="Center"
+                                       ToolTip.Tip="0 = vertical toolhead. 100 = full path/surface follow."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+
+                        <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                   Margin="8,0,8,8"
+                                   Text="Adjust while scrubbing to preview robot clearance. Re-slice to bake into exported KRL."/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

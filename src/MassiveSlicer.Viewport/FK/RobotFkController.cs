@@ -43,6 +43,12 @@ public sealed class RobotFkController
     public Matrix4 ChainRootTransform { get; private set; } = Matrix4.Identity;
 
     /// <summary>
+    /// Current scene-graph chain root (joint_1 parent). Tracks LFAM 1 rail carriage motion.
+    /// </summary>
+    public Matrix4 LiveChainRootTransform()
+        => _joints[0]?.Parent?.WorldTransform ?? ChainRootTransform;
+
+    /// <summary>
     /// The GLTF "tcp" node, a child of joint_6 placed at the tool centre point.
     /// Its WorldTransform.Row3.Xyz gives the TCP world position each frame.
     /// Null if the node wasn't found in the robot model.

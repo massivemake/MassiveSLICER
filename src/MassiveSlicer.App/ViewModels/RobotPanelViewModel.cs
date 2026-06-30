@@ -77,6 +77,12 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>True when the active cell's bed is a circular rotary turntable (shows the ROTARY BED panel).</summary>
     public bool IsRotaryBed { get => _isRotaryBed; private set => SetField(ref _isRotaryBed, value); }
 
+    private bool _isRobotRail;
+    /// <summary>True when E1 drives a linear rail (mm) rather than a rotary bed (deg).</summary>
+    public bool IsRobotRail { get => _isRobotRail; private set => SetField(ref _isRobotRail, value); }
+
+    public string E1UnitLabel => IsRobotRail ? "mm" : "°";
+
     /// <summary>Rotary-bed centre X in world/ROBROOT mm (rotation axis + grid datum). Editable.</summary>
     public double BedCenterX { get => _bedCenterX; set { if (SetField(ref _bedCenterX, value)) FireBedEdited(); } }
     /// <summary>Rotary-bed centre Y in world/ROBROOT mm. Editable.</summary>
@@ -140,6 +146,23 @@ public sealed class RobotPanelViewModel : ViewModelBase
         OnPropertyChanged(nameof(BedOrientationOffsetDeg));
         IsRotaryBed     = isRotary;
         _suppressBedCallback = false;
+    }
+
+    /// <summary>Loads E1 limits/units from the active cell rail config.</summary>
+    public void ConfigureRail(RobotRailCellConfig? rail)
+    {
+        IsRobotRail = rail is not null;
+        OnPropertyChanged(nameof(E1UnitLabel));
+        if (rail is { } r)
+        {
+            MinE1 = r.MinMm;
+            MaxE1 = r.MaxMm;
+        }
+        else if (!IsRotaryBed)
+        {
+            MinE1 = -360;
+            MaxE1 = 360;
+        }
     }
 
     /// <summary>
@@ -388,11 +411,27 @@ public sealed class RobotPanelViewModel : ViewModelBase
             MinA5 = joints[4].MinDeg; MaxA5 = joints[4].MaxDeg;
             MinA6 = joints[5].MinDeg; MaxA6 = joints[5].MaxDeg;
         }
-        if (home.Length >= 6)
-        {
-            A1 = home[0]; A2 = home[1]; A3 = home[2];
-            A4 = home[3]; A5 = home[4]; A6 = home[5];
-        }
+        ApplyViewportJoints(home);
+    }
+
+    /// <summary>Sets the viewport robot to <paramref name="home"/> (A1–A6, KRL degrees) without moving the real robot.</summary>
+    public void ApplyViewportJoints(float[] home)
+    {
+        if (home.Length < 6) return;
+        A1 = home[0]; A2 = home[1]; A3 = home[2];
+        A4 = home[3]; A5 = home[4]; A6 = home[5];
+    }
+
+    private float _defaultToolheadA;
+    private float _defaultToolheadB;
+    private float _defaultToolheadC;
+
+    /// <summary>Cell default toolhead ABC (KUKA ZYX deg) — used by Go To Bed Center IK orientation.</summary>
+    public void SetDefaultToolheadOrientation(double a, double b, double c)
+    {
+        _defaultToolheadA = (float)a;
+        _defaultToolheadB = (float)b;
+        _defaultToolheadC = (float)c;
     }
 
     // -- TCP readout -----------------------------------------------------------
@@ -782,7 +821,7 @@ public sealed class RobotPanelViewModel : ViewModelBase
 
         var target = new OpenTK.Mathematics.Vector3(_bedCenterRobot.X, _bedCenterRobot.Y, _bedCenterRobot.Z);
         var seed   = new float[] { (float)A1, (float)A2, (float)A3, (float)A4, (float)A5, (float)A6 };
-        var rot    = IkSolver.TargetRotFromKukaAbc(0f, 90f, 0f);
+        var rot    = IkSolver.TargetRotFromKukaAbc(_defaultToolheadA, _defaultToolheadB, _defaultToolheadC);
         var result = IkSolver.Solve(target, seed, rot);
         if (result is null) return;
 

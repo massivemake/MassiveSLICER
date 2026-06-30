@@ -9,5 +9,16 @@
     "FlowRate": 0.463,
     "MaterialDensity": 1,
     "CostPerLb": 5
+  },
+  {
+    "Name": "ASA GF - Black",
+    "MaterialType": "ASA",
+    "Color": "Black",
+    "Temperature1": 250,
+    "Temperature2": 250,
+    "Temperature3": 250,
+    "FlowRate": 0.4115,
+    "MaterialDensity": 1.17,
+    "CostPerLb": 5
   }
 ]

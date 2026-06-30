@@ -18,6 +18,14 @@ public static class Picker
     /// <param name="hitDistance">World-space distance to the closest hit, or <see cref="float.MaxValue"/>.</param>
     /// <returns>The hit node, or <c>null</c> if nothing was intersected.</returns>
     public static SceneNode? Pick(Ray worldRay, SceneNode root, out float hitDistance)
+        => PickWhere(worldRay, root, _ => true, out hitDistance);
+
+    /// <summary>
+    /// Like <see cref="Pick"/> but only considers hits whose selectable root passes
+    /// <paramref name="acceptSelectable"/>.
+    /// </summary>
+    public static SceneNode? PickWhere(
+        Ray worldRay, SceneNode root, Func<SceneNode, bool> acceptSelectable, out float hitDistance)
     {
         hitDistance = float.MaxValue;
         PickTier bestTier = PickTier.Environment;
@@ -27,6 +35,7 @@ public static class Picker
         {
             if (node.Mesh?.PickingData is not { } mesh) continue;
             if (FindSelectableRoot(node) is not { } selectable) continue;
+            if (!acceptSelectable(selectable)) continue;
 
             Matrix4.Invert(node.WorldTransform, out var invWorld);
             var lo = TransformPoint(worldRay.Origin,    invWorld);
