@@ -336,7 +336,7 @@ public partial class MainWindow : Window
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await vm.SaveWorkspaceAsync(path);
+        await vm.SaveWorkspaceAsync(SavePathUtil.Normalize(path, "mass"));
     }
 
     /// <summary>

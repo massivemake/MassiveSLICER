@@ -74,6 +74,39 @@
                                   DataContext="{Binding}"
                                   HorizontalAlignment="Stretch"
                                   VerticalAlignment="Bottom"/>
+
+        <!-- ── Busy overlay: progress bar + stage text (project open, slicing) ── -->
+        <Border Grid.Row="0" Grid.RowSpan="3"
+                IsVisible="{Binding BusyOverlayVisible}"
+                Background="#66000000">
+            <Border Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border2}"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="28,20"
+                    MinWidth="380"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="{Binding BusyTitle}"
+                               FontSize="15" FontWeight="SemiBold"
+                               HorizontalAlignment="Center"/>
+                    <ProgressBar Minimum="0" Maximum="100" Height="6"
+                                 Value="{Binding BusyProgress}"
+                                 Foreground="{DynamicResource Accent}"
+                                 Background="{DynamicResource Border1}"/>
+                    <TextBlock Text="{Binding BusyProgress, StringFormat={}{0:F0}%}"
+                               FontSize="11"
+                               Opacity="0.6"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="{Binding BusyDetail}"
+                               Classes="LabelMuted"
+                               HorizontalAlignment="Center"
+                               TextWrapping="Wrap"
+                               MaxWidth="420"/>
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 
 </Window>

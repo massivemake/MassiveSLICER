@@ -283,7 +283,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // -- Toolpath colors -------------------------------------------------------
 
-    private System.Numerics.Vector3 _toolpathExtrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private System.Numerics.Vector3 _toolpathExtrudeColor     = new(1f, 1f, 1f);
     private System.Numerics.Vector3 _toolpathTravelColor      = new(0.85f, 0.18f, 0.18f);
     private System.Numerics.Vector3 _toolpathWipeColor        = new(1.0f,  0.53f, 0.0f);
     private System.Numerics.Vector3 _toolpathRetractionColor  = new(0.61f, 0.15f, 0.69f);
@@ -294,6 +294,26 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get => _toolpathExtrudeColor;
         set => SetField(ref _toolpathExtrudeColor, value);
+    }
+
+    // Live bead colour — applied every frame as a shader uniform, so changing it
+    // recolours already-sliced beads instantly (no re-slice, no VBO rebuild).
+    private System.Numerics.Vector3 _beadColor = new(0.95f, 0.95f, 0.95f);
+
+    public System.Numerics.Vector3 BeadColor
+    {
+        get => _beadColor;
+        set { if (SetField(ref _beadColor, value)) OnPropertyChanged(nameof(BeadPickerColor)); }
+    }
+
+    /// <summary>Avalonia-Color bridge for the ColorPicker control in the Toolpath panel.</summary>
+    public Avalonia.Media.Color BeadPickerColor
+    {
+        get => Avalonia.Media.Color.FromRgb(
+            (byte)Math.Clamp(_beadColor.X * 255f, 0f, 255f),
+            (byte)Math.Clamp(_beadColor.Y * 255f, 0f, 255f),
+            (byte)Math.Clamp(_beadColor.Z * 255f, 0f, 255f));
+        set => BeadColor = new System.Numerics.Vector3(value.R / 255f, value.G / 255f, value.B / 255f);
     }
 
     public System.Numerics.Vector3 ToolpathTravelColor
@@ -1528,6 +1548,10 @@ public sealed class ViewportViewModel : ViewModelBase
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected)
                     OnScrubIkRequested?.Invoke(value);
+                // Always repaint: the IK callback only repaints on a successful solve,
+                // so without this the viewport freezes when scrubbing through
+                // unreachable poses.
+                NotifyRenderNeeded();
             }
         }
     }
@@ -2245,6 +2269,15 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowSliceStatus));
             }
         }
+    }
+
+    private double _sliceProgressPercent;
+
+    /// <summary>Slice progress 0–100, driven by per-stage/per-layer callbacks.</summary>
+    public double SliceProgressPercent
+    {
+        get => _sliceProgressPercent;
+        set => SetField(ref _sliceProgressPercent, Math.Clamp(value, 0.0, 100.0));
     }
 
     private string _sliceStatusMessage = string.Empty;
@@ -3207,7 +3240,7 @@ public sealed class ViewportViewModel : ViewModelBase
             Node          = node,
             BeadWidth     = beadWidth,
             LayerHeight   = 3f,
-            MaterialColor = new System.Numerics.Vector3(0.10f, 0.45f, 0.90f),
+            MaterialColor = new System.Numerics.Vector3(0.95f, 0.95f, 0.95f),
         });
         NotifyRenderNeeded();
     }

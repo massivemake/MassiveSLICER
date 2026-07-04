@@ -44,20 +44,67 @@ public static class WorkspaceLoader
     public static bool Exists()
         => File.Exists(DefaultPath) || File.Exists(LegacyPath);
 
-    public static WorkspaceDocument? Load(string? path = null)
+    /// <summary>
+    /// Loads a workspace. <paramref name="progress"/> (0..1) reports real read progress —
+    /// the deserializer consumes the file incrementally, so bytes-read / file-size tracks
+    /// the actual parse position.
+    /// </summary>
+    public static WorkspaceDocument? Load(string? path = null, Action<float>? progress = null)
     {
         path ??= ResolveDefaultLoadPath();
         path = PathNormalization.Normalize(path);
         if (!File.Exists(path)) return null;
         try
         {
-            string json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<WorkspaceDocument>(json, LoadOptions);
+            using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                bufferSize: 1 << 16);
+            using var ps = new ProgressReadStream(fs, progress);
+            return JsonSerializer.Deserialize<WorkspaceDocument>(ps, LoadOptions);
         }
         catch
         {
             return null;
         }
+    }
+
+    /// <summary>Read-only stream wrapper reporting consumed-bytes / total-length.</summary>
+    private sealed class ProgressReadStream(Stream inner, Action<float>? progress) : Stream
+    {
+        private long _reported = -1;
+
+        private void Report()
+        {
+            if (progress is null || inner.Length <= 0) return;
+            // throttle: report at ~1% granularity
+            long bucket = inner.Position * 100 / inner.Length;
+            if (bucket == _reported) return;
+            _reported = bucket;
+            progress(Math.Clamp(inner.Position / (float)inner.Length, 0f, 1f));
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int n = inner.Read(buffer, offset, count);
+            Report();
+            return n;
+        }
+
+        public override int Read(Span<byte> buffer)
+        {
+            int n = inner.Read(buffer);
+            Report();
+            return n;
+        }
+
+        public override bool CanRead  => true;
+        public override bool CanSeek  => inner.CanSeek;
+        public override bool CanWrite => false;
+        public override long Length   => inner.Length;
+        public override long Position { get => inner.Position; set => inner.Position = value; }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => inner.Seek(offset, origin);
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     public static void Save(WorkspaceDocument doc, string? path = null)
