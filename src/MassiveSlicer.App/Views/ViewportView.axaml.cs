@@ -104,6 +104,9 @@ public partial class ViewportView : UserControl
     // Toolpath-to-node map -- populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _toolpathByNode       = new();
     private readonly ConcurrentDictionary<SceneNode, (float BeadWidth, float LayerHeight, NVec3 MaterialColor)> _toolpathMetaByNode = new();
+
+    /// <summary>Robot-validation issue summary per toolpath node (unreachable / singularity counts + Z range).</summary>
+    private readonly ConcurrentDictionary<SceneNode, (int Unreachable, int Singular, float ZLo, float ZHi)> _validationIssuesByNode = new();
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
@@ -1046,6 +1049,7 @@ public partial class ViewportView : UserControl
                 _ikSolutionsByNode.TryRemove(entry.Node, out _);
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
+                _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
@@ -4910,12 +4914,122 @@ public partial class ViewportView : UserControl
             for (int i = 0; i < total; i++)
                 singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
 
+            // -- TCP auto-rotate repair -------------------------------------------
+            // The nozzle is rotationally symmetric, so spinning it about its own axis
+            // (KUKA C offset) is print-neutral — but it swings the flange/wrist into a
+            // different configuration. For each flagged span, search for the smallest
+            // spin that clears the wrist singularity, ramp it in/out smoothly over
+            // neighbouring moves, and re-solve IK for the affected range.
+            {
+                bool anyBad = false;
+                for (int i = 0; i < total && !anyBad; i++)
+                    anyBad = !result[i] || singularity[i];
+
+                if (anyBad)
+                {
+                    var flatMoves = new ToolpathMove[total];
+                    {
+                        int fi = 0;
+                        foreach (var layer in toolpath.Layers)
+                            foreach (var mv in layer.Moves)
+                            { if (fi < total) flatMoves[fi] = mv; fi++; }
+                    }
+
+                    const int   Ramp  = 60;   // moves over which yaw ramps in/out
+                    const float MinA5 = 6f;   // deg of wrist margin required
+                    var yawByMove = new float[total];
+                    bool Bad(int i) => !result[i] || singularity[i];
+
+                    int s0 = 0;
+                    while (s0 < total)
+                    {
+                        if (cts.IsCancellationRequested) return;
+                        if (!Bad(s0)) { s0++; continue; }
+                        int s1 = s0;
+                        while (s1 + 1 < total && Bad(s1 + 1)) s1++;
+
+                        // Smallest nozzle spin that clears the span's start/middle/end.
+                        float chosen = 0f;
+                        foreach (float mag in new[] { 20f, 40f, 60f, 90f, 120f, 150f, 180f })
+                        {
+                            foreach (float sgn in new[] { 1f, -1f })
+                            {
+                                float y = mag * sgn;
+                                bool ok = true;
+                                foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
+                                {
+                                    var rot = solver.TargetRotFromGlobalOrientation(
+                                        normals[ti], offA, offB, offC + y);
+                                    var sol = solver.Solve(targets[ti],
+                                        solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
+                                    if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
+                                }
+                                if (ok) { chosen = y; break; }
+                            }
+                            if (chosen != 0f) break;
+                        }
+
+                        if (chosen != 0f)
+                        {
+                            int rIn  = Math.Max(0, s0 - Ramp);
+                            int rOut = Math.Min(total - 1, s1 + Ramp);
+                            for (int i = rIn; i <= rOut; i++)
+                            {
+                                float w = i < s0 ? (i - rIn)  / (float)Math.Max(1, s0 - rIn)
+                                        : i > s1 ? (rOut - i) / (float)Math.Max(1, rOut - s1)
+                                        : 1f;
+                                float y = chosen * w;
+                                if (MathF.Abs(y) > MathF.Abs(yawByMove[i])) yawByMove[i] = y;
+                            }
+
+                            // Re-solve the affected range with the yawed orientation.
+                            var chunkSeed = solutions[Math.Max(0, rIn - 1)];
+                            for (int i = rIn; i <= rOut; i++)
+                            {
+                                var rot = solver.TargetRotFromGlobalOrientation(
+                                    normals[i], offA, offB, offC + yawByMove[i]);
+                                var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
+                                result[i] = sol is not null;
+                                if (sol is not null) { solutions[i] = sol; chunkSeed = sol; }
+                                singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
+                            }
+                        }
+                        s0 = s1 + 1;
+                    }
+
+                    // Bake the repair into the toolpath so KRL export writes the
+                    // rotated orientations.
+                    for (int i = 0; i < total; i++)
+                        flatMoves[i].TcpYawDeg = yawByMove[i];
+                }
+            }
+
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
+            int singCount = 0;
+            foreach (var sg in singularity) if (sg) singCount++;
+
+            // Height range of flagged moves — tells the operator where the robot
+            // would fault, in part coordinates they can check against the model.
+            float zLo = float.MaxValue, zHi = float.MinValue;
+            {
+                int fi = 0;
+                foreach (var layer in toolpath.Layers)
+                    foreach (var mv in layer.Moves)
+                    {
+                        if (fi < total && (!result[fi] || singularity[fi]))
+                        {
+                            zLo = Math.Min(zLo, mv.From.Z);
+                            zHi = Math.Max(zHi, mv.From.Z);
+                        }
+                        fi++;
+                    }
+            }
+            _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
 
             _pendingReachability.Enqueue((node, result));
             _pendingSingularityPoints.Enqueue((node, singularity));
@@ -4930,6 +5044,17 @@ public partial class ViewportView : UserControl
                     vm.StatsReachability = reachLabel;
                     vm.IsValidating = false;
                     vm.SetScrubMarkers(result, singularity);
+                    int firstBad = -1;
+                    for (int i = 0; i < total; i++)
+                        if (!result[i] || singularity[i]) { firstBad = i; break; }
+                    vm.FirstValidationIssueIndex = firstBad;
+                    // Loud warning: a fault mid-print wastes material and hours.
+                    if (failCount + singCount > 0)
+                        SetSliceStatus(vm,
+                            $"⚠ Robot validation: {singCount:N0} singularity-risk and {failCount:N0} unreachable moves" +
+                            (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
+                            " — the robot may fault mid-print.",
+                            isError: true);
                 }
                 GlCanvas.RequestNextFrameRendering();
             });
@@ -5858,6 +5983,60 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>
+    /// If robot validation flagged issues for this toolpath, asks the operator to confirm
+    /// before exporting. Returns false to abort the export.
+    /// </summary>
+    private async Task<bool> ConfirmExportDespiteValidationAsync(SceneNode node)
+    {
+        if (!_validationIssuesByNode.TryGetValue(node, out var vi) || vi.Unreachable + vi.Singular == 0)
+            return true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return true;
+
+        string zRange = vi.ZLo <= vi.ZHi ? $" between Z {vi.ZLo:0} and {vi.ZHi:0} mm" : "";
+        var dlg = new Window
+        {
+            Title = "Robot Validation Warning",
+            Width = 460, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"⚠ This toolpath has {vi.Singular:N0} singularity-risk moves and " +
+                   $"{vi.Unreachable:N0} unreachable moves{zRange}.\n\n" +
+                   "The robot is likely to fault mid-print. " +
+                   "Scrub the timeline to the purple/red markers to inspect, or adjust the toolhead " +
+                   "orientation before exporting.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Thickness(20, 18, 20, 12),
+        };
+        var exportBtn = new Button { Content = "Export anyway", Padding = new Thickness(14, 6, 14, 6) };
+        var gotoBtn   = new Button { Content = "Go to issue",   Padding = new Thickness(14, 6, 14, 6) };
+        var cancelBtn = new Button { Content = "Cancel",        Padding = new Thickness(14, 6, 14, 6) };
+        exportBtn.Click += (_, _) => dlg.Close(true);
+        gotoBtn.Click   += (_, _) => { dlg.Close(false); _vm?.JumpToValidationIssue(); };
+        cancelBtn.Click += (_, _) => dlg.Close(false);
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Thickness(20, 0, 20, 16),
+                    Children = { cancelBtn, gotoBtn, exportBtn },
+                },
+            },
+        };
+        return await dlg.ShowDialog<bool?>(owner) == true;
+    }
+
     private async Task ExportKrlAsync(ViewportViewModel vm)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -5866,6 +6045,8 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         if (topLevel is null) return;
@@ -5893,6 +6074,8 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         if (topLevel is null) return;

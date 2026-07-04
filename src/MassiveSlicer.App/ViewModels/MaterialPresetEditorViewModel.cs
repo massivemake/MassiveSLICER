@@ -81,7 +81,7 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     public double MaterialDensity
     {
         get => _materialDensity;
-        set => SetField(ref _materialDensity, Math.Max(0, value));
+        set { if (SetField(ref _materialDensity, Math.Max(0, value))) OnPropertyChanged(nameof(CalibComputedText)); }
     }
 
     private double _costPerLb = 5.0;
@@ -89,6 +89,78 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     {
         get => _costPerLb;
         set => SetField(ref _costPerLb, Math.Max(0, value));
+    }
+
+    // -- Purge-and-weigh calibration -----------------------------------------
+    //
+    // Run the extruder into the air at a fixed motor % for a fixed time, weigh
+    // the cooled purge.  Flow rate falls out directly — no true RPM needed,
+    // because the machine's $ANOUT[4] channel is a percentage:
+    //
+    //   flowRate (rev/cm³-equivalent) = motor% × (seconds/60) ÷ (grams ÷ density)
+
+    private string _calibratedOn = "";
+    public string CalibratedOn
+    {
+        get => _calibratedOn;
+        set { if (SetField(ref _calibratedOn, value)) OnPropertyChanged(nameof(CalibrationStatus)); }
+    }
+
+    private string _calibrationNote = "";
+    public string CalibrationNote
+    {
+        get => _calibrationNote;
+        set { if (SetField(ref _calibrationNote, value)) OnPropertyChanged(nameof(CalibrationStatus)); }
+    }
+
+    public string CalibrationStatus =>
+        string.IsNullOrWhiteSpace(_calibratedOn)
+            ? "Not calibrated — flow rate is the default/manual value."
+            : $"Calibrated {_calibratedOn}   ({_calibrationNote})";
+
+    private double _calibMotorPercent = 50.0;
+    public double CalibMotorPercent
+    {
+        get => _calibMotorPercent;
+        set { if (SetField(ref _calibMotorPercent, Math.Clamp(value, 0.1, 100))) OnPropertyChanged(nameof(CalibComputedText)); }
+    }
+
+    private double _calibTimeSec = 60.0;
+    public double CalibTimeSec
+    {
+        get => _calibTimeSec;
+        set { if (SetField(ref _calibTimeSec, Math.Max(1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+    }
+
+    private double _calibWeightG;
+    public double CalibWeightG
+    {
+        get => _calibWeightG;
+        set { if (SetField(ref _calibWeightG, Math.Max(0, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+    }
+
+    /// <summary>Flow rate computed from the calibration inputs, or null when incomplete.</summary>
+    public double? CalibComputedFlowRate
+    {
+        get
+        {
+            if (_calibWeightG <= 0 || _materialDensity <= 0) return null;
+            double volumeCm3 = _calibWeightG / _materialDensity;
+            return _calibMotorPercent * (_calibTimeSec / 60.0) / volumeCm3;
+        }
+    }
+
+    public string CalibComputedText => CalibComputedFlowRate is double f
+        ? $"Computed flow rate: {f:F4} rev/cm³"
+        : "Enter purge weight to compute.";
+
+    /// <summary>Applies the computed calibration to the preset's flow rate.</summary>
+    public void ApplyCalibration()
+    {
+        if (CalibComputedFlowRate is not double f) return;
+        FlowRate        = f;
+        CalibratedOn    = DateTime.Now.ToString("yyyy-MM-dd");
+        CalibrationNote = $"{_calibMotorPercent:0.#}% × {_calibTimeSec:0}s → {_calibWeightG:0.#}g @ {Temperature1:0}/{Temperature2:0}/{Temperature3:0}°C";
     }
 
     // -- Auto-name logic ---------------------------------------------------
@@ -119,6 +191,8 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         FlowRate        = FlowRate,
         MaterialDensity = MaterialDensity,
         CostPerLb       = CostPerLb,
+        CalibratedOn    = CalibratedOn,
+        CalibrationNote = CalibrationNote,
     };
 
     public void LoadFrom(MaterialPreset p)
@@ -133,5 +207,7 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         FlowRate        = p.FlowRate;
         MaterialDensity = p.MaterialDensity;
         CostPerLb       = p.CostPerLb;
+        CalibratedOn    = p.CalibratedOn;
+        CalibrationNote = p.CalibrationNote;
     }
 }

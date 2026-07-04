@@ -2335,6 +2335,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Viewport.ApplyCameraState?.Invoke(camera);
 
         AppPreferences.LastWorkspacePath = workspacePath;
+        StatusBar.FileStatus = Path.GetFileName(workspacePath);
         SyncKrlFrameIndicesToActiveTab();
         PreferencesLoader.Save(AppPreferences);
         Console.Log($"[workspace] Restored {doc.Models.Count} model(s) from {workspacePath}");

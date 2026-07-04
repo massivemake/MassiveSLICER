@@ -14,4 +14,10 @@ public partial class ViewportOverlayView : UserControl
                 vm.ScrubTrackPixelWidth = e.NewSize.Width;
         };
     }
+
+    private void OnGoToValidationIssue(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is ViewportViewModel vm)
+            vm.JumpToValidationIssue();
+    }
 }

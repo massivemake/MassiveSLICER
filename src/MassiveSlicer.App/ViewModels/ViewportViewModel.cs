@@ -2280,6 +2280,28 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _sliceProgressPercent, Math.Clamp(value, 0.0, 100.0));
     }
 
+    private int _firstValidationIssueIndex = -1;
+
+    /// <summary>Flat move index of the first validation-flagged move, or -1.</summary>
+    public int FirstValidationIssueIndex
+    {
+        get => _firstValidationIssueIndex;
+        set { if (SetField(ref _firstValidationIssueIndex, value)) OnPropertyChanged(nameof(HasValidationIssueJump)); }
+    }
+
+    public bool HasValidationIssueJump => _firstValidationIssueIndex >= 0;
+
+    /// <summary>Jumps the scrubber to the first flagged move so the failing pose is visible.</summary>
+    public void JumpToValidationIssue()
+    {
+        if (_firstValidationIssueIndex < 0) return;
+        // Preserve the red/purple timeline markers: a selection-sync side effect of
+        // the jump can clear them, so re-emit the stored validation data afterwards.
+        var reach = _scrubReachable; var sing = _scrubSingular;
+        ToolpathScrubIndex = Math.Clamp(_firstValidationIssueIndex, 0, ToolpathScrubMax);
+        if (reach.Length > 0) SetScrubMarkers(reach, sing);
+    }
+
     private string _sliceStatusMessage = string.Empty;
 
     /// <summary>Human-readable slice progress, result, or error (shown in overlay + status bar).</summary>
