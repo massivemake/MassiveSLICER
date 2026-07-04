@@ -149,6 +149,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 {
                     StatusBar.OperationFeedback = string.Empty;
                     LogProgressDetail("Starting slice…");
+                    ShowBusy("Slicing", "Starting slice…");
                 }
                 else
                 {
@@ -158,16 +159,23 @@ public sealed class MainWindowViewModel : ViewModelBase
                         LogProgressDetail(Viewport.SliceStatusMessage);
                     }
                     _lastProgressLogMessage = string.Empty;
+                    HideBusy();
                 }
             }
 
             if (e.PropertyName is nameof(ViewportViewModel.SliceStatusMessage))
             {
                 if (Viewport.IsSlicing)
+                {
                     LogProgressDetail(Viewport.SliceStatusMessage);
+                    UpdateBusy(Viewport.SliceStatusMessage);
+                }
                 else if (!string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
                     StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
             }
+
+            if (e.PropertyName is nameof(ViewportViewModel.SliceProgressPercent) && Viewport.IsSlicing)
+                UpdateBusyProgress(Viewport.SliceProgressPercent);
 
             if (e.PropertyName is nameof(ViewportViewModel.HasSelection)
                                 or nameof(ViewportViewModel.HasMeshSelected)
@@ -2064,16 +2072,83 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Loads a <c>.mass</c> workspace from <paramref name="path"/> (File â†’ Open).
     /// Models restore only after the workspace cell scene (bed/robot) is ready.
     /// </summary>
-    public void OpenWorkspace(string path)
+    // -- Busy overlay (project open / slicing) ------------------------------------
+
+    private bool   _busyOverlayVisible;
+    private string _busyTitle  = "";
+    private string _busyDetail = "";
+
+    public bool BusyOverlayVisible
+    {
+        get => _busyOverlayVisible;
+        set => SetField(ref _busyOverlayVisible, value);
+    }
+
+    public string BusyTitle
+    {
+        get => _busyTitle;
+        set => SetField(ref _busyTitle, value);
+    }
+
+    public string BusyDetail
+    {
+        get => _busyDetail;
+        set => SetField(ref _busyDetail, value);
+    }
+
+    private double _busyProgress;
+
+    /// <summary>Overlay progress 0–100 (determinate).</summary>
+    public double BusyProgress
+    {
+        get => _busyProgress;
+        set => SetField(ref _busyProgress, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    internal void ShowBusy(string title, string detail = "")
+    {
+        BusyTitle    = title;
+        BusyDetail   = detail;
+        BusyProgress = 0;
+        BusyOverlayVisible = true;
+    }
+
+    internal void UpdateBusy(string detail) => BusyDetail = detail;
+
+    internal void UpdateBusyProgress(double percent) => BusyProgress = percent;
+
+    internal void HideBusy() => BusyOverlayVisible = false;
+
+    public void OpenWorkspace(string path) => _ = OpenWorkspaceAsync(path);
+
+    private async Task OpenWorkspaceAsync(string path)
     {
         path = PathNormalization.Normalize(path);
-        var doc = WorkspaceLoader.Load(path);
+        ShowBusy("Opening Project", $"Reading {Path.GetFileName(path)}…");
+
+        WorkspaceDocument? doc = null;
+        try
+        {
+            // Parsing large workspaces (multi-million-move toolpaths) takes tens of
+            // seconds — run it off the UI thread so the overlay stays responsive.
+            // File read/parse owns 0–70% of the bar (byte-accurate).
+            doc = await Task.Run(() => WorkspaceLoader.Load(path,
+                f => Dispatcher.UIThread.Post(() => UpdateBusyProgress(f * 70.0))));
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[workspace] Load failed: {ex.Message}");
+        }
+
         if (doc is null)
         {
+            HideBusy();
             Console.Log($"[workspace] Failed to load '{path}'.");
             return;
         }
 
+        UpdateBusy("Preparing robot cell…");
+        UpdateBusyProgress(75);
         _pendingWorkspaceRestore = (doc, path);
         _workspaceRestoreGeneration = 0;
         QueueWorkspaceRestoreAfterCellReady(doc);
@@ -2138,8 +2213,24 @@ public sealed class MainWindowViewModel : ViewModelBase
         _pendingWorkspaceRestore = null;
         _workspaceRestoreGeneration = 0;
         Viewport.WorkspaceCellLoadGeneration = null;
-        ApplyWorkspaceState(pending.Doc, pending.Path);
-        Console.Log($"[workspace] Restored on {cellName}.");
+
+        UpdateBusy($"Restoring {pending.Doc.Models.Count} model(s) and toolpaths…");
+        UpdateBusyProgress(85);
+        // Defer one frame so the overlay text above repaints before the UI thread
+        // is occupied by the (potentially long) restore.
+        Dispatcher.UIThread.Post(() =>
+        {
+            try
+            {
+                ApplyWorkspaceState(pending.Doc, pending.Path);
+                Console.Log($"[workspace] Restored on {cellName}.");
+                UpdateBusyProgress(100);
+            }
+            finally
+            {
+                HideBusy();
+            }
+        }, DispatcherPriority.Background);
     }
 
     /// <summary>
@@ -2203,11 +2294,15 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Fire-and-forget wrapper for callers that cannot await.</summary>
     public void SaveWorkspace(string path) => _ = SaveWorkspaceAsync(path);
 
-    /// <summary>Suggested filename for the Save As dialog (last save or default).</summary>
+    /// <summary>
+    /// Suggested filename stem for the Save As dialog (last save or default).
+    /// Extension-less: the dialog's DefaultExtension adds ".mass" — including it
+    /// here produced doubled extensions (".mass.mass") on macOS.
+    /// </summary>
     internal string SuggestedWorkspaceFileName =>
         AppPreferences.LastWorkspacePath is { } last
-            ? System.IO.Path.GetFileName(last)
-            : "workspace.mass";
+            ? System.IO.Path.GetFileNameWithoutExtension(last)
+            : "workspace";
 
     private void ApplyWorkspaceState(WorkspaceDocument doc, string workspacePath)
     {
@@ -2398,6 +2493,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WaveCycles             = copy.WaveCycles;
         live.WaveShape              = copy.WaveShape;
         live.WaveStagger            = copy.WaveStagger;
+        live.WavePhaseMethodIndex   = copy.WavePhaseMethodIndex;
         live.WaveGradient           = copy.WaveGradient;
         live.WaveAmplitudeBottom    = copy.WaveAmplitudeBottom;
         live.WaveAmplitudeTop       = copy.WaveAmplitudeTop;
@@ -2493,6 +2589,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         vp.ActivePreset = p.ActivePreset;
 
         // Toolpath colors
+        vp.BeadColor               = HexToVec3(p.ToolpathBeadColor);
         vp.ToolpathExtrudeColor    = HexToVec3(p.ToolpathExtrudeColor);
         vp.ToolpathTravelColor     = HexToVec3(p.ToolpathTravelColor);
         vp.ToolpathSeamColor       = HexToVec3(p.ToolpathSeamColor);
@@ -2558,6 +2655,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WaveCycles           = p.WaveCycles;
         add.WaveShape            = p.WaveShape;
         add.WaveStagger          = p.WaveStagger;
+        add.WavePhaseMethodIndex = p.WavePhaseMethodIndex;
         add.WaveGradient         = p.WaveGradient;
         add.WaveAmplitudeBottom  = p.WaveAmplitudeBottom;
         add.WaveAmplitudeTop     = p.WaveAmplitudeTop;
@@ -2727,6 +2825,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ShowBedGrid  = vp.ShowBedGrid;
         p.ActivePreset = vp.ActivePreset;
 
+        // Toolpath bead colour (live viewport control)
+        p.ToolpathBeadColor = Vec3ToHex(vp.BeadColor);
+
         // Lighting
         p.LightAzimuth   = vp.LightAzimuth;
         p.LightElevation = vp.LightElevation;
@@ -2766,6 +2867,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WaveCycles           = add.WaveCycles;
         p.WaveShape            = add.WaveShape;
         p.WaveStagger          = add.WaveStagger;
+        p.WavePhaseMethodIndex = add.WavePhaseMethodIndex;
         p.WaveGradient         = add.WaveGradient;
         p.WaveAmplitudeBottom  = add.WaveAmplitudeBottom;
         p.WaveAmplitudeTop     = add.WaveAmplitudeTop;
@@ -2831,6 +2933,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         "Natural" or "Normal" => "Same-Direction",
         _                     => mode ?? "Off",
     };
+
+    private static string Vec3ToHex(System.Numerics.Vector3 c) =>
+        $"#FF{(int)Math.Clamp(c.X * 255f, 0f, 255f):X2}{(int)Math.Clamp(c.Y * 255f, 0f, 255f):X2}{(int)Math.Clamp(c.Z * 255f, 0f, 255f):X2}";
 
     private static System.Numerics.Vector3 HexToVec3(string hex)
     {

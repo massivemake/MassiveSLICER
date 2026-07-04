@@ -1,4 +1,5 @@
-﻿using MassiveSlicer.ViewModels.Base;
+﻿using MassiveSlicer.App;
+using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
 
@@ -26,6 +27,8 @@ public sealed class StatusBarViewModel : ViewModelBase
         get => _operationFeedback;
         set => SetField(ref _operationFeedback, value);
     }
+
+    public string BuildLabel { get; } = BuildInfo.Label;
 
     private bool _isProgressActive;
 

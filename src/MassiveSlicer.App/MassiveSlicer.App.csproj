@@ -42,6 +42,8 @@
     <!-- Canonical app icon lives in repo assets/Icons (generated from Square44x44Logo PNGs). -->
     <AvaloniaResource Include="..\..\assets\Icons\icon.ico" Link="Assets\icon.ico"/>
     <None Include="..\..\assets\Icons\icon.ico" Link="icon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- macOS Dock icon set at runtime (MacDockIcon) -->
+    <None Include="..\..\assets\Icons\macos-app-icon.png" Link="macos-app-icon.png" CopyToOutputDirectory="PreserveNewest" />
     <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
   </ItemGroup>
 

@@ -62,7 +62,7 @@ public sealed class SceneRenderer : IDisposable
     private bool _disposed;
     private bool _initialised;
 
-    private Vector3 _toolpathExtrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _toolpathExtrudeColor     = new(1f, 1f, 1f);
     private Vector3 _toolpathTravelColor      = new(0.85f, 0.18f, 0.18f);
     private Vector3 _toolpathWipeColor        = new(1.0f,  0.53f, 0.0f);
     private Vector3 _toolpathRetractionColor  = new(0.61f, 0.15f, 0.69f);
@@ -477,15 +477,31 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>
+    /// Sets the live bead colour on every registered toolpath (and any added later).
+    /// Cheap — a shader-uniform change, no VBO rebuild.
+    /// </summary>
+    public void SetToolpathBeadColor(Vector3 color)
+    {
+        if (_toolpathBeadColor == color) return;
+        _toolpathBeadColor = color;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetBeadColor(color);
+    }
+
+    private Vector3 _toolpathBeadColor = new(0.95f, 0.95f, 0.95f);
+
+    /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
     /// </summary>
     public void AddToolpath(Toolpath toolpath, SceneNode node,
         float beadWidth = 6f, float layerHeight = 3f,
-        System.Numerics.Vector3 materialColor = default)
+        System.Numerics.Vector3 materialColor = default,
+        Toolpath? beadToolpath = null)
     {
         var centroid = ComputeToolpathCentroid(toolpath);
-        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
+        renderer.SetBeadColor(_toolpathBeadColor);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -537,11 +553,13 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public void ReplaceToolpath(Toolpath toolpath, SceneNode node,
         float beadWidth = 6f, float layerHeight = 3f,
-        System.Numerics.Vector3 materialColor = default)
+        System.Numerics.Vector3 materialColor = default,
+        Toolpath? beadToolpath = null)
     {
         RemoveToolpathIfExists(node);
         var centroid = ComputeToolpathCentroid(toolpath);
-        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor);
+        var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
+        renderer.SetBeadColor(_toolpathBeadColor);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);

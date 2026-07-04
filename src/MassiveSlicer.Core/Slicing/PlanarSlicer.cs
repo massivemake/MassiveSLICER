@@ -24,7 +24,8 @@ public static class PlanarSlicer
     /// <param name="settings">Slice parameters.</param>
     public static Toolpath Slice(
         IReadOnlyList<Vector3[]> meshes,
-        SliceSettings settings)
+        SliceSettings settings,
+        Action<float>? progress = null)
     {
         // -- Compute Z + XY extents across all meshes -------------------------
         float zMin = float.MaxValue, zMax = float.MinValue;
@@ -63,6 +64,7 @@ public static class PlanarSlicer
 
         for (int zi = 0; zi < zPositions.Length; zi++)
         {
+            if ((zi & 15) == 0) progress?.Invoke(zi / (float)zPositions.Length);
             float z           = zPositions[zi];
             float prevZ       = zi == 0 ? zMin : zPositions[zi - 1];
             bool  isLastLayer = zi == zPositions.Length - 1;

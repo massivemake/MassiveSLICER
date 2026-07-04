@@ -21,6 +21,7 @@ using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.FK;
 using MassiveSlicer.Viewport.Loading;
+using MassiveSlicer.App.Diagnostics;
 using MassiveSlicer.Viewport.Rendering;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels;
@@ -826,6 +827,8 @@ public partial class ViewportView : UserControl
             _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
                 ? vm.ToolpathScrubIndex
                 : int.MaxValue;
+            _renderer.SetToolpathBeadColor(
+                new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
             _renderer.SetToolpathColors(
                 new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
                 new TkVector3(vm.ToolpathTravelColor.X,      vm.ToolpathTravelColor.Y,      vm.ToolpathTravelColor.Z),
@@ -2248,10 +2251,35 @@ public partial class ViewportView : UserControl
 
     private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
     {
-        // Avalonia Delta.Y is in lines (typically ±3 per notch).
-        // Normalise to ±1 per notch to match the WPF behaviour.
-        _renderer.Camera.Zoom((float)e.Delta.Y / 3f);
+        var mods = e.KeyModifiers;
+        float dx = (float)e.Delta.X;
+        float dy = (float)e.Delta.Y;
+
+        if (mods.HasFlag(KeyModifiers.Shift))
+        {
+            // Shift + two fingers → zoom
+            float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
+            _renderer.Camera.Zoom(zoom);
+        }
+        else if (mods.HasFlag(KeyModifiers.Meta))
+        {
+            // Cmd + two fingers → pan
+            _renderer.Camera.Pan(
+                deltaX:         dx * 4f,
+                deltaY:        -dy * 4f,
+                viewportWidth:  (float)GlCanvas.Bounds.Width,
+                viewportHeight: (float)GlCanvas.Bounds.Height);
+        }
+        else
+        {
+            // Two fingers (no modifier) → orbit/rotate
+            _renderer.Camera.Orbit(
+                deltaAzimuth:   -dx * 2f,
+                deltaElevation:  dy * 2f);
+        }
+
         GlCanvas.RequestNextFrameRendering();
+        e.Handled = true;
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -2516,6 +2544,7 @@ public partial class ViewportView : UserControl
             WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
             WaveShape      = (float)s.WaveShape,
             WaveStagger    = (float)s.WaveStagger,
+            WavePhaseMethod = s.WavePhaseMethod,
             AdaptiveLayerHeight = s.AdaptiveLayerHeight,
             AdaptiveQuality     = (float)s.AdaptiveQuality,
             MinLayerHeight      = (float)s.MinLayerHeight,
@@ -2569,13 +2598,18 @@ public partial class ViewportView : UserControl
         List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> meshSnapshots,
         SliceMethod method,
         SliceSettings settings,
-        Action<string>? reportProgress = null)
+        Action<string>? reportProgress = null,
+        Action<double>? reportPercent = null)
     {
         void Report(string msg) => reportProgress?.Invoke(msg);
+        void Pct(double p)      => reportPercent?.Invoke(p);
 
         Report("Preparing mesh…");
-        var toolpath = await Task.Run(() =>
+        Pct(1);
+        SliceLogger.BeginSession($"ComputeToolpathAsync  method={method}  wave={settings.WaveEffect}");
+        var (smoothedToolpath, rawToolpath) = await Task.Run(() =>
         {
+            SliceLogger.Step("background thread started");
             var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
             foreach (var (positions, indices, world) in meshSnapshots)
             {
@@ -2594,6 +2628,7 @@ public partial class ViewportView : UserControl
                 }
                 flatMeshes.Add(flat);
             }
+            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}");
 
             Report(method switch
             {
@@ -2602,24 +2637,54 @@ public partial class ViewportView : UserControl
                 SliceMethod.Angled   => "Angled: intersecting tilted planes…",
                 _                    => "Planar: intersecting layers…",
             });
+            Pct(5);
 
+            // Stage weights: slicing dominates wall-clock, so it owns 5→75%.
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
-            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
+            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings,
+                                                          f => Pct(5 + f * 70));
+            SliceLogger.Step($"slicer done  layers={tp.Layers.Count}  moves={tp.Layers.Sum(l => l.Moves.Count)}");
+            Pct(75);
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
+            SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
+            Pct(80);
+
             tp = MovementPostProcessor.Apply(tp, settings);
-            return ResumeRampPostProcessor.Apply(tp, settings);
+            SliceLogger.Step("MovementPostProcessor done");
+
+            tp = ResumeRampPostProcessor.Apply(tp, settings);
+            SliceLogger.Step("ResumeRampPostProcessor done");
+            Pct(84);
+
+            var raw = ToolpathClone.Copy(tp);
+            SliceLogger.Step("ToolpathClone.Copy(raw) done");
+            Pct(88);
+
+            var withSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(tp), settings);
+            SliceLogger.Step("LayerSpeedPostProcessor done");
+            Pct(93);
+
+            var toSmooth = ToolpathClone.Copy(withSpeed);
+            SliceLogger.Step("ToolpathClone.Copy(toSmooth) done");
+            Pct(96);
+
+            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+            SliceLogger.Step("OrientationBlender done");
+
+            var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+            SliceLogger.Step("OrientationSmoother done");
+            Pct(100);
+
+            return (smoothed, raw);
         });
 
-        var rawToolpath      = ToolpathClone.Copy(toolpath);
-        var withLayerSpeed   = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(toolpath), settings);
-        var toSmooth         = ToolpathClone.Copy(withLayerSpeed);
-        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
-        var smoothedToolpath = OrientationSmoother.Apply(toSmooth, settings);
+        SliceLogger.Step("back on UI thread — returning result");
+        SliceLogger.EndSession();
         return (smoothedToolpath, rawToolpath, settings);
     }
 
@@ -2656,37 +2721,61 @@ public partial class ViewportView : UserControl
 
     private void UploadToolpathEntry(PendingToolpathEntry entry, bool addToScene)
     {
-        StageToolpathMaps(entry);
-        if (addToScene)
-            _renderer.AddToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
-        else
-            _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
-
-        var centroidLocal = entry.Node.LocalTransform;
-
-        if (entry.PreserveRelativePose
-            && entry.PreservedLocalTransform is Matrix4 preservedLocal
-            && entry.PreservedOrigin is NVec3 preservedOrigin)
+        int moveCount = entry.Toolpath.Layers.Sum(l => l.Moves.Count);
+        SliceLogger.BeginSession($"UploadToolpathEntry  addToScene={addToScene}  moves={moveCount}");
+        try
         {
-            var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
-            Matrix4.Invert(oldOriginT, out var invOldOrigin);
-            entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+            SliceLogger.Step("StageToolpathMaps");
+            StageToolpathMaps(entry);
+
+            SliceLogger.Step(addToScene ? "renderer.AddToolpath" : "renderer.ReplaceToolpath");
+            if (addToScene)
+                _renderer.AddToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+            else
+                _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+
+            SliceLogger.Step("pose/transform");
+            var centroidLocal = entry.Node.LocalTransform;
+
+            if (entry.PreserveRelativePose
+                && entry.PreservedLocalTransform is Matrix4 preservedLocal
+                && entry.PreservedOrigin is NVec3 preservedOrigin)
+            {
+                var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
+                Matrix4.Invert(oldOriginT, out var invOldOrigin);
+                entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+            }
+            else if (entry.LocalTransformOverride is Matrix4 lt)
+            {
+                entry.Node.LocalTransform = lt;
+            }
+
+            SliceLogger.Step("ComputeOverhangPerFlatMove");
+            var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
+            SliceLogger.Step("UpdateToolpathBeadOverhang");
+            _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
+            SliceLogger.Step("ComputeOrientationRatePerFlatMove");
+            var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
+            SliceLogger.Step("UpdateToolpathBeadOrientation");
+            _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
+
+            // Scrub/IK un-localise against the geometry centroid, not the user translation component.
+            var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
+                ? centroidLocal.Row3
+                : entry.Node.LocalTransform.Row3;
+            _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
+            SliceLogger.EndSession("UploadToolpathEntry done");
         }
-        else if (entry.LocalTransformOverride is Matrix4 lt)
+        catch (Exception ex)
         {
-            entry.Node.LocalTransform = lt;
+            SliceLogger.Error("UploadToolpathEntry", ex);
+            // Swallow so the GL thread survives — the toolpath just won't render.
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_vm is { } vm)
+                    SetSliceStatus(vm, $"Render error: {ex.GetType().Name}: {ex.Message}", isError: true);
+            });
         }
-
-        var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
-        _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
-        var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
-        _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
-
-        // Scrub/IK un-localise against the geometry centroid, not the user translation component.
-        var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
-            ? centroidLocal.Row3
-            : entry.Node.LocalTransform.Row3;
-        _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
     }
 
     private void ApplyToolpathStats(ViewportViewModel vm, Toolpath smoothedToolpath)
@@ -2802,7 +2891,8 @@ public partial class ViewportView : UserControl
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
-                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
 
             int layerCount = smoothedToolpath.Layers.Count;
             if (layerCount == 0)
@@ -3157,7 +3247,8 @@ public partial class ViewportView : UserControl
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
-                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
 
             if (smoothedToolpath.Layers.Count == 0)
             {
@@ -3304,7 +3395,7 @@ public partial class ViewportView : UserControl
         "Orange"  => new(0.95f, 0.45f, 0.10f),
         "Natural" => new(0.92f, 0.88f, 0.75f),
         "Black"   => new(0.15f, 0.15f, 0.15f),
-        _         => new(0.15f, 0.35f, 0.85f),  // Other / no preset → blue
+        _         => new(0.95f, 0.95f, 0.95f),  // Other / no preset → white
     };
 
     private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
@@ -4880,6 +4971,10 @@ public partial class ViewportView : UserControl
         var result = new float[total];
         if (total == 0) return result;
 
+        // O(n×m) per-layer search — too slow for wave-expanded toolpaths.
+        // Skip and return all-zero (no overhang highlight) above threshold.
+        if (total > 600_000) return result;
+
         List<(NVec3 from, NVec3 to)>? prevSegs = null;
         int fi = 0;
         foreach (var layer in tp.Layers)
@@ -5715,6 +5810,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "ply");
 
         try
         {
@@ -5747,6 +5843,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "stl");
 
         try
         {
@@ -5785,7 +5882,7 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -5815,6 +5912,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "src");
 
         path = RobotKrlPaths.ToExtendedUncPath(path);
         await WriteKrlAsync(vm, toolpath, node, cell, settings, path);

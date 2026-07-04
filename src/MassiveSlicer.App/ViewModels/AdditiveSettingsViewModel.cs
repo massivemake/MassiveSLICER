@@ -499,6 +499,21 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _waveStagger, Math.Clamp(value, 0.0, 1.0));
     }
 
+    private int _wavePhaseMethodIndex;   // 0 = Method A, 1 = Method B
+
+    /// <summary>
+    /// Wave phase method (dropdown index). 0 = Method A (seam anchored, original),
+    /// 1 = Method B (phase inheritance).
+    /// </summary>
+    public int WavePhaseMethodIndex
+    {
+        get => _wavePhaseMethodIndex;
+        set => SetField(ref _wavePhaseMethodIndex, Math.Clamp(value, 0, 1));
+    }
+
+    /// <summary>"A" or "B" — the value passed to SliceSettings.</summary>
+    public string WavePhaseMethod => _wavePhaseMethodIndex == 1 ? "B" : "A";
+
     // -- Wave gradient ----------------------------------------------------------
 
     private bool _waveGradient;

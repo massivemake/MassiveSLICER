@@ -522,6 +522,21 @@
                                                TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                 </Grid>
 
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="52"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Phase" Classes="LabelMuted" VerticalAlignment="Center"
+                                               ToolTip.Tip="Fixed: each layer's wave counts from its own start point — alignment between layers can drift as the shape changes with height.&#x0a;Dynamic: each layer continues the wave of the layer directly below plus stagger — consistent layer-to-layer alignment across the whole print."/>
+                                    <ComboBox Grid.Column="1"
+                                              SelectedIndex="{Binding Additive.WavePhaseMethodIndex, Mode=TwoWay}"
+                                              HorizontalAlignment="Stretch" FontSize="11">
+                                        <ComboBoxItem Content="Fixed"/>
+                                        <ComboBoxItem Content="Dynamic"/>
+                                    </ComboBox>
+                                </Grid>
+
                                 <CheckBox Content="Gradient"
                                           IsChecked="{Binding Additive.WaveGradient, Mode=TwoWay}"
                                           Margin="8,4,8,4"
@@ -1323,6 +1338,18 @@
 
                         <CheckBox Content="Show bead"            Margin="12,2,8,2"
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowBead, Mode=TwoWay}"/>
+                        <Grid Margin="30,0,8,2"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowBead}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Bead color" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Live bead colour — updates instantly, no re-slice needed"/>
+                            <ColorPicker Grid.Column="1"
+                                         Color="{Binding $parent[Window].DataContext.Viewport.BeadPickerColor, Mode=TwoWay}"
+                                         IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
+                        </Grid>
                         <CheckBox Content="Show extrusion moves" Margin="12,2,8,2"
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowExtrusionMoves, Mode=TwoWay}"/>
                         <CheckBox Content="Show travel moves"    Margin="12,2,8,2"
