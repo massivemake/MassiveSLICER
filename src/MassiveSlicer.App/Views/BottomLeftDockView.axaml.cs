@@ -7,6 +7,12 @@ namespace MassiveSlicer.App.Views;
 
 public partial class BottomLeftDockView : UserControl
 {
+    private void OnGoToValidationIssue(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is MassiveSlicer.ViewModels.MainWindowViewModel m)
+            m.Viewport.JumpToValidationIssue();
+    }
+
     private bool  _resizing;
     private double _resizeStartHeight;
     private double _resizeStartY;

@@ -29,4 +29,12 @@ public sealed class MaterialPreset
 
     /// <summary>Material cost in USD per pound.</summary>
     public double CostPerLb { get; set; } = 5.0;
+
+    // -- Calibration provenance --------------------------------------------
+
+    /// <summary>Date of the last purge-and-weigh calibration (yyyy-MM-dd), or empty if never.</summary>
+    public string CalibratedOn { get; set; } = "";
+
+    /// <summary>Conditions the flow rate was measured under, e.g. "50% × 60s → 850g @ 230/230/230°C".</summary>
+    public string CalibrationNote { get; set; } = "";
 }

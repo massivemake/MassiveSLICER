@@ -53,4 +53,12 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// Also scales extrusion RPM for KRL <c>$ANOUT[4]</c> export.
     /// </summary>
     public float PrintSpeedScale { get; init; } = 1f;
+
+    /// <summary>
+    /// Extra TCP yaw (deg) applied on top of the toolhead orientation for this move.
+    /// The nozzle is rotationally symmetric, so this spin is print-neutral — it is used
+    /// to steer the robot wrist away from singularities. Mutable: assigned by the
+    /// post-slice validation repair pass. 0 = no adjustment.
+    /// </summary>
+    public float TcpYawDeg { get; set; }
 }
