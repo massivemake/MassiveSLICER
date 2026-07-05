@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """MCP stdio shim for MassiveSlicer LocalControlBridge (http://127.0.0.1:<port>).
 
-Reads port from %LOCALAPPDATA%/MassiveSlicer/bridge.port (default 8723).
+The running MassiveSlicer app writes the bridge port to:
+  Windows:     %LOCALAPPDATA%/MassiveSlicer/bridge.port
+  macOS/Linux: ~/.local/share/MassiveSlicer/bridge.port  (.NET LocalApplicationData)
+Falls back to $MASSIVESLICER_BRIDGE_PORT or 8723 if no port file is found.
 
-Add to ~/.grok/config.toml:
-  [mcp_servers.massiveslicer]
-  command = "python"
-  args = ["\\\\192.168.0.191\\MassiveFILES\\Research\\LFAM\\MassiveSLICER V2\\scripts\\mcp\\massiveslicer_mcp.py"]
-  enabled = true
+Claude Code config (project .mcp.json or `claude mcp add`):
+  {
+    "mcpServers": {
+      "massiveslicer": {
+        "command": "python3",
+        "args": ["/abs/path/to/scripts/mcp/massiveslicer_mcp.py"]
+      }
+    }
+  }
 """
 
 from __future__ import annotations
@@ -22,11 +29,20 @@ from typing import Any
 
 
 def bridge_port() -> int:
-    port_file = Path(os.environ.get("LOCALAPPDATA", "")) / "MassiveSlicer" / "bridge.port"
-    if port_file.is_file():
+    candidates = []
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:  # Windows
+        candidates.append(Path(localappdata) / "MassiveSlicer" / "bridge.port")
+    xdg = os.environ.get("XDG_DATA_HOME")
+    if xdg:
+        candidates.append(Path(xdg) / "MassiveSlicer" / "bridge.port")
+    # .NET SpecialFolder.LocalApplicationData on macOS/Linux
+    candidates.append(Path.home() / ".local" / "share" / "MassiveSlicer" / "bridge.port")
+    for port_file in candidates:
         try:
-            return int(port_file.read_text(encoding="utf-8").strip())
-        except ValueError:
+            if port_file.is_file():
+                return int(port_file.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
             pass
     return int(os.environ.get("MASSIVESLICER_BRIDGE_PORT", "8723"))
 

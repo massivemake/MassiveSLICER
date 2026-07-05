@@ -29,6 +29,10 @@
 
                 <Menu Background="Transparent" VerticalAlignment="Center" Margin="0,0,4,0">
                     <MenuItem Header="_File">
+                        <MenuItem Header="_New"
+                                  Command="{Binding NewWorkspaceCommand}"
+                                  InputGesture="Ctrl+N"/>
+                        <Separator/>
                         <MenuItem Header="_Open..."
                                   Command="{Binding OpenWorkspaceCommand}"
                                   InputGesture="Ctrl+O"/>

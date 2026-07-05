@@ -57,28 +57,39 @@ dotnet publish src/MassiveSlicer.App -r win-x64 --self-contained -c Release
 
 ## macOS
 
-### Install .NET 8 SDK
+### Install prerequisites
 
-Download from [https://dotnet.microsoft.com/download/dotnet/8.0](https://dotnet.microsoft.com/download/dotnet/8.0). Choose the macOS arm64 installer for Apple Silicon (M1/M2/M3) or x64 for Intel. Verify:
+**.NET SDK 9.0 or newer** — the solution uses the `.slnx` format, which the .NET 8 SDK
+cannot parse. Download from [https://dotnet.microsoft.com/download](https://dotnet.microsoft.com/download)
+and choose the macOS arm64 installer for Apple Silicon (M1/M2/M3) or x64 for Intel. Verify:
 
 ```bash
 dotnet --version
-# Should print 8.x.xxx
+# Should print 9.x.xxx or newer
 ```
 
-> **Note:** On Apple Silicon, the default .NET installer targets `arm64`. If you hit architecture issues, ensure you installed the arm64 SDK (not Rosetta).
+> **Note:** On Apple Silicon, install the **arm64** SDK (not Rosetta). The app builds and
+> runs natively as `net8.0` / arm64 on macOS — no x64 emulation needed.
+
+**Git LFS** — the repo stores binary assets (GLB/STL/3dm/HDR) via Git LFS:
+
+```bash
+brew install git-lfs
+git lfs install
+```
 
 ### Clone the repository
 
 ```bash
-git clone https://github.com/MattWhite3194/MassiveSlicer.git
-cd MassiveSlicer
+git clone https://github.com/massivemake/MassiveSLICER.git
+cd MassiveSLICER
+git lfs pull   # ensure binary assets are materialized
 ```
 
 ### Build
 
 ```bash
-dotnet build
+dotnet build MassiveSlicer.slnx
 ```
 
 ### Run
@@ -93,6 +104,11 @@ dotnet run --project src/MassiveSlicer.App
 dotnet publish src/MassiveSlicer.App -r osx-arm64 --self-contained -c Release
 # Intel Mac: use osx-x64 instead of osx-arm64
 ```
+
+> **macOS limitation:** STEP (`.stp` / `.step`) import is **Windows-only** — it depends on
+> Open CASCADE (Occt.NET), which ships Windows-only native libraries. All other import
+> formats (STL, OBJ, 3MF, GLTF/GLB) and the rest of the app work on macOS. Attempting a
+> STEP import on macOS is handled gracefully (the file is skipped, no crash).
 
 ---
 

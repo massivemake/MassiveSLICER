@@ -229,7 +229,15 @@ public static class KrlExporter
         {{HOME_PTP}}
         """;
 
+    /// <summary>
+    /// Exports the toolpath as a KUKA KRL <c>.src</c> program. Output always uses CRLF line
+    /// endings: KRL runs on the Windows-based KRC controller and its PointLoader tool, which
+    /// mis-parse LF-only files (StringBuilder.AppendLine would otherwise emit LF on macOS/Linux).
+    /// </summary>
     public static string Export(Toolpath toolpath, KrlExportSettings s)
+        => ExportCore(toolpath, s).ReplaceLineEndings("\r\n");
+
+    private static string ExportCore(Toolpath toolpath, KrlExportSettings s)
     {
         var sb   = new StringBuilder(64 * 1024);
         var name = SafeName(s.ProgramName);
@@ -711,8 +719,17 @@ public static class KrlExporter
         // in tool orientation is negligible, and the robot interpolates at full $VEL.CP.
         if (MathF.Abs(MathF.Abs(bRad) - MathF.PI / 2f) < 0.05f)
         {
-            aRad = 0f;
+            // Gimbal lock (tool ~vertical): A and C rotate about the same axis. Zeroing both
+            // suppresses spurious A/C swings from noisy surface normals near the singularity.
+            // But it also discards a DELIBERATE global toolhead spin (ToolheadOffsetA/C) — which
+            // the viewport preview DOES apply — so on flat top-down toolpaths the exported
+            // orientation silently ignored the toolhead rotation. When such an offset is set,
+            // recover the true azimuth from the frame (ZYX gimbal-lock: A = atan2(-yF.X, yF.Y),
+            // C = 0) so the export matches the preview; otherwise keep the noise-suppressing zero.
             cRad = 0f;
+            bool deliberateSpin = MathF.Abs(s.ToolheadOffsetA) > 1e-3f
+                               || MathF.Abs(s.ToolheadOffsetC) > 1e-3f;
+            aRad = deliberateSpin ? MathF.Atan2(-yF.X, yF.Y) : 0f;
         }
         else
         {

@@ -37,6 +37,16 @@ public static class ToolpathSerializer
                     PrintSpeedScale  = move.PrintSpeedScale,
                 });
             }
+            foreach (var span in layer.Contours)
+            {
+                layerDto.Contours.Add(new WorkspaceContourSpanData
+                {
+                    Start            = span.Start,
+                    Count            = span.Count,
+                    Closed           = span.Closed,
+                    EntryTravelIndex = span.EntryTravelIndex,
+                });
+            }
             data.Layers.Add(layerDto);
         }
         return data;
@@ -70,6 +80,9 @@ public static class ToolpathSerializer
                     PrintSpeedScale  = moveDto.PrintSpeedScale,
                 });
             }
+            foreach (var spanDto in layerDto.Contours)
+                layer.Contours.Add(new ContourSpan(
+                    spanDto.Start, spanDto.Count, spanDto.Closed, spanDto.EntryTravelIndex));
             toolpath.Layers.Add(layer);
         }
         return toolpath;

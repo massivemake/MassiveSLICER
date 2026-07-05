@@ -198,6 +198,7 @@ public static class ContourSeamPlanner
         bool reversed)
     {
         int n = c.Count;
+        int spanMoveStart = layer.Moves.Count; // first move index this contour will emit
         Vector2? first = null;
         Vector3 firstNorm = Vector3.Zero;
         Vector3 prev = default;
@@ -236,6 +237,19 @@ public static class ContourSeamPlanner
 
         if (count > 0)
             lastPos = new Vector2(prev.X, prev.Y);
+
+        // Record this contour's move range so the seam can be re-positioned in place later.
+        // The optional leading Travel is separated out; Start/Count cover the Extrude moves.
+        int spanMoveEnd = layer.Moves.Count; // exclusive
+        if (spanMoveEnd > spanMoveStart)
+        {
+            bool hasEntryTravel = layer.Moves[spanMoveStart].Kind == MoveKind.Travel;
+            int entryTravelIndex = hasEntryTravel ? spanMoveStart : -1;
+            int extrudeStart = hasEntryTravel ? spanMoveStart + 1 : spanMoveStart;
+            int extrudeCount = spanMoveEnd - extrudeStart;
+            if (extrudeCount > 0)
+                layer.Contours.Add(new ContourSpan(extrudeStart, extrudeCount, isClosed, entryTravelIndex));
+        }
     }
 
     public static int CountCrossings(Vector2 from, Vector2 to, IReadOnlyList<(Vector2 a, Vector2 b)> printed)

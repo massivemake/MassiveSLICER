@@ -688,7 +688,13 @@ public sealed class RobotPanelViewModel : ViewModelBase
             KrlBaseOptions.Add($"{b.Index}: {b.Name}");
         }
 
-        var ti = _krlToolIndices.IndexOf(currentToolIndex);
+        // Prefer the cell's designated default tool (e.g. LFAM 2 → HV Extruder / TOOL_NO 2)
+        // so each cell exports with its intended KRL tool. Falls back to the caller's current
+        // selection, then the lowest-index tool. Called only on cell swap, so honoring the
+        // cell default here is correct (it doesn't override a mid-session dropdown pick).
+        int defaultKrlTool = tools.FirstOrDefault(t => t.Default && t.KrlIndex > 0)?.KrlIndex ?? 0;
+        int wantToolIndex  = defaultKrlTool > 0 ? defaultKrlTool : currentToolIndex;
+        var ti = _krlToolIndices.IndexOf(wantToolIndex);
         _krlToolSelectedIndex = ti >= 0 ? ti : 0;
         OnPropertyChanged(nameof(KrlToolSelectedIndex));
         if (_krlToolIndices.Count > 0)

@@ -155,10 +155,15 @@
       "tcpC": 0,
       "toolFrameRoll": -90,
       "krlIndex": 2,
-      "default": false
+      "default": true
     }
   ],
-  "krlBases": [],
+  "krlBases": [
+    {
+      "name": "massiveb1",
+      "index": 1
+    }
+  ],
   "bridgeIp": "192.168.0.152",
   "bridgePort": 7000,
   "extBridgePort": 8765,

@@ -213,6 +213,10 @@ public partial class ViewportView : UserControl
     /// <summary>Captures the current 3D viewport as PNG bytes (GL color buffer).</summary>
     public Task<byte[]?> CaptureScreenshotAsync() => GlCanvas.CaptureScreenshotPngAsync();
 
+    /// <summary>The GL surface control, for locating the viewport region within the window
+    /// when compositing a full-window screenshot.</summary>
+    internal Control ViewportSurface => GlCanvas;
+
     private void WireGlCanvas()
     {
         if (!_glRenderWired)
@@ -279,6 +283,7 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
@@ -2105,6 +2110,25 @@ public partial class ViewportView : UserControl
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
 
+        // Stop an active orbit/pan FIRST, for ANY button. The left-button release is
+        // otherwise consumed (and returned) by the selection/gizmo branch below, so a
+        // left-bound orbit/pan (e.g. Mol3D, Maya+Alt) would never stop: the camera keeps
+        // spinning, the pointer stays captured, and the reduced interaction render scale
+        // leaves a small, torn viewport. Selection only happens when not dragging, so a
+        // genuine click (no orbit/pan in progress) still falls through unchanged.
+        if (btn is not null && (btn == _orbitButton || btn == _panButton))
+        {
+            if (btn == _orbitButton) { _isOrbiting = false; _orbitButton = null; }
+            if (btn == _panButton)   { _isPanning  = false; _panButton   = null; }
+            if (!_isOrbiting && !_isPanning && GlCanvas.InteractionRenderScale < 1f)
+                GlCanvas.InteractionRenderScale = 1f;
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            _leftDragged = false;
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonReleased && _kbTransformActive)
         {
             CommitKbTransform();
@@ -2160,7 +2184,8 @@ public partial class ViewportView : UserControl
                     else
                         bndVm.SetBoundaryDraft(bndVm.BoundaryLowDraft, ring);
                 }
-                else if (DataContext is ViewportViewModel flatVm && flatVm.IsSeamEditorActive)
+                else if (DataContext is ViewportViewModel flatVm
+                         && (flatVm.IsSeamEditorActive || flatVm.IsToolpathSeamEditActive))
                 {
                     int guideHit = _renderer.PickSeamGuide(
                         (float)_leftDownPos.X, (float)_leftDownPos.Y, vpW, vpH);
@@ -4067,6 +4092,52 @@ public partial class ViewportView : UserControl
         if (_activeScrubNode is not { } node) return;
         if (_toolpathByNode.TryGetValue(node, out var tp))
             ValidateToolpathAsync(node, tp);
+    }
+
+    /// <summary>
+    /// Re-seams the selected toolpath in place toward the placed seam points (no re-slice),
+    /// then re-renders on the GL thread. The same Toolpath object feeds KRL export, so the
+    /// new seam flows through to exported programs.
+    /// </summary>
+    private void ApplyToolpathSeam(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_toolpathByNode.TryGetValue(node, out var tp)) return;
+
+        var pts = vm.SeamGuideDraft
+            .Select(g => new System.Numerics.Vector2(g.X, g.Y))
+            .ToList();
+        if (pts.Count == 0) return;
+
+        int moved = MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(tp, pts);
+
+        // Keep the raw (save/export source) consistent when it is a distinct object.
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+        if (raw is not null && !ReferenceEquals(raw, tp))
+            MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(raw, pts);
+
+        // Geometry is unchanged (loops only rotate), so re-upload without touching the pose.
+        var snap = GetToolpathSnapshot(node);
+        if (snap is not null)
+        {
+            vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = tp,
+                RawToolpath   = raw ?? tp,
+                Node          = node,
+                BeadWidth     = snap.BeadWidth,
+                LayerHeight   = snap.LayerHeight,
+                MaterialColor = snap.MaterialColor,
+            });
+        }
+
+        // Apply is a one-shot: leave edit mode and clear the placement markers.
+        vm.DoneToolpathSeamCommand.Execute(null);
+        UpdateSeamGuideMarkers(vm);
+        GlCanvas.RequestNextFrameRendering();
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log($"[seam] Re-seamed {moved} loop(s) toward {pts.Count} seam point(s).");
     }
 
     private void CancelKbTransform()

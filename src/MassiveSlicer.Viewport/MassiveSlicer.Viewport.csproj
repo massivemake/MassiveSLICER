@@ -6,18 +6,33 @@
 
   <ItemGroup>
     <PackageReference Include="Meshoptimizer.NET" Version="1.0.7" />
-    <PackageReference Include="Occt.NET" Version="7.9.0" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="SharpGLTF.Core" Version="1.0.6" />
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
   </ItemGroup>
 
+  <!-- Occt.NET (Open CASCADE) ships Windows-only x64 C++/CLI natives, so it is
+       referenced only on Windows. The OCCT-backed STEP loader compiles on Windows;
+       macOS/Linux use the StepLoader.NonWindows.cs stub instead. -->
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="Occt.NET" Version="7.9.0" />
+    <Compile Remove="Loading\StepLoader.NonWindows.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Compile Remove="Loading\StepLoader.cs" />
+    <Compile Remove="Loading\OcctBootstrap.cs" />
+  </ItemGroup>
+
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- Windows-only TFM on Windows; cross-platform net8.0 elsewhere (Occt.NET STEP
+         import is Windows-only and loads lazily, so the rest runs on macOS/Linux). -->
+    <TargetFramework Condition="$([MSBuild]::IsOSPlatform('Windows'))">net8.0-windows</TargetFramework>
+    <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <PlatformTarget>x64</PlatformTarget>
+    <!-- x64 forced only on Windows for the Occt.NET native libs. -->
+    <PlatformTarget Condition="$([MSBuild]::IsOSPlatform('Windows'))">x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
 

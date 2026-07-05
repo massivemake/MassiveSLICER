@@ -18,6 +18,7 @@
     "Temperature2": 250,
     "Temperature3": 250,
     "FlowRate": 0.4115,
+    "FlowRateHf": 0.6019,
     "MaterialDensity": 1.17,
     "CostPerLb": 5
   }

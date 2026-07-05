@@ -18,11 +18,23 @@ public sealed class MaterialPreset
 
     // -- Extrusion properties ----------------------------------------------
     /// <summary>
-    /// Material flow rate in rev/cm³ — motor revolutions per cubic centimetre deposited.
-    /// KRL export: <c>rpm% = W × H × v × FlowRate × 60</c>, then <c>$ANOUT[4] = rpm% ÷ 10</c>.
-    /// Calibrated at W=6, H=3, v=100 mm/s, 50% RPM → <b>0.463</b> (→ <c>5.0</c> ANOUT).
+    /// Flow rate in rev/cm³ for the <b>HV</b> extruder — motor revolutions per cubic centimetre
+    /// deposited. KRL export: <c>rpm% = W × H × v × FlowRate × 60</c>.
+    /// Calibrated at W=6, H=3, v=100 mm/s, 50% RPM → <b>0.463</b>.
     /// </summary>
     public double FlowRate { get; set; } = 0.463;
+
+    /// <summary>
+    /// Flow rate in rev/cm³ for the <b>HF</b> extruder. The HF and HV extruders deposit a
+    /// slightly different volume per revolution, so each carries its own calibration.
+    /// <c>0</c> (unset) falls back to <see cref="FlowRate"/>. Chosen automatically from the
+    /// active cell's extruder.
+    /// </summary>
+    public double FlowRateHf { get; set; } = 0.0;
+
+    /// <summary>Flow rate for the active extruder: the HF value when <paramref name="isHf"/> and
+    /// set, otherwise the HV <see cref="FlowRate"/>.</summary>
+    public double FlowRateFor(bool isHf) => isHf && FlowRateHf > 0.0 ? FlowRateHf : FlowRate;
 
     /// <summary>Material density in g/cm³.</summary>
     public double MaterialDensity { get; set; } = 1.05;

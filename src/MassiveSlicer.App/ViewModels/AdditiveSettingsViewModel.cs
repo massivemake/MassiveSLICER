@@ -844,12 +844,26 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _extrusionSpeedOffset, value);
     }
 
+    private bool _activeExtruderIsHf;
+
+    /// <summary>True when the active cell's extruder is the HF head, so the preset's HF flow rate
+    /// is used instead of the HV one. Set from the active cell/tool in MainWindowViewModel.</summary>
+    public bool ActiveExtruderIsHf
+    {
+        get => _activeExtruderIsHf;
+        set
+        {
+            if (SetField(ref _activeExtruderIsHf, value))
+                OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+        }
+    }
+
     /// <summary>Computed extrusion motor speed (%) from bead geometry and material flow.</summary>
     public double ExtrusionSpeedPercent => ComputeExtrusionSpeedPercent();
 
     private double ComputeExtrusionSpeedPercent()
     {
-        float flow = (float)(SelectedPreset?.FlowRate ?? 0.463);
+        float flow = (float)(SelectedPreset?.FlowRateFor(ActiveExtruderIsHf) ?? 0.463);
         return KrlAnout.ComputeRpmPercent(
             (float)BeadWidth, (float)LayerHeight, (float)(PrintSpeed / 1000.0), flow);
     }
