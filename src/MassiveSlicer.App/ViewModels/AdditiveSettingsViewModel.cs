@@ -20,6 +20,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
@@ -336,6 +337,15 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _tiltAngleX;
         set => SetField(ref _tiltAngleX, Math.Clamp(value, -89.0, 89.0));
+    }
+
+    /// <summary>Reverses the angled-slice direction by flipping both tilt angles.</summary>
+    public RelayCommand ReverseTiltDirectionCommand { get; }
+
+    private void ReverseTiltDirection()
+    {
+        TiltAngle  = -TiltAngle;
+        TiltAngleX = -TiltAngleX;
     }
 
     // -- Motion ---------------------------------------------------------------
