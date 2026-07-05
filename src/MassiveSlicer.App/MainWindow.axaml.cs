@@ -48,6 +48,9 @@ public partial class MainWindow : Window
             catch (Exception ex) { vm.Console.LogError($"[bridge] {ex.Message}"); }
         }
 
+        // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
+        vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+
         // -- Right panel column toggle -----------------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {

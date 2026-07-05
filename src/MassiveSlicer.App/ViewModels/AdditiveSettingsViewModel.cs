@@ -21,6 +21,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
+        AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
+        AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
@@ -346,6 +348,30 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         TiltAngle  = -TiltAngle;
         TiltAngleX = -TiltAngleX;
+    }
+
+    /// <summary>Auto-calculates the X/Y tilt with the least overhang risk (mesh stays put).</summary>
+    public RelayCommand AutoTiltCommand { get; }
+
+    /// <summary>Auto-calculates the optimal slice direction, yaw-rotating the mesh so it becomes a pure Y tilt.</summary>
+    public RelayCommand AutoTiltRotateCommand { get; }
+
+    /// <summary>Raised by the auto-tilt commands; the viewport handles the mesh analysis.
+    /// Argument: true = also rotate the mesh (dropdown option), false = tilt only.</summary>
+    internal Action<bool>? OnAutoTiltRequested { get; set; }
+
+    private bool _isAutoTiltRunning;
+
+    /// <summary>True while the auto-tilt analysis runs — disables both commands.</summary>
+    public bool IsAutoTiltRunning
+    {
+        get => _isAutoTiltRunning;
+        set
+        {
+            if (!SetField(ref _isAutoTiltRunning, value)) return;
+            AutoTiltCommand.RaiseCanExecuteChanged();
+            AutoTiltRotateCommand.RaiseCanExecuteChanged();
+        }
     }
 
     // -- Motion ---------------------------------------------------------------

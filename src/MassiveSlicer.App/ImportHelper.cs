@@ -17,20 +17,53 @@ internal static class ImportHelper
     /// <summary>Fraction of rotary radius used when scaling oversized imports to fit the table.</summary>
     private const float RotaryFitMargin = 0.96f;
 
+    /// <summary>Largest bounding-box dimension (mm) below which a fresh import is assumed to be in
+    /// metres (exported as millimetres) and auto-scaled ×1000. Real LFAM parts are always larger.</summary>
+    private const float TinyImportMaxDimMm = 10f;
+
     internal static bool IsSupported(string path)
         => SupportedExtensions.Contains(Path.GetExtension(path).ToLowerInvariant());
 
     /// <summary>
     /// Loads a model file and places it on the bed surface with its bounding-box
     /// centre aligned to the bed's XY centre. Returns <c>null</c> on load failure.
+    /// Corrects a metres-as-millimetres import (see <see cref="NormalizeUnitScale"/>);
+    /// <paramref name="log"/> receives any scale-correction warning.
     /// </summary>
-    internal static SceneNode? LoadAndPlace(string filePath, CellConfig? activeCell)
+    internal static SceneNode? LoadAndPlace(string filePath, CellConfig? activeCell, Action<string>? log = null)
     {
         var node = LoadFile(filePath);
         if (node is null) return null;
 
+        NormalizeUnitScale(node, log);
         PlaceOnBed(node, activeCell);
         return node;
+    }
+
+    /// <summary>
+    /// STL/OBJ carry no units and the slicer treats values as millimetres, but CAD/Blender often
+    /// export in metres. If the loaded model's largest dimension is implausibly small
+    /// (&lt; <see cref="TinyImportMaxDimMm"/> mm), scale it ×1000 (m→mm) so it isn't an invisible
+    /// speck, and warn. Runs only on interactive import — not on workspace restore, whose meshes
+    /// were already scaled when first imported.
+    /// </summary>
+    private static void NormalizeUnitScale(SceneNode node, Action<string>? log)
+    {
+        var (min, max) = ComputeSubtreeAabb(node);
+        if (min.X > max.X) return; // no geometry
+
+        float maxDim = MathF.Max(max.X - min.X, MathF.Max(max.Y - min.Y, max.Z - min.Z));
+        if (maxDim <= 0f || maxDim >= TinyImportMaxDimMm) return;
+
+        const float factor = 1000f;
+        node.LocalTransform = Matrix4.CreateScale(factor) * node.LocalTransform;
+
+        float after = maxDim * factor;
+        string msg = $"[import] Model was only {maxDim:0.###} mm — looks like metres exported as mm; " +
+                     $"auto-scaled ×1000 to ~{after:0.#} mm (undo to revert, or export in millimetres).";
+        if (after < TinyImportMaxDimMm)
+            msg += " Still very small after scaling — check the model's size in your CAD.";
+        log?.Invoke(msg);
     }
 
     /// <summary>
