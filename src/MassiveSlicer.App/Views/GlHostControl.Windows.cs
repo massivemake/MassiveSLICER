@@ -64,6 +64,10 @@ internal sealed class GlHostControl : UserControl, IDisposable
     public event Action<TimeSpan, int, int>?    GlRender;
     public event Action?                        GlDeinitialized;
 
+    /// <summary>Diagnostic sink parity with the non-Windows host (unused on Windows;
+    /// the WGL host has its own logging path). Kept so shared code can wire it once.</summary>
+    public static Action<string>? Diag;
+
     // -- Display ---------------------------------------------------------------
 
     private readonly Image _image = new() { Stretch = Stretch.Fill };

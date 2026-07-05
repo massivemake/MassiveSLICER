@@ -26,9 +26,24 @@ public sealed class ToolpathLayer
     /// <summary>All move segments in this layer, in order of execution.</summary>
     public List<ToolpathMove> Moves { get; } = [];
 
+    /// <summary>
+    /// One recorded contour (perimeter loop or open path) within <see cref="Moves"/>, captured at
+    /// slice time so the seam can be re-positioned in place without re-slicing. Only
+    /// <see cref="ContourSpan.Closed"/> contours can be re-seamed.
+    /// </summary>
+    public List<ContourSpan> Contours { get; } = [];
+
     public ToolpathLayer(int index, float z)
     {
         Index = index;
         Z     = z;
     }
 }
+
+/// <summary>
+/// A contiguous run of moves in a <see cref="ToolpathLayer"/> that forms one contour.
+/// <see cref="Start"/>/<see cref="Count"/> index the loop's Extrude moves; <see cref="EntryTravelIndex"/>
+/// is the leading Travel move that leads into the loop (-1 if none). Enables re-seaming by rotating
+/// the loop's start vertex without re-slicing.
+/// </summary>
+public sealed record ContourSpan(int Start, int Count, bool Closed, int EntryTravelIndex);

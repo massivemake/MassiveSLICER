@@ -10,13 +10,17 @@ internal static class RobotKrlPaths
     public static string UncDFolder(CellConfig cell)
         => $@"\\?\UNC\{cell.BridgeIp.Trim()}\d";
 
-    /// <summary>Default filename: <c>yyyy_MMdd - Name.src</c>.</summary>
+    /// <summary>
+    /// Default filename stem: <c>yyyy_MMdd - Name</c>.  Deliberately extension-less —
+    /// the save dialog's DefaultExtension adds ".src"; including it here produced
+    /// doubled extensions (".src.src") on macOS.
+    /// </summary>
     public static string SuggestedFileName(string? baseName = null)
     {
         var stem = SanitizeStem(baseName);
         if (string.IsNullOrWhiteSpace(stem))
             stem = "PrintJob";
-        return $"{DateTime.Now:yyyy_MMdd} - {stem}.src";
+        return $"{DateTime.Now:yyyy_MMdd} - {stem}";
     }
 
     /// <summary>Normalizes a picked/saved path to extended UNC form when targeting a robot share.</summary>

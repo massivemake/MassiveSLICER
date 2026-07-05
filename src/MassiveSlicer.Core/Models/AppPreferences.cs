@@ -105,7 +105,8 @@ public sealed class AppPreferences
 
     // ── Toolpath colors (AARRGGBB hex) ────────────────────────────────────
 
-    public string ToolpathExtrudeColor    { get; set; } = "#FF1A73E6";
+    public string ToolpathExtrudeColor    { get; set; } = "#FFFFFFFF";
+    public string ToolpathBeadColor       { get; set; } = "#FFF2F2F2";
     public string ToolpathTravelColor     { get; set; } = "#FFD92E2E";
     public string ToolpathWipeColor       { get; set; } = "#FFFF8800";
     public string ToolpathRetractionColor { get; set; } = "#FF9C27B0";
@@ -165,6 +166,7 @@ public sealed class AppPreferences
     public int WaveCycles { get; set; }
     public double WaveShape { get; set; } = 1.0;
     public double WaveStagger { get; set; }
+    public int WavePhaseMethodIndex { get; set; }   // 0 = Method A (seam), 1 = Method B (inherit)
     public bool WaveGradient { get; set; }
     public double WaveAmplitudeBottom { get; set; }
     public double WaveAmplitudeTop { get; set; } = 3.0;

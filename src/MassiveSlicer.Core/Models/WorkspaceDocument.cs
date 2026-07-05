@@ -82,6 +82,18 @@ public sealed class WorkspaceToolpathLayerData
     public float Height { get; set; }
     public float[] PlaneNormal { get; set; } = [0, 0, 1];
     public List<WorkspaceToolpathMoveData> Moves { get; set; } = [];
+
+    /// <summary>Recorded contour spans (for in-place seam editing). Empty for pre-existing
+    /// workspaces saved before seam metadata existed — those need one re-slice to populate.</summary>
+    public List<WorkspaceContourSpanData> Contours { get; set; } = [];
+}
+
+public sealed class WorkspaceContourSpanData
+{
+    public int Start { get; set; }
+    public int Count { get; set; }
+    public bool Closed { get; set; }
+    public int EntryTravelIndex { get; set; } = -1;
 }
 
 public sealed class WorkspaceToolpathMoveData

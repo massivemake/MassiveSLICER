@@ -74,6 +74,7 @@
                                   DataContext="{Binding}"
                                   HorizontalAlignment="Stretch"
                                   VerticalAlignment="Bottom"/>
+
     </Grid>
 
 </Window>

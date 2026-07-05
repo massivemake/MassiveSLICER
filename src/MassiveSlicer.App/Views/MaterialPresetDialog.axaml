@@ -5,7 +5,7 @@
         x:Class="MassiveSlicer.App.Views.MaterialPresetDialog"
         x:CompileBindings="False"
         Title="Material Preset"
-        Width="400" Height="460"
+        Width="400" Height="640"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="None"
         CanResize="False"
@@ -127,9 +127,20 @@
                             <ColumnDefinition Width="140"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Flow rate (rev/cm³)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="0" Text="Flow rate HV (rev/cm³)" Classes="LabelMuted" VerticalAlignment="Center"/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox"
                                    Text="{Binding FlowRate, Mode=TwoWay, StringFormat={}{0:F4}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Flow rate HF (rev/cm³)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="HF-extruder flow. 0 = use the HV value. Chosen automatically per active cell/extruder."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding FlowRateHf, Mode=TwoWay, StringFormat={}{0:F4}}"/>
                     </Grid>
 
                     <Grid Margin="0,0,0,6">
@@ -151,6 +162,62 @@
                         <TextBox   Grid.Column="1" Classes="PanelTextBox"
                                    Text="{Binding CostPerLb, Mode=TwoWay, StringFormat={}{0:F2}}"/>
                     </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+
+                    <!-- Purge-and-weigh calibration -->
+                    <TextBlock Text="CALIBRATION — PURGE &amp; WEIGH" Classes="SectionHeader" Margin="0,0,0,6"/>
+
+                    <TextBlock Classes="LabelMuted" TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.8"
+                               Text="Heat the extruder to the temperatures above. Run it into the air at a fixed motor % for a fixed time. Weigh the cooled purge and enter the numbers — the flow rate is computed from them (uses Density above)."/>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Motor speed (%)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="The extruder % set on the KUKA during the purge test ($ANOUT[4] × 100)"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding CalibMotorPercent, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Run time (s)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding CalibTimeSec, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Purge weight (g)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding CalibWeightG, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,2,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding CalibComputedText}"
+                                   Classes="LabelMuted" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        <Button    Grid.Column="1" Content="Apply"
+                                   Classes="PrimaryButton" Padding="12,4"
+                                   Click="OnApplyCalibration"
+                                   ToolTip.Tip="Write the computed value into Flow rate and stamp the calibration date"/>
+                    </Grid>
+
+                    <TextBlock Text="{Binding CalibrationStatus}"
+                               Classes="LabelMuted" TextWrapping="Wrap"
+                               Opacity="0.7" Margin="0,2,0,0"/>
 
                 </StackPanel>
             </ScrollViewer>
