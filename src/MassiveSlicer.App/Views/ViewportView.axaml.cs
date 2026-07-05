@@ -21,6 +21,7 @@ using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.FK;
 using MassiveSlicer.Viewport.Loading;
+using MassiveSlicer.App.Diagnostics;
 using MassiveSlicer.Viewport.Rendering;
 using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels;
@@ -103,6 +104,9 @@ public partial class ViewportView : UserControl
     // Toolpath-to-node map -- populated on GL thread, read on UI thread (ConcurrentDictionary is safe)
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _toolpathByNode       = new();
     private readonly ConcurrentDictionary<SceneNode, (float BeadWidth, float LayerHeight, NVec3 MaterialColor)> _toolpathMetaByNode = new();
+
+    /// <summary>Robot-validation issue summary per toolpath node (unreachable / singularity counts + Z range).</summary>
+    private readonly ConcurrentDictionary<SceneNode, (int Unreachable, int Singular, float ZLo, float ZHi)> _validationIssuesByNode = new();
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
@@ -831,6 +835,8 @@ public partial class ViewportView : UserControl
             _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
                 ? vm.ToolpathScrubIndex
                 : int.MaxValue;
+            _renderer.SetToolpathBeadColor(
+                new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
             _renderer.SetToolpathColors(
                 new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
                 new TkVector3(vm.ToolpathTravelColor.X,      vm.ToolpathTravelColor.Y,      vm.ToolpathTravelColor.Z),
@@ -1048,6 +1054,7 @@ public partial class ViewportView : UserControl
                 _ikSolutionsByNode.TryRemove(entry.Node, out _);
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
+                _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
                 _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
@@ -2273,10 +2280,35 @@ public partial class ViewportView : UserControl
 
     private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
     {
-        // Avalonia Delta.Y is in lines (typically ±3 per notch).
-        // Normalise to ±1 per notch to match the WPF behaviour.
-        _renderer.Camera.Zoom((float)e.Delta.Y / 3f);
+        var mods = e.KeyModifiers;
+        float dx = (float)e.Delta.X;
+        float dy = (float)e.Delta.Y;
+
+        if (mods.HasFlag(KeyModifiers.Shift))
+        {
+            // Shift + two fingers → zoom
+            float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
+            _renderer.Camera.Zoom(zoom);
+        }
+        else if (mods.HasFlag(KeyModifiers.Meta))
+        {
+            // Cmd + two fingers → pan
+            _renderer.Camera.Pan(
+                deltaX:         dx * 4f,
+                deltaY:        -dy * 4f,
+                viewportWidth:  (float)GlCanvas.Bounds.Width,
+                viewportHeight: (float)GlCanvas.Bounds.Height);
+        }
+        else
+        {
+            // Two fingers (no modifier) → orbit/rotate
+            _renderer.Camera.Orbit(
+                deltaAzimuth:   -dx * 2f,
+                deltaElevation:  dy * 2f);
+        }
+
         GlCanvas.RequestNextFrameRendering();
+        e.Handled = true;
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -2541,6 +2573,7 @@ public partial class ViewportView : UserControl
             WaveCycles     = s.WaveFrequencyMode == "Cycles" ? s.WaveCycles : 0,
             WaveShape      = (float)s.WaveShape,
             WaveStagger    = (float)s.WaveStagger,
+            WavePhaseMethod = s.WavePhaseMethod,
             AdaptiveLayerHeight = s.AdaptiveLayerHeight,
             AdaptiveQuality     = (float)s.AdaptiveQuality,
             MinLayerHeight      = (float)s.MinLayerHeight,
@@ -2594,13 +2627,18 @@ public partial class ViewportView : UserControl
         List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> meshSnapshots,
         SliceMethod method,
         SliceSettings settings,
-        Action<string>? reportProgress = null)
+        Action<string>? reportProgress = null,
+        Action<double>? reportPercent = null)
     {
         void Report(string msg) => reportProgress?.Invoke(msg);
+        void Pct(double p)      => reportPercent?.Invoke(p);
 
         Report("Preparing mesh…");
-        var toolpath = await Task.Run(() =>
+        Pct(1);
+        SliceLogger.BeginSession($"ComputeToolpathAsync  method={method}  wave={settings.WaveEffect}");
+        var (smoothedToolpath, rawToolpath) = await Task.Run(() =>
         {
+            SliceLogger.Step("background thread started");
             var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
             foreach (var (positions, indices, world) in meshSnapshots)
             {
@@ -2619,6 +2657,7 @@ public partial class ViewportView : UserControl
                 }
                 flatMeshes.Add(flat);
             }
+            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}");
 
             Report(method switch
             {
@@ -2627,24 +2666,54 @@ public partial class ViewportView : UserControl
                 SliceMethod.Angled   => "Angled: intersecting tilted planes…",
                 _                    => "Planar: intersecting layers…",
             });
+            Pct(5);
 
+            // Stage weights: slicing dominates wall-clock, so it owns 5→75%.
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
-            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings);
+            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings,
+                                                          f => Pct(5 + f * 70));
+            SliceLogger.Step($"slicer done  layers={tp.Layers.Count}  moves={tp.Layers.Sum(l => l.Moves.Count)}");
+            Pct(75);
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
+            SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
+            Pct(80);
+
             tp = MovementPostProcessor.Apply(tp, settings);
-            return ResumeRampPostProcessor.Apply(tp, settings);
+            SliceLogger.Step("MovementPostProcessor done");
+
+            tp = ResumeRampPostProcessor.Apply(tp, settings);
+            SliceLogger.Step("ResumeRampPostProcessor done");
+            Pct(84);
+
+            var raw = ToolpathClone.Copy(tp);
+            SliceLogger.Step("ToolpathClone.Copy(raw) done");
+            Pct(88);
+
+            var withSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(tp), settings);
+            SliceLogger.Step("LayerSpeedPostProcessor done");
+            Pct(93);
+
+            var toSmooth = ToolpathClone.Copy(withSpeed);
+            SliceLogger.Step("ToolpathClone.Copy(toSmooth) done");
+            Pct(96);
+
+            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+            SliceLogger.Step("OrientationBlender done");
+
+            var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+            SliceLogger.Step("OrientationSmoother done");
+            Pct(100);
+
+            return (smoothed, raw);
         });
 
-        var rawToolpath      = ToolpathClone.Copy(toolpath);
-        var withLayerSpeed   = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(toolpath), settings);
-        var toSmooth         = ToolpathClone.Copy(withLayerSpeed);
-        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
-        var smoothedToolpath = OrientationSmoother.Apply(toSmooth, settings);
+        SliceLogger.Step("back on UI thread — returning result");
+        SliceLogger.EndSession();
         return (smoothedToolpath, rawToolpath, settings);
     }
 
@@ -2681,37 +2750,61 @@ public partial class ViewportView : UserControl
 
     private void UploadToolpathEntry(PendingToolpathEntry entry, bool addToScene)
     {
-        StageToolpathMaps(entry);
-        if (addToScene)
-            _renderer.AddToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
-        else
-            _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
-
-        var centroidLocal = entry.Node.LocalTransform;
-
-        if (entry.PreserveRelativePose
-            && entry.PreservedLocalTransform is Matrix4 preservedLocal
-            && entry.PreservedOrigin is NVec3 preservedOrigin)
+        int moveCount = entry.Toolpath.Layers.Sum(l => l.Moves.Count);
+        SliceLogger.BeginSession($"UploadToolpathEntry  addToScene={addToScene}  moves={moveCount}");
+        try
         {
-            var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
-            Matrix4.Invert(oldOriginT, out var invOldOrigin);
-            entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+            SliceLogger.Step("StageToolpathMaps");
+            StageToolpathMaps(entry);
+
+            SliceLogger.Step(addToScene ? "renderer.AddToolpath" : "renderer.ReplaceToolpath");
+            if (addToScene)
+                _renderer.AddToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+            else
+                _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
+
+            SliceLogger.Step("pose/transform");
+            var centroidLocal = entry.Node.LocalTransform;
+
+            if (entry.PreserveRelativePose
+                && entry.PreservedLocalTransform is Matrix4 preservedLocal
+                && entry.PreservedOrigin is NVec3 preservedOrigin)
+            {
+                var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
+                Matrix4.Invert(oldOriginT, out var invOldOrigin);
+                entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+            }
+            else if (entry.LocalTransformOverride is Matrix4 lt)
+            {
+                entry.Node.LocalTransform = lt;
+            }
+
+            SliceLogger.Step("ComputeOverhangPerFlatMove");
+            var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
+            SliceLogger.Step("UpdateToolpathBeadOverhang");
+            _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
+            SliceLogger.Step("ComputeOrientationRatePerFlatMove");
+            var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
+            SliceLogger.Step("UpdateToolpathBeadOrientation");
+            _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
+
+            // Scrub/IK un-localise against the geometry centroid, not the user translation component.
+            var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
+                ? centroidLocal.Row3
+                : entry.Node.LocalTransform.Row3;
+            _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
+            SliceLogger.EndSession("UploadToolpathEntry done");
         }
-        else if (entry.LocalTransformOverride is Matrix4 lt)
+        catch (Exception ex)
         {
-            entry.Node.LocalTransform = lt;
+            SliceLogger.Error("UploadToolpathEntry", ex);
+            // Swallow so the GL thread survives — the toolpath just won't render.
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (_vm is { } vm)
+                    SetSliceStatus(vm, $"Render error: {ex.GetType().Name}: {ex.Message}", isError: true);
+            });
         }
-
-        var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
-        _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
-        var orientationRates = ComputeOrientationRatePerFlatMove(entry.Toolpath);
-        _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
-
-        // Scrub/IK un-localise against the geometry centroid, not the user translation component.
-        var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
-            ? centroidLocal.Row3
-            : entry.Node.LocalTransform.Row3;
-        _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
     }
 
     private void ApplyToolpathStats(ViewportViewModel vm, Toolpath smoothedToolpath)
@@ -2827,7 +2920,8 @@ public partial class ViewportView : UserControl
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
-                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
 
             int layerCount = smoothedToolpath.Layers.Count;
             if (layerCount == 0)
@@ -3182,7 +3276,8 @@ public partial class ViewportView : UserControl
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
-                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg));
+                meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
 
             if (smoothedToolpath.Layers.Count == 0)
             {
@@ -3329,7 +3424,7 @@ public partial class ViewportView : UserControl
         "Orange"  => new(0.95f, 0.45f, 0.10f),
         "Natural" => new(0.92f, 0.88f, 0.75f),
         "Black"   => new(0.15f, 0.15f, 0.15f),
-        _         => new(0.15f, 0.35f, 0.85f),  // Other / no preset → blue
+        _         => new(0.95f, 0.95f, 0.95f),  // Other / no preset → white
     };
 
     private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
@@ -4890,12 +4985,122 @@ public partial class ViewportView : UserControl
             for (int i = 0; i < total; i++)
                 singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
 
+            // -- TCP auto-rotate repair -------------------------------------------
+            // The nozzle is rotationally symmetric, so spinning it about its own axis
+            // (KUKA C offset) is print-neutral — but it swings the flange/wrist into a
+            // different configuration. For each flagged span, search for the smallest
+            // spin that clears the wrist singularity, ramp it in/out smoothly over
+            // neighbouring moves, and re-solve IK for the affected range.
+            {
+                bool anyBad = false;
+                for (int i = 0; i < total && !anyBad; i++)
+                    anyBad = !result[i] || singularity[i];
+
+                if (anyBad)
+                {
+                    var flatMoves = new ToolpathMove[total];
+                    {
+                        int fi = 0;
+                        foreach (var layer in toolpath.Layers)
+                            foreach (var mv in layer.Moves)
+                            { if (fi < total) flatMoves[fi] = mv; fi++; }
+                    }
+
+                    const int   Ramp  = 60;   // moves over which yaw ramps in/out
+                    const float MinA5 = 6f;   // deg of wrist margin required
+                    var yawByMove = new float[total];
+                    bool Bad(int i) => !result[i] || singularity[i];
+
+                    int s0 = 0;
+                    while (s0 < total)
+                    {
+                        if (cts.IsCancellationRequested) return;
+                        if (!Bad(s0)) { s0++; continue; }
+                        int s1 = s0;
+                        while (s1 + 1 < total && Bad(s1 + 1)) s1++;
+
+                        // Smallest nozzle spin that clears the span's start/middle/end.
+                        float chosen = 0f;
+                        foreach (float mag in new[] { 20f, 40f, 60f, 90f, 120f, 150f, 180f })
+                        {
+                            foreach (float sgn in new[] { 1f, -1f })
+                            {
+                                float y = mag * sgn;
+                                bool ok = true;
+                                foreach (int ti in new[] { s0, (s0 + s1) / 2, s1 })
+                                {
+                                    var rot = solver.TargetRotFromGlobalOrientation(
+                                        normals[ti], offA, offB, offC + y);
+                                    var sol = solver.Solve(targets[ti],
+                                        solutions[Math.Max(0, ti - 1)], rot, maxIterations: 60);
+                                    if (sol is null || MathF.Abs(sol[4]) < MinA5) { ok = false; break; }
+                                }
+                                if (ok) { chosen = y; break; }
+                            }
+                            if (chosen != 0f) break;
+                        }
+
+                        if (chosen != 0f)
+                        {
+                            int rIn  = Math.Max(0, s0 - Ramp);
+                            int rOut = Math.Min(total - 1, s1 + Ramp);
+                            for (int i = rIn; i <= rOut; i++)
+                            {
+                                float w = i < s0 ? (i - rIn)  / (float)Math.Max(1, s0 - rIn)
+                                        : i > s1 ? (rOut - i) / (float)Math.Max(1, rOut - s1)
+                                        : 1f;
+                                float y = chosen * w;
+                                if (MathF.Abs(y) > MathF.Abs(yawByMove[i])) yawByMove[i] = y;
+                            }
+
+                            // Re-solve the affected range with the yawed orientation.
+                            var chunkSeed = solutions[Math.Max(0, rIn - 1)];
+                            for (int i = rIn; i <= rOut; i++)
+                            {
+                                var rot = solver.TargetRotFromGlobalOrientation(
+                                    normals[i], offA, offB, offC + yawByMove[i]);
+                                var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
+                                result[i] = sol is not null;
+                                if (sol is not null) { solutions[i] = sol; chunkSeed = sol; }
+                                singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
+                            }
+                        }
+                        s0 = s1 + 1;
+                    }
+
+                    // Bake the repair into the toolpath so KRL export writes the
+                    // rotated orientations.
+                    for (int i = 0; i < total; i++)
+                        flatMoves[i].TcpYawDeg = yawByMove[i];
+                }
+            }
+
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
+            int singCount = 0;
+            foreach (var sg in singularity) if (sg) singCount++;
+
+            // Height range of flagged moves — tells the operator where the robot
+            // would fault, in part coordinates they can check against the model.
+            float zLo = float.MaxValue, zHi = float.MinValue;
+            {
+                int fi = 0;
+                foreach (var layer in toolpath.Layers)
+                    foreach (var mv in layer.Moves)
+                    {
+                        if (fi < total && (!result[fi] || singularity[fi]))
+                        {
+                            zLo = Math.Min(zLo, mv.From.Z);
+                            zHi = Math.Max(zHi, mv.From.Z);
+                        }
+                        fi++;
+                    }
+            }
+            _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
 
             _pendingReachability.Enqueue((node, result));
             _pendingSingularityPoints.Enqueue((node, singularity));
@@ -4910,6 +5115,17 @@ public partial class ViewportView : UserControl
                     vm.StatsReachability = reachLabel;
                     vm.IsValidating = false;
                     vm.SetScrubMarkers(result, singularity);
+                    int firstBad = -1;
+                    for (int i = 0; i < total; i++)
+                        if (!result[i] || singularity[i]) { firstBad = i; break; }
+                    vm.FirstValidationIssueIndex = firstBad;
+                    // Loud warning: a fault mid-print wastes material and hours.
+                    if (failCount + singCount > 0)
+                        SetSliceStatus(vm,
+                            $"⚠ Robot validation: {singCount:N0} singularity-risk and {failCount:N0} unreachable moves" +
+                            (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
+                            " — the robot may fault mid-print.",
+                            isError: true);
                 }
                 GlCanvas.RequestNextFrameRendering();
             });
@@ -4950,6 +5166,10 @@ public partial class ViewportView : UserControl
         int total = tp.Layers.Sum(l => l.Moves.Count);
         var result = new float[total];
         if (total == 0) return result;
+
+        // O(n×m) per-layer search — too slow for wave-expanded toolpaths.
+        // Skip and return all-zero (no overhang highlight) above threshold.
+        if (total > 600_000) return result;
 
         List<(NVec3 from, NVec3 to)>? prevSegs = null;
         int fi = 0;
@@ -5786,6 +6006,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "ply");
 
         try
         {
@@ -5818,6 +6039,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "stl");
 
         try
         {
@@ -5832,6 +6054,60 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>
+    /// If robot validation flagged issues for this toolpath, asks the operator to confirm
+    /// before exporting. Returns false to abort the export.
+    /// </summary>
+    private async Task<bool> ConfirmExportDespiteValidationAsync(SceneNode node)
+    {
+        if (!_validationIssuesByNode.TryGetValue(node, out var vi) || vi.Unreachable + vi.Singular == 0)
+            return true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return true;
+
+        string zRange = vi.ZLo <= vi.ZHi ? $" between Z {vi.ZLo:0} and {vi.ZHi:0} mm" : "";
+        var dlg = new Window
+        {
+            Title = "Robot Validation Warning",
+            Width = 460, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"⚠ This toolpath has {vi.Singular:N0} singularity-risk moves and " +
+                   $"{vi.Unreachable:N0} unreachable moves{zRange}.\n\n" +
+                   "The robot is likely to fault mid-print. " +
+                   "Scrub the timeline to the purple/red markers to inspect, or adjust the toolhead " +
+                   "orientation before exporting.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Thickness(20, 18, 20, 12),
+        };
+        var exportBtn = new Button { Content = "Export anyway", Padding = new Thickness(14, 6, 14, 6) };
+        var gotoBtn   = new Button { Content = "Go to issue",   Padding = new Thickness(14, 6, 14, 6) };
+        var cancelBtn = new Button { Content = "Cancel",        Padding = new Thickness(14, 6, 14, 6) };
+        exportBtn.Click += (_, _) => dlg.Close(true);
+        gotoBtn.Click   += (_, _) => { dlg.Close(false); _vm?.JumpToValidationIssue(); };
+        cancelBtn.Click += (_, _) => dlg.Close(false);
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Thickness(20, 0, 20, 16),
+                    Children = { cancelBtn, gotoBtn, exportBtn },
+                },
+            },
+        };
+        return await dlg.ShowDialog<bool?>(owner) == true;
+    }
+
     private async Task ExportKrlAsync(ViewportViewModel vm)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -5840,6 +6116,8 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         if (topLevel is null) return;
@@ -5856,7 +6134,7 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -5867,6 +6145,8 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
         if (topLevel is null) return;
@@ -5886,6 +6166,7 @@ public partial class ViewportView : UserControl
 
         var path = file.TryGetLocalPath();
         if (path is null) return;
+        path = SavePathUtil.Normalize(path, "src");
 
         path = RobotKrlPaths.ToExtendedUncPath(path);
         await WriteKrlAsync(vm, toolpath, node, cell, settings, path);

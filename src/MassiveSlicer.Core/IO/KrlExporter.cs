@@ -348,8 +348,10 @@ public static class KrlExporter
                     var (ma, mb, mc) = move.IsLayerStitch
                         ? lastAbc
                         : effectiveNormal.LengthSquared() > 1e-6f
-                            ? KukaAbc(effectiveNormal, s)
-                            : (la, lb, lc);
+                            ? KukaAbc(effectiveNormal, s, move.TcpYawDeg)
+                            : move.TcpYawDeg != 0f
+                                ? KukaAbc(layer.PlaneNormal, s, move.TcpYawDeg)
+                                : (la, lb, lc);
 
                     if (move.IsWipe)
                     {
@@ -491,7 +493,9 @@ public static class KrlExporter
                 var to = ToBase(move.To, s);
                 // Multi-axis: orient the spindle to the per-move tool axis (surface normal) when
                 // present; fall back to the layer plane normal (top-down) otherwise.
-                var (a, b, c) = move.Normal != Vector3.Zero ? KukaAbc(move.Normal, s) : (la, lb, lc);
+                var (a, b, c) = move.Normal != Vector3.Zero ? KukaAbc(move.Normal, s, move.TcpYawDeg)
+                    : move.TcpYawDeg != 0f ? KukaAbc(layer.PlaneNormal, s, move.TcpYawDeg)
+                    : (la, lb, lc);
                 if (move.Kind == MoveKind.Mill)
                 {
                     sb.AppendLine($"$VEL.CP = {cutV}");
@@ -674,7 +678,7 @@ public static class KrlExporter
     ///      Non-zero offset → physically tilts/rolls the nozzle from perpendicular.
     ///   3. Extract ZYX Euler from R_final.
     /// </summary>
-    private static (float a, float b, float c) KukaAbc(Vector3 normal, KrlExportSettings s)
+    private static (float a, float b, float c) KukaAbc(Vector3 normal, KrlExportSettings s, float tcpYawDeg = 0f)
     {
         normal = Vector3.Normalize(normal);
 
@@ -709,27 +713,33 @@ public static class KrlExporter
         var yF = xBase * (ca * sb * sc - sa * cc)   + yBase * (sa * sb * sc + ca * cc)   + zBase * (cb * sc);
         var zF = xBase * (ca * sb * cc + sa * sc)   + yBase * (sa * sb * cc - ca * sc)   + zBase * (cb * cc);
 
+        // Optional print-neutral spin about the nozzle (approach) axis — used by the
+        // singularity-avoidance repair pass.  The nozzle is rotationally symmetric, so
+        // this changes only the wrist configuration, never the deposited bead.
+        if (MathF.Abs(tcpYawDeg) > 1e-4f)
+        {
+            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
+            var y2 = yF * cy + zF * sy;
+            var z2 = zF * cy - yF * sy;
+            yF = y2; zF = z2;
+        }
+
         // Step 3: extract ZYX Euler from R_final
         float bRad = MathF.Atan2(-xF.Z, MathF.Sqrt(xF.X * xF.X + xF.Y * xF.Y));
         float aRad, cRad;
         // Threshold 0.05 rad ≈ cos(87°). Near B = ±90° the A and C axes are collinear
         // (gimbal lock): tiny XY noise in the normal produces huge atan2 swings that force
         // the KUKA to interpolate through spurious wrist rotations at reduced speed.
-        // Zero A and C when we're within ~3° of the singularity — the physical difference
-        // in tool orientation is negligible, and the robot interpolates at full $VEL.CP.
+        // In that regime only (A − C) is physical: derive it from the y-axis (stable —
+        // no atan2 blowup) so a deliberate TCP yaw survives; without yaw this yields the
+        // same A = 0, C = 0 as before for clean vertical normals.
         if (MathF.Abs(MathF.Abs(bRad) - MathF.PI / 2f) < 0.05f)
         {
-            // Gimbal lock (tool ~vertical): A and C rotate about the same axis. Zeroing both
-            // suppresses spurious A/C swings from noisy surface normals near the singularity.
-            // But it also discards a DELIBERATE global toolhead spin (ToolheadOffsetA/C) — which
-            // the viewport preview DOES apply — so on flat top-down toolpaths the exported
-            // orientation silently ignored the toolhead rotation. When such an offset is set,
-            // recover the true azimuth from the frame (ZYX gimbal-lock: A = atan2(-yF.X, yF.Y),
-            // C = 0) so the export matches the preview; otherwise keep the noise-suppressing zero.
+            // Gimbal lock (tool ~vertical): A and C are collinear. Recover the true azimuth
+            // from the (stable) y-axis so a deliberate toolhead offset / singularity-repair yaw
+            // survives; for a clean vertical normal with no yaw this yields A = 0 as before.
+            aRad = MathF.Atan2(-yF.X, yF.Y);
             cRad = 0f;
-            bool deliberateSpin = MathF.Abs(s.ToolheadOffsetA) > 1e-3f
-                               || MathF.Abs(s.ToolheadOffsetC) > 1e-3f;
-            aRad = deliberateSpin ? MathF.Atan2(-yF.X, yF.Y) : 0f;
         }
         else
         {

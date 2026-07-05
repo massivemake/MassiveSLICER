@@ -1,6 +1,6 @@
 # MassiveSLICER V2 — Project Memory
 
-Last updated: 2026-06-26 (merged `feature/print-scan-mill` → `main`; canonical repo: massivemake/MassiveSLICER)
+Last updated: 2026-07-04 (builds 1–30: crash fixes, bead renderer, Fixed/Dynamic wave, flow calibration, singularity auto-repair — see CHANGELOG.md)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -504,6 +504,26 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-04 — Curtain print failure countermeasures (builds 25–30)
+**Print failed mid-run: KUKA hit wrist singularity.** Root cause: KRL export wrote a frozen `A 0, B 90, C 0` orientation on every move — the exporter's gimbal-lock branch zeroed any TCP rotation for a straight-down tool.
+- **TCP auto-rotation repair (build 27):** post-slice validation now searches the smallest print-neutral nozzle spin (rotationally symmetric tool) that clears flagged wrist configurations, ramps it in/out over ~60 moves, re-verifies with IK, and bakes per-move `ToolpathMove.TcpYawDeg` into KRL export (`KrlExporter.KukaAbc` now composes the spin and preserves it at gimbal lock).
+- **Validation is loud (26/28/29):** red ⚠ alert in the bottom status bar with singular/unreachable counts + Z range, "Go to issue" jumps the scrubber to the first flagged move; Export KRL / Send to Robot show a confirm dialog (Cancel / Go to issue / Export anyway).
+- **Material flow calibration (25):** Material Preset dialog gains a guided purge-and-weigh section → per-material `FlowRate` (rev/cm³) with provenance. Fixes wrong starting RPM from the uncalibrated default 0.463 (the over-extrusion "creep" that smeared the curtain's bottom third; RPM was hand-tuned mid-print). `RPM% = W×H×v×FlowRate×60` already existed in `KrlAnout` — the constant was never measured per material.
+- **UI (29/30, CEO request):** no popups — progress (real 0–100%) and alerts render inline in the bottom status bar; status shows loaded workspace filename.
+- Key files: `KrlExporter.cs`, `KrlAnout.cs`, `ToolpathMove.cs`, `MaterialPreset.cs`, `MaterialPresetDialog.axaml(+VM)`, `ViewportView.axaml.cs` (validation/repair), `BottomLeftDockView.axaml`.
+
+### 2026-07-03 — Sine wave Fixed/Dynamic + trustworthy bead preview (builds 17–24)
+- **Wave texture bands diagnosed:** Fixed (seam-anchored) phase drifts as the cross-section morphs; bands appear where seam-to-point arc grows ~1 wavelength/layer (verified: predicted vs measured crest shift at both user-reported bands). `tools/wave_analysis.py` measures phase coherence in exported .src.
+- **Fixed / Dynamic phase methods (21–22):** "Phase" dropdown in wave settings. Fixed = original, byte-identical (verified vs printed program). Dynamic = phase inheritance from the layer below + stagger — constant layer-to-layer crest shift, shape change absorbed as bounded wavelength flex. Roughly halves worst-height error; means near zero.
+- **Bead renderer rebuilt (19):** indexed mesh + chord-error decimation (0.35 mm) — full 2.7M-move wave toolpaths render faithfully; old fixed-step decimation cut chords across whole wavelengths (the "inconsistent sine wave" was the preview lying, not the toolpath). Overlays share the bead EBO (fixed latent 2.3 GB alloc).
+- **Live bead color (16):** picker next to Show Bead, shader-uniform driven, no re-slice; blue came from stale `prefs.json` + material fallback, all defaults now white.
+- **Progress + save fixes (23–24):** real 0–100% progress (byte-accurate workspace read, per-layer planar slice), load off the UI thread; doubled save extensions (`.src.src`/`.mass.mass`) fixed everywhere; macOS app bundle + Dock icon (`tools/make_macos_app.sh`).
+- **Scrub freeze fix (20):** repaint no longer depends on a successful IK solve.
+
+### 2026-06-30…07-02 — macOS Sine+Show-bead crash hunt (builds 1–16)
+- **SIGABRT on slice with Sine wave + Show bead:** unhandled managed exceptions escaped to the native GL render loop (CLR abort). `SliceLogger` (→ `~/Desktop/massiveslicer-slice.log`) + try-catch on the GL upload path exposed the real error: bead VBO `IndexOutOfRange` — decimation counted moves globally but selected per layer (undersized array). Also ~390 MB bead allocations for wave toolpaths → decimation budget.
+- Build numbers introduced (`BuildInfo.cs`, shown in status bar). Full build-by-build log: **CHANGELOG.md** (repo root).
 
 ### 2026-06-25 — Milestone: KRL import toolpath + viewport polish (GitHub `feature/print-scan-mill`)
 **Milestone title (GitHub):** `KRL Import & Viewport Polish — June 2026`
