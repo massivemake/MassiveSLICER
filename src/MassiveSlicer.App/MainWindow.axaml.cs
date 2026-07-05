@@ -27,6 +27,13 @@ public partial class MainWindow : Window
 
         vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
 
+        // Route GL host diagnostics to the in-app console (readable via the control bridge).
+        MassiveSlicer.App.Views.GlHostControl.Diag = msg =>
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is MainWindowViewModel m) m.Console.Log(msg);
+            });
+
         // -- Local control bridge (external tooling reads console / sends commands) --
         if (_controlBridge is null)
         {
@@ -336,7 +343,7 @@ public partial class MainWindow : Window
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await vm.SaveWorkspaceAsync(path);
+        await vm.SaveWorkspaceAsync(SavePathUtil.Normalize(path, "mass"));
     }
 
     /// <summary>
@@ -345,11 +352,11 @@ public partial class MainWindow : Window
     /// </summary>
     internal async Task<byte[]?> CaptureAppScreenshotAsync()
     {
-        await Viewport.CaptureScreenshotAsync();
+        var viewportPng = await Viewport.CaptureScreenshotAsync();
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             UpdateLayout();
-            return AppScreenshotCapture.CapturePng(this);
+            return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface);
         });
     }
 }

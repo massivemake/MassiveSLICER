@@ -23,7 +23,7 @@ public sealed class ToolpathRenderer : IDisposable
     private int  _travelVao,  _travelVbo,  _travelCount;
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
-    private int  _beadVao, _beadVbo, _beadCount;
+    private int  _beadVao, _beadVbo, _beadEbo, _beadCount;   // _beadCount = index count
     private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
     private int  _orientationVao, _orientationVbo, _orientationCount;
     private int  _singularityPtVao, _singularityPtVbo, _singularityPointCount;
@@ -86,7 +86,7 @@ public sealed class ToolpathRenderer : IDisposable
 
     private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
 
-    private Vector3 _extrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private Vector3 _extrudeColor     = new(1f, 1f, 1f);
     private Vector3 _millColor        = new(0.95f, 0.6f,  0.1f);
     private Vector3 _travelColor      = new(0.85f, 0.18f, 0.18f);
     private Vector3 _wipeColor        = new(1.0f,  0.53f, 0.0f);
@@ -96,6 +96,22 @@ public sealed class ToolpathRenderer : IDisposable
 
     private float    _beadWidth;
     private float    _beadLayerHeight;
+
+    /// <summary>
+    /// One entry per contour of the bead mesh: the decimated polyline points (cross-section
+    /// centres), the blended cross-section right vectors, the flat move index range covered
+    /// by each segment, and the half layer height.  Shared by the bead, overhang and
+    /// orientation builders so all three stay geometrically identical.
+    /// </summary>
+    private sealed class BeadContour
+    {
+        public required NVec3[] Pts;          // m+1 cross-section centres
+        public required NVec3[] CsR;          // m+1 blended right vectors
+        public required int[]   SegFirstFlat; // m: first flat move index covered by segment j
+        public required int[]   SegLastFlat;  // m: last  flat move index covered by segment j
+        public required float   Hh;           // half layer height
+    }
+    private List<BeadContour> _beadPlan = [];
     private Toolpath _toolpath;
     private NVec3    _origin;
     private bool[]?  _reachability;  // per flat-move index; null = all reachable
@@ -109,15 +125,16 @@ public sealed class ToolpathRenderer : IDisposable
     private int[] _seamVertexCumulative    = [];
 
     public ToolpathRenderer(Toolpath toolpath, NVec3 origin = default,
-        float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default)
+        float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default,
+        Toolpath? beadToolpath = null)
     {
         _toolpath   = toolpath;
         _origin     = origin;
         _shader     = new Shader(VertSrc,     FragSrc);
         _beadShader = new Shader(BeadVertSrc, BeadFragSrc);
         Upload(toolpath, origin);
-        UploadBead(toolpath, origin, beadWidth, layerHeight,
-            materialColor == NVec3.Zero ? new NVec3(0.1f, 0.45f, 0.9f) : materialColor);
+        UploadBead(beadToolpath ?? toolpath, origin, beadWidth, layerHeight,
+            materialColor == NVec3.Zero ? NVec3.One : materialColor);
     }
 
     /// <summary>
@@ -136,6 +153,12 @@ public sealed class ToolpathRenderer : IDisposable
             _extrudeCount = extData.Length / 6;
         }
     }
+
+    /// <summary>
+    /// Sets the bead surface colour. Applied as a shader uniform at draw time —
+    /// takes effect immediately with no VBO rebuild. Safe to call from any thread.
+    /// </summary>
+    public void SetBeadColor(Vector3 color) => _beadMaterialColor = color;
 
     /// <summary>
     /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
@@ -260,40 +283,24 @@ public sealed class ToolpathRenderer : IDisposable
     }
 
     /// <summary>
-    /// Builds the bead prefix-sum array by mirroring UploadBead's contour logic
-    /// without emitting any vertex data. Must be called after ComputeMovePrefixSums.
+    /// Builds the bead prefix-sum array (in INDEX counts, matching UploadBead's emission
+    /// order: back cap, segments, front cap per contour) from the shared bead plan.
+    /// Must be called after ComputeMovePrefixSums.
     /// </summary>
     private void BuildBeadVertexCumulative()
     {
         _beadVertexCumulative = new int[_totalMoveCount + 1];
         int cumulative = 0;
 
-        var contourFlatIndices = new List<List<int>>();
-        int flatIdx = 0;
-        foreach (var layer in _toolpath.Layers)
+        foreach (var c in _beadPlan)
         {
-            List<int>? cur = null;
-            foreach (var move in layer.Moves)
+            int m = c.Pts.Length - 1;   // segments
+            for (int j = 0; j < m; j++)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
-                {
-                    if (cur is null) { cur = new List<int>(); contourFlatIndices.Add(cur); }
-                    cur.Add(flatIdx);
-                }
-                else cur = null;
-                flatIdx++;
-            }
-        }
-
-        foreach (var contour in contourFlatIndices)
-        {
-            int n = contour.Count;
-            for (int i = 0; i < n; i++)
-            {
-                if (i == 0)     cumulative += 6;   // back cap  (1 Quad = 6 verts)
-                cumulative += 24;                   // 4 side Quads = 4×6 = 24 verts
-                if (i == n - 1) cumulative += 6;   // front cap
-                _beadVertexCumulative[contour[i] + 1] = cumulative;
+                if (j == 0)     cumulative += 6;   // back cap  (2 tris)
+                cumulative += 24;                   // 4 side quads = 8 tris
+                if (j == m - 1) cumulative += 6;   // front cap
+                _beadVertexCumulative[c.SegLastFlat[j] + 1] = cumulative;
             }
         }
 
@@ -411,6 +418,140 @@ public sealed class ToolpathRenderer : IDisposable
         return ptData;
     }
 
+    // Chord-error tolerance for bead decimation: points are dropped only where the
+    // path stays within this distance of the straight chord — invisible at bead scale,
+    // but preserves wave/curve shape exactly where it matters.
+    private const float BeadChordTolerance = 0.35f;
+    private const int   MaxBeadSegments    = 1_000_000;
+
+    // Side normals: blend of adjacent face normals only (no fwd component).
+    // Identical on both sides of a junction, eliminating shading seams.
+    private static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r) => (
+        NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
+        NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
+
+    /// <summary>
+    /// Builds the shared bead plan: contours of chord-error-decimated polyline points.
+    /// Unlike fixed-step decimation, this keeps every point needed to represent curves
+    /// (e.g. wave effects) faithfully and merges only visually straight runs.
+    /// </summary>
+    private void BuildBeadPlan(Toolpath toolpath, float layerHeight)
+    {
+        // Collect raw contours: positions + flat move indices of consecutive cut runs.
+        var raw = new List<(List<NVec3> pts, List<int> flats, float hh)>();
+        int flatIdx = 0;
+        foreach (var layer in toolpath.Layers)
+        {
+            float lh  = layer.Height > 0f ? layer.Height : layerHeight;
+            float lhh = lh * 0.5f;
+            List<NVec3>? pts = null; List<int>? flats = null;
+            foreach (var move in layer.Moves)
+            {
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    if (pts is null)
+                    {
+                        pts = [move.From]; flats = [];
+                        raw.Add((pts, flats, lhh));
+                    }
+                    pts.Add(move.To);
+                    flats!.Add(flatIdx);
+                }
+                else { pts = null; flats = null; }
+                flatIdx++;
+            }
+        }
+
+        // Decimate; if over the segment budget, coarsen the tolerance and retry.
+        float eps = BeadChordTolerance;
+        for (int attempt = 0; ; attempt++)
+        {
+            _beadPlan = [];
+            long totalSegs = 0;
+            foreach (var (pts, flats, hh) in raw)
+            {
+                var keep = DecimatePolyline(pts, eps);
+                int m = keep.Count - 1;
+                if (m <= 0) continue;
+                var cPts  = new NVec3[m + 1];
+                var first = new int[m];
+                var last  = new int[m];
+                for (int j = 0; j <= m; j++) cPts[j] = pts[keep[j]];
+                for (int j = 0; j <  m; j++)
+                {
+                    first[j] = flats[keep[j]];
+                    last[j]  = flats[keep[j + 1] - 1];
+                }
+
+                // Blended cross-section right vectors (same construction as before).
+                var rights = new NVec3[m];
+                var up = NVec3.UnitZ;
+                for (int j = 0; j < m; j++)
+                {
+                    var d = cPts[j + 1] - cPts[j];
+                    var fwd = d.LengthSquared() > 1e-12f
+                        ? NVec3.Normalize(d)
+                        : (j > 0 ? NVec3.Normalize(cPts[j] - cPts[j - 1]) : NVec3.UnitX);
+                    var r = NVec3.Cross(fwd, up);
+                    if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwd, NVec3.UnitX);
+                    rights[j] = NVec3.Normalize(r);
+                }
+                var csR = new NVec3[m + 1];
+                csR[0] = rights[0];
+                for (int j = 1; j < m; j++) csR[j] = NVec3.Normalize(rights[j - 1] + rights[j]);
+                csR[m] = rights[m - 1];
+
+                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh });
+                totalSegs += m;
+            }
+            if (totalSegs <= MaxBeadSegments || attempt >= 4) break;
+            eps *= 2f;
+        }
+    }
+
+    /// <summary>Greedy chord-error decimation: returns kept indices (always includes ends).</summary>
+    private static List<int> DecimatePolyline(List<NVec3> pts, float eps)
+    {
+        var keep = new List<int> { 0 };
+        int n = pts.Count;
+        int a = 0;
+        while (a < n - 1)
+        {
+            int k = a + 1;
+            while (k + 1 < n && k - a < 200 && ChordOk(pts, a, k + 1, eps)) k++;
+            keep.Add(k);
+            a = k;
+        }
+        return keep;
+    }
+
+    private static bool ChordOk(List<NVec3> pts, int a, int b, float eps)
+    {
+        var A = pts[a];
+        var ab = pts[b] - A;
+        float len2 = ab.LengthSquared();
+        float eps2 = eps * eps;
+        for (int i = a + 1; i < b; i++)
+        {
+            var ap = pts[i] - A;
+            float t = len2 > 1e-12f ? Math.Clamp(NVec3.Dot(ap, ab) / len2, 0f, 1f) : 0f;
+            if ((ap - ab * t).LengthSquared() > eps2) return false;
+        }
+        return true;
+    }
+
+    private void EmitCorner(float[] a, ref int i, NVec3 p, NVec3 n)
+    {
+        a[i++] = p.X - _origin.X; a[i++] = p.Y - _origin.Y; a[i++] = p.Z - _origin.Z;
+        a[i++] = n.X;             a[i++] = n.Y;             a[i++] = n.Z;
+    }
+
+    private static void AddTri(uint[] a, ref int i, uint x, uint y, uint z)
+    { a[i++] = x; a[i++] = y; a[i++] = z; }
+
+    private static void AddQuad(uint[] a, ref int i, uint p0, uint p1, uint p2, uint p3)
+    { AddTri(a, ref i, p0, p1, p2); AddTri(a, ref i, p0, p2, p3); }
+
     private void UploadBead(Toolpath toolpath, NVec3 origin,
         float beadWidth, float layerHeight, NVec3 matColor)
     {
@@ -418,12 +559,10 @@ public sealed class ToolpathRenderer : IDisposable
         _beadWidth       = beadWidth;
         _beadLayerHeight = layerHeight;
 
-        int cutCount = 0;
-        foreach (var layer in toolpath.Layers)
-            foreach (var move in layer.Moves)
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
+        BuildBeadPlan(toolpath, layerHeight);
+
         // Travel-only paths have no bead geometry — still build prefix sums for scrubbing.
-        if (cutCount == 0)
+        if (_beadPlan.Count == 0)
         {
             BuildBeadVertexCumulative();
             return;
@@ -432,116 +571,62 @@ public sealed class ToolpathRenderer : IDisposable
         float hw = beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
 
-        // 4 side quads + 2 caps = 12 tris = 36 verts per segment (upper bound)
-        var data = new float[cutCount * 36 * 6];
-        int di = 0;
+        int sections = 0, segs = 0;
+        foreach (var c in _beadPlan) { sections += c.Pts.Length; segs += c.Pts.Length - 1; }
 
-        void WV(NVec3 p, NVec3 n)
+        // Indexed mesh: 4 shared corner verts per cross-section (~16× leaner than the old
+        // 36-verts-per-segment triangle soup), so full wave toolpaths fit in GPU memory.
+        var verts = new float[sections * 4 * 6];
+        var idx   = new uint[segs * 24 + _beadPlan.Count * 12];
+        int vi = 0, ii = 0;
+        uint baseV = 0;
+
+        foreach (var c in _beadPlan)
         {
-            data[di++] = p.X - origin.X; data[di++] = p.Y - origin.Y; data[di++] = p.Z - origin.Z;
-            data[di++] = n.X;            data[di++] = n.Y;            data[di++] = n.Z;
-        }
+            int   m  = c.Pts.Length;   // cross-sections in this contour (segments + 1)
+            float hh = c.Hh;
 
-        void Quad(NVec3 p0, NVec3 n0, NVec3 p1, NVec3 n1,
-                  NVec3 p2, NVec3 n2, NVec3 p3, NVec3 n3)
-        {
-            WV(p0, n0); WV(p1, n1); WV(p2, n2);
-            WV(p0, n0); WV(p2, n2); WV(p3, n3);
-        }
-
-        // Side normals: blend of adjacent face normals only (no fwd component).
-        // This makes normals identical on both sides of a junction regardless of
-        // how the segment direction changes, eliminating shading seams.
-        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r) => (
-            NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
-            NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
-
-        // hh is per-contour (layer height can vary with adaptive slicing).
-        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r, float hw, float hh, NVec3 up)
-            => (pt - r*hw - up*hh, pt + r*hw - up*hh,
-                pt - r*hw + up*hh, pt + r*hw + up*hh);
-
-        // Group consecutive cut moves (extrude + imported KRL LIN) into contours.
-        // Each contour stores its half-height so adaptive layers use the correct bead size.
-        // Caps are only emitted at contour start/end; interior junctions get blended normals.
-        var contours = new List<(List<ToolpathMove> moves, float hh)>();
-        foreach (var layer in toolpath.Layers)
-        {
-            float lh  = layer.Height > 0f ? layer.Height : layerHeight;
-            float lhh = lh * 0.5f;
-            List<ToolpathMove>? cur = null;
-            foreach (var move in layer.Moves)
+            for (int s = 0; s < m; s++)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
-                {
-                    if (cur is null) { cur = []; contours.Add((cur, lhh)); }
-                    cur.Add(move);
-                }
-                else cur = null;
-            }
-        }
-
-        foreach (var (contour, hh) in contours)
-        {
-            int n = contour.Count;
-            if (n == 0) continue;
-
-            // Per-segment forward and right vectors.
-            var fwds   = new NVec3[n];
-            var rights = new NVec3[n];
-            for (int i = 0; i < n; i++)
-            {
-                var d = contour[i].To - contour[i].From;
-                fwds[i] = d.LengthSquared() > 1e-12f
-                    ? NVec3.Normalize(d)
-                    : (i > 0 ? fwds[i - 1] : NVec3.UnitX);
-                var r = NVec3.Cross(fwds[i], up);
-                if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwds[i], NVec3.UnitX);
-                rights[i] = NVec3.Normalize(r);
+                var r  = c.CsR[s];
+                var pt = c.Pts[s];
+                var (nLb, nRb, nLt, nRt) = SideNormals(r);
+                // corner order: 0=lb, 1=rb, 2=lt, 3=rt
+                EmitCorner(verts, ref vi, pt - r*hw - up*hh, nLb);
+                EmitCorner(verts, ref vi, pt + r*hw - up*hh, nRb);
+                EmitCorner(verts, ref vi, pt - r*hw + up*hh, nLt);
+                EmitCorner(verts, ref vi, pt + r*hw + up*hh, nRt);
             }
 
-            // Cross-section right vectors: averaged at interior junctions.
-            // cs[0] = contour start, cs[i] = junction between seg i-1 and seg i, cs[n] = contour end.
-            var csR = new NVec3[n + 1];
-            csR[0] = rights[0];
-            for (int i = 1; i < n; i++) csR[i] = NVec3.Normalize(rights[i - 1] + rights[i]);
-            csR[n] = rights[n - 1];
+            uint V(int s, int k) => baseV + (uint)(s * 4 + k);
 
-            // Back cap (flat normal = -fwd of first segment).
+            // Back cap.
+            AddTri(idx, ref ii, V(0,1), V(0,0), V(0,2));
+            AddTri(idx, ref ii, V(0,1), V(0,2), V(0,3));
+
+            for (int s = 0; s < m - 1; s++)
             {
-                var (lb, rb, lt, rt) = Corners(contour[0].From, csR[0], hw, hh, up);
-                var cn = -fwds[0];
-                Quad(rb, cn, lb, cn, lt, cn, rt, cn);
+                AddQuad(idx, ref ii, V(s,2), V(s,3), V(s+1,3), V(s+1,2));  // top
+                AddQuad(idx, ref ii, V(s,1), V(s,0), V(s+1,0), V(s+1,1));  // bottom
+                AddQuad(idx, ref ii, V(s,0), V(s,2), V(s+1,2), V(s+1,0));  // left
+                AddQuad(idx, ref ii, V(s,3), V(s,1), V(s+1,1), V(s+1,3));  // right
             }
 
-            // Four side quads per segment, using blended cross-section normals.
-            for (int i = 0; i < n; i++)
-            {
-                var (lbA, rbA, ltA, rtA) = Corners(contour[i].From, csR[i],     hw, hh, up);
-                var (lbB, rbB, ltB, rtB) = Corners(contour[i].To,   csR[i + 1], hw, hh, up);
-                var (nLbA, nRbA, nLtA, nRtA) = SideNormals(csR[i]);
-                var (nLbB, nRbB, nLtB, nRtB) = SideNormals(csR[i + 1]);
+            // Front cap.
+            AddTri(idx, ref ii, V(m-1,0), V(m-1,2), V(m-1,3));
+            AddTri(idx, ref ii, V(m-1,0), V(m-1,3), V(m-1,1));
 
-                Quad(ltA, nLtA, rtA, nRtA, rtB, nRtB, ltB, nLtB);  // top
-                Quad(rbA, nRbA, lbA, nLbA, lbB, nLbB, rbB, nRbB);  // bottom
-                Quad(lbA, nLbA, ltA, nLtA, ltB, nLtB, lbB, nLbB);  // left
-                Quad(rtA, nRtA, rbA, nRbA, rbB, nRbB, rtB, nRtB);  // right
-            }
-
-            // Front cap (flat normal = +fwd of last segment).
-            {
-                var (lb, rb, lt, rt) = Corners(contour[n - 1].To, csR[n], hw, hh, up);
-                var cn = fwds[n - 1];
-                Quad(lb, cn, lt, cn, rt, cn, rb, cn);
-            }
+            baseV += (uint)(m * 4);
         }
 
-        _beadCount = di / 6;
-        if (_beadCount > 0)
-        {
-            float[] upload = di == data.Length ? data : data[..di];
-            (_beadVao, _beadVbo) = BuildVao(upload);
-        }
+        (_beadVao, _beadVbo) = BuildVao(verts);
+        _beadEbo = GL.GenBuffer();
+        GL.BindVertexArray(_beadVao);
+        GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);
+        GL.BufferData(BufferTarget.ElementArrayBuffer, ii * sizeof(uint), idx, BufferUsageHint.StaticDraw);
+        GL.BindVertexArray(0);
+        _beadCount = ii;
+
         BuildBeadVertexCumulative();
     }
 
@@ -554,8 +639,16 @@ public sealed class ToolpathRenderer : IDisposable
     {
         if (_beadOverhangVao != 0) { GL.DeleteVertexArray(_beadOverhangVao); GL.DeleteBuffer(_beadOverhangVbo); }
         _beadOverhangVao = _beadOverhangVbo = _beadOverhangCount = 0;
+        if (_beadEbo == 0) return;
         var data = BuildBeadColoredData(scoresPerFlatMove, t => new NVec3(1f, 1f - t, 1f - t));
-        if (data.Length > 0) { (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data); _beadOverhangCount = data.Length / 6; }
+        if (data.Length > 0)
+        {
+            (_beadOverhangVao, _beadOverhangVbo) = BuildVao(data);
+            GL.BindVertexArray(_beadOverhangVao);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);   // share bead indices
+            GL.BindVertexArray(0);
+            _beadOverhangCount = _beadCount;
+        }
     }
 
     // Stops normalised to [0,1] where 1.0 = 3 °/mm (matches maxDegPerMm in the compute pass).
@@ -594,118 +687,61 @@ public sealed class ToolpathRenderer : IDisposable
     {
         if (_orientationVao != 0) { GL.DeleteVertexArray(_orientationVao); GL.DeleteBuffer(_orientationVbo); }
         _orientationVao = _orientationVbo = _orientationCount = 0;
+        if (_beadEbo == 0) return;
         var data = BuildBeadColoredData(scoresPerFlatMove, OrientationColor);
-        if (data.Length > 0) { (_orientationVao, _orientationVbo) = BuildVao(data); _orientationCount = data.Length / 6; }
+        if (data.Length > 0)
+        {
+            (_orientationVao, _orientationVbo) = BuildVao(data);
+            GL.BindVertexArray(_orientationVao);
+            GL.BindBuffer(BufferTarget.ElementArrayBuffer, _beadEbo);   // share bead indices
+            GL.BindVertexArray(0);
+            _orientationCount = _beadCount;
+        }
     }
 
+    /// <summary>
+    /// Builds per-cross-section coloured vertices matching the bead plan geometry exactly
+    /// (same sections, same order), so the shared bead index buffer can render them.
+    /// </summary>
     private float[] BuildBeadColoredData(float[] scoresPerFlatMove, Func<float, NVec3> colorFromScore)
     {
+        int sections = 0;
+        foreach (var c in _beadPlan) sections += c.Pts.Length;
+        if (sections == 0) return [];
+
         float hw = _beadWidth * 0.5f;
         var   up = NVec3.UnitZ;
+        var   verts = new float[sections * 4 * 6];
+        int   vi = 0;
 
-        int cutCount = 0;
-        foreach (var layer in _toolpath.Layers)
-            foreach (var move in layer.Moves)
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) cutCount++;
-        if (cutCount == 0) return [];
-
-        var data = new float[cutCount * 36 * 6];
-        int di = 0;
-
-        void WV(NVec3 p, NVec3 c)
+        void EmitColored(NVec3 p, NVec3 col)
         {
-            data[di++] = p.X - _origin.X; data[di++] = p.Y - _origin.Y; data[di++] = p.Z - _origin.Z;
-            data[di++] = c.X;             data[di++] = c.Y;             data[di++] = c.Z;
+            verts[vi++] = p.X - _origin.X; verts[vi++] = p.Y - _origin.Y; verts[vi++] = p.Z - _origin.Z;
+            verts[vi++] = col.X;           verts[vi++] = col.Y;           verts[vi++] = col.Z;
         }
 
-        void Quad(NVec3 p0, NVec3 p1, NVec3 p2, NVec3 p3, NVec3 col)
+        foreach (var c in _beadPlan)
         {
-            WV(p0, col); WV(p1, col); WV(p2, col);
-            WV(p0, col); WV(p2, col); WV(p3, col);
-        }
-
-        static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) Corners(NVec3 pt, NVec3 r, float hw, float hh, NVec3 up)
-            => (pt - r*hw - up*hh, pt + r*hw - up*hh,
-                pt - r*hw + up*hh, pt + r*hw + up*hh);
-
-        // Group consecutive cut moves into contours, tracking flat move indices and layer height.
-        var contours = new List<(List<(ToolpathMove move, int flatIdx)> moves, float hh)>();
-        int flatIdx = 0;
-        foreach (var layer in _toolpath.Layers)
-        {
-            float lh  = layer.Height > 0f ? layer.Height : _beadLayerHeight;
-            float lhh = lh * 0.5f;
-            List<(ToolpathMove, int)>? cur = null;
-            foreach (var move in layer.Moves)
+            int m = c.Pts.Length;
+            for (int s = 0; s < m; s++)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
-                {
-                    if (cur is null) { cur = []; contours.Add((cur, lhh)); }
-                    cur.Add((move, flatIdx));
-                }
-                else cur = null;
-                flatIdx++;
-            }
-        }
-
-        foreach (var (contour, hh) in contours)
-        {
-            int n = contour.Count;
-            if (n == 0) continue;
-
-            // Per-segment forward and right vectors (same as UploadBead).
-            var fwds   = new NVec3[n];
-            var rights = new NVec3[n];
-            for (int i = 0; i < n; i++)
-            {
-                var d = contour[i].move.To - contour[i].move.From;
-                fwds[i] = d.LengthSquared() > 1e-12f
-                    ? NVec3.Normalize(d)
-                    : (i > 0 ? fwds[i - 1] : NVec3.UnitX);
-                var r = NVec3.Cross(fwds[i], up);
-                if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwds[i], NVec3.UnitX);
-                rights[i] = NVec3.Normalize(r);
-            }
-
-            var csR = new NVec3[n + 1];
-            csR[0] = rights[0];
-            for (int i = 1; i < n; i++) csR[i] = NVec3.Normalize(rights[i - 1] + rights[i]);
-            csR[n] = rights[n - 1];
-
-            NVec3 ColorAt(int fi)
-            {
+                // Section s is coloured by the segment it starts (last section reuses
+                // the final segment's colour).
+                int seg = Math.Min(s, m - 2);
+                int fi  = c.SegFirstFlat[seg];
                 float t = fi >= 0 && fi < scoresPerFlatMove.Length ? scoresPerFlatMove[fi] : 0f;
-                return colorFromScore(t);
-            }
+                var col = colorFromScore(t);
 
-            // Back cap.
-            {
-                var c = ColorAt(contour[0].flatIdx);
-                var (lb, rb, lt, rt) = Corners(contour[0].move.From, csR[0], hw, hh, up);
-                Quad(rb, lb, lt, rt, c);
-            }
-
-            // Four side quads per segment.
-            for (int i = 0; i < n; i++)
-            {
-                var c = ColorAt(contour[i].flatIdx);
-                var (lbA, rbA, ltA, rtA) = Corners(contour[i].move.From, csR[i],     hw, hh, up);
-                var (lbB, rbB, ltB, rtB) = Corners(contour[i].move.To,   csR[i + 1], hw, hh, up);
-                Quad(ltA, rtA, rtB, ltB, c); // top
-                Quad(rbA, lbA, lbB, rbB, c); // bottom
-                Quad(lbA, ltA, ltB, lbB, c); // left
-                Quad(rtA, rbA, rbB, rtB, c); // right
-            }
-
-            // Front cap.
-            {
-                var c = ColorAt(contour[n - 1].flatIdx);
-                var (lb, rb, lt, rt) = Corners(contour[n - 1].move.To, csR[n], hw, hh, up);
-                Quad(lb, lt, rt, rb, c);
+                var r  = c.CsR[s];
+                var pt = c.Pts[s];
+                EmitColored(pt - r*hw - up*c.Hh, col);
+                EmitColored(pt + r*hw - up*c.Hh, col);
+                EmitColored(pt - r*hw + up*c.Hh, col);
+                EmitColored(pt + r*hw + up*c.Hh, col);
             }
         }
 
-        return di == data.Length ? data : data[..di];
+        return verts;
     }
 
     // Returns the number of VBO vertices to draw when the scrubber is at `scrubIndex`.
@@ -787,7 +823,8 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_orientationVao);
-            GL.DrawArrays(PrimitiveType.Triangles, 0, Math.Min(_orientationCount, beadCount));
+            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_orientationCount, beadCount),
+                DrawElementsType.UnsignedInt, 0);
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
@@ -797,7 +834,8 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadOverhangVao);
-            GL.DrawArrays(PrimitiveType.Triangles, 0, Math.Min(_beadOverhangCount, beadCount));
+            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_beadOverhangCount, beadCount),
+                DrawElementsType.UnsignedInt, 0);
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBead && beadCount > 0)
@@ -807,7 +845,7 @@ public sealed class ToolpathRenderer : IDisposable
             _beadShader.SetVector3("uColor", _beadMaterialColor);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
-            GL.DrawArrays(PrimitiveType.Triangles, 0, beadCount);
+            GL.DrawElements(PrimitiveType.Triangles, beadCount, DrawElementsType.UnsignedInt, 0);
             GL.Enable(EnableCap.CullFace);
         }
 
@@ -866,6 +904,7 @@ public sealed class ToolpathRenderer : IDisposable
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
+        if (_beadEbo          != 0) GL.DeleteBuffer(_beadEbo);
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
         if (_orientationVao   != 0) { GL.DeleteVertexArray(_orientationVao);   GL.DeleteBuffer(_orientationVbo);   }
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }

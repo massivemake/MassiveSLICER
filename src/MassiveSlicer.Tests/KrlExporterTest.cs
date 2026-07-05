@@ -44,6 +44,56 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Export_applies_toolhead_orientation_offset_on_flat_toolpath()
+    {
+        // Regression: a deliberate global toolhead spin must survive the B≈90° gimbal-lock
+        // branch on a flat top-down toolpath. Previously A and C were zeroed there, silently
+        // dropping the toolhead rotation the viewport preview shows.
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        static float FirstA(string krl)
+        {
+            var m = Regex.Match(krl, @"LIN \{X [^}]*?A (-?\d+\.\d+)");
+            Assert.True(m.Success, "expected a LIN line with an A angle");
+            return float.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+        }
+
+        // No toolhead offset → A stays 0 (noise-suppressing gimbal zero preserved).
+        var noOffset = KrlExporter.Export(tp, new KrlExportSettings { ProgramName = "t0" });
+        Assert.Equal(0f, FirstA(noOffset), 1);
+
+        // 43° toolhead offset (X slider → ToolheadOffsetC) → A reflects the spin, not zeroed.
+        var withOffset = KrlExporter.Export(tp, new KrlExportSettings { ProgramName = "t1", ToolheadOffsetC = 43f });
+        Assert.True(Math.Abs(FirstA(withOffset)) > 40f,
+            $"toolhead offset should propagate to exported A, got {FirstA(withOffset)}");
+    }
+
+    [Fact]
+    public void Export_uses_crlf_line_endings_on_every_platform()
+    {
+        // KUKA KRC / PointLoader are Windows tools and mis-parse LF-only .src files.
+        // StringBuilder.AppendLine emits LF on macOS/Linux, so Export must normalize to CRLF.
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings { ProgramName = "crlf_test" });
+
+        Assert.Contains("\r\n", krl);
+        Assert.DoesNotContain("\n", krl.Replace("\r\n", "")); // no bare LF remains after stripping CRLF
+    }
+
+    [Fact]
     public void Export_first_extrusion_emits_start_wait_after_rpm_on()
     {
         var tp = new Toolpath();

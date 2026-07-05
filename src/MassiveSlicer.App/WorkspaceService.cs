@@ -42,17 +42,20 @@ internal static class WorkspaceService
             };
 
             if (node.SourceFilePath is { } src && File.Exists(src))
-            {
                 entry.SourcePath = src;
-            }
-            else if (TryGetMesh(node) is { } mesh)
+
+            // Always embed a portable copy of the mesh beside the .mass (workspace_meshes/)
+            // so the workspace opens on any machine, even when SourcePath is an absolute
+            // path from the machine it was saved on. Load prefers SourcePath, then a file
+            // beside the .mass, then this embedded copy.
+            if (TryGetMesh(node) is { } mesh)
             {
                 string fileName = $"{Guid.NewGuid():N}.stl";
                 string meshPath = Path.Combine(meshDir, fileName);
                 StlExporter.Write(meshPath, mesh);
                 entry.EmbeddedMeshPath = WorkspaceLoader.ToRelativeMeshPath(fileName);
             }
-            else
+            else if (entry.SourcePath is null)
             {
                 continue;
             }
@@ -95,42 +98,85 @@ internal static class WorkspaceService
         WorkspaceLoader.Save(state.Document, savePath);
     }
 
-    public static void RestoreModels(
+    /// <summary>Restores models (and their toolpaths) into the viewport. Returns the number
+    /// of model entries that produced scene content — a mesh node, or, when the mesh is
+    /// missing, a placeholder hosting the entry's toolpaths.</summary>
+    public static int RestoreModels(
         WorkspaceDocument doc,
         ViewModels.ViewportViewModel viewport,
         string workspacePath)
     {
         viewport.ClearUserScene();
 
+        int restored = 0;
         foreach (var entry in doc.Models)
         {
+            // Resolve the mesh via a sequential fallback so a portable embedded copy is
+            // used even when an absolute SourcePath is present but missing on this machine.
             string? loadPath = null;
             if (entry.SourcePath is { } src && File.Exists(src))
                 loadPath = src;
-            else if (entry.SourcePath is { } missingSrc)
+            if (loadPath is null && entry.SourcePath is { } missingSrc)
                 loadPath = TryResolveModelBesideWorkspace(workspacePath, missingSrc);
-            else if (entry.EmbeddedMeshPath is { } rel)
+            if (loadPath is null && entry.EmbeddedMeshPath is { } rel)
             {
                 string embedded = WorkspaceLoader.ResolveMeshPath(workspacePath, rel);
                 if (File.Exists(embedded))
                     loadPath = embedded;
             }
 
-            if (loadPath is null) continue;
+            SceneNode? node = null;
+            if (loadPath is not null)
+            {
+                var transform = FromArray(entry.LocalTransform);
+                node = ImportHelper.LoadAtTransform(loadPath, transform);
+                if (node is not null)
+                {
+                    node.Name         = entry.Name;
+                    node.Visible      = entry.Visible;
+                    node.LayerPreview = entry.LayerPreview;
+                    viewport.AddImportNode(node);
+                }
+            }
 
-            var transform = FromArray(entry.LocalTransform);
-            var node = ImportHelper.LoadAtTransform(loadPath, transform);
-            if (node is null) continue;
+            // Mesh missing or failed to load. Toolpaths carry their own world coordinates,
+            // so keep them under a placeholder node rather than silently dropping them
+            // (the old behaviour skipped the whole entry, losing every toolpath with it).
+            if (node is null)
+            {
+                if (entry.SourcePath is { Length: > 0 } miss)
+                    viewport.OnDevLog?.Invoke($"[workspace] Mesh not found for '{entry.Name}': {miss}");
 
-            node.Name         = entry.Name;
-            node.Visible      = entry.Visible;
-            node.LayerPreview = entry.LayerPreview;
-            viewport.AddImportNode(node);
+                if (entry.Toolpaths.Count == 0)
+                    continue;
 
-            if (entry.Toolpaths.Count == 0) continue;
+                node = new SceneNode
+                {
+                    Name           = string.IsNullOrEmpty(entry.Name)
+                        ? "Toolpaths (mesh missing)"
+                        : $"{entry.Name} (mesh missing)",
+                    Visible        = entry.Visible,
+                    LocalTransform = FromArray(entry.LocalTransform),
+                };
+                viewport.AddImportNode(node);
+                viewport.OnDevLog?.Invoke(
+                    $"[workspace] Kept {entry.Toolpaths.Count} toolpath(s) for '{entry.Name}' without its mesh.");
+            }
+
+            restored++;
+
+            if (entry.Toolpaths.Count == 0)
+            {
+                viewport.NotifyRenderNeeded();
+                continue;
+            }
 
             var parentItem = viewport.FindOutlinerItem(node);
-            if (parentItem is null) continue;
+            if (parentItem is null)
+            {
+                viewport.NotifyRenderNeeded();
+                continue;
+            }
 
             foreach (var tpEntry in entry.Toolpaths)
             {
@@ -168,6 +214,8 @@ internal static class WorkspaceService
 
             viewport.NotifyRenderNeeded();
         }
+
+        return restored;
     }
 
     private static MeshData? TryGetMesh(SceneNode root)

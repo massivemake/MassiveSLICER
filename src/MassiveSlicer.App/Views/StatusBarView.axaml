@@ -11,6 +11,11 @@
                        VerticalAlignment="Center"
                        HorizontalAlignment="Left"
                        Classes="LabelMuted"/>
+            <TextBlock Text="{Binding BuildLabel}"
+                       VerticalAlignment="Center"
+                       HorizontalAlignment="Center"
+                       Classes="LabelMuted"
+                       Opacity="0.45"/>
             <TextBlock Text="{Binding OperationFeedback}"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Right"

@@ -283,7 +283,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // -- Toolpath colors -------------------------------------------------------
 
-    private System.Numerics.Vector3 _toolpathExtrudeColor     = new(0.1f,  0.45f, 0.9f);
+    private System.Numerics.Vector3 _toolpathExtrudeColor     = new(1f, 1f, 1f);
     private System.Numerics.Vector3 _toolpathTravelColor      = new(0.85f, 0.18f, 0.18f);
     private System.Numerics.Vector3 _toolpathWipeColor        = new(1.0f,  0.53f, 0.0f);
     private System.Numerics.Vector3 _toolpathRetractionColor  = new(0.61f, 0.15f, 0.69f);
@@ -294,6 +294,26 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get => _toolpathExtrudeColor;
         set => SetField(ref _toolpathExtrudeColor, value);
+    }
+
+    // Live bead colour — applied every frame as a shader uniform, so changing it
+    // recolours already-sliced beads instantly (no re-slice, no VBO rebuild).
+    private System.Numerics.Vector3 _beadColor = new(0.95f, 0.95f, 0.95f);
+
+    public System.Numerics.Vector3 BeadColor
+    {
+        get => _beadColor;
+        set { if (SetField(ref _beadColor, value)) OnPropertyChanged(nameof(BeadPickerColor)); }
+    }
+
+    /// <summary>Avalonia-Color bridge for the ColorPicker control in the Toolpath panel.</summary>
+    public Avalonia.Media.Color BeadPickerColor
+    {
+        get => Avalonia.Media.Color.FromRgb(
+            (byte)Math.Clamp(_beadColor.X * 255f, 0f, 255f),
+            (byte)Math.Clamp(_beadColor.Y * 255f, 0f, 255f),
+            (byte)Math.Clamp(_beadColor.Z * 255f, 0f, 255f));
+        set => BeadColor = new System.Numerics.Vector3(value.R / 255f, value.G / 255f, value.B / 255f);
     }
 
     public System.Numerics.Vector3 ToolpathTravelColor
@@ -1528,6 +1548,10 @@ public sealed class ViewportViewModel : ViewModelBase
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected)
                     OnScrubIkRequested?.Invoke(value);
+                // Always repaint: the IK callback only repaints on a successful solve,
+                // so without this the viewport freezes when scrubbing through
+                // unreachable poses.
+                NotifyRenderNeeded();
             }
         }
     }
@@ -1827,6 +1851,11 @@ public sealed class ViewportViewModel : ViewModelBase
         SeamEditorSelectPointCommand = new RelayCommand(() => SeamEditorTool = SeamEditorToolKind.SelectPoint, () => IsSeamEditorActive);
         ToggleSeamGuideLayerCommand = new RelayCommand(() => IsSeamGuideLayerOpen = !IsSeamGuideLayerOpen, () => IsSeamEditorActive && SeamGuideDraft.Count > 0);
         SelectSeamGuideByIndexCommand = new RelayCommand<int>(SelectSeamGuideByIndex, _ => IsSeamEditorActive);
+        EditToolpathSeamCommand  = new RelayCommand(ToggleToolpathSeamEdit, () => IsToolpathSelected);
+        ApplyToolpathSeamCommand = new RelayCommand(() => OnApplyToolpathSeamRequested?.Invoke(),
+            () => IsToolpathSeamEditActive && HasSeamGuideDraft && IsToolpathSelected);
+        ClearToolpathSeamCommand = new RelayCommand(ClearToolpathSeam, () => IsToolpathSeamEditActive && HasSeamGuideDraft);
+        DoneToolpathSeamCommand  = new RelayCommand(ExitToolpathSeamEdit, () => IsToolpathSeamEditActive);
         BoundaryEditorSaveCommand       = new RelayCommand(SaveBoundaryEditor, () => IsBoundaryEditorActive);
         BoundaryEditorCancelCommand     = new RelayCommand(CancelBoundaryEditor, () => IsBoundaryEditorActive);
         BoundaryEditorLowTargetCommand  = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low, () => IsBoundaryEditorActive);
@@ -2055,6 +2084,85 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ToggleSeamGuideLayerCommand { get; }
     public RelayCommand<int> SelectSeamGuideByIndexCommand { get; }
 
+    // -- Toolpath seam editing (Toolpath tab): re-seam a generated toolpath in place ----------
+    public RelayCommand EditToolpathSeamCommand  { get; }
+    public RelayCommand ApplyToolpathSeamCommand { get; }
+    public RelayCommand ClearToolpathSeamCommand { get; }
+    public RelayCommand DoneToolpathSeamCommand  { get; }
+
+    /// <summary>Wired in ViewportView: applies the placed seam points to the selected toolpath.</summary>
+    internal Action? OnApplyToolpathSeamRequested { get; set; }
+
+    private bool _isToolpathSeamEditActive;
+
+    /// <summary>When true, clicks in the viewport place seam points for in-place re-seaming
+    /// of the selected toolpath (no re-slice), reusing the seam-guide markers.</summary>
+    public bool IsToolpathSeamEditActive
+    {
+        get => _isToolpathSeamEditActive;
+        private set
+        {
+            if (SetField(ref _isToolpathSeamEditActive, value))
+            {
+                OnPropertyChanged(nameof(ToolpathSeamSummary));
+                ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+                ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+                DoneToolpathSeamCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string ToolpathSeamSummary =>
+        !IsToolpathSeamEditActive ? "Off"
+        : SeamGuideDraft.Count == 0 ? "Click in the viewport to place seam point(s)."
+        : $"{SeamGuideDraft.Count} point(s) placed — press Apply.";
+
+    private void ToggleToolpathSeamEdit()
+    {
+        if (IsToolpathSeamEditActive) ExitToolpathSeamEdit();
+        else BeginToolpathSeamEdit();
+    }
+
+    private void BeginToolpathSeamEdit()
+    {
+        SeamGuideDraft.Clear();
+        SeamEditorTool = SeamEditorToolKind.AddPoint;
+        SelectedSeamGuideIndex = -1;
+        IsToolpathSeamEditActive = true;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void ExitToolpathSeamEdit()
+    {
+        IsToolpathSeamEditActive = false;
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void ClearToolpathSeam()
+    {
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+        ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    /// <summary>Refresh toolpath-seam UI after a point is placed (called from AddSeamGuidePoint).</summary>
+    private void RefreshToolpathSeamState()
+    {
+        if (!IsToolpathSeamEditActive) return;
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+        ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+    }
+
     public void BeginSeamEditor(IReadOnlyList<SeamGuidePoint> current)
     {
         SeamGuideDraft.Clear();
@@ -2080,6 +2188,7 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSeamGuideDraft));
         OnPropertyChanged(nameof(SeamGuideLayerLabel));
         RaiseSeamGuideCommands();
+        RefreshToolpathSeamState();
         OnSeamGuidesChanged?.Invoke();
     }
 
@@ -2245,6 +2354,37 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowSliceStatus));
             }
         }
+    }
+
+    private double _sliceProgressPercent;
+
+    /// <summary>Slice progress 0–100, driven by per-stage/per-layer callbacks.</summary>
+    public double SliceProgressPercent
+    {
+        get => _sliceProgressPercent;
+        set => SetField(ref _sliceProgressPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private int _firstValidationIssueIndex = -1;
+
+    /// <summary>Flat move index of the first validation-flagged move, or -1.</summary>
+    public int FirstValidationIssueIndex
+    {
+        get => _firstValidationIssueIndex;
+        set { if (SetField(ref _firstValidationIssueIndex, value)) OnPropertyChanged(nameof(HasValidationIssueJump)); }
+    }
+
+    public bool HasValidationIssueJump => _firstValidationIssueIndex >= 0;
+
+    /// <summary>Jumps the scrubber to the first flagged move so the failing pose is visible.</summary>
+    public void JumpToValidationIssue()
+    {
+        if (_firstValidationIssueIndex < 0) return;
+        // Preserve the red/purple timeline markers: a selection-sync side effect of
+        // the jump can clear them, so re-emit the stored validation data afterwards.
+        var reach = _scrubReachable; var sing = _scrubSingular;
+        ToolpathScrubIndex = Math.Clamp(_firstValidationIssueIndex, 0, ToolpathScrubMax);
+        if (reach.Length > 0) SetScrubMarkers(reach, sing);
     }
 
     private string _sliceStatusMessage = string.Empty;
@@ -3207,7 +3347,7 @@ public sealed class ViewportViewModel : ViewModelBase
             Node          = node,
             BeadWidth     = beadWidth,
             LayerHeight   = 3f,
-            MaterialColor = new System.Numerics.Vector3(0.10f, 0.45f, 0.90f),
+            MaterialColor = new System.Numerics.Vector3(0.95f, 0.95f, 0.95f),
         });
         NotifyRenderNeeded();
     }
@@ -3412,7 +3552,14 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         foreach (var item in OutlinerItems.ToList())
         {
-            if (item == _rotaryGroupItem || item == _robotGroupItem) continue;
+            // Preserve cell-owned scenery (robot, rotary, print bed, tools, stands) —
+            // these belong to the active cell, not the user's workspace. Without this,
+            // opening a workspace on the already-active cell deletes the print bed and
+            // tools (the cell isn't reloaded to rebuild them).
+            if (item == _rotaryGroupItem
+                || item == _robotGroupItem
+                || _cellEnvOutlinerItems.Contains(item)
+                || _toolheadOutlinerItems.Contains(item)) continue;
             RemoveUserNode(item);
         }
 

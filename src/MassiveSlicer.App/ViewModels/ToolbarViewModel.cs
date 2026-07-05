@@ -97,6 +97,9 @@ public sealed class ToolbarViewModel : ViewModelBase
     /// <summary>Opens a file-picker dialog to load a 3D model.</summary>
     public ICommand OpenModelCommand { get; }
 
+    /// <summary>Clears the scene and resets to a fresh cell (new empty workspace).</summary>
+    public ICommand NewWorkspaceCommand { get; }
+
     /// <summary>Opens a saved <c>.mass</c> workspace file.</summary>
     public ICommand OpenWorkspaceCommand { get; }
 
@@ -151,6 +154,7 @@ public sealed class ToolbarViewModel : ViewModelBase
     public ToolbarViewModel()
     {
         OpenModelCommand        = new RelayCommand(OpenModel);
+        NewWorkspaceCommand     = new RelayCommand(NewWorkspace);
         OpenWorkspaceCommand    = new RelayCommand(OpenWorkspace);
         SaveWorkspaceCommand    = new RelayCommand(SaveWorkspace);
         SaveWorkspaceAsCommand  = new RelayCommand(SaveWorkspaceAs);
@@ -191,6 +195,8 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     public event EventHandler? ModelLoadRequested;
 
     /// <summary>Raised when the user triggers Open Workspace.</summary>
+    public event EventHandler? NewWorkspaceRequested;
+
     public event EventHandler? OpenWorkspaceRequested;
 
     /// <summary>Raised when the user triggers Save (current file).</summary>
@@ -214,6 +220,7 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
     // ── Private handlers (wired up to real logic incrementally) ──────────────
 
     private void OpenModel() => ModelLoadRequested?.Invoke(this, EventArgs.Empty);
+    private void NewWorkspace() => NewWorkspaceRequested?.Invoke(this, EventArgs.Empty);
     private void OpenWorkspace() => OpenWorkspaceRequested?.Invoke(this, EventArgs.Empty);
     private void SaveWorkspace()   => SaveWorkspaceRequested?.Invoke(this, EventArgs.Empty);
     private void SaveWorkspaceAs() => SaveWorkspaceAsRequested?.Invoke(this, EventArgs.Empty);

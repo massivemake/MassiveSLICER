@@ -17,10 +17,14 @@
 // RequestNextFrameRendering() is inherited from OpenGlControlBase -- all callers
 // in ViewportView.axaml.cs can use it without changes.
 
+using System.Runtime.InteropServices;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Media.Imaging;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
+using Avalonia.Platform;
+using Avalonia.Threading;
 using OpenTK;
 using OpenTK.Graphics.OpenGL4;
 using GlPixelFormat = OpenTK.Graphics.OpenGL4.PixelFormat;
@@ -35,11 +39,63 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
     public event Action<TimeSpan, int, int>? GlRender;
     public event Action?                     GlDeinitialized;
 
+    /// <summary>Optional diagnostic sink (wired to the in-app console in MainWindow) for
+    /// one-shot GL lifecycle reporting on macOS/Linux. Invoked from the GL render thread.</summary>
+    public static Action<string>? Diag;
+
+    /// <summary>Always writes to stderr (reliable, race-free); also mirrors to the in-app
+    /// console when the <see cref="Diag"/> sink is wired.</summary>
+    private static void DiagLog(string msg)
+    {
+        System.Console.Error.WriteLine(msg);
+        Diag?.Invoke(msg);
+    }
+
     /// <inheritdoc cref="GlHostControl.InteractionRenderScale"/>
     public float InteractionRenderScale { get; set; } = 1f;
 
-    /// <inheritdoc cref="GlHostControl.CaptureScreenshotPngAsync"/>
-    public Task<byte[]?> CaptureScreenshotPngAsync(int timeoutMs = 5000) => Task.FromResult<byte[]?>(null);
+    // -- Screenshot (on-demand FBO readback) -----------------------------------
+
+    private int _screenshotPending;
+    private TaskCompletionSource<byte[]?>? _screenshotTcs;
+
+    /// <summary>
+    /// Captures the rendered 3D viewport as PNG by reading back the output FBO on the next
+    /// frame. Needed on macOS/Linux because Avalonia's OpenGlControlBase surface is not
+    /// picked up by window-level RenderTargetBitmap capture (it composites separately), so
+    /// a plain window screenshot shows the viewport as black.
+    /// </summary>
+    public Task<byte[]?> CaptureScreenshotPngAsync(int timeoutMs = 5000)
+    {
+        var tcs = new TaskCompletionSource<byte[]?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _screenshotTcs = tcs;
+        Interlocked.Exchange(ref _screenshotPending, 1);
+        RequestNextFrameRendering();
+        _ = Task.Delay(timeoutMs).ContinueWith(_ => tcs.TrySetResult(null), TaskScheduler.Default);
+        return tcs.Task;
+    }
+
+    private static byte[]? EncodeRgbaPng(byte[] rgbaBottomUp, int w, int h)
+    {
+        try
+        {
+            // OpenGL's origin is bottom-left; image formats are top-left — flip rows.
+            int stride = w * 4;
+            var topDown = new byte[rgbaBottomUp.Length];
+            for (int row = 0; row < h; row++)
+                System.Buffer.BlockCopy(rgbaBottomUp, (h - 1 - row) * stride, topDown, row * stride, stride);
+
+            using var wb = new WriteableBitmap(
+                new PixelSize(w, h), new Vector(96, 96), PixelFormats.Rgba8888, AlphaFormat.Opaque);
+            using (var fb = wb.Lock())
+                Marshal.Copy(topDown, 0, fb.Address, topDown.Length);
+
+            using var ms = new System.IO.MemoryStream();
+            wb.Save(ms);
+            return ms.ToArray();
+        }
+        catch { return null; }
+    }
 
     // -- Output FBO (what SceneRenderer composites into) -----------------------
 
@@ -58,6 +114,13 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
         // Load OpenTK bindings through Avalonia's GL interface so we can use
         // the same GL.* calls as the rest of SceneRenderer / MeshRenderer.
         GL.LoadBindings(new AvaloniaBindingsContext(gl));
+        try
+        {
+            DiagLog($"[gl] init  version={GL.GetString(StringName.Version)}  " +
+                    $"renderer={GL.GetString(StringName.Renderer)}  " +
+                    $"glsl={GL.GetString(StringName.ShadingLanguageVersion)}");
+        }
+        catch (Exception ex) { DiagLog($"[gl] init string query failed: {ex.Message}"); }
         GlInitialized?.Invoke();
     }
 
@@ -93,11 +156,34 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
 
         // Blit colour result to the framebuffer Avalonia provided for this frame.
         // Avalonia composites that into the window on its own render pass.
+        // The scene is rendered at w×h (possibly reduced by InteractionRenderScale during
+        // orbit/pan), so we must UPSCALE the source to the full display size of Avalonia's
+        // framebuffer — blitting 1:1 would fill only a small corner and leave the rest of
+        // the viewport showing stale content (a small, torn window).
         GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _outputFbo);
         GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, fb);
-        GL.BlitFramebuffer(0, 0, w, h, 0, 0, w, h,
-            ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+        var blitFilter = (w == displayW && h == displayH)
+            ? BlitFramebufferFilter.Nearest
+            : BlitFramebufferFilter.Linear;
+        GL.BlitFramebuffer(0, 0, w, h, 0, 0, displayW, displayH,
+            ClearBufferMask.ColorBufferBit, blitFilter);
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, fb);
+
+        // Fulfil a pending screenshot request by reading back the rendered output FBO.
+        if (Interlocked.Exchange(ref _screenshotPending, 0) == 1 && _screenshotTcs is { } shot)
+        {
+            _screenshotTcs = null;
+            try
+            {
+                var raw = new byte[w * h * 4];
+                GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _outputFbo);
+                GL.ReadPixels(0, 0, w, h, GlPixelFormat.Rgba, PixelType.UnsignedByte, raw);
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, fb);
+                int sw = w, sh = h;
+                Dispatcher.UIThread.Post(() => shot.TrySetResult(EncodeRgbaPng(raw, sw, sh)));
+            }
+            catch { shot.TrySetResult(null); }
+        }
     }
 
     // -- FBO lifecycle ---------------------------------------------------------

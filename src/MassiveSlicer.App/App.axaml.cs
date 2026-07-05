@@ -20,6 +20,7 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            MacDockIcon.TrySet("macos-app-icon.png");
             StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
             desktop.MainWindow = new MainWindow();
             desktop.ShutdownRequested += (_, _) => MassiveSlicer.Core.Scanning.ZividScanService.Disconnect();

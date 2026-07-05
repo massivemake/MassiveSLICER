@@ -20,6 +20,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public AdditiveSettingsViewModel()
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
+        ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
@@ -338,6 +339,15 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _tiltAngleX, Math.Clamp(value, -89.0, 89.0));
     }
 
+    /// <summary>Reverses the angled-slice direction by flipping both tilt angles.</summary>
+    public RelayCommand ReverseTiltDirectionCommand { get; }
+
+    private void ReverseTiltDirection()
+    {
+        TiltAngle  = -TiltAngle;
+        TiltAngleX = -TiltAngleX;
+    }
+
     // -- Motion ---------------------------------------------------------------
 
     private double _printSpeed = 100.0;
@@ -498,6 +508,21 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _waveStagger;
         set => SetField(ref _waveStagger, Math.Clamp(value, 0.0, 1.0));
     }
+
+    private int _wavePhaseMethodIndex;   // 0 = Method A, 1 = Method B
+
+    /// <summary>
+    /// Wave phase method (dropdown index). 0 = Method A (seam anchored, original),
+    /// 1 = Method B (phase inheritance).
+    /// </summary>
+    public int WavePhaseMethodIndex
+    {
+        get => _wavePhaseMethodIndex;
+        set => SetField(ref _wavePhaseMethodIndex, Math.Clamp(value, 0, 1));
+    }
+
+    /// <summary>"A" or "B" — the value passed to SliceSettings.</summary>
+    public string WavePhaseMethod => _wavePhaseMethodIndex == 1 ? "B" : "A";
 
     // -- Wave gradient ----------------------------------------------------------
 
@@ -844,12 +869,26 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _extrusionSpeedOffset, value);
     }
 
+    private bool _activeExtruderIsHf;
+
+    /// <summary>True when the active cell's extruder is the HF head, so the preset's HF flow rate
+    /// is used instead of the HV one. Set from the active cell/tool in MainWindowViewModel.</summary>
+    public bool ActiveExtruderIsHf
+    {
+        get => _activeExtruderIsHf;
+        set
+        {
+            if (SetField(ref _activeExtruderIsHf, value))
+                OnPropertyChanged(nameof(ExtrusionSpeedPercent));
+        }
+    }
+
     /// <summary>Computed extrusion motor speed (%) from bead geometry and material flow.</summary>
     public double ExtrusionSpeedPercent => ComputeExtrusionSpeedPercent();
 
     private double ComputeExtrusionSpeedPercent()
     {
-        float flow = (float)(SelectedPreset?.FlowRate ?? 0.463);
+        float flow = (float)(SelectedPreset?.FlowRateFor(ActiveExtruderIsHf) ?? 0.463);
         return KrlAnout.ComputeRpmPercent(
             (float)BeadWidth, (float)LayerHeight, (float)(PrintSpeed / 1000.0), flow);
     }
