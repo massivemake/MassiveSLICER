@@ -154,6 +154,16 @@ public sealed class SliceSettings
     public float WaveStagger { get; init; } = 0f;
 
     /// <summary>
+    /// Wave phase method.
+    /// "A" (seam-anchored, original): each layer's phase counts from its contour start.
+    ///     Layer-to-layer alignment can drift as the part's cross-section morphs.
+    /// "B" (phase inheritance): each layer continues the phase of the layer below plus
+    ///     stagger — constant layer-to-layer alignment everywhere, shape change absorbed
+    ///     as a tiny bounded wavelength flex. Ignored when WaveCycles &gt; 0.
+    /// </summary>
+    public string WavePhaseMethod { get; init; } = "A";
+
+    /// <summary>
     /// When true, open contours (panels, single-wall prints) alternate print direction each layer.
     /// Even layers print start→end; odd layers print end→start, eliminating the long return travel.
     /// Has no effect on closed contours.

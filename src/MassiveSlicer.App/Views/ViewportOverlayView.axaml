@@ -16,25 +16,7 @@
 
     <Grid Background="Transparent">
 
-        <!-- Slice error overlay (progress uses footer line + console) -->
-        <Border IsVisible="{Binding ShowSliceStatus}"
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Background="#D90B1220"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="6"
-                Padding="20,14"
-                MinWidth="280"
-                MaxWidth="420"
-                ZIndex="40">
-            <TextBlock Text="{Binding SliceStatusMessage}"
-                       TextWrapping="Wrap"
-                       TextAlignment="Center"
-                       FontSize="13"
-                       FontWeight="SemiBold"
-                       Foreground="#FFFF7070"/>
-        </Border>
+        <!-- Slice errors / validation alerts render inline in the bottom status bar. -->
 
         <!-- N-key HUD — hidden until N; no always-visible tab on the viewport edge. -->
         <StackPanel HorizontalAlignment="Left"

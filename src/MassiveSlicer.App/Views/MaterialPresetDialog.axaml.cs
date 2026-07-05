@@ -19,5 +19,11 @@ public partial class MaterialPresetDialog : Window
         Close(vm.ToPreset());
     }
 
+    private void OnApplyCalibration(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is MaterialPresetEditorViewModel vm)
+            vm.ApplyCalibration();
+    }
+
     private void OnCancel(object? sender, RoutedEventArgs e) => Close(null);
 }
