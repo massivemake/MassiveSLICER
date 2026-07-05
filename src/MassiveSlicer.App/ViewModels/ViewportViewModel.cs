@@ -355,6 +355,9 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _activePreset, value);
     }
 
+    /// <summary>Plasticity live-bridge state, surfaced as a collapsible section in the N-key HUD.</summary>
+    public PlasticityViewModel Plasticity { get; } = new();
+
     /// <summary>
     /// Scene nodes queued for addition to the scene graph. The producer enqueues after
     /// CPU-side loading; the render loop dequeues on the GL thread, uploads PendingMesh

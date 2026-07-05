@@ -193,7 +193,23 @@
                                            TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                             </Grid>
 
-                            <Button Grid.Column="0" Margin="8,4,8,2" HorizontalAlignment="Stretch"
+                            <SplitButton Margin="8,4,8,2" HorizontalAlignment="Stretch"
+                                         HorizontalContentAlignment="Center"
+                                         Content="Auto Calculate Tilt"
+                                         IsVisible="{Binding Additive.ShowTiltAngle}"
+                                         IsEnabled="{Binding !Additive.IsAutoTiltRunning}"
+                                         Command="{Binding Additive.AutoTiltCommand}"
+                                         ToolTip.Tip="Find the X/Y tilt with the least overhangs and lowest print-failure risk (mesh stays in place). Use the dropdown to also auto-rotate the mesh.">
+                                <SplitButton.Flyout>
+                                    <MenuFlyout Placement="Bottom">
+                                        <MenuItem Header="Auto rotate mesh + tilt"
+                                                  Command="{Binding Additive.AutoTiltRotateCommand}"
+                                                  ToolTip.Tip="Search every lean direction, rotate the mesh on the bed so the best one becomes a clean single-axis Y tilt, and apply it."/>
+                                    </MenuFlyout>
+                                </SplitButton.Flyout>
+                            </SplitButton>
+
+                            <Button Grid.Column="0" Margin="8,2,8,2" HorizontalAlignment="Stretch"
                                     Content="Reverse direction"
                                     IsVisible="{Binding Additive.ShowTiltAngle}"
                                     Command="{Binding Additive.ReverseTiltDirectionCommand}"

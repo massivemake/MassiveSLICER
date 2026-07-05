@@ -2050,7 +2050,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         SceneNode? node;
         try
         {
-            node = ImportHelper.LoadAndPlace(path, Viewport.ActiveCell);
+            node = ImportHelper.LoadAndPlace(path, Viewport.ActiveCell, Console.Log);
         }
         catch (Exception ex)
         {

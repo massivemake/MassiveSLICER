@@ -278,6 +278,8 @@ public partial class ViewportView : UserControl
             vm.OnSeamGuidesChanged = () => UpdateSeamGuideMarkers(vm);
             vm.OnBoundaryDraftChanged = () => UpdateBoundaryMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
+            if (vm.AdditiveSettings is { } addSettings)
+                addSettings.OnAutoTiltRequested = rotateMesh => _ = RunAutoTiltAsync(vm, rotateMesh);
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
@@ -2284,7 +2286,14 @@ public partial class ViewportView : UserControl
         float dx = (float)e.Delta.X;
         float dy = (float)e.Delta.Y;
 
-        if (mods.HasFlag(KeyModifiers.Shift))
+        // Every preset except Touchpad maps a plain scroll to zoom (see NavigationPreset table).
+        // The Touchpad preset keeps two-finger gestures: no-modifier orbit, Shift zoom, Cmd pan.
+        if (ActivePreset != NavigationPresetId.Touchpad)
+        {
+            float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
+            _renderer.Camera.Zoom(zoom);
+        }
+        else if (mods.HasFlag(KeyModifiers.Shift))
         {
             // Shift + two fingers → zoom
             float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
@@ -2972,6 +2981,107 @@ public partial class ViewportView : UserControl
         finally
         {
             vm.IsSlicing = false;
+        }
+    }
+
+    /// <summary>
+    /// Auto-calculates the angled-slicer tilt with the least overhang risk for the active print
+    /// object. With <paramref name="rotateMesh"/> the whole lean azimuth is searched and the mesh
+    /// is yaw-rotated (about Z, staying flat on the bed) so the winner becomes a pure Y tilt.
+    /// </summary>
+    private async Task RunAutoTiltAsync(ViewportViewModel vm, bool rotateMesh)
+    {
+        if (vm.AdditiveSettings is not { } add || add.IsAutoTiltRunning) return;
+
+        var item = vm.ResolveActivePrintObjectItem()
+                   ?? vm.FindUserMeshOutlinerItem(_renderer.SelectedNode);
+        if (item is null)
+        {
+            SetSliceStatus(vm, "Auto tilt: select a mesh first.", isError: true);
+            return;
+        }
+
+        var snapshots = CollectMeshSnapshots(item, requireVisible: false);
+        if (snapshots.Count == 0)
+        {
+            SetSliceStatus(vm, "Auto tilt: mesh has no geometry.", isError: true);
+            return;
+        }
+
+        add.IsAutoTiltRunning = true;
+        SetSliceStatus(vm, rotateMesh
+            ? "Auto tilt: optimising mesh rotation + tilt…"
+            : "Auto tilt: optimising X/Y tilt…");
+        try
+        {
+            float curX = (float)add.TiltAngleX;
+            float curY = (float)add.TiltAngle;
+
+            var (result, center) = await Task.Run(() =>
+            {
+                // Same world-space triangle soup the angled slicer consumes.
+                var soup = new List<NVec3[]>(snapshots.Count);
+                var min  = new NVec3(float.MaxValue);
+                var max  = new NVec3(float.MinValue);
+                foreach (var (positions, indices, world) in snapshots)
+                {
+                    NVec3[] flat;
+                    if (indices is null)
+                    {
+                        flat = new NVec3[positions.Length];
+                        for (int i = 0; i < positions.Length; i++)
+                            flat[i] = TransformPoint(positions[i], world);
+                    }
+                    else
+                    {
+                        flat = new NVec3[indices.Length];
+                        for (int i = 0; i < indices.Length; i++)
+                            flat[i] = TransformPoint(positions[indices[i]], world);
+                    }
+                    foreach (var p in flat)
+                    {
+                        min = NVec3.Min(min, p);
+                        max = NVec3.Max(max, p);
+                    }
+                    soup.Add(flat);
+                }
+                var opt = TiltOptimizer.Optimize(soup, curX, curY, allowMeshYaw: rotateMesh);
+                return (opt, (min + max) * 0.5f);
+            });
+
+            if (rotateMesh && MathF.Abs(result.MeshYawDeg) > 0.05f)
+            {
+                // Yaw about world Z through the part's footprint centre — stays flat on the bed.
+                var node        = item.Node;
+                var parentWorld = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+                var c           = new TkVector3(center.X, center.Y, center.Z);
+                var rot         = TkMatrix4.CreateTranslation(-c)
+                                * TkMatrix4.CreateRotationZ(result.MeshYawDeg * MathF.PI / 180f)
+                                * TkMatrix4.CreateTranslation(c);
+                node.LocalTransform = node.WorldTransform * rot * parentWorld.Inverted();
+                vm.NotifyRenderNeeded();
+                GlCanvas.RequestNextFrameRendering();
+            }
+
+            add.TiltAngleX = Math.Round(result.TiltXDeg, 1);
+            add.TiltAngle  = Math.Round(result.TiltYDeg, 1);
+
+            string summary = rotateMesh
+                ? $"Auto tilt: mesh rotated {result.MeshYawDeg:0.#}°, Y tilt {result.TiltYDeg:0.#}°"
+                : $"Auto tilt: X {result.TiltXDeg:0.#}°, Y {result.TiltYDeg:0.#}°";
+            SetSliceStatus(vm, $"{summary} — overhang risk {result.RiskBefore * 100:0.#}% → {result.RiskAfter * 100:0.#}%");
+            ScheduleClearSliceStatus(vm);
+            System.Console.WriteLine(
+                $"[tilt] {summary}  risk {result.RiskBefore * 100:0.##}% -> {result.RiskAfter * 100:0.##}%");
+        }
+        catch (Exception ex)
+        {
+            SetSliceStatus(vm, $"Auto tilt failed: {ex.Message}", isError: true);
+            System.Console.Error.WriteLine($"[tilt] {ex}");
+        }
+        finally
+        {
+            add.IsAutoTiltRunning = false;
         }
     }
 
