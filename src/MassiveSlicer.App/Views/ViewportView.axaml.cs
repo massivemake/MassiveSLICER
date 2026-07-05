@@ -5430,6 +5430,7 @@ public partial class ViewportView : UserControl
             || _renderer.IsToolpathNode(node))
         {
             _renderer.SetPlanePreview(null, null);
+            _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
             return;
         }
 
@@ -5459,7 +5460,12 @@ public partial class ViewportView : UserControl
             hasGeometry = true;
         }
 
-        if (!hasGeometry) { _renderer.SetPlanePreview(null, null); return; }
+        if (!hasGeometry)
+        {
+            _renderer.SetPlanePreview(null, null);
+            _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
+            return;
+        }
 
         var center = (min + max) * 0.5f;
         float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.3f;
@@ -5472,6 +5478,19 @@ public partial class ViewportView : UserControl
              MathF.Cos(tx) * MathF.Cos(ty));
 
         _renderer.SetPlanePreview(center, normal, size);
+
+        // Slice-direction helper arrow: the angled layers advance along the plane normal's
+        // XY projection. Sit it at the upstream perimeter of the plane pointing across.
+        var dirXY = new TkVector3(normal.X, normal.Y, 0f);
+        if (dirXY.LengthSquared > 1e-6f)
+        {
+            dirXY = dirXY.Normalized();
+            _renderer.SetSliceDirectionArrow(true, center - dirXY * (size * 0.5f), dirXY, size * 0.6f);
+        }
+        else
+        {
+            _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
+        }
     }
 
     private void FocusSelected()

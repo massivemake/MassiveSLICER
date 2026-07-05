@@ -19,6 +19,14 @@ public sealed class SceneRenderer : IDisposable
     private ContactShadowRenderer?   _contactShadows;
     private CavityRenderer?          _cavity;
     private AxisRenderer?        _axes;
+    private ArrowRenderer?       _directionArrow;
+
+    // Angled-slice direction helper arrow (world space).
+    private bool    _arrowVisible;
+    private bool    _arrowDirty;
+    private Vector3 _arrowOrigin;
+    private Vector3 _arrowDir;
+    private float   _arrowLength;
     private AxisRenderer?        _tcpAxes;
     private AxisRenderer?        _flangeAxes;
     private AxisRenderer?        _sensorAxes;
@@ -762,6 +770,7 @@ public sealed class SceneRenderer : IDisposable
         _contactShadows   = new ContactShadowRenderer();
         _cavity           = new CavityRenderer();
         _axes             = new AxisRenderer();
+        _directionArrow   = new ArrowRenderer();
         _tcpAxes          = new AxisRenderer();
         _flangeAxes       = new AxisRenderer();
         // Sensor origin gizmo: orange X / lime Y / sky-blue Z, 150mm to distinguish from TCP.
@@ -1075,6 +1084,20 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.DepthTest);
         }
 
+        // -- Angled-slice direction helper arrow (drawn on top) ----------------
+        if (_arrowVisible && _directionArrow is not null)
+        {
+            if (_arrowDirty)
+            {
+                _directionArrow.Update(_arrowOrigin, _arrowDir, _arrowLength, new Vector3(1.0f, 0.85f, 0.1f));
+                _arrowDirty = false;
+            }
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            _directionArrow.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
         // -- Curved boundary loop markers --------------------------------------
         if ((_boundaryLowPoints.Count > 0 || _boundaryHighPoints.Count > 0)
             && _boundaryLowMarkers is not null && _boundaryHighMarkers is not null)
@@ -1257,6 +1280,17 @@ public sealed class SceneRenderer : IDisposable
         _seamGuidePoints        = points;
         _seamGuideSelectedIndex = selectedIndex;
         _seamGuidesDirty        = true;
+    }
+
+    /// <summary>Sets the angled-slice direction helper arrow (world space). <paramref name="visible"/>
+    /// = false hides it; a zero <paramref name="direction"/> also hides it.</summary>
+    public void SetSliceDirectionArrow(bool visible, Vector3 origin, Vector3 direction, float length)
+    {
+        _arrowVisible = visible;
+        _arrowOrigin  = origin;
+        _arrowDir     = direction;
+        _arrowLength  = length;
+        _arrowDirty   = true;
     }
 
     /// <summary>Queues curved-slicing LOW (green) and HIGH (orange) boundary vertex markers.</summary>
@@ -1518,6 +1552,7 @@ public sealed class SceneRenderer : IDisposable
         _contactShadows?.Dispose();
         _cavity?.Dispose();
         _axes?.Dispose();
+        _directionArrow?.Dispose();
         _tcpAxes?.Dispose();
         _flangeAxes?.Dispose();
         _sensorAxes?.Dispose();

@@ -192,6 +192,12 @@
                                            Text="{Binding Additive.TiltAngleX, Mode=TwoWay, StringFormat={}{0:F1}}"
                                            TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                             </Grid>
+
+                            <Button Grid.Column="0" Margin="8,4,8,2" HorizontalAlignment="Stretch"
+                                    Content="Reverse direction"
+                                    IsVisible="{Binding Additive.ShowTiltAngle}"
+                                    Command="{Binding Additive.ReverseTiltDirectionCommand}"
+                                    ToolTip.Tip="Flip the angled-slice direction (negates the X and Y tilt). The perimeter arrow shows the current slice direction."/>
                         </StackPanel>
                     </Expander>
 
