@@ -1089,6 +1089,25 @@
                     <!-- Options — shown only when a toolpath is selected -->
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
 
+                    <!-- SEAM — re-position the seam of the generated toolpath in place (no re-slice) -->
+                    <StackPanel Margin="0,0,0,8">
+                        <TextBlock Text="SEAM" Classes="SectionHeader"/>
+                        <StackPanel Margin="8,2,8,2" Spacing="6">
+                            <Button Content="Edit Seam" HorizontalAlignment="Stretch"
+                                    Command="{Binding $parent[Window].DataContext.Viewport.EditToolpathSeamCommand}"
+                                    ToolTip.Tip="Place seam point(s) in the viewport; each perimeter loop re-seams to the nearest point. No re-slice."/>
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.ToolpathSeamSummary}"
+                                       Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                                       IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSeamEditActive}"/>
+                            <StackPanel Orientation="Horizontal" Spacing="6"
+                                        IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSeamEditActive}">
+                                <Button Content="Apply" Command="{Binding $parent[Window].DataContext.Viewport.ApplyToolpathSeamCommand}"/>
+                                <Button Content="Clear" Command="{Binding $parent[Window].DataContext.Viewport.ClearToolpathSeamCommand}"/>
+                                <Button Content="Done"  Command="{Binding $parent[Window].DataContext.Viewport.DoneToolpathSeamCommand}"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </StackPanel>
+
                     <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasToolpathStats}" Margin="0,0,0,8">
                         <TextBlock Text="SLICE STATISTICS" Classes="SectionHeader"/>
                         <Grid Margin="8,2,8,2">

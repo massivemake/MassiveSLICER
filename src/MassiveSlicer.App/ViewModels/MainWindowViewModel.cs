@@ -201,6 +201,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Wire toolbar commands to cross-panel actions.
         Toolbar.FrameAllRequested       += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
+        Toolbar.NewWorkspaceRequested   += (_, _) => NewWorkspace();
         Viewport.OnSaveViewRequested    = SaveCurrentView;
 
         Console.Attach(this, new ConsoleCommandContext
@@ -330,6 +331,9 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             // Show/hide the Scan tab based on whether this cell has a scanner.
             RightPanel.HasScanTab = cell?.ScanToolName is not null;
+
+            // Pick the material preset's per-extruder flow rate for this cell's extruder.
+            UpdateActiveExtruderType();
 
             if (!Viewport.ShowLfam3ToolPicker)
             {
@@ -1930,7 +1934,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         UndoRedo.Clear();
         AppPreferences.LastWorkspacePath = null;
         PreferencesLoader.Save(AppPreferences);
-        Console.Log("[workspace] New workspace.");
+
+        // Reset to a fresh cell: rebuild the active cell scene (robot/bed back to home pose).
+        // Falls back to the first discovered cell if none is active.
+        if (Viewport.ActiveCellPath is { Length: > 0 } cellPath)
+            Viewport.OnDevCellReloadRequested?.Invoke(cellPath);
+        else if (LeftPanel.DiscoveredCellPaths.Count > 0)
+            LeftPanel.OnCellSelected?.Invoke(LeftPanel.DiscoveredCellPaths[0]);
+
+        Console.Log("[workspace] New workspace — scene cleared, cell reloaded.");
     }
 
     /// <summary>Imports a model file into the scene and logs material diagnostics.</summary>
@@ -2233,7 +2245,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
             RightPanel.ActiveTab = tab;
 
-        WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
+        int restoredCount = WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
         Viewport.FlattenScansToBedGroup();
 
         if (doc.Camera is { } camera)
@@ -2242,7 +2254,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         AppPreferences.LastWorkspacePath = workspacePath;
         SyncKrlFrameIndicesToActiveTab();
         PreferencesLoader.Save(AppPreferences);
-        Console.Log($"[workspace] Restored {doc.Models.Count} model(s) from {workspacePath}");
+        Console.Log(restoredCount == doc.Models.Count
+            ? $"[workspace] Restored {restoredCount} model(s) from {workspacePath}"
+            : $"[workspace] Restored {restoredCount} of {doc.Models.Count} model(s) from {workspacePath} (some meshes missing).");
     }
 
     private void OnSettingsChanged()
@@ -2697,6 +2711,18 @@ public sealed class MainWindowViewModel : ViewModelBase
                 RightPanel.Scan.BaseDataIndex = robot.KrlBaseIndex;
                 break;
         }
+        UpdateActiveExtruderType();
+    }
+
+    /// <summary>Sets the additive HF/HV flag from the active cell's selected KRL tool, so the
+    /// material preset uses the matching per-extruder flow rate (HF and HV deposit differently).</summary>
+    private void UpdateActiveExtruderType()
+    {
+        var cell = Viewport.ActiveCell;
+        int krlTool = RightPanel.Settings.Robot.KrlToolIndex;
+        var tool = cell?.EffectiveTools?.FirstOrDefault(t => t.KrlIndex == krlTool);
+        RightPanel.Additive.ActiveExtruderIsHf =
+            tool?.Name?.Contains("HF", StringComparison.OrdinalIgnoreCase) ?? false;
     }
 
     /// <summary>

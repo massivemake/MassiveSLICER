@@ -1827,6 +1827,11 @@ public sealed class ViewportViewModel : ViewModelBase
         SeamEditorSelectPointCommand = new RelayCommand(() => SeamEditorTool = SeamEditorToolKind.SelectPoint, () => IsSeamEditorActive);
         ToggleSeamGuideLayerCommand = new RelayCommand(() => IsSeamGuideLayerOpen = !IsSeamGuideLayerOpen, () => IsSeamEditorActive && SeamGuideDraft.Count > 0);
         SelectSeamGuideByIndexCommand = new RelayCommand<int>(SelectSeamGuideByIndex, _ => IsSeamEditorActive);
+        EditToolpathSeamCommand  = new RelayCommand(ToggleToolpathSeamEdit, () => IsToolpathSelected);
+        ApplyToolpathSeamCommand = new RelayCommand(() => OnApplyToolpathSeamRequested?.Invoke(),
+            () => IsToolpathSeamEditActive && HasSeamGuideDraft && IsToolpathSelected);
+        ClearToolpathSeamCommand = new RelayCommand(ClearToolpathSeam, () => IsToolpathSeamEditActive && HasSeamGuideDraft);
+        DoneToolpathSeamCommand  = new RelayCommand(ExitToolpathSeamEdit, () => IsToolpathSeamEditActive);
         BoundaryEditorSaveCommand       = new RelayCommand(SaveBoundaryEditor, () => IsBoundaryEditorActive);
         BoundaryEditorCancelCommand     = new RelayCommand(CancelBoundaryEditor, () => IsBoundaryEditorActive);
         BoundaryEditorLowTargetCommand  = new RelayCommand(() => BoundaryEditorTarget = CurvedBoundaryEditorTarget.Low, () => IsBoundaryEditorActive);
@@ -2055,6 +2060,85 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ToggleSeamGuideLayerCommand { get; }
     public RelayCommand<int> SelectSeamGuideByIndexCommand { get; }
 
+    // -- Toolpath seam editing (Toolpath tab): re-seam a generated toolpath in place ----------
+    public RelayCommand EditToolpathSeamCommand  { get; }
+    public RelayCommand ApplyToolpathSeamCommand { get; }
+    public RelayCommand ClearToolpathSeamCommand { get; }
+    public RelayCommand DoneToolpathSeamCommand  { get; }
+
+    /// <summary>Wired in ViewportView: applies the placed seam points to the selected toolpath.</summary>
+    internal Action? OnApplyToolpathSeamRequested { get; set; }
+
+    private bool _isToolpathSeamEditActive;
+
+    /// <summary>When true, clicks in the viewport place seam points for in-place re-seaming
+    /// of the selected toolpath (no re-slice), reusing the seam-guide markers.</summary>
+    public bool IsToolpathSeamEditActive
+    {
+        get => _isToolpathSeamEditActive;
+        private set
+        {
+            if (SetField(ref _isToolpathSeamEditActive, value))
+            {
+                OnPropertyChanged(nameof(ToolpathSeamSummary));
+                ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+                ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+                DoneToolpathSeamCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    public string ToolpathSeamSummary =>
+        !IsToolpathSeamEditActive ? "Off"
+        : SeamGuideDraft.Count == 0 ? "Click in the viewport to place seam point(s)."
+        : $"{SeamGuideDraft.Count} point(s) placed — press Apply.";
+
+    private void ToggleToolpathSeamEdit()
+    {
+        if (IsToolpathSeamEditActive) ExitToolpathSeamEdit();
+        else BeginToolpathSeamEdit();
+    }
+
+    private void BeginToolpathSeamEdit()
+    {
+        SeamGuideDraft.Clear();
+        SeamEditorTool = SeamEditorToolKind.AddPoint;
+        SelectedSeamGuideIndex = -1;
+        IsToolpathSeamEditActive = true;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void ExitToolpathSeamEdit()
+    {
+        IsToolpathSeamEditActive = false;
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    private void ClearToolpathSeam()
+    {
+        SeamGuideDraft.Clear();
+        SelectedSeamGuideIndex = -1;
+        OnPropertyChanged(nameof(HasSeamGuideDraft));
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+        ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+        OnSeamGuidesChanged?.Invoke();
+    }
+
+    /// <summary>Refresh toolpath-seam UI after a point is placed (called from AddSeamGuidePoint).</summary>
+    private void RefreshToolpathSeamState()
+    {
+        if (!IsToolpathSeamEditActive) return;
+        OnPropertyChanged(nameof(ToolpathSeamSummary));
+        ApplyToolpathSeamCommand.RaiseCanExecuteChanged();
+        ClearToolpathSeamCommand.RaiseCanExecuteChanged();
+    }
+
     public void BeginSeamEditor(IReadOnlyList<SeamGuidePoint> current)
     {
         SeamGuideDraft.Clear();
@@ -2080,6 +2164,7 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSeamGuideDraft));
         OnPropertyChanged(nameof(SeamGuideLayerLabel));
         RaiseSeamGuideCommands();
+        RefreshToolpathSeamState();
         OnSeamGuidesChanged?.Invoke();
     }
 
@@ -3412,7 +3497,14 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         foreach (var item in OutlinerItems.ToList())
         {
-            if (item == _rotaryGroupItem || item == _robotGroupItem) continue;
+            // Preserve cell-owned scenery (robot, rotary, print bed, tools, stands) —
+            // these belong to the active cell, not the user's workspace. Without this,
+            // opening a workspace on the already-active cell deletes the print bed and
+            // tools (the cell isn't reloaded to rebuild them).
+            if (item == _rotaryGroupItem
+                || item == _robotGroupItem
+                || _cellEnvOutlinerItems.Contains(item)
+                || _toolheadOutlinerItems.Contains(item)) continue;
             RemoveUserNode(item);
         }
 
