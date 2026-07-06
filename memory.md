@@ -505,6 +505,11 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Session changelog (reverse chronological)
 
+### 2026-07-04 — Branch convention (agreed with Thom)
+- **`master` = integration branch (GitHub default), Thom merges everything there.**
+- **Mac side works on and pushes to `main`.** Sync = `git merge origin/master` into `main` (fast-forwards when both sides merge regularly). As of today both branches point at the same commit (`2b6d55b`).
+- Also today: curtain print failure root cause **corrected — truncated program transfer, not singularity.** The production-share .src ends mid-line at Z 2154 (layer 718 of 1047), matching the physical print height and the nozzle-drool blob at the final preview pose. TCP auto-rotation (build 27) remains valuable but the immediate prevention is transfer verification on export/Send-to-Robot (planned).
+
 ### 2026-07-04 — Curtain print failure countermeasures (builds 25–30)
 **Print failed mid-run: KUKA hit wrist singularity.** Root cause: KRL export wrote a frozen `A 0, B 90, C 0` orientation on every move — the exporter's gimbal-lock branch zeroed any TCP rotation for a straight-down tool.
 - **TCP auto-rotation repair (build 27):** post-slice validation now searches the smallest print-neutral nozzle spin (rotationally symmetric tool) that clears flagged wrist configurations, ramps it in/out over ~60 moves, re-verifies with IK, and bakes per-move `ToolpathMove.TcpYawDeg` into KRL export (`KrlExporter.KukaAbc` now composes the spin and preserves it at gimbal lock).
