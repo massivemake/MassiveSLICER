@@ -73,6 +73,7 @@
   <!-- HDR environment backdrops for the viewport BACKDROP selector. -->
   <ItemGroup>
     <None Include="..\..\assets\Images\*.hdr" Link="assets\Images\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\assets\Images\*.png" Link="assets\Images\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="CopyIjwhostToAppOutput" AfterTargets="Build">
