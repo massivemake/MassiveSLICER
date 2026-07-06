@@ -16,6 +16,17 @@ namespace MassiveSlicer.Viewport.Rendering;
 ///
 /// Depth test is disabled so lines are never occluded by mesh geometry.
 /// </summary>
+/// <summary>How toolpath extrude lines are coloured.</summary>
+public enum ToolpathColorMode
+{
+    /// <summary>Kind-based colours (extrude/travel/wipe/seam).</summary>
+    Normal,
+    /// <summary>Gradient by effective print speed (blue slow → red fast).</summary>
+    Speed,
+    /// <summary>Gradient by extrusion rate / RPM demand (blue low → red high).</summary>
+    Rpm,
+}
+
 public sealed class ToolpathRenderer : IDisposable
 {
     // Separate VAOs per category so each can be toggled independently.
@@ -160,6 +171,16 @@ public sealed class ToolpathRenderer : IDisposable
     /// </summary>
     public void SetBeadColor(Vector3 color) => _beadMaterialColor = color;
 
+    private ToolpathColorMode _colorMode = ToolpathColorMode.Normal;
+
+    /// <summary>Switches the extrude-line colour mode and rebuilds VBOs. GL thread only.</summary>
+    public void SetColorMode(ToolpathColorMode mode)
+    {
+        if (_colorMode == mode) return;
+        _colorMode = mode;
+        RebuildLineVbos();
+    }
+
     /// <summary>
     /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
     /// </summary>
@@ -212,6 +233,21 @@ public sealed class ToolpathRenderer : IDisposable
             extData[ei++] = c.X;             extData[ei++] = c.Y;             extData[ei++] = c.Z;
         }
 
+        // Speed/RPM gradients: normalise the per-move factor over the whole toolpath.
+        float scalarMin = float.MaxValue, scalarMax = float.MinValue;
+        if (_colorMode != ToolpathColorMode.Normal)
+        {
+            foreach (var layer in _toolpath.Layers)
+                foreach (var move in layer.Moves)
+                    if (move.Kind == MoveKind.Extrude)
+                    {
+                        float v = MoveScalar(move, layer);
+                        if (v < scalarMin) scalarMin = v;
+                        if (v > scalarMax) scalarMax = v;
+                    }
+        }
+        float scalarRange = scalarMax - scalarMin;
+
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
@@ -223,6 +259,10 @@ public sealed class ToolpathRenderer : IDisposable
                         color = UnreachableColor;
                     else if (move.Kind == MoveKind.Mill)
                         color = _millColor;
+                    else if (_colorMode != ToolpathColorMode.Normal)
+                        color = scalarRange < 1e-6f
+                            ? GradientColor(0.5f)
+                            : GradientColor((MoveScalar(move, layer) - scalarMin) / scalarRange);
                     else if (move.IsWipe)
                         color = _wipeColor;
                     else
@@ -234,6 +274,29 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
         return extData;
+    }
+
+    /// <summary>Per-move factor for the active gradient mode (relative units — normalised later).</summary>
+    private float MoveScalar(ToolpathMove move, ToolpathLayer layer)
+    {
+        float speed = move.PrintSpeedScale * (move.IsResumeRamp ? move.ResumeSpeedScale : 1f);
+        if (_colorMode == ToolpathColorMode.Speed) return speed;
+        // RPM demand ∝ speed · layer height (bead width constant per slice) · ramp/wipe scales.
+        float rpm = speed
+                  * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
+                  * (move.IsWipe ? move.WipeRpmScale : 1f)
+                  * MathF.Max(0.1f, layer.Height);
+        return rpm;
+    }
+
+    /// <summary>Blue → green → red gradient over t ∈ [0,1].</summary>
+    private static Vector3 GradientColor(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        var lo  = new Vector3(0.20f, 0.45f, 1.00f);
+        var mid = new Vector3(0.25f, 0.85f, 0.30f);
+        var hi  = new Vector3(1.00f, 0.25f, 0.15f);
+        return t < 0.5f ? Vector3.Lerp(lo, mid, t * 2f) : Vector3.Lerp(mid, hi, (t - 0.5f) * 2f);
     }
 
     /// <summary>Creates and populates a VAO+VBO pair. Both handles are returned.</summary>

@@ -458,6 +458,17 @@ public sealed class SceneRenderer : IDisposable
     private static readonly Vector3 DarkShaderBackground  = new(0.086f, 0.086f, 0.086f);   // #161616 — matches the MassiveMake theme
     private static readonly Vector3 ArcticShaderBackground = new(1f, 1f, 1f);
 
+    private Rendering.ToolpathColorMode _toolpathColorMode = Rendering.ToolpathColorMode.Normal;
+
+    /// <summary>Switches every toolpath's extrude-line colour mode. GL thread only; no-op if unchanged.</summary>
+    public void SetToolpathColorMode(Rendering.ToolpathColorMode mode)
+    {
+        if (_toolpathColorMode == mode) return;
+        _toolpathColorMode = mode;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetColorMode(mode);
+    }
+
     /// <summary>
     /// Updates toolpath line colours for all registered renderers. Must be called on the GL thread.
     /// No-op when the values are unchanged to avoid unnecessary VBO rebuilds.

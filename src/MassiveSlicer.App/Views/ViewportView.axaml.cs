@@ -842,6 +842,7 @@ public partial class ViewportView : UserControl
                 : int.MaxValue;
             _renderer.SetToolpathBeadColor(
                 new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
+            _renderer.SetToolpathColorMode(vm.ToolpathColorMode);
             _renderer.SetToolpathColors(
                 new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
                 new TkVector3(vm.ToolpathTravelColor.X,      vm.ToolpathTravelColor.Y,      vm.ToolpathTravelColor.Z),

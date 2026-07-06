@@ -1949,9 +1949,9 @@ public sealed class ViewportViewModel : ViewModelBase
     private RelayCommand<string>? _selectViewPresetCommand;
 
     // ── View mode (Body / Toolpath / Both) ─────────────────────────────────
-    private string _viewMode = "Both";
+    private string _viewMode = "Body";
 
-    /// <summary>Viewport content mode: Body (mesh only), Toolpath (paths only), Both.</summary>
+    /// <summary>Viewport content mode: Body, Toolpath, Speed, RPM, Preview (mesh + paths).</summary>
     public string ViewMode
     {
         get => _viewMode;
@@ -1959,13 +1959,21 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
-        new RelayCommand<string>(m => ViewMode = m ?? "Both");
+        new RelayCommand<string>(m => ViewMode = m ?? "Body");
     private RelayCommand<string>? _setViewModeCommand;
+
+    /// <summary>Extrude-line colour mode implied by the view mode (drained by the GL loop).</summary>
+    public MassiveSlicer.Viewport.Rendering.ToolpathColorMode ToolpathColorMode => _viewMode switch
+    {
+        "Speed" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Speed,
+        "RPM"   => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Rpm,
+        _       => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Normal,
+    };
 
     /// <summary>Applies the view mode to every user model and its toolpath children.</summary>
     internal void ApplyViewMode()
     {
-        bool showBody = _viewMode != "Toolpath";
+        bool showBody = _viewMode is "Body" or "Preview";
         bool showPath = _viewMode != "Body";
         foreach (var item in EnumerateUserModelItems().ToList())
         {

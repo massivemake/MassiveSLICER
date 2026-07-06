@@ -17,9 +17,9 @@
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid Background="Transparent" Margin="312,48,312,0">
 
-        <!-- View-mode pills (effector style): Body / Toolpath / Both -->
-        <Border HorizontalAlignment="Center" VerticalAlignment="Top"
-                Margin="0,8,0,0" ZIndex="15"
+        <!-- View-mode pills (effector style) — top right -->
+        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,8,8,0" ZIndex="15"
                 Background="#B3222222" CornerRadius="6"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                 Padding="3">
@@ -30,20 +30,18 @@
                 <Button Classes="ViewPill" Content="Toolpath"
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Toolpath}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="Toolpath"/>
-                <Button Classes="ViewPill" Content="Both"
-                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Both}"
-                        Command="{Binding SetViewModeCommand}" CommandParameter="Both"/>
+                <Button Classes="ViewPill" Content="Speed"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Speed}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Speed"/>
+                <Button Classes="ViewPill" Content="RPM"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=RPM}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="RPM"
+                        ToolTip.Tip="Extrusion rate / flowrate demand"/>
+                <Button Classes="ViewPill" Content="Preview"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
             </StackPanel>
         </Border>
-
-        <!-- Frame All — viewport top-right icon -->
-        <Button HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,8,8,0" Padding="7" ZIndex="15"
-                Background="#B32b2b2b" CornerRadius="6"
-                Command="{Binding FrameAllCommand}"
-                ToolTip.Tip="Frame All — fit the whole scene in view">
-            <ia:Icon Value="mdi-fit-to-screen-outline" FontSize="16"/>
-        </Button>
 
         <!-- View pie menu (Ctrl+Space) — appears around the pointer -->
         <Grid Background="#01000000" ZIndex="60" IsVisible="{Binding IsViewPieOpen}">
@@ -491,6 +489,11 @@
                         IsVisible="{Binding !IsToolpathSelected}"/>
 
                 <!-- Other tools: camera + mesh structure -->
+                <Button Classes="ToolbarButton" Padding="6"
+                        Command="{Binding FrameAllCommand}"
+                        ToolTip.Tip="Frame All — fit the whole scene in view">
+                    <ia:Icon Value="mdi-fit-to-screen-outline" FontSize="14"/>
+                </Button>
                 <Button Classes="ToolbarButton"
                         Padding="6,4"
                         Command="{Binding FocusCommand}"
