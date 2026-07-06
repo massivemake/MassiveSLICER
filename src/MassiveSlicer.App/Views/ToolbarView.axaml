@@ -94,8 +94,8 @@
                         Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
                         ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src)">
                     <StackPanel Orientation="Horizontal" Spacing="5">
-                        <ia:Icon Value="mdi-robot-industrial" FontSize="12"/>
-                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11"/>
+                        <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
+                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
                     </StackPanel>
                 </Button>
 

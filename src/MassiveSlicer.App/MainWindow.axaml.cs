@@ -51,6 +51,7 @@ public partial class MainWindow : Window
         // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
         vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
         vm.Viewport.MassiveBrain.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+        vm.Viewport.MassiveBrain.Enabled = true;   // sync server on by default (localhost:4547)
 
         // -- Right panel toggle (floating card) --------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
