@@ -3008,9 +3008,9 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, smoothedToolpath);
 
-            // Visibility is governed by the view mode (Body / Toolpath / Both); default
-            // to the toolpath view after slicing, like the effector.
-            if (vm.ViewMode == "Body") vm.ViewMode = "Toolpath"; else vm.ApplyViewMode();
+            // Visibility is governed by the view mode pills; slicing keeps the current
+            // mode (no auto-jump to Toolpath) so imports land in Body view.
+            vm.ApplyViewMode();
 
             _renderer.Select(null);
             UpdateFocusOverlay();

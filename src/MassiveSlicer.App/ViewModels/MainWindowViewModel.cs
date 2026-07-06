@@ -2073,6 +2073,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Viewport.AddImportNode(node);
 
+        // Guide the workflow: importing opens MODEL and SLICE.
+        RightPanel.StepModelExpanded = true;
+        RightPanel.StepSliceExpanded = true;
+
         Console.Log($"[import] Added '{node.Name}' to scene.");
         return true;
     }
