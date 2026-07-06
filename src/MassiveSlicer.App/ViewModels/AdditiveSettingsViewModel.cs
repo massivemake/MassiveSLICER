@@ -721,7 +721,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public bool ShowInfillControls => InfillPattern != "None" && !SurfaceModeActive;
+    public bool ShowInfillControls => InfillPattern != "None";
 
     private double _infillSpacingMm = 0.0;
 

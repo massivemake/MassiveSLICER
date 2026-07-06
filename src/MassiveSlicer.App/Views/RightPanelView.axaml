@@ -980,8 +980,8 @@
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="80"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Centre-to-centre distance between infill lines in mm. Leave 0 to use the bead width."/>
+                                    <TextBlock Grid.Column="0" Text="Grid width (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Centre-to-centre distance between fill lines — the grid cell width for Grid / Ghost Mesh Grid. Leave 0 to use the bead width."/>
                                     <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
                                 </Grid>
 
@@ -991,9 +991,14 @@
                                         <ColumnDefinition Width="80"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Base angle of infill lines in degrees. 0 = parallel to X axis. Grid rotates +90° every layer; Triangle rotates +60° every layer."/>
+                                               ToolTip.Tip="Base angle of fill lines in degrees. 0 = parallel to X axis. Grid and Ghost Mesh rotate +90° every layer; Triangle rotates +60° every layer."/>
                                     <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
                                 </Grid>
+
+                                <TextBlock Margin="8,2,8,4" TextWrapping="Wrap"
+                                           Classes="LabelMuted" FontSize="10"
+                                           IsVisible="{Binding Additive.SurfaceModeActive}"
+                                           Text="Fill patterns apply when Slicing mode is Normal — Surface mode emits boundary chains only."/>
 
                             </StackPanel>
                         </StackPanel>
