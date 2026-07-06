@@ -975,7 +975,8 @@
     </Style>
     <!-- Floating: macOS-style overlay scrolling — the scrollbar floats over the
          content's right edge instead of reserving layout space, so floating cards
-         keep their width when it appears. -->
+         keep their width when it appears. Fully retemplated: rounded translucent
+         thumb, no track, no arrows. -->
     <Style Selector="ScrollViewer.Floating">
         <Setter Property="Template">
             <ControlTemplate>
@@ -991,58 +992,42 @@
         </Setter>
     </Style>
     <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar">
-        <Setter Property="Width" Value="7"/>
+        <Setter Property="Width" Value="9"/>
         <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="Opacity" Value="0.55"/>
+        <Setter Property="Opacity" Value="0.6"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="Transparent" Padding="2,3">
+                    <Track Minimum="{TemplateBinding Minimum}"
+                           Maximum="{TemplateBinding Maximum}"
+                           Value="{TemplateBinding Value, Mode=TwoWay}"
+                           ViewportSize="{TemplateBinding ViewportSize}"
+                           Orientation="Vertical"
+                           IsDirectionReversed="True">
+                        <Track.DecreaseButton>
+                            <RepeatButton Opacity="0" Focusable="False" MinWidth="0" MinHeight="0"
+                                          Padding="0" BorderThickness="0" Background="Transparent"/>
+                        </Track.DecreaseButton>
+                        <Track.IncreaseButton>
+                            <RepeatButton Opacity="0" Focusable="False" MinWidth="0" MinHeight="0"
+                                          Padding="0" BorderThickness="0" Background="Transparent"/>
+                        </Track.IncreaseButton>
+                        <Track.Thumb>
+                            <Thumb MinHeight="34">
+                                <Thumb.Template>
+                                    <ControlTemplate>
+                                        <Border Background="#66c8c8c8" CornerRadius="2.5"/>
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                    </Track>
+                </Border>
+            </ControlTemplate>
+        </Setter>
     </Style>
     <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar:pointerover">
-        <Setter Property="Opacity" Value="0.9"/>
-    </Style>
-    <Style Selector="ScrollViewer.Floating ScrollBar /template/ Thumb">
-        <Setter Property="Background" Value="#66c8c8c8"/>
-        <Setter Property="CornerRadius" Value="3.5"/>
-        <Setter Property="MinHeight" Value="30"/>
-    </Style>
-    <Style Selector="ScrollViewer.Floating ScrollBar /template/ Thumb:pointerover">
-        <Setter Property="Background" Value="#99d8d8d8"/>
-    </Style>
-    <Style Selector="ScrollViewer.Floating ScrollBar /template/ RepeatButton">
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="MinWidth" Value="0"/>
-        <Setter Property="MinHeight" Value="0"/>
-        <Setter Property="Padding" Value="0"/>
-    </Style>
-
-    <!-- ViewPill: viewport view-mode selector (Body / Toolpath / Both) -->
-    <Style Selector="Button.ViewPill">
-        <Setter Property="Background" Value="Transparent"/>
-        <Setter Property="BorderThickness" Value="0"/>
-        <Setter Property="CornerRadius" Value="4"/>
-        <Setter Property="Padding" Value="12,4"/>
-        <Setter Property="FontSize" Value="12"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
-    </Style>
-    <Style Selector="Button.ViewPill:pointerover">
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-    </Style>
-    <Style Selector="Button.ViewPill.active">
-        <Setter Property="Background" Value="#33409640"/>
-        <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
-    </Style>
-
-    <!-- ExportCta: green call-to-action in the top bar -->
-    <Style Selector="Button.ExportCta">
-        <Setter Property="Background" Value="{DynamicResource Accent}"/>
-        <Setter Property="Foreground" Value="#111111"/>
-        <Setter Property="CornerRadius" Value="6"/>
-        <Setter Property="Padding" Value="12,6"/>
-    </Style>
-    <Style Selector="Button.ExportCta:pointerover">
-        <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
-    </Style>
-    <Style Selector="Button.ExportCta:disabled">
-        <Setter Property="Opacity" Value="0.4"/>
+        <Setter Property="Opacity" Value="1"/>
     </Style>
 
     <!-- PieButton: Ctrl+Space view pie menu entries -->
