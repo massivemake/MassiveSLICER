@@ -1602,7 +1602,7 @@ public sealed class SceneRenderer : IDisposable
     private static readonly OpenTK.Mathematics.Vector4 ArcticColor  = new(0.93f, 0.93f, 0.95f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MetalColor     = new(0.60f, 0.60f, 0.65f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 ChromeColor    = new(1.00f, 1.00f, 1.00f, 1f);
-    private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.07f, 0.07f, 0.07f, 1f);
+    private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.094f, 0.094f, 0.094f, 1f);   // #181818
     private static readonly OpenTK.Mathematics.Vector4 PurpleColor    = new(0.53f, 0.25f, 0.80f, 1f);
 
     private static bool InheritsLayerPreview(SceneNode n)
@@ -1737,7 +1737,7 @@ public sealed class SceneRenderer : IDisposable
                     mesh.NormalsMode      = false;
                     mesh.SuppressTextures = true;
                     mesh.Metallic         = 0f;
-                    mesh.RoughnessFactor  = 0.95f;
+                    mesh.RoughnessFactor  = 1f;
                     mesh.Color            = MatteBlackColor;
                     mesh.SpecularStrength = 0f;
                     mesh.Shininess        = 1f;
