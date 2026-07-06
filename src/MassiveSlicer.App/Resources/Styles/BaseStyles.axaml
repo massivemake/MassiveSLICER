@@ -1125,15 +1125,15 @@
     </Style>
 
     <!-- RealtimePause: top-bar toggle that holds off realtime re-slicing.
-         Neutral pill normally; amber while paused so the held state is obvious. -->
+         Light green while live; amber while paused so the held state is obvious. -->
     <Style Selector="ToggleButton.RealtimePause">
-        <Setter Property="Background" Value="#3f3f3f"/>
-        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="Background" Value="#7ed87e"/>
+        <Setter Property="Foreground" Value="#111111"/>
         <Setter Property="CornerRadius" Value="6"/>
-        <Setter Property="Padding" Value="12,6"/>
+        <Setter Property="Padding" Value="10,4"/>
     </Style>
     <Style Selector="ToggleButton.RealtimePause:pointerover /template/ ContentPresenter">
-        <Setter Property="Background" Value="#4a4a4a"/>
+        <Setter Property="Background" Value="#93e493"/>
     </Style>
     <Style Selector="ToggleButton.RealtimePause:checked /template/ ContentPresenter">
         <Setter Property="Background" Value="#d99a2b"/>
