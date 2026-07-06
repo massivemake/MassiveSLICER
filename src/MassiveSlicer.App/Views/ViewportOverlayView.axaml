@@ -823,8 +823,9 @@
             </Grid>
         </Border>
 
-        <!-- Horizontal timeline — bottom, visible when toolpath selected -->
-        <Border IsVisible="{Binding IsToolpathSelected}"
+        <!-- Horizontal timeline — bottom, visible while a scrub session is live
+             (stays up when the TCP is selected for keyframe adjustments) -->
+        <Border IsVisible="{Binding IsScrubSessionActive}"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Margin="8"
@@ -857,6 +858,22 @@
                                   Width="64"
                                   VerticalAlignment="Center"
                                   ToolTip.Tip="Playback speed"/>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                Command="{Binding AddTcpKeyframeCommand}"
+                                ToolTip.Tip="Add a TCP keyframe at this moment — drag the TCP first (or click to pin the nominal position). The offset eases in/out over nearby moves.">
+                            <ia:Icon Value="mdi-key-plus" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                IsVisible="{Binding HasTcpKeyframes}"
+                                Command="{Binding ClearTcpKeyframesCommand}"
+                                ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
+                            <ia:Icon Value="mdi-key-remove" FontSize="15"/>
+                        </Button>
+                        <Slider Width="70" Minimum="5" Maximum="1000"
+                                IsVisible="{Binding HasTcpKeyframes}"
+                                VerticalAlignment="Center"
+                                Value="{Binding KeyframeSmoothing, Mode=TwoWay}"
+                                ToolTip.Tip="Keyframe smoothing — how many moves the TCP offset eases over (double-click to type)"/>
                     </StackPanel>
 
                     <!-- Horizontal scrubber track -->
@@ -877,6 +894,11 @@
                         <ctrl:ScrubMarkerBar Markers="{Binding ScrubSingularityMarkers}"
                                              MarkerBrush="#9955DD"
                                              Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
+                        <!-- TCP keyframe markers — lime ticks -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
+                                             MarkerBrush="#7ed87e"
+                                             Height="10" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
                     </Grid>
 

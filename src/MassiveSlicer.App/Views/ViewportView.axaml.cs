@@ -110,6 +110,9 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
+    // TCP keyframes: per-toolpath-node offset keys + the pristine pre-keyframe path.
+    private readonly Dictionary<SceneNode, List<(int Index, NVec3 Offset)>>       _tcpKeyframesByNode   = new();
+    private readonly Dictionary<SceneNode, Toolpath>                              _keyframeBaseByNode   = new();
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
     // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
     private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
@@ -329,6 +332,13 @@ public partial class ViewportView : UserControl
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnSimScrubRequested = SimScrubIk;
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
+            vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
+            vm.OnClearTcpKeyframesRequested = () => ClearTcpKeyframes(vm);
+            vm.OnTcpKeyframeSmoothingChanged = () =>
+            {
+                if (_activeScrubNode is { } n && _tcpKeyframesByNode.ContainsKey(n))
+                    ApplyTcpKeyframes(vm, n);
+            };
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
@@ -2184,8 +2194,17 @@ public partial class ViewportView : UserControl
                 if (DataContext is ViewportViewModel vmGz2)
                 {
                     SyncSelectionTransformDisplay(vmGz2);
-                    // Moving a model or effector handle invalidates the slice.
-                    vmGz2.OnModelGeometryChanged?.Invoke();
+                    if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
+                    {
+                        // Dragging the TCP mid-scrub = keyframe the offset at this moment
+                        // (no re-slice — the adjustment lives on the toolpath timeline).
+                        AddTcpKeyframeAtCurrentIndex(vmGz2);
+                    }
+                    else
+                    {
+                        // Moving a model or effector handle invalidates the slice.
+                        vmGz2.OnModelGeometryChanged?.Invoke();
+                    }
                 }
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
@@ -3586,6 +3605,7 @@ public partial class ViewportView : UserControl
                     preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
             }
 
+            ClearTcpKeyframeState(toolpathNode, vm);
             vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
             {
                 Toolpath               = smoothedToolpath,
@@ -4989,15 +5009,26 @@ public partial class ViewportView : UserControl
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
         if (isToolpath && selected is not null && _toolpathByNode.TryGetValue(selected, out var tp))
         {
+            // Re-selecting the same toolpath keeps the scrub position (keyframe workflow).
+            bool sameSession = ReferenceEquals(_activeScrubNode, selected)
+                               && ReferenceEquals(vm.ActiveScrubToolpath, tp);
             _activeScrubNode = selected;
-            vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+            if (!sameSession)
+                vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+            vm.IsScrubSessionActive = true;
             ValidateToolpathAsync(selected, tp);
             if (vm.AdditiveSettings is { } ads)
                 ApplyToolpathStats(vm, tp, ads);
         }
+        else if (isToolNode && _activeScrubNode is not null && vm.ActiveScrubToolpath is not null)
+        {
+            // Clicking the TCP mid-scrub keeps the timeline session alive so the user
+            // can adjust the tool position at this moment (keyframing).
+        }
         else
         {
             _activeScrubNode = null;
+            vm.IsScrubSessionActive = false;
             vm.ResetScrubIndex(0, null);
             ClearToolpathStats(vm);
             vm.StatsReachability = "";
@@ -5007,6 +5038,179 @@ public partial class ViewportView : UserControl
         }
 
         SyncSelectionTransformDisplay(vm);
+    }
+
+    // -- TCP keyframes -----------------------------------------------------------
+
+    /// <summary>
+    /// Records (or updates) a TCP offset keyframe at the current scrub index: the delta
+    /// between where the user dragged the TCP and the nominal toolpath position there.
+    /// The offsets are eased over neighbouring moves and baked into the rendered path.
+    /// </summary>
+    private void AddTcpKeyframeAtCurrentIndex(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+
+        int index = Math.Clamp(vm.ToolpathScrubIndex, 0, cache.Length - 1);
+
+        // Nominal path position at this move (same transform chain as ScrubIkForNode).
+        var (pos, _) = cache[index];
+        NVec3 nominal;
+        if (_toolpathOriginByNode.TryGetValue(node, out var origin))
+        {
+            var wt = node.WorldTransform;
+            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+            nominal = new NVec3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+        }
+        else nominal = pos;
+
+        // Where the TCP actually is now (after the user's drag).
+        if (_renderer.TcpFrameMatrix is not { } tcpMat) return;
+        var tcpWorld = new NVec3(tcpMat.M41, tcpMat.M42, tcpMat.M43);
+        var offset   = tcpWorld - nominal;
+
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys))
+            _tcpKeyframesByNode[node] = keys = [];
+        if (!_keyframeBaseByNode.ContainsKey(node) && _toolpathByNode.TryGetValue(node, out var basePath))
+            _keyframeBaseByNode[node] = basePath;
+
+        keys.RemoveAll(k => k.Index == index);
+        keys.Add((index, offset));
+        keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+
+        ApplyTcpKeyframes(vm, node);
+    }
+
+    /// <summary>Removes all keyframes for the active toolpath and restores the pristine path.</summary>
+    private void ClearTcpKeyframes(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        _tcpKeyframesByNode.Remove(node);
+        if (_keyframeBaseByNode.Remove(node, out var basePath))
+            SwapScrubbedToolpath(vm, node, basePath);
+        vm.HasTcpKeyframes = false;
+        vm.SetScrubKeyframeIndices([]);
+    }
+
+    /// <summary>Drops keyframe state without restoring (a fresh slice replaced the path).</summary>
+    private void ClearTcpKeyframeState(SceneNode node, ViewportViewModel vm)
+    {
+        _tcpKeyframesByNode.Remove(node);
+        _keyframeBaseByNode.Remove(node);
+        if (ReferenceEquals(node, _activeScrubNode))
+        {
+            vm.HasTcpKeyframes = false;
+            vm.SetScrubKeyframeIndices([]);
+        }
+    }
+
+    /// <summary>Re-bakes the eased keyframe offsets into the toolpath and re-poses the robot.</summary>
+    private void ApplyTcpKeyframes(ViewportViewModel vm, SceneNode node)
+    {
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return;
+        if (!_keyframeBaseByNode.TryGetValue(node, out var basePath)) return;
+
+        var modified = BuildOffsetToolpath(basePath, keys, vm.KeyframeSmoothing);
+        SwapScrubbedToolpath(vm, node, modified);
+
+        vm.HasTcpKeyframes = true;
+        vm.SetScrubKeyframeIndices(keys.Select(k => k.Index).ToArray());
+
+        ScrubIkForNode(node, vm.ToolpathScrubIndex);
+    }
+
+    /// <summary>In-place toolpath swap that keeps the scrub position and node pose.</summary>
+    private void SwapScrubbedToolpath(ViewportViewModel vm, SceneNode node, Toolpath toolpath)
+    {
+        _toolpathByNode[node]    = toolpath;
+        _scrubCacheByNode[node]  = BuildScrubCache(toolpath);
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+
+        var preservedLocal = node.LocalTransform;
+        if (!_toolpathOriginByNode.TryGetValue(node, out var preservedOrigin))
+            preservedOrigin = new NVec3(preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+
+        vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath                = toolpath,
+            RawToolpath             = raw ?? toolpath,
+            Node                    = node,
+            BeadWidth               = (float)(vm.AdditiveSettings?.BeadWidth   ?? 6.0),
+            LayerHeight             = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0),
+            PreserveRelativePose    = true,
+            PreservedLocalTransform = preservedLocal,
+            PreservedOrigin         = preservedOrigin,
+        });
+        vm.ReplaceScrubToolpathInPlace(toolpath);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Clones <paramref name="src"/> with the keyframe offsets applied: each move vertex
+    /// shifts by the interpolated offset at its flat index. Between keyframes offsets
+    /// ease with smoothstep; before the first / after the last they ease to zero over
+    /// <paramref name="smoothingMoves"/> moves.
+    /// </summary>
+    private static Toolpath BuildOffsetToolpath(
+        Toolpath src, List<(int Index, NVec3 Offset)> keys, double smoothingMoves)
+    {
+        double w = Math.Max(smoothingMoves, 1.0);
+
+        NVec3 OffsetAt(double v)
+        {
+            if (keys.Count == 0) return NVec3.Zero;
+            var first = keys[0];
+            var last  = keys[^1];
+            if (v <= first.Index - w || v >= last.Index + w)
+            {
+                if (v <= first.Index - w && keys.Count >= 1 && v < first.Index) return NVec3.Zero;
+                if (v >= last.Index + w) return NVec3.Zero;
+            }
+            if (v <= first.Index)
+            {
+                double t = Math.Clamp((v - (first.Index - w)) / w, 0, 1);
+                return first.Offset * Smooth(t);
+            }
+            if (v >= last.Index)
+            {
+                double t = Math.Clamp((v - last.Index) / w, 0, 1);
+                return last.Offset * (1f - Smooth(t));
+            }
+            for (int i = 0; i < keys.Count - 1; i++)
+            {
+                if (v < keys[i].Index || v > keys[i + 1].Index) continue;
+                double span = Math.Max(keys[i + 1].Index - keys[i].Index, 1);
+                double t    = (v - keys[i].Index) / span;
+                float  st   = Smooth(t);
+                return keys[i].Offset * (1f - st) + keys[i + 1].Offset * st;
+            }
+            return NVec3.Zero;
+
+            static float Smooth(double t) => (float)(t * t * (3.0 - 2.0 * t));
+        }
+
+        var dst = new Toolpath();
+        int fi  = 0;
+        foreach (var layer in src.Layers)
+        {
+            var nl = new ToolpathLayer(layer.Index, layer.Z)
+            {
+                Height      = layer.Height,
+                PlaneNormal = layer.PlaneNormal,
+            };
+            nl.Contours.AddRange(layer.Contours);
+            foreach (var m in layer.Moves)
+            {
+                nl.Moves.Add(m with { From = m.From + OffsetAt(fi), To = m.To + OffsetAt(fi + 1) });
+                fi++;
+            }
+            dst.Layers.Add(nl);
+        }
+        return dst;
     }
 
     // -- Scrub IK --------------------------------------------------------------
@@ -6282,6 +6486,7 @@ public partial class ViewportView : UserControl
 
         var merged = BuildMergedToolpath(record);
         var src    = record.Sources[0];
+        ClearTcpKeyframeState(node, vm);
         vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
         {
             Toolpath      = merged,

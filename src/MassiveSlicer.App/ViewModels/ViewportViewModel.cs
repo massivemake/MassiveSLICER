@@ -1569,7 +1569,7 @@ public sealed class ViewportViewModel : ViewModelBase
                     OnPlaybackToggled?.Invoke(false);
                 }
                 // Drive IK when the user is actively scrubbing a toolpath.
-                if (_isToolpathSelected)
+                if (_isToolpathSelected || _isScrubSessionActive)
                     OnScrubIkRequested?.Invoke(value);
                 // Always repaint: the IK callback only repaints on a successful solve,
                 // so without this the viewport freezes when scrubbing through
@@ -1629,6 +1629,63 @@ public sealed class ViewportViewModel : ViewModelBase
     /// firing <see cref="OnScrubIkRequested"/>. Use this for programmatic selection
     /// changes so the robot is not driven automatically when a new toolpath is picked.
     /// </summary>
+    private bool _isScrubSessionActive;
+
+    /// <summary>True while a toolpath scrub session is live — stays true when the user
+    /// clicks the TCP to adjust a keyframe, so the timeline card never drops.</summary>
+    public bool IsScrubSessionActive
+    {
+        get => _isScrubSessionActive;
+        internal set => SetField(ref _isScrubSessionActive, value);
+    }
+
+    // ── TCP keyframes (timeline-scoped TCP offsets, eased over move proximity) ──
+
+    private IReadOnlyList<double> _scrubKeyframeMarkers = [];
+    public IReadOnlyList<double> ScrubKeyframeMarkers
+    {
+        get => _scrubKeyframeMarkers;
+        internal set => SetField(ref _scrubKeyframeMarkers, value);
+    }
+
+    private bool _hasTcpKeyframes;
+    public bool HasTcpKeyframes
+    {
+        get => _hasTcpKeyframes;
+        internal set => SetField(ref _hasTcpKeyframes, value);
+    }
+
+    private double _keyframeSmoothing = 150;
+    /// <summary>Ease window in moves on each side of / between keyframes.</summary>
+    public double KeyframeSmoothing
+    {
+        get => _keyframeSmoothing;
+        set
+        {
+            if (SetField(ref _keyframeSmoothing, Math.Clamp(value, 5, 2000)))
+                OnTcpKeyframeSmoothingChanged?.Invoke();
+        }
+    }
+
+    internal Action? OnAddTcpKeyframeRequested { get; set; }
+    internal Action? OnClearTcpKeyframesRequested { get; set; }
+    internal Action? OnTcpKeyframeSmoothingChanged { get; set; }
+
+    public RelayCommand AddTcpKeyframeCommand => _addTcpKeyframeCommand ??=
+        new RelayCommand(() => OnAddTcpKeyframeRequested?.Invoke());
+    private RelayCommand? _addTcpKeyframeCommand;
+
+    public RelayCommand ClearTcpKeyframesCommand => _clearTcpKeyframesCommand ??=
+        new RelayCommand(() => OnClearTcpKeyframesRequested?.Invoke());
+    private RelayCommand? _clearTcpKeyframesCommand;
+
+    /// <summary>Swaps the scrubbed toolpath (same move count) without resetting the position.</summary>
+    internal void ReplaceScrubToolpathInPlace(Toolpath toolpath)
+    {
+        ActiveScrubToolpath = toolpath;
+        ExportKrlCommand?.RaiseCanExecuteChanged();
+    }
+
     internal void ResetScrubIndex(int max, Toolpath? toolpath)
     {
         if (_isPlaying)
@@ -1742,6 +1799,15 @@ public sealed class ViewportViewModel : ViewModelBase
         RecomputeScrubMarkers();
     }
 
+    private int[] _scrubKeyframeIndices = [];
+
+    /// <summary>Sets the TCP keyframe move indices shown as lime ticks on the scrubber.</summary>
+    internal void SetScrubKeyframeIndices(int[] indices)
+    {
+        _scrubKeyframeIndices = indices;
+        RecomputeScrubMarkers();
+    }
+
     private void RecomputeScrubMarkers()
     {
         int    max = _toolpathScrubMax;
@@ -1760,6 +1826,11 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
+
+        var kf = new List<double>();
+        foreach (int i in _scrubKeyframeIndices)
+            kf.Add(max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0);
+        ScrubKeyframeMarkers = kf;
     }
 
     public RelayCommand FocusCommand                { get; }

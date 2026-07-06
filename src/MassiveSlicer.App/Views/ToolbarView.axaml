@@ -79,13 +79,13 @@
                     <Panel HorizontalAlignment="Center">
                         <StackPanel Orientation="Horizontal" Spacing="5"
                                     IsVisible="{Binding !$parent[ToggleButton].IsChecked}">
-                            <ia:Icon Value="mdi-pause" FontSize="12"/>
-                            <TextBlock Text="Realtime" FontWeight="SemiBold" FontSize="11"/>
+                            <ia:Icon Value="mdi-pause" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Realtime" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Spacing="5"
                                     IsVisible="{Binding $parent[ToggleButton].IsChecked}">
-                            <ia:Icon Value="mdi-play" FontSize="12"/>
-                            <TextBlock Text="Paused" FontWeight="SemiBold" FontSize="11"/>
+                            <ia:Icon Value="mdi-play" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Paused" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
                         </StackPanel>
                     </Panel>
                 </ToggleButton>
