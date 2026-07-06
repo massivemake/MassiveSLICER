@@ -2023,9 +2023,10 @@ public sealed class ViewportViewModel : ViewModelBase
         private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
     }
 
-    /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off.</summary>
+    /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
+    /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
     internal float SimRenderProgress
-        => IsToolpathViewActive ? (float)(_simTimelinePercent / 100.0) : -1f;
+        => ShowSimTimeline ? (float)(_simTimelinePercent / 100.0) : -1f;
 
     public RelayCommand SimPlayPauseCommand => _simPlayPauseCommand ??= new RelayCommand(() =>
     {
