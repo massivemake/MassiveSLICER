@@ -1107,11 +1107,11 @@
         <Setter Property="Padding"                    Value="0"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Background="#E6333333"
+                <Border Background="#B3000000"
                         BorderBrush="{DynamicResource Border1}"
                         BorderThickness="1"
                         CornerRadius="8"
-                        Margin="8,4"
+                        Margin="0,0,0,9"
                         ClipToBounds="True">
                     <StackPanel>
                         <ToggleButton Name="HeaderToggle"
