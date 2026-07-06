@@ -328,6 +328,7 @@ public partial class ViewportView : UserControl
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnSimScrubRequested = SimScrubIk;
+            vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
@@ -6328,6 +6329,94 @@ public partial class ViewportView : UserControl
                wt.M21, wt.M22, wt.M23, wt.M24,
                wt.M31, wt.M32, wt.M33, wt.M34,
                wt.M41, wt.M42, wt.M43, wt.M44);
+
+    /// <summary>
+    /// Records the simulate-timeline sweep (0–100% over 6 s) as an MP4: steps the
+    /// timeline at 30 fps, reads back each GL frame as PNG, and pipes the sequence
+    /// into ffmpeg. The robot IK follow runs exactly as it does during live playback.
+    /// </summary>
+    private async Task ExportSimVideoAsync(ViewportViewModel vm)
+    {
+        if (vm.SimRecording) return;
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        string? ffmpeg = new[] { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" }
+            .FirstOrDefault(File.Exists);
+        var mvmLog = topLevel.DataContext as MainWindowViewModel;
+        if (ffmpeg is null)
+        {
+            mvmLog?.Console.Log("[simvideo] ffmpeg not found — install it (brew install ffmpeg) to export videos.");
+            SetSliceStatus(vm, "Video export needs ffmpeg (brew install ffmpeg).", isError: true);
+            return;
+        }
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Simulation Video",
+            DefaultExtension  = "mp4",
+            SuggestedFileName = "toolpath-simulation",
+            FileTypeChoices   = [new("MP4 Video") { Patterns = ["*.mp4"] }],
+        });
+        if (file is null) return;
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+        path = SavePathUtil.Normalize(path, "mp4");
+
+        const int fps = 30, seconds = 6, totalFrames = fps * seconds;
+        double restorePercent = vm.SimTimelinePercent;
+        vm.SimRecording = true;
+        SetSliceStatus(vm, "Recording simulation video…");
+
+        System.Diagnostics.Process? proc = null;
+        try
+        {
+            proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName  = ffmpeg,
+                Arguments = "-y -f image2pipe -framerate 30 -i pipe:0 " +
+                            "-c:v libx264 -pix_fmt yuv420p -crf 18 " +
+                            "-vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" " +
+                            $"\"{path}\"",
+                RedirectStandardInput = true,
+                RedirectStandardError = true,
+                UseShellExecute       = false,
+            });
+            if (proc is null) throw new InvalidOperationException("could not start ffmpeg");
+            // Drain stderr so ffmpeg never blocks on a full pipe.
+            _ = proc.StandardError.ReadToEndAsync();
+
+            var stdin = proc.StandardInput.BaseStream;
+            for (int i = 0; i < totalFrames; i++)
+            {
+                vm.SimTimelinePercent = i * 100.0 / (totalFrames - 1);
+                await Task.Delay(12);                    // let the async IK land on the pose
+                GlCanvas.RequestNextFrameRendering();
+                var png = await GlCanvas.CaptureScreenshotPngAsync();
+                if (png is null) throw new InvalidOperationException($"frame {i} capture failed");
+                await stdin.WriteAsync(png);
+                if (i % fps == 0)
+                    SetSliceStatus(vm, $"Recording simulation video… {i * 100 / totalFrames}%");
+            }
+            stdin.Close();
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode != 0) throw new InvalidOperationException($"ffmpeg exited with {proc.ExitCode}");
+
+            mvmLog?.Console.Log($"[simvideo] Simulation video → {path}");
+            SetSliceStatus(vm, $"Simulation video saved: {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            try { if (proc is { HasExited: false }) proc.Kill(); } catch { }
+            mvmLog?.Console.Log($"[simvideo] Export failed: {ex.Message}");
+            SetSliceStatus(vm, $"Video export failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            vm.SimRecording = false;
+            vm.SimTimelinePercent = restorePercent;
+        }
+    }
 
     private async Task ExportScanPointCloudAsync(ViewportViewModel vm, SceneNode node)
     {

@@ -664,7 +664,7 @@
                 CornerRadius="6"
                 Padding="10,5"
                 ZIndex="24">
-            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
                 <Button Grid.Column="0" Classes="ToolbarButton" Padding="6,4" Margin="0,0,2,0"
                         Command="{Binding SimResetCommand}"
                         ToolTip.Tip="Reset simulation to 0%">
@@ -685,6 +685,12 @@
                 <TextBlock Grid.Column="3" Text="{Binding SimTimelineLabel}"
                            Classes="Readout" FontSize="11" Width="38"
                            TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <Button Grid.Column="4" Classes="ToolbarButton" Padding="6,4" Margin="6,0,0,0"
+                        Command="{Binding SimExportVideoCommand}"
+                        IsEnabled="{Binding !SimRecording}"
+                        ToolTip.Tip="Download the 6-second simulation as an MP4 video">
+                    <ia:Icon Value="mdi-download" FontSize="15"/>
+                </Button>
             </Grid>
         </Border>
 

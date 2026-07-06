@@ -2050,6 +2050,26 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
     internal Action<double>? OnSimScrubRequested { get; set; }
 
+    /// <summary>Wired by the viewport code-behind: record the 6 s simulation to a video.</summary>
+    internal Action? OnSimVideoExportRequested { get; set; }
+
+    private bool _simRecording;
+
+    /// <summary>True while the simulation video is being captured/encoded.</summary>
+    public bool SimRecording
+    {
+        get => _simRecording;
+        internal set => SetField(ref _simRecording, value);
+    }
+
+    public RelayCommand SimExportVideoCommand => _simExportVideoCommand ??= new RelayCommand(() =>
+    {
+        if (_simRecording) return;
+        StopSimTimeline();
+        OnSimVideoExportRequested?.Invoke();
+    });
+    private RelayCommand? _simExportVideoCommand;
+
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
     internal float SimRenderProgress
