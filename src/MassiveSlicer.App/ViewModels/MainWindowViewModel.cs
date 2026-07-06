@@ -2072,6 +2072,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(line);
 
         Viewport.AddImportNode(node);
+        StatusBar.FileStatus = System.IO.Path.GetFileName(path);
 
         // Guide the workflow: importing opens MODEL and SLICE.
         RightPanel.StepModelExpanded = true;
@@ -2292,6 +2293,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
 
             AppPreferences.LastWorkspacePath = path;
+            StatusBar.FileStatus = System.IO.Path.GetFileName(path);
             PreferencesLoader.Save(AppPreferences);
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
