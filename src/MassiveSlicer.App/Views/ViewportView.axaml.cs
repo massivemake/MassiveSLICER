@@ -1051,7 +1051,8 @@ public partial class ViewportView : UserControl
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
                 UploadToolpathEntry(entry, addToScene: true);
-                _renderer.Select(entry.Node);
+                // Keep the current selection (usually the model) — auto-selecting the
+                // toolpath would flip the sidebar to the Toolpath view mid-workflow.
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
@@ -1062,7 +1063,6 @@ public partial class ViewportView : UserControl
                 _singularityByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
-                _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
