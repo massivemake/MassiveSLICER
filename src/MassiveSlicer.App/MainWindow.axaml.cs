@@ -315,28 +315,43 @@ public partial class MainWindow : Window
         }, ct);
     }
 
+    private static bool _ghostPinHooked;
+
     /// <summary>
     /// Keeps a ghosted sidebar card at full opacity while a ComboBox dropdown inside it is
-    /// open. When the pointer leaves the card (usually because the popup grabbed it), the
-    /// card gets a "pinned" style class until the open dropdown closes.
+    /// open. Pins the card the moment the dropdown opens (a global IsDropDownOpen observer),
+    /// so the ghost fade never starts — reacting on pointer-exit instead caused a visible
+    /// fade-then-snap flicker because the popup steals the pointer first.
     /// </summary>
-    private static void SetupGhostPin(Border card)
+    private void SetupGhostPin(Border card)
     {
-        card.PointerExited += (_, _) =>
-        {
-            var openCombo = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(card)
-                .OfType<ComboBox>()
-                .FirstOrDefault(c => c.IsDropDownOpen);
-            if (openCombo is null || card.Classes.Contains("pinned")) return;
+        if (_ghostPinHooked) return;
+        _ghostPinHooked = true;
 
-            card.Classes.Add("pinned");
-            void OnClosed(object? s, EventArgs e)
+        ComboBox.IsDropDownOpenProperty.Changed.Subscribe(
+            new Avalonia.Reactive.AnonymousObserver<Avalonia.AvaloniaPropertyChangedEventArgs<bool>>(args =>
             {
-                openCombo.DropDownClosed -= OnClosed;
-                card.Classes.Remove("pinned");
-            }
-            openCombo.DropDownClosed += OnClosed;
-        };
+                if (args.Sender is not ComboBox combo) return;
+                var owner = FindAncestorCard(combo);
+                if (owner is null) return;
+                if (combo.IsDropDownOpen)
+                    owner.Classes.Add("pinned");
+                else
+                    owner.Classes.Remove("pinned");
+            }));
+    }
+
+    /// <summary>Returns the ghosted sidebar card that visually contains <paramref name="control"/>, if any.</summary>
+    private Border? FindAncestorCard(Avalonia.Visual control)
+    {
+        Avalonia.Visual? cur = control;
+        while (cur is not null)
+        {
+            if (ReferenceEquals(cur, LeftPanelCard) || ReferenceEquals(cur, RightPanelCard))
+                return (Border)cur;
+            cur = Avalonia.VisualTree.VisualExtensions.GetVisualParent(cur);
+        }
+        return null;
     }
 
     private async Task ShowModelImportPickerAsync(MainWindowViewModel vm)
