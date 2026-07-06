@@ -1148,6 +1148,23 @@
         <Setter Property="TextElement.Foreground" Value="#242424"/>
     </Style>
 
+    <!-- FlashTarget: attention guide — green border fades in on .flash, out on removal -->
+    <Style Selector="Border.FlashTarget">
+        <Setter Property="BorderBrush" Value="#0040b840"/>
+        <Setter Property="BorderThickness" Value="1.5"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Margin" Value="3,0"/>
+        <Setter Property="Padding" Value="0,2"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <BrushTransition Property="BorderBrush" Duration="0:0:0.9"/>
+            </Transitions>
+        </Setter>
+    </Style>
+    <Style Selector="Border.FlashTarget.flash">
+        <Setter Property="BorderBrush" Value="#FF40b840"/>
+    </Style>
+
     <!-- PieButton: Ctrl+Space view pie menu entries -->
     <Style Selector="Button.PieButton">
         <Setter Property="Background" Value="#E62e2e2e"/>

@@ -2164,6 +2164,10 @@ public sealed class ViewportViewModel : ViewModelBase
         private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
     }
 
+    /// <summary>Raised when the user selects the toolhead/TCP in the viewport
+    /// (rising edge only) — used to guide attention to the orientation settings.</summary>
+    internal Action? OnToolheadSelected { get; set; }
+
     /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
     internal Action<double>? OnSimScrubRequested { get; set; }
 

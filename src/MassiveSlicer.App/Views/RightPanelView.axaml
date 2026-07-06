@@ -1007,7 +1007,7 @@
                     </Expander>
 
                     <!-- 4 TOOLPATH -->
-                    <Expander Classes="StepCard" IsExpanded="False">
+                    <Expander Classes="StepCard" IsExpanded="{Binding StepToolpathExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -1143,7 +1143,8 @@
                     </Border>
                     </Expander>
 
-                    <Expander Classes="SectionExpander" Header="GLOBAL" IsExpanded="False" Margin="0,0,0,4">
+                    <Expander Classes="SectionExpander" Header="GLOBAL"
+                              IsExpanded="{Binding GlobalSectionExpanded, Mode=TwoWay}" Margin="0,0,0,4">
                         <StackPanel>
 
                         <TextBlock Text="HOME POSITION" Classes="SectionHeader"/>
@@ -1167,6 +1168,8 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
+                        <Border Classes="FlashTarget" Classes.flash="{Binding HighlightToolheadOrientation}">
+                        <StackPanel>
                         <TextBlock Text="TOOLHEAD GLOBAL ORIENTATION" Classes="SectionHeader"
                                    ToolTip.Tip="Global-axis rotations: R_global = Rz(Z) × Ry(Y) × Rx(X). Default 0,90,0 = nozzle vertical."/>
 
@@ -1220,6 +1223,9 @@
                                        Text="{Binding Additive.ToolheadA, Mode=TwoWay, StringFormat={}{0:F1}}"
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                         </Grid>
+
+                        </StackPanel>
+                        </Border>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

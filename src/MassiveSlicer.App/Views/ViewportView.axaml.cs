@@ -4986,6 +4986,7 @@ public partial class ViewportView : UserControl
     }
 
     private SceneNode? _lastOutlinerSyncedNode;
+    private bool _wasToolNodeSelected;
 
     private void UpdateFocusOverlay()
     {
@@ -5032,6 +5033,9 @@ public partial class ViewportView : UserControl
             vm.Robot?.Desync();
             SetGizmoMode(GizmoMode.Translate);
         }
+        if (isToolNode && !_wasToolNodeSelected)
+            vm.OnToolheadSelected?.Invoke();
+        _wasToolNodeSelected = isToolNode;
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
