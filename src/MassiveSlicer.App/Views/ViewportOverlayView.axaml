@@ -17,6 +17,25 @@
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid Background="Transparent" Margin="312,48,312,0">
 
+        <!-- View-mode pills (effector style): Body / Toolpath / Both -->
+        <Border HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,8,0,0" ZIndex="15"
+                Background="#B3222222" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="3">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="ViewPill" Content="Body"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Body}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Body"/>
+                <Button Classes="ViewPill" Content="Toolpath"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Toolpath}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Toolpath"/>
+                <Button Classes="ViewPill" Content="Both"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Both}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Both"/>
+            </StackPanel>
+        </Border>
+
         <!-- Frame All — viewport top-right icon -->
         <Button HorizontalAlignment="Right" VerticalAlignment="Top"
                 Margin="0,8,8,0" Padding="7" ZIndex="15"

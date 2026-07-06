@@ -71,6 +71,15 @@
                 <!-- Frame All lives as a viewport icon (top-right); view presets via the
                      Ctrl+Space pie menu. -->
 
+                <Button Classes="ExportCta" Margin="0,0,10,0"
+                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
+                        ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src)">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="mdi-robot-industrial" FontSize="13"/>
+                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
                 <Button Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
                     <ia:Icon Value="mdi-console" FontSize="14"/>
                 </Button>

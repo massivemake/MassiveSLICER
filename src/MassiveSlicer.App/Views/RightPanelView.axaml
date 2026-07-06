@@ -991,16 +991,7 @@
                             </Grid>
                         </StackPanel>
                     
-                            <Button Classes="PrimaryButton"
-                                    HorizontalAlignment="Stretch"
-                                    Margin="8,10,8,2"
-                                    Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
-                                    ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src).">
-                                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
-                                    <ia:Icon Value="mdi-robot-industrial" FontSize="14"/>
-                                    <TextBlock Text="EXPORT TO ROBOT" FontWeight="Bold"/>
-                                </StackPanel>
-                            </Button>
+                            <!-- Export to Robot lives in the top menu bar. -->
                         </StackPanel>
                     
                         </StackPanel>

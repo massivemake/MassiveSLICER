@@ -24,6 +24,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     public ICommand ReloadModelCommand { get; }
     public ICommand ReplaceModelCommand { get; }
 
+    /// <summary>True for toolpath entries (set by RegisterToolpathInOutliner).</summary>
+    public bool IsToolpath { get; set; }
+
     public bool Visible
     {
         get => Node.Visible;

@@ -1865,6 +1865,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnDropToPlateRequested?.Invoke();
         }
         NotifyRenderNeeded();
+        OnModelGeometryChanged?.Invoke();
     }
 
     private void ScaleSelectedModel(float ratio)
@@ -1946,6 +1947,39 @@ public sealed class ViewportViewModel : ViewModelBase
             if (name is not null) OnViewPresetRequested?.Invoke(name);
         });
     private RelayCommand<string>? _selectViewPresetCommand;
+
+    // ── View mode (Body / Toolpath / Both) ─────────────────────────────────
+    private string _viewMode = "Both";
+
+    /// <summary>Viewport content mode: Body (mesh only), Toolpath (paths only), Both.</summary>
+    public string ViewMode
+    {
+        get => _viewMode;
+        set { if (SetField(ref _viewMode, value)) ApplyViewMode(); }
+    }
+
+    public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
+        new RelayCommand<string>(m => ViewMode = m ?? "Both");
+    private RelayCommand<string>? _setViewModeCommand;
+
+    /// <summary>Applies the view mode to every user model and its toolpath children.</summary>
+    internal void ApplyViewMode()
+    {
+        bool showBody = _viewMode != "Toolpath";
+        bool showPath = _viewMode != "Body";
+        foreach (var item in EnumerateUserModelItems().ToList())
+        {
+            if (item.Visible != showBody) item.Visible = showBody;
+            foreach (var child in item.Children)
+                if (child.IsToolpath && child.Visible != showPath)
+                    child.Visible = showPath;
+        }
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Raised whenever model geometry/placement changes (import, scale, rotate) —
+    /// drives the realtime re-slice.</summary>
+    internal Action? OnModelGeometryChanged { get; set; }
 
     /// <summary>Fits the whole scene in view (viewport top-right icon).</summary>
     public RelayCommand FrameAllCommand => _frameAllCommand ??=
@@ -3210,7 +3244,11 @@ public sealed class ViewportViewModel : ViewModelBase
     /// toolpath generation); otherwise it falls back to <see cref="AddUserNode"/>.
     /// Must be called on the UI thread.
     /// </summary>
-    public void AddImportNode(SceneNode node) => AddRotaryBedChildNode(node);
+    public void AddImportNode(SceneNode node)
+    {
+        AddRotaryBedChildNode(node);
+        OnModelGeometryChanged?.Invoke();
+    }
 
     private void AddRotaryBedChildNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
     {
@@ -3643,6 +3681,7 @@ public sealed class ViewportViewModel : ViewModelBase
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
+        item.IsToolpath = true;
 
         if (parentItem is not null)
             parentItem.AddChild(item);

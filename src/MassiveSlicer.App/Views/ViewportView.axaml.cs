@@ -328,6 +328,7 @@ public partial class ViewportView : UserControl
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnFrameAllRequested = FrameAll;
+            WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
             vm.GetCameraState = () =>
             {
@@ -2920,8 +2921,10 @@ public partial class ViewportView : UserControl
 
         try
         {
-            var selectedNode = _renderer.SelectedNode;
-            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
+            var sourceItem = vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                             ?? vm.ResolveActivePrintObjectItem()
+                             ?? vm.EnumerateUserModelItems().FirstOrDefault();
+            if (sourceItem is null)
             {
                 SetSliceStatus(vm, "Slice failed: select a mesh to slice.", isError: true);
                 return;
@@ -2994,7 +2997,9 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, smoothedToolpath);
 
-            sourceItem.Visible = false;
+            // Visibility is governed by the view mode (Body / Toolpath / Both); default
+            // to the toolpath view after slicing, like the effector.
+            if (vm.ViewMode == "Body") vm.ViewMode = "Toolpath"; else vm.ApplyViewMode();
 
             _renderer.Select(null);
             UpdateFocusOverlay();
@@ -3394,10 +3399,92 @@ public partial class ViewportView : UserControl
         return v.LengthSquared() > 1e-12f ? NVec3.Normalize(v) : new NVec3(0, 0, 1);
     }
 
+    // ── Realtime slicing (effector-style) ──────────────────────────────────
+    // Any relevant parameter change re-slices the active model automatically,
+    // debounced; updates replace the existing toolpath node in place.
+
+    private DispatcherTimer? _realtimeSliceTimer;
+
+    private static readonly HashSet<string> RealtimeSliceProps =
+    [
+        nameof(AdditiveSettingsViewModel.LayerHeight),
+        nameof(AdditiveSettingsViewModel.FirstLayerHeight),
+        nameof(AdditiveSettingsViewModel.BeadWidth),
+        nameof(AdditiveSettingsViewModel.Method),
+        nameof(AdditiveSettingsViewModel.MethodDisplayName),
+        nameof(AdditiveSettingsViewModel.SlicingMode),
+        nameof(AdditiveSettingsViewModel.TiltAngle),
+        nameof(AdditiveSettingsViewModel.TiltAngleX),
+        nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight),
+        nameof(AdditiveSettingsViewModel.AdaptiveQuality),
+        nameof(AdditiveSettingsViewModel.MinLayerHeight),
+        nameof(AdditiveSettingsViewModel.DisableContourOffset),
+        nameof(AdditiveSettingsViewModel.InfillPattern),
+        nameof(AdditiveSettingsViewModel.InfillSpacingMm),
+        nameof(AdditiveSettingsViewModel.InfillAngleDeg),
+        nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.PatternAmplitude),
+        nameof(AdditiveSettingsViewModel.PatternFrequency),
+        nameof(AdditiveSettingsViewModel.PatternTwist),
+        nameof(AdditiveSettingsViewModel.PatternOffset),
+        nameof(AdditiveSettingsViewModel.PatternFadeIn),
+        nameof(AdditiveSettingsViewModel.PatternFadeOut),
+        nameof(AdditiveSettingsViewModel.WaveEffect),
+        nameof(AdditiveSettingsViewModel.WaveAmplitude),
+        nameof(AdditiveSettingsViewModel.WaveWavelength),
+    ];
+
+    private void WireRealtimeSlicing(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is { } add)
+            add.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName is { } name && RealtimeSliceProps.Contains(name))
+                    ScheduleRealtimeSlice(vm);
+            };
+        vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+    }
+
+    private void ScheduleRealtimeSlice(ViewportViewModel vm)
+    {
+        if (_realtimeSliceTimer is null)
+        {
+            _realtimeSliceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            _realtimeSliceTimer.Tick += async (_, _) =>
+            {
+                if (DataContext is not ViewportViewModel tickVm) { _realtimeSliceTimer!.Stop(); return; }
+                if (tickVm.IsSlicing) return;   // keep ticking until the current run finishes
+                _realtimeSliceTimer!.Stop();
+                await RunRealtimeSliceAsync(tickVm);
+            };
+        }
+        _realtimeSliceTimer.Stop();
+        _realtimeSliceTimer.Start();
+    }
+
+    private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
+    {
+        var item = vm.ResolveActivePrintObjectItem()
+                   ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (item is null) return;
+
+        var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+        if (toolpathChild is not null)
+            await RunUpdateSliceAsync(vm, (item, toolpathChild));
+        else
+            await RunSliceAsync(vm);
+    }
+
     private async Task RunUpdateSliceAsync(ViewportViewModel vm)
+        => await RunUpdateSliceAsync(vm, null);
+
+    private async Task RunUpdateSliceAsync(
+        ViewportViewModel vm,
+        (OutlinerItemViewModel parent, OutlinerItemViewModel toolpath)? explicitSource)
     {
         if (vm.IsSlicing) return;
-        if (FindResliceSource(vm) is not { } source) return;
+        var resolved = explicitSource ?? FindResliceSource(vm);
+        if (resolved is not { } source) return;
 
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
