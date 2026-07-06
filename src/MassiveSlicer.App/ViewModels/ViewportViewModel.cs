@@ -1639,7 +1639,10 @@ public sealed class ViewportViewModel : ViewModelBase
         internal set
         {
             if (SetField(ref _isScrubSessionActive, value))
+            {
                 OnPropertyChanged(nameof(ShowSimTimeline));
+                OnPropertyChanged(nameof(ShowPlaybackTimeline));
+            }
         }
     }
 
@@ -2079,6 +2082,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (value != "Toolpath") StopSimTimeline();
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
+            OnPropertyChanged(nameof(ShowPlaybackTimeline));
         }
     }
 
@@ -2095,8 +2099,11 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public bool IsToolpathViewActive => _viewMode == "Toolpath";
 
-    /// <summary>The simplified bar hides whenever the full playback card is up.</summary>
-    public bool ShowSimTimeline => IsToolpathViewActive && !_isScrubSessionActive;
+    /// <summary>The simplified bar is the Toolpath view's timeline.</summary>
+    public bool ShowSimTimeline => IsToolpathViewActive;
+
+    /// <summary>The full playback/keyframe timeline lives on the Preview view only.</summary>
+    public bool ShowPlaybackTimeline => _isScrubSessionActive && _viewMode == "Preview";
 
     /// <summary>Timeline position, 0–100 %. 100 = full toolpath drawn.</summary>
     public double SimTimelinePercent
@@ -2148,7 +2155,15 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
     internal float SimRenderProgress
-        => ShowSimTimeline || _simRecording ? (float)(_simTimelinePercent / 100.0) : -1f;
+    {
+        get
+        {
+            if (_simRecording || ShowSimTimeline) return (float)(_simTimelinePercent / 100.0);
+            if (_viewMode == "Preview" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
+                return (float)_toolpathScrubIndex / _toolpathScrubMax;
+            return -1f;
+        }
+    }
 
     public RelayCommand SimPlayPauseCommand => _simPlayPauseCommand ??= new RelayCommand(() =>
     {
