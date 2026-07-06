@@ -1031,6 +1031,37 @@
         <Setter Property="Opacity" Value="1"/>
     </Style>
 
+    <!-- ViewPill: viewport view-mode selector (Body / Toolpath / Speed / RPM / Preview) -->
+    <Style Selector="Button.ViewPill">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="4"/>
+        <Setter Property="Padding" Value="12,4"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+    </Style>
+    <Style Selector="Button.ViewPill:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+    </Style>
+    <Style Selector="Button.ViewPill.active">
+        <Setter Property="Background" Value="#33409640"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
+    </Style>
+
+    <!-- ExportCta: green call-to-action in the top bar -->
+    <Style Selector="Button.ExportCta">
+        <Setter Property="Background" Value="{DynamicResource Accent}"/>
+        <Setter Property="Foreground" Value="#111111"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="Button.ExportCta:pointerover">
+        <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
+    </Style>
+    <Style Selector="Button.ExportCta:disabled">
+        <Setter Property="Opacity" Value="0.4"/>
+    </Style>
+
     <!-- PieButton: Ctrl+Space view pie menu entries -->
     <Style Selector="Button.PieButton">
         <Setter Property="Background" Value="#E62e2e2e"/>
