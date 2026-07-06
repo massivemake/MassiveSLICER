@@ -992,13 +992,13 @@
         </Setter>
     </Style>
     <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar">
-        <Setter Property="Width" Value="8"/>
-        <Setter Property="Margin" Value="0,4,-2,4"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="Margin" Value="0,4,0,4"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Opacity" Value="0.85"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Background="Transparent" Padding="0,2">
+                <Border Background="Transparent" Padding="2,2,0,2">
                     <Track Minimum="{TemplateBinding Minimum}"
                            Maximum="{TemplateBinding Maximum}"
                            Value="{TemplateBinding Value, Mode=TwoWay}"
