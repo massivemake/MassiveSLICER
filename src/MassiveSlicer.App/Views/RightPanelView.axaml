@@ -1015,502 +1015,11 @@
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,6" Spacing="6">
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Generate Slice creates a toolpath under the model in the outliner. Select it to scrub/play the print and edit seams."/>
-                            <Button Content="Open toolpath options"
-                                    HorizontalAlignment="Stretch"
-                                    Command="{Binding ShowToolpathCommand}"
-                                    ToolTip.Tip="Playback, statistics, seam editing, and export options for the selected toolpath."/>
-                        
-                        <StackPanel Margin="0,0,0,6">
+                                       IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsScrubSessionActive}"
+                                       Text="Slice a model to unlock seam editing, motion smoothing, statistics, and export options."/>
 
-                        <StackPanel Margin="0,2,0,6">
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
-                            </Grid>
-
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
-                            </Grid>
-                        </StackPanel>
-                    
-                            <!-- Export to Robot lives in the top menu bar. -->
-                        </StackPanel>
-                    
-                        </StackPanel>
-                    </Expander>
-
-                                        
-
-                    <!-- Other workflows (tab bar was removed; steps are the panel home) -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
-                        <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
-                        <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
-                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
-                                IsVisible="{Binding ShowScanTabButton}" Command="{Binding ShowScanCommand}"/>
-                        <Button Content="MILLING" FontSize="10" Padding="6,2" Background="Transparent"
-                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
-                                IsVisible="{Binding ShowSubtractiveTabButton}" Command="{Binding ShowSubtractiveCommand}"/>
-                    </StackPanel>
-
-                </StackPanel>
-                </ScrollViewer>
-            </Grid>
-
-            <!-- SCAN tab -->
-            <Grid Grid.Row="1" IsVisible="{Binding IsScanTab}" Background="#E62e2e2e">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <!-- SCAN sub-tab bar -->
-                <Border Grid.Row="0"
-                        Background="{DynamicResource Bg3}"
-                        BorderBrush="{DynamicResource Border1}"
-                        BorderThickness="0,0,0,1">
-                    <StackPanel Orientation="Horizontal">
-                        <Button Content="&#8592; STEPS" Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
-                        <Button Content="CAPTURE"  Classes="TabButton" Classes.active="{Binding Scan.IsCaptureSubTab}"     Command="{Binding Scan.ShowCaptureCommand}"/>
-                        <Button Content="SETTINGS" Classes="TabButton" Classes.active="{Binding Scan.IsCalibrationSubTab}" Command="{Binding Scan.ShowCalibrationCommand}"/>
-                    </StackPanel>
-                </Border>
-
-                <!-- CAPTURE sub-tab -->
-                <ScrollViewer Grid.Row="1"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              Background="{DynamicResource Bg2}"
-                              IsVisible="{Binding Scan.IsCaptureSubTab}">
-                    <StackPanel Margin="0,8">
-
-                        <!-- QUICK POSITIONS -->
-                        <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False">
-                            <StackPanel Margin="0,2,0,6">
-                                <TextBlock Classes="LabelMuted" Margin="8,4,8,6" TextWrapping="Wrap"
-                                           Text="Recall saved scan poses. Robot must be synced before moving or saving."/>
-
-                                <ItemsControl ItemsSource="{Binding Scan.QuickPositions}" Margin="8,0,8,4">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Button Content="{Binding Label}"
-                                                    Classes="PrimaryButton"
-                                                    HorizontalAlignment="Stretch"
-                                                    Margin="0,0,0,4"
-                                                    Command="{Binding MoveCommand}"
-                                                    ToolTip.Tip="Move the robot to this saved position"/>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-
-                                <TextBlock Text="Save current pose" Classes="LabelMuted" Margin="8,4,8,2"
-                                           ToolTip.Tip="Captures the synced robot pose ($POS_ACT / $AXIS_ACT) as a new quick position"/>
-                                <Grid Margin="8,0,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="8"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBox Grid.Column="0"
-                                             Classes="PanelTextBox"
-                                             Text="{Binding Scan.NewQuickPositionName, Mode=TwoWay}"
-                                             PlaceholderText="Position name"/>
-                                    <Button Grid.Column="2"
-                                            Content="Save"
-                                            Classes="ToolbarButton"
-                                            Command="{Binding Scan.SaveQuickPositionCommand}"
-                                            ToolTip.Tip="Save the current synced robot pose as a quick position"/>
-                                </Grid>
-
-                                <TextBlock Text="{Binding Scan.QuickPositionStatus}"
-                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Expander>
-
-                        <!-- CAMERA -->
-                        <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="False">
-                            <StackPanel Margin="0,2,0,6">
-                                <Grid Margin="8,2,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="120"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Address of the Zivid camera on the cell network"/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
-                                </Grid>
-
-                                <Button Content="Test Scan"
-                                        Classes="PrimaryButton"
-                                        HorizontalAlignment="Stretch"
-                                        Margin="8,8,8,2"
-                                        Command="{Binding Scan.TestScanCommand}"
-                                        ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
-                                <TextBlock Text="{Binding Scan.ScanStatus}"
-                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Expander>
-
-                        <!-- OUTPUT -->
-                        <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="False">
-                            <StackPanel Margin="0,2,0,6">
-                                <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
-                                           ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
-                                <TextBox Classes="PanelTextBox" Margin="8,0,8,4" Text="{Binding Scan.OutputDirectory}"/>
-                            </StackPanel>
-                        </Expander>
-
-                    </StackPanel>
-                </ScrollViewer>
-
-                <!-- SETTINGS sub-tab (hand-eye calibration) -->
-                <ScrollViewer Grid.Row="1"
-                              VerticalScrollBarVisibility="Auto"
-                              HorizontalScrollBarVisibility="Disabled"
-                              Background="{DynamicResource Bg2}"
-                              IsVisible="{Binding Scan.IsCalibrationSubTab}">
-                    <StackPanel Margin="0,8">
-
-                        <Expander Classes="SectionExpander" Header="HAND-EYE CALIBRATION" IsExpanded="False">
-                            <StackPanel Margin="0,2,0,6">
-
-                                <TextBlock Classes="LabelMuted" Margin="8,4,8,8" TextWrapping="Wrap"
-                                           Text="Place the calibration board on the print bed. Move the robot to several distinct positions and add a pose at each. Aim for ≥ 10 poses with varied orientations."/>
-
-                                <!-- Pose count -->
-                                <TextBlock Text="{Binding Scan.Calibration.PoseCountLabel}"
-                                           Classes="LabelMuted" Margin="8,4,8,2" FontWeight="SemiBold"/>
-
-                                <!-- Automated pose sweep -->
-                                <Button Content="AUTO-CALIBRATE SCAN TOOL"
-                                        Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,2,8,2"
-                                        Command="{Binding Scan.Calibration.AutoCalibrateCommand}"
-                                        ToolTip.Tip="Place the calibration card in the bed centre and aim the scanner at it. Runs SCAN_TOOL_CAL (or start it on the pendant): the robot nutates the wrist through 9 views, the app scans at each, then computes and applies the hand-eye result."/>
-                                <TextBlock Text="Auto: card in the bed centre, scanner aimed at it, robot synced + in AUTO with drives on. Or collect poses manually below."
-                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
-
-                                <!-- Add Pose / Clear All -->
-                                <Grid Margin="8,4,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="8"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Button Grid.Column="0" Content="Add Pose"
-                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
-                                            Command="{Binding Scan.Calibration.AddPoseCommand}"
-                                            ToolTip.Tip="Capture the calibration board at the current robot pose"/>
-                                    <Button Grid.Column="2" Content="Clear All"
-                                            Classes="ToolbarButton"
-                                            Command="{Binding Scan.Calibration.ClearPosesCommand}"
-                                            ToolTip.Tip="Remove all collected poses and reset"/>
-                                </Grid>
-
-                                <TextBlock Text="{Binding Scan.Calibration.CaptureStatus}"
-                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
-
-                                <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                                <!-- Run Calibration -->
-                                <Button Content="Run Calibration"
-                                        Classes="PrimaryButton" HorizontalAlignment="Stretch"
-                                        Margin="8,4,8,2"
-                                        Command="{Binding Scan.Calibration.CalibrateCommand}"
-                                        ToolTip.Tip="Compute hand-eye calibration from collected poses (requires ≥ 3)"/>
-                                <TextBlock Text="{Binding Scan.Calibration.CalibrateStatus}"
-                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
-
-                                <!-- Result section (shown once a valid result exists) -->
-                                <StackPanel IsVisible="{Binding Scan.Calibration.HasResult}">
-                                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-                                    <TextBlock Text="RESULT" Classes="SectionHeader"/>
-
-                                    <!-- Residuals -->
-                                    <Grid Margin="8,2,8,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Rot residual" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResidualRot, StringFormat={}{0:F3} °}"/>
-                                    </Grid>
-                                    <Grid Margin="8,2,8,6">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Trans residual" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResidualTrans, StringFormat={}{0:F3} mm}"/>
-                                    </Grid>
-
-                                    <!-- TCP XYZ -->
-                                    <TextBlock Text="CAMERA TCP OFFSET" Classes="SectionHeader"/>
-                                    <Grid Margin="8,2,8,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultX, StringFormat={}{0:F2} mm}"/>
-                                    </Grid>
-                                    <Grid Margin="8,2,8,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultY, StringFormat={}{0:F2} mm}"/>
-                                    </Grid>
-                                    <Grid Margin="8,2,8,6">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultZ, StringFormat={}{0:F2} mm}"/>
-                                    </Grid>
-
-                                    <!-- TCP ABC -->
-                                    <Grid Margin="8,2,8,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultA, StringFormat={}{0:F3} °}"/>
-                                    </Grid>
-                                    <Grid Margin="8,2,8,2">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="B" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultB, StringFormat={}{0:F3} °}"/>
-                                    </Grid>
-                                    <Grid Margin="8,2,8,8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20"/>
-                                            <ColumnDefinition Width="*"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="C" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   Text="{Binding Scan.Calibration.ResultC, StringFormat={}{0:F3} °}"/>
-                                    </Grid>
-
-                                    <!-- Apply to TCP -->
-                                    <Button Content="{Binding Scan.Calibration.ApplyButtonLabel}"
-                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
-                                            Margin="8,4,8,8"
-                                            Command="{Binding Scan.Calibration.ApplyToTcpCommand}"
-                                            ToolTip.Tip="Write this result into the TCP OFFSET fields for the active tool"/>
-                                </StackPanel>
-
-                            </StackPanel>
-                        </Expander>
-
-                    </StackPanel>
-                </ScrollViewer>
-
-            </Grid>
-
-            <!-- SUBTRACTIVE tab -->
-            <ScrollViewer Grid.Row="1"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          IsVisible="{Binding IsSubtractiveTab}"
-                          Background="#E62e2e2e">
-                <StackPanel Margin="0,8">
-                <Button Grid.Row="0"
-                        HorizontalAlignment="Left"
-                        Margin="8,6,8,2"
-                        Padding="8,4"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        FontSize="11"
-                        Foreground="{DynamicResource TextSecondary}"
-                        Content="&#8592;  Back to steps"
-                        Command="{Binding ShowAdditiveCommand}"/>
-                    <TextBlock Text="MILLING" Classes="SectionHeader"/>
-                    <TextBlock Text="HSD ES951 spindle finish — carve a relief into the printed blank."
-                               Classes="LabelMuted" Margin="12,0,12,8" TextWrapping="Wrap"/>
-
-                    <!-- Relief heightmap -->
-                    <TextBlock Text="RELIEF HEIGHTMAP" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
-                        <TextBox Grid.Column="0" Watermark="grayscale .png / .jpg" FontSize="11"
-                                 Text="{Binding Subtractive.HeightmapPath, Mode=TwoWay}"/>
-                        <Button Grid.Column="1" Content="Browse" Margin="4,0,0,0" FontSize="11"
-                                Command="{Binding Subtractive.BrowseHeightmapCommand}"
-                                ToolTip.Tip="Pick a grayscale relief image (white = high surface)"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
-                                       Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
-                    </Grid>
-                    <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
-                              IsChecked="{Binding Subtractive.InvertHeightmap, Mode=TwoWay}"/>
-
-                    <!-- Displaced surface: PBR map detail -> real geometry -->
-                    <TextBlock Text="DISPLACED SURFACE (PBR detail)" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,8,8,2"/>
-                    <TextBlock Text="Pushes the low-poly mesh along its normals by the map above (or the model's normal map if none). This is the surface the mill follows."
-                               Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Displacement distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
-                                       Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
-                    </Grid>
-                    <Button Margin="8,2,8,4"
-                            Content="Preview Displaced Surface"
-                            Classes="SecondaryButton"
-                            HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Build and show the detailed surface from the model's maps (the geometry the mill rides)"
-                            Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
-
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Analysis tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
-                                       Minimum="0.01" Maximum="5" Increment="0.05" FormatString="F2" FontSize="11"/>
-                    </Grid>
-
-                    <Button Margin="8,0,8,4"
-                            Content="Generate Multi-Axis Toolpath"
-                            Classes="PrimaryButton"
-                            HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Surface-following finish pass over the displaced surface (tool axis follows the surface normal)"
-                            Command="{Binding $parent[Window].DataContext.Viewport.GenerateMultiAxisCommand}"/>
-
-                    <Border Margin="8,0,8,6" Padding="6" CornerRadius="5" Background="{DynamicResource Bg1}"
-                            IsVisible="{Binding Subtractive.MillAnalysisText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
-                        <TextBlock Text="{Binding Subtractive.MillAnalysisText}" Classes="LabelMuted"
-                                   FontSize="11" TextWrapping="Wrap"/>
-                    </Border>
-
-                    <!-- Tool &amp; cutting -->
-                    <TextBlock Text="TOOL &amp; CUTTING" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Tool diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ToolDiameterMm, Mode=TwoWay}"
-                                       Minimum="0.5" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
-                    </Grid>
-                    <CheckBox Margin="8,0,8,4" Content="Ball-nose (off = flat end-mill)" FontSize="11"
-                              IsChecked="{Binding Subtractive.BallEnd, Mode=TwoWay}"/>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Stepover (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepoverMm, Mode=TwoWay}"
-                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Stepdown (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
-                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Finish allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FinishAllowanceMm, Mode=TwoWay}"
-                                       Minimum="0" Maximum="10" Increment="0.1" FormatString="F2" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Feed rate (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FeedRateMmMin, Mode=TwoWay}"
-                                       Minimum="100" Maximum="15000" Increment="100" FormatString="F0" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Plunge feed (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlungeFeedMmMin, Mode=TwoWay}"
-                                       Minimum="50" Maximum="10000" Increment="50" FormatString="F0" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Safe / rapid Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.RapidZMm, Mode=TwoWay}"
-                                       Minimum="1" Maximum="500" Increment="1" FormatString="F0" FontSize="11"/>
-                    </Grid>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
-                        <TextBlock Grid.Column="0" Text="Spindle RPM" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.SpindleRpm, Mode=TwoWay}"
-                                       Minimum="0" Maximum="30000" Increment="500" FormatString="F0" FontSize="11"/>
-                    </Grid>
-
-                    <!-- Placement -->
-                    <TextBlock Text="PLACEMENT" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
-                    <CheckBox Margin="8,0,8,4" Content="Reference Z from part top" FontSize="11"
-                              IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
-                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
-                        <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
-                                       Increment="1" FormatString="F1" FontSize="11"/>
-                    </Grid>
-                    <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"
-                              IsChecked="{Binding Subtractive.AutoFootprint, Mode=TwoWay}"/>
-
-                    <Button Margin="8,4,8,8"
-                            Content="Generate Mill Toolpath"
-                            Classes="PrimaryButton"
-                            HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Carve the relief into the selected blank (relief milling)"
-                            Command="{Binding $parent[Window].DataContext.Viewport.MillCommand}"/>
-
-                    <Button Margin="8,0,8,4"
-                            Content="Export Mill KRL"
-                            Classes="PrimaryButton"
-                            HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
-                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
-
-                    <Button Margin="8,0,8,4"
-                            Content="Send to Robot"
-                            Classes="SecondaryButton"
-                            HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Save mill KRL to the cell robot"
-                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
-                </StackPanel>
-            </ScrollViewer>
-
-            <!-- TOOLPATH tab -->
-            <Grid Grid.Row="1" IsVisible="{Binding IsToolpathTab}" Background="#E62e2e2e">
-                <!-- Steps are the panel home; this grid opens from step 4 / toolpath selection -->
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-            <ScrollViewer Grid.Row="0"
-                          VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled">
-                <StackPanel Margin="0,8">
-                <Button Grid.Row="0"
-                        HorizontalAlignment="Left"
-                        Margin="8,6,8,2"
-                        Padding="8,4"
-                        Background="Transparent"
-                        BorderThickness="0"
-                        FontSize="11"
-                        Foreground="{DynamicResource TextSecondary}"
-                        Content="&#8592;  Back to steps"
-                        Command="{Binding ShowAdditiveCommand}"/>
-                    <TextBlock Text="TOOLPATH" Classes="SectionHeader"/>
-
-                    <!-- No toolpath selected -->
-                    <TextBlock Text="Select a toolpath to view options."
-                               Classes="LabelMuted" Margin="12,4"
-                               IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsToolpathSelected}"/>
-
-                    <!-- Options — shown only when a toolpath is selected -->
-                    <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsToolpathSelected}">
+                    <!-- Toolpath options — live once a toolpath exists (scrub session) -->
+                    <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.IsScrubSessionActive}">
 
                     <!-- SEAM — re-position the seam of the generated toolpath in place (no re-slice) -->
                     <StackPanel Margin="0,0,0,8">
@@ -2029,9 +1538,469 @@
                     <!-- Mill-phase relief milling lives in the SUBTRACTIVE tab (auto-selected on the Mill phase). -->
 
                     </StackPanel>
+
+                        
+                        <StackPanel Margin="0,0,0,6">
+
+                        <StackPanel Margin="0,2,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="80"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
+                            </Grid>
+                        </StackPanel>
+                    
+                            <!-- Export to Robot lives in the top menu bar. -->
+                        </StackPanel>
+                    
+                        </StackPanel>
+                    </Expander>
+
+                                        
+
+                    <!-- Other workflows (tab bar was removed; steps are the panel home) -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
+                        <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                        <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
+                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
+                                IsVisible="{Binding ShowScanTabButton}" Command="{Binding ShowScanCommand}"/>
+                        <Button Content="MILLING" FontSize="10" Padding="6,2" Background="Transparent"
+                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
+                                IsVisible="{Binding ShowSubtractiveTabButton}" Command="{Binding ShowSubtractiveCommand}"/>
+                    </StackPanel>
+
+                </StackPanel>
+                </ScrollViewer>
+            </Grid>
+
+            <!-- SCAN tab -->
+            <Grid Grid.Row="1" IsVisible="{Binding IsScanTab}" Background="#E62e2e2e">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- SCAN sub-tab bar -->
+                <Border Grid.Row="0"
+                        Background="{DynamicResource Bg3}"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="&#8592; STEPS" Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
+                        <Button Content="CAPTURE"  Classes="TabButton" Classes.active="{Binding Scan.IsCaptureSubTab}"     Command="{Binding Scan.ShowCaptureCommand}"/>
+                        <Button Content="SETTINGS" Classes="TabButton" Classes.active="{Binding Scan.IsCalibrationSubTab}" Command="{Binding Scan.ShowCalibrationCommand}"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- CAPTURE sub-tab -->
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Background="{DynamicResource Bg2}"
+                              IsVisible="{Binding Scan.IsCaptureSubTab}">
+                    <StackPanel Margin="0,8">
+
+                        <!-- QUICK POSITIONS -->
+                        <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+                                <TextBlock Classes="LabelMuted" Margin="8,4,8,6" TextWrapping="Wrap"
+                                           Text="Recall saved scan poses. Robot must be synced before moving or saving."/>
+
+                                <ItemsControl ItemsSource="{Binding Scan.QuickPositions}" Margin="8,0,8,4">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Content="{Binding Label}"
+                                                    Classes="PrimaryButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    Margin="0,0,0,4"
+                                                    Command="{Binding MoveCommand}"
+                                                    ToolTip.Tip="Move the robot to this saved position"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <TextBlock Text="Save current pose" Classes="LabelMuted" Margin="8,4,8,2"
+                                           ToolTip.Tip="Captures the synced robot pose ($POS_ACT / $AXIS_ACT) as a new quick position"/>
+                                <Grid Margin="8,0,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0"
+                                             Classes="PanelTextBox"
+                                             Text="{Binding Scan.NewQuickPositionName, Mode=TwoWay}"
+                                             PlaceholderText="Position name"/>
+                                    <Button Grid.Column="2"
+                                            Content="Save"
+                                            Classes="ToolbarButton"
+                                            Command="{Binding Scan.SaveQuickPositionCommand}"
+                                            ToolTip.Tip="Save the current synced robot pose as a quick position"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Scan.QuickPositionStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- CAMERA -->
+                        <Expander Classes="SectionExpander" Header="CAMERA" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+                                <Grid Margin="8,2,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="120"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Camera IP" VerticalAlignment="Center" Classes="LabelMuted"
+                                               ToolTip.Tip="Address of the Zivid camera on the cell network"/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Scan.CameraIp}"/>
+                                </Grid>
+
+                                <Button Content="Test Scan"
+                                        Classes="PrimaryButton"
+                                        HorizontalAlignment="Stretch"
+                                        Margin="8,8,8,2"
+                                        Command="{Binding Scan.TestScanCommand}"
+                                        ToolTip.Tip="Capture a single frame from the Zivid camera and add it to the scene"/>
+                                <TextBlock Text="{Binding Scan.ScanStatus}"
+                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Expander>
+
+                        <!-- OUTPUT -->
+                        <Expander Classes="SectionExpander" Header="OUTPUT" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+                                <TextBlock Text="Scan output directory" Classes="LabelMuted" Margin="8,2,8,2"
+                                           ToolTip.Tip="Captured scans (.zdf / .ply) are written here. Relative paths resolve against the application directory."/>
+                                <TextBox Classes="PanelTextBox" Margin="8,0,8,4" Text="{Binding Scan.OutputDirectory}"/>
+                            </StackPanel>
+                        </Expander>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- SETTINGS sub-tab (hand-eye calibration) -->
+                <ScrollViewer Grid.Row="1"
+                              VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Background="{DynamicResource Bg2}"
+                              IsVisible="{Binding Scan.IsCalibrationSubTab}">
+                    <StackPanel Margin="0,8">
+
+                        <Expander Classes="SectionExpander" Header="HAND-EYE CALIBRATION" IsExpanded="False">
+                            <StackPanel Margin="0,2,0,6">
+
+                                <TextBlock Classes="LabelMuted" Margin="8,4,8,8" TextWrapping="Wrap"
+                                           Text="Place the calibration board on the print bed. Move the robot to several distinct positions and add a pose at each. Aim for ≥ 10 poses with varied orientations."/>
+
+                                <!-- Pose count -->
+                                <TextBlock Text="{Binding Scan.Calibration.PoseCountLabel}"
+                                           Classes="LabelMuted" Margin="8,4,8,2" FontWeight="SemiBold"/>
+
+                                <!-- Automated pose sweep -->
+                                <Button Content="AUTO-CALIBRATE SCAN TOOL"
+                                        Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,2,8,2"
+                                        Command="{Binding Scan.Calibration.AutoCalibrateCommand}"
+                                        ToolTip.Tip="Place the calibration card in the bed centre and aim the scanner at it. Runs SCAN_TOOL_CAL (or start it on the pendant): the robot nutates the wrist through 9 views, the app scans at each, then computes and applies the hand-eye result."/>
+                                <TextBlock Text="Auto: card in the bed centre, scanner aimed at it, robot synced + in AUTO with drives on. Or collect poses manually below."
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+
+                                <!-- Add Pose / Clear All -->
+                                <Grid Margin="8,4,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button Grid.Column="0" Content="Add Pose"
+                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                            Command="{Binding Scan.Calibration.AddPoseCommand}"
+                                            ToolTip.Tip="Capture the calibration board at the current robot pose"/>
+                                    <Button Grid.Column="2" Content="Clear All"
+                                            Classes="ToolbarButton"
+                                            Command="{Binding Scan.Calibration.ClearPosesCommand}"
+                                            ToolTip.Tip="Remove all collected poses and reset"/>
+                                </Grid>
+
+                                <TextBlock Text="{Binding Scan.Calibration.CaptureStatus}"
+                                           Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+
+                                <!-- Run Calibration -->
+                                <Button Content="Run Calibration"
+                                        Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                        Margin="8,4,8,2"
+                                        Command="{Binding Scan.Calibration.CalibrateCommand}"
+                                        ToolTip.Tip="Compute hand-eye calibration from collected poses (requires ≥ 3)"/>
+                                <TextBlock Text="{Binding Scan.Calibration.CalibrateStatus}"
+                                           Classes="LabelMuted" Margin="8,2,8,4" TextWrapping="Wrap"/>
+
+                                <!-- Result section (shown once a valid result exists) -->
+                                <StackPanel IsVisible="{Binding Scan.Calibration.HasResult}">
+                                    <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                                    <TextBlock Text="RESULT" Classes="SectionHeader"/>
+
+                                    <!-- Residuals -->
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Rot residual" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResidualRot, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Trans residual" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResidualTrans, StringFormat={}{0:F3} mm}"/>
+                                    </Grid>
+
+                                    <!-- TCP XYZ -->
+                                    <TextBlock Text="CAMERA TCP OFFSET" Classes="SectionHeader"/>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultX, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultY, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultZ, StringFormat={}{0:F2} mm}"/>
+                                    </Grid>
+
+                                    <!-- TCP ABC -->
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="A" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultA, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,2">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="B" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultB, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="C" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="1" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   Text="{Binding Scan.Calibration.ResultC, StringFormat={}{0:F3} °}"/>
+                                    </Grid>
+
+                                    <!-- Apply to TCP -->
+                                    <Button Content="{Binding Scan.Calibration.ApplyButtonLabel}"
+                                            Classes="PrimaryButton" HorizontalAlignment="Stretch"
+                                            Margin="8,4,8,8"
+                                            Command="{Binding Scan.Calibration.ApplyToTcpCommand}"
+                                            ToolTip.Tip="Write this result into the TCP OFFSET fields for the active tool"/>
+                                </StackPanel>
+
+                            </StackPanel>
+                        </Expander>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+            </Grid>
+
+            <!-- SUBTRACTIVE tab -->
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          IsVisible="{Binding IsSubtractiveTab}"
+                          Background="#E62e2e2e">
+                <StackPanel Margin="0,8">
+                <Button Grid.Row="0"
+                        HorizontalAlignment="Left"
+                        Margin="8,6,8,2"
+                        Padding="8,4"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontSize="11"
+                        Foreground="{DynamicResource TextSecondary}"
+                        Content="&#8592;  Back to steps"
+                        Command="{Binding ShowAdditiveCommand}"/>
+                    <TextBlock Text="MILLING" Classes="SectionHeader"/>
+                    <TextBlock Text="HSD ES951 spindle finish — carve a relief into the printed blank."
+                               Classes="LabelMuted" Margin="12,0,12,8" TextWrapping="Wrap"/>
+
+                    <!-- Relief heightmap -->
+                    <TextBlock Text="RELIEF HEIGHTMAP" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto">
+                        <TextBox Grid.Column="0" Watermark="grayscale .png / .jpg" FontSize="11"
+                                 Text="{Binding Subtractive.HeightmapPath, Mode=TwoWay}"/>
+                        <Button Grid.Column="1" Content="Browse" Margin="4,0,0,0" FontSize="11"
+                                Command="{Binding Subtractive.BrowseHeightmapCommand}"
+                                ToolTip.Tip="Pick a grayscale relief image (white = high surface)"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Height scale (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.HeightScaleMm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="200" Increment="0.5" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,4" Content="Invert (black = high)" FontSize="11"
+                              IsChecked="{Binding Subtractive.InvertHeightmap, Mode=TwoWay}"/>
+
+                    <!-- Displaced surface: PBR map detail -> real geometry -->
+                    <TextBlock Text="DISPLACED SURFACE (PBR detail)" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,8,8,2"/>
+                    <TextBlock Text="Pushes the low-poly mesh along its normals by the map above (or the model's normal map if none). This is the surface the mill follows."
+                               Classes="LabelMuted" Margin="8,0,8,4" TextWrapping="Wrap"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Displacement distance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.DisplacementDistanceMm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="100" Increment="0.25" FormatString="F2" FontSize="11"/>
+                    </Grid>
+                    <Button Margin="8,2,8,4"
+                            Content="Preview Displaced Surface"
+                            Classes="SecondaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Build and show the detailed surface from the model's maps (the geometry the mill rides)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.PreviewDisplacedCommand}"/>
+
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Analysis tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.AnalysisToleranceMm, Mode=TwoWay}"
+                                       Minimum="0.01" Maximum="5" Increment="0.05" FormatString="F2" FontSize="11"/>
+                    </Grid>
+
+                    <Button Margin="8,0,8,4"
+                            Content="Generate Multi-Axis Toolpath"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Surface-following finish pass over the displaced surface (tool axis follows the surface normal)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.GenerateMultiAxisCommand}"/>
+
+                    <Border Margin="8,0,8,6" Padding="6" CornerRadius="5" Background="{DynamicResource Bg1}"
+                            IsVisible="{Binding Subtractive.MillAnalysisText, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                        <TextBlock Text="{Binding Subtractive.MillAnalysisText}" Classes="LabelMuted"
+                                   FontSize="11" TextWrapping="Wrap"/>
+                    </Border>
+
+                    <!-- Tool &amp; cutting -->
+                    <TextBlock Text="TOOL &amp; CUTTING" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Tool diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ToolDiameterMm, Mode=TwoWay}"
+                                       Minimum="0.5" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,4" Content="Ball-nose (off = flat end-mill)" FontSize="11"
+                              IsChecked="{Binding Subtractive.BallEnd, Mode=TwoWay}"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Stepover (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepoverMm, Mode=TwoWay}"
+                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Stepdown (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.StepdownMm, Mode=TwoWay}"
+                                       Minimum="0.1" Maximum="20" Increment="0.1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Finish allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FinishAllowanceMm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="10" Increment="0.1" FormatString="F2" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Feed rate (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.FeedRateMmMin, Mode=TwoWay}"
+                                       Minimum="100" Maximum="15000" Increment="100" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Plunge feed (mm/min)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.PlungeFeedMmMin, Mode=TwoWay}"
+                                       Minimum="50" Maximum="10000" Increment="50" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Safe / rapid Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.RapidZMm, Mode=TwoWay}"
+                                       Minimum="1" Maximum="500" Increment="1" FormatString="F0" FontSize="11"/>
+                    </Grid>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80">
+                        <TextBlock Grid.Column="0" Text="Spindle RPM" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.SpindleRpm, Mode=TwoWay}"
+                                       Minimum="0" Maximum="30000" Increment="500" FormatString="F0" FontSize="11"/>
+                    </Grid>
+
+                    <!-- Placement -->
+                    <TextBlock Text="PLACEMENT" Classes="LabelMuted" FontWeight="SemiBold" Margin="8,6,8,4"/>
+                    <CheckBox Margin="8,0,8,4" Content="Reference Z from part top" FontSize="11"
+                              IsChecked="{Binding Subtractive.AutoReferenceFromTop, Mode=TwoWay}"/>
+                    <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding !Subtractive.AutoReferenceFromTop}">
+                        <TextBlock Grid.Column="0" Text="Reference Z (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                        <NumericUpDown Grid.Column="1" Value="{Binding Subtractive.ReferencePlaneZ, Mode=TwoWay}"
+                                       Increment="1" FormatString="F1" FontSize="11"/>
+                    </Grid>
+                    <CheckBox Margin="8,0,8,8" Content="Footprint from part bounds" FontSize="11"
+                              IsChecked="{Binding Subtractive.AutoFootprint, Mode=TwoWay}"/>
+
+                    <Button Margin="8,4,8,8"
+                            Content="Generate Mill Toolpath"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Carve the relief into the selected blank (relief milling)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.MillCommand}"/>
+
+                    <Button Margin="8,0,8,4"
+                            Content="Export Mill KRL"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
+
+                    <Button Margin="8,0,8,4"
+                            Content="Send to Robot"
+                            Classes="SecondaryButton"
+                            HorizontalAlignment="Stretch"
+                            ToolTip.Tip="Save mill KRL to the cell robot"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
                 </StackPanel>
             </ScrollViewer>
-            </Grid>
+
 
         </Grid>
     </Border>
