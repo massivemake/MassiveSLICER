@@ -992,13 +992,13 @@
         </Setter>
     </Style>
     <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar">
-        <Setter Property="Width" Value="12"/>
+        <Setter Property="Width" Value="9"/>
         <Setter Property="Margin" Value="0,4,0,4"/>
         <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Opacity" Value="0.85"/>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Background="Transparent" Padding="2,2,0,2">
+                <Border Background="Transparent" Padding="1,2,0,2">
                     <Track Minimum="{TemplateBinding Minimum}"
                            Maximum="{TemplateBinding Maximum}"
                            Value="{TemplateBinding Value, Mode=TwoWay}"
@@ -1017,7 +1017,7 @@
                             <Thumb MinHeight="44">
                                 <Thumb.Template>
                                     <ControlTemplate>
-                                        <Border Background="#4D000000" CornerRadius="5"/>
+                                        <Border Background="#4D000000" CornerRadius="4"/>
                                     </ControlTemplate>
                                 </Thumb.Template>
                             </Thumb>

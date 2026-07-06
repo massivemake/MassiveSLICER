@@ -45,24 +45,26 @@
                           Classes="Floating"
                           HorizontalAlignment="Left"
                           Width="309"
-                          Padding="0,0,9,0"
                           Margin="9,56,0,9"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           ZIndex="5">
-                <views:LeftPanelView x:Name="LeftPanelControl" DataContext="{Binding LeftPanel}"/>
+                <Border Padding="0,0,9,0">
+                    <views:LeftPanelView x:Name="LeftPanelControl" DataContext="{Binding LeftPanel}"/>
+                </Border>
             </ScrollViewer>
 
             <ScrollViewer x:Name="RightPanelHost"
                           Classes="Floating"
                           HorizontalAlignment="Right"
                           Width="309"
-                          Padding="9,0,0,0"
-                          Margin="0,56,9,9"
+                          Margin="0,56,0,9"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
                           ZIndex="5">
-                <views:RightPanelView x:Name="RightPanel" DataContext="{Binding RightPanel}"/>
+                <Border Padding="0,0,9,0">
+                    <views:RightPanelView x:Name="RightPanel" DataContext="{Binding RightPanel}"/>
+                </Border>
             </ScrollViewer>
 
             <!-- Toolbar — constant slight translucency (background set in ToolbarView) -->
