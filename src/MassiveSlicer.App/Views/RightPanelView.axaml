@@ -998,7 +998,7 @@
                                 <TextBlock Margin="8,2,8,4" TextWrapping="Wrap"
                                            Classes="LabelMuted" FontSize="10"
                                            IsVisible="{Binding Additive.SurfaceModeActive}"
-                                           Text="Fill patterns apply when Slicing mode is Normal — Surface mode emits boundary chains only."/>
+                                           Text="In Surface mode the fill runs across closed boundary chains; open chains keep their boundary paths."/>
 
                             </StackPanel>
                         </StackPanel>

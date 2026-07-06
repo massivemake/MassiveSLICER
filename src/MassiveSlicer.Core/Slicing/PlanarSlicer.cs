@@ -229,25 +229,39 @@ public static class PlanarSlicer
         }
         if (insetContours.Count == 0) return new List<ContourTrack>();
 
-        // ── Infill mode: replace shell contours with a continuous fill pattern ──
-        if (!surfaceMode && settings.InfillPattern != InfillPattern.None)
+        // ── Infill mode: replace shell contours with a continuous fill pattern.
+        // Surface mode fills across CLOSED boundary chains (open chains can't bound
+        // a region, so layers without any closed chain keep their boundary paths).
+        if (settings.InfillPattern != InfillPattern.None)
         {
-            float baseAngle = settings.InfillAngleDeg;
-            float angle = settings.InfillPattern switch
+            List<List<Vector2>> fillPolys;
+            if (surfaceMode)
             {
-                InfillPattern.Grid          => baseAngle + (layer.Index % 2) * 90f,
-                InfillPattern.GhostMeshGrid => baseAngle + (layer.Index % 2) * 90f,
-                InfillPattern.Triangle      => baseAngle + (layer.Index % 3) * 60f,
-                _                           => baseAngle,
-            };
-            float spacing = settings.InfillSpacingMm > 0f
-                ? settings.InfillSpacingMm
-                : settings.BeadWidth;
-            if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
-                InfillGenerator.EmitGhostMesh(insetContours, z, layer, spacing, angle, isLastLayer);
-            else
-                InfillGenerator.Emit(insetContours, z, layer, spacing, angle);
-            return new List<ContourTrack>();
+                fillPolys = new List<List<Vector2>>();
+                for (int ci = 0; ci < insetContours.Count; ci++)
+                    if (insetClosed[ci]) fillPolys.Add(insetContours[ci]);
+            }
+            else fillPolys = insetContours;
+
+            if (fillPolys.Count > 0)
+            {
+                float baseAngle = settings.InfillAngleDeg;
+                float angle = settings.InfillPattern switch
+                {
+                    InfillPattern.Grid          => baseAngle + (layer.Index % 2) * 90f,
+                    InfillPattern.GhostMeshGrid => baseAngle + (layer.Index % 2) * 90f,
+                    InfillPattern.Triangle      => baseAngle + (layer.Index % 3) * 60f,
+                    _                           => baseAngle,
+                };
+                float spacing = settings.InfillSpacingMm > 0f
+                    ? settings.InfillSpacingMm
+                    : settings.BeadWidth;
+                if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                    InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer);
+                else
+                    InfillGenerator.Emit(fillPolys, z, layer, spacing, angle);
+                return new List<ContourTrack>();
+            }
         }
 
         var guideXY = settings.SeamGuidePoints.Select(g => g.ToXY()).ToList();
