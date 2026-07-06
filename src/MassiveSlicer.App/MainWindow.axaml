@@ -53,6 +53,11 @@
                 <Style Selector="Border.GhostCard:pointerover">
                     <Setter Property="Opacity" Value="1"/>
                 </Style>
+                <!-- Keep the card solid while a control inside it has focus (e.g. an
+                     open ComboBox popup grabs the pointer, which would ghost the card). -->
+                <Style Selector="Border.GhostCard:focus-within">
+                    <Setter Property="Opacity" Value="1"/>
+                </Style>
             </Grid.Styles>
 
             <!-- Left floating panel: cell / import / outliner -->
