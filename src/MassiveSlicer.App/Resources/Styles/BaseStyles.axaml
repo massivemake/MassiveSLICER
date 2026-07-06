@@ -936,7 +936,7 @@
         <Setter Property="Template">
             <ControlTemplate>
                 <StackPanel>
-                    <ToggleButton Name="PART_toggle"
+                    <ToggleButton Name="HeaderToggle"
                                   IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
                                   HorizontalAlignment="Stretch"
                                   HorizontalContentAlignment="Stretch"
@@ -968,7 +968,7 @@
                                       Content="{TemplateBinding Content}"
                                       ContentTemplate="{TemplateBinding ContentTemplate}"
                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                      IsVisible="{Binding #PART_toggle.IsChecked}"/>
+                                      IsVisible="{Binding #HeaderToggle.IsChecked}"/>
                 </StackPanel>
             </ControlTemplate>
         </Setter>
@@ -987,7 +987,7 @@
                         Margin="8,4"
                         ClipToBounds="True">
                     <StackPanel>
-                        <ToggleButton Name="PART_toggle"
+                        <ToggleButton Name="HeaderToggle"
                                       IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
                                       HorizontalAlignment="Stretch"
                                       HorizontalContentAlignment="Stretch"
@@ -1016,7 +1016,7 @@
                                           Content="{TemplateBinding Content}"
                                           ContentTemplate="{TemplateBinding ContentTemplate}"
                                           HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                          IsVisible="{Binding #PART_toggle.IsChecked}"/>
+                                          IsVisible="{Binding #HeaderToggle.IsChecked}"/>
                     </StackPanel>
                 </Border>
             </ControlTemplate>
@@ -1037,17 +1037,17 @@
         <Setter Property="RenderTransform"><RotateTransform Angle="0"/></Setter>
     </Style>
     <!-- Suppress ToggleButton default hover/checked/pressed backgrounds -->
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle /template/ Border">
         <Setter Property="Background"      Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pointerover /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:pointerover /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:checked /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:checked /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pressed /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:pressed /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
 
