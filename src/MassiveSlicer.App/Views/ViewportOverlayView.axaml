@@ -396,29 +396,29 @@
                     BorderBrush="#3D3D3D"
                     BorderThickness="1"
                     CornerRadius="6"
-                    Padding="10,6">
+                    Padding="3">
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="8,6"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="12,4"
                             Classes.active="{Binding IsMoveActive}"
                             Command="{Binding GizmoMoveCommand}">
-                        <ia:Icon Value="mdi-cursor-move" FontSize="16"/>
+                        <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="8,6"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="12,4"
                             Classes.active="{Binding IsRotateActive}"
                             Command="{Binding GizmoRotateCommand}">
-                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="16"/>
+                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="8,6"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="12,4"
                             Classes.active="{Binding IsScaleActive}"
                             Command="{Binding GizmoScaleCommand}">
-                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="16"/>
+                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
                     </Button>
                     <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
-                    <Button Classes="ToolbarButton" Padding="8,6"
+                    <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
                             ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
-                        <ia:Icon Value="mdi-target-variant" FontSize="16"/>
+                        <ia:Icon Value="mdi-target-variant" FontSize="14"/>
                     </Button>
                 </StackPanel>
             </Border>
