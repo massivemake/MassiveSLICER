@@ -55,16 +55,15 @@ public partial class MainWindow : Window
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName != nameof(ToolbarViewModel.IsRightPanelVisible)) return;
-            RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
+            RightPanelHost.IsVisible = vm.Toolbar.IsRightPanelVisible;
         };
 
         // Apply persisted panel visibility before first layout pass.
-        RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
+        RightPanelHost.IsVisible = vm.Toolbar.IsRightPanelVisible;
 
         // Ghosted cards must stay solid while a dropdown they own is open — the popup
         // steals the pointer (and focus), which would otherwise fade the card mid-use.
-        SetupGhostPin(LeftPanelCard);
-        SetupGhostPin(RightPanelCard);
+        SetupGhostPin();
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
@@ -323,7 +322,7 @@ public partial class MainWindow : Window
     /// so the ghost fade never starts — reacting on pointer-exit instead caused a visible
     /// fade-then-snap flicker because the popup steals the pointer first.
     /// </summary>
-    private void SetupGhostPin(Border card)
+    private void SetupGhostPin()
     {
         if (_ghostPinHooked) return;
         _ghostPinHooked = true;
@@ -341,14 +340,14 @@ public partial class MainWindow : Window
             }));
     }
 
-    /// <summary>Returns the ghosted sidebar card that visually contains <paramref name="control"/>, if any.</summary>
-    private Border? FindAncestorCard(Avalonia.Visual control)
+    /// <summary>Returns the ghosted floating card (StepCard expander) that contains <paramref name="control"/>, if any.</summary>
+    private static Expander? FindAncestorCard(Avalonia.Visual control)
     {
         Avalonia.Visual? cur = control;
         while (cur is not null)
         {
-            if (ReferenceEquals(cur, LeftPanelCard) || ReferenceEquals(cur, RightPanelCard))
-                return (Border)cur;
+            if (cur is Expander ex && ex.Classes.Contains("StepCard"))
+                return ex;
             cur = Avalonia.VisualTree.VisualExtensions.GetVisualParent(cur);
         }
         return null;
@@ -411,10 +410,14 @@ public partial class MainWindow : Window
         var viewportPng = await Viewport.CaptureScreenshotAsync();
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            // Capture the ghosted sidebar cards at full opacity so screenshots show the
-            // chrome. Local Opacity values beat the GhostCard style; transitions are
+            // Capture the ghosted floating cards at full opacity so screenshots show the
+            // chrome. Local Opacity values beat the StepCard style; transitions are
             // suspended so the change is instant, then everything reverts to the style.
-            Avalonia.Controls.Border[] ghostCards = [LeftPanelCard, RightPanelCard];
+            var ghostCards = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(this)
+                .OfType<Expander>()
+                .Where(x => x.Classes.Contains("StepCard"))
+                .Cast<Avalonia.Controls.Control>()
+                .ToArray();
             var savedTransitions = new Avalonia.Animation.Transitions?[ghostCards.Length];
             for (int i = 0; i < ghostCards.Length; i++)
             {
@@ -426,7 +429,7 @@ public partial class MainWindow : Window
             try
             {
                 return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface,
-                    [LeftPanelCard, RightPanelCard, ToolbarHost]);
+                    [LeftPanelHost, RightPanelHost, ToolbarHost]);
             }
             finally
             {

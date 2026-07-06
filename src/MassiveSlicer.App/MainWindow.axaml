@@ -40,59 +40,26 @@
             <views:ViewportView x:Name="Viewport"
                                 DataContext="{Binding Viewport}"/>
 
-            <!-- Ghosted sidebar cards: translucent until hovered, then fade to full. -->
-            <Grid.Styles>
-                <Style Selector="Border.GhostCard">
-                    <Setter Property="Opacity" Value="0.35"/>
-                    <Setter Property="Transitions">
-                        <Transitions>
-                            <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
-                        </Transitions>
-                    </Setter>
-                </Style>
-                <Style Selector="Border.GhostCard:pointerover">
-                    <Setter Property="Opacity" Value="1"/>
-                </Style>
-                <!-- Keep the card solid while a control inside it has focus, and while a
-                     dropdown owned by the card is open (popups live in a separate visual
-                     root, so :focus-within alone misses them — code-behind adds .pinned). -->
-                <Style Selector="Border.GhostCard:focus-within">
-                    <Setter Property="Opacity" Value="1"/>
-                </Style>
-                <Style Selector="Border.GhostCard.pinned">
-                    <Setter Property="Opacity" Value="1"/>
-                </Style>
-            </Grid.Styles>
-
-            <!-- Left floating panel: cell / import / outliner -->
-            <Border x:Name="LeftPanelCard"
-                    Classes="GhostCard"
-                    HorizontalAlignment="Left"
-                    Width="300"
-                    Margin="10,56,0,10"
-                    CornerRadius="8"
-                    ClipToBounds="True"
-                    Background="#E02b2b2b"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="1"
-                    ZIndex="5">
+            <!-- Floating card columns — transparent hosts; each card ghosts individually -->
+            <ScrollViewer x:Name="LeftPanelHost"
+                          HorizontalAlignment="Left"
+                          Width="300"
+                          Margin="10,56,0,10"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          ZIndex="5">
                 <views:LeftPanelView x:Name="LeftPanelControl" DataContext="{Binding LeftPanel}"/>
-            </Border>
+            </ScrollViewer>
 
-            <!-- Right floating panel: numbered workflow steps -->
-            <Border x:Name="RightPanelCard"
-                    Classes="GhostCard"
-                    HorizontalAlignment="Right"
-                    Width="300"
-                    Margin="0,56,10,10"
-                    CornerRadius="8"
-                    ClipToBounds="True"
-                    Background="#E02b2b2b"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="1"
-                    ZIndex="5">
+            <ScrollViewer x:Name="RightPanelHost"
+                          HorizontalAlignment="Right"
+                          Width="300"
+                          Margin="0,56,10,10"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          ZIndex="5">
                 <views:RightPanelView x:Name="RightPanel" DataContext="{Binding RightPanel}"/>
-            </Border>
+            </ScrollViewer>
 
             <!-- Toolbar — constant slight translucency (background set in ToolbarView) -->
             <Border x:Name="ToolbarHost"

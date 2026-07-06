@@ -978,9 +978,15 @@
         <Setter Property="HorizontalAlignment"        Value="Stretch"/>
         <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
         <Setter Property="Padding"                    Value="0"/>
+        <Setter Property="Opacity"                    Value="0.35"/>
+        <Setter Property="Transitions">
+            <Transitions>
+                <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
+            </Transitions>
+        </Setter>
         <Setter Property="Template">
             <ControlTemplate>
-                <Border Background="#B33d3d3d"
+                <Border Background="#E6333333"
                         BorderBrush="{DynamicResource Border1}"
                         BorderThickness="1"
                         CornerRadius="8"
@@ -1021,6 +1027,12 @@
                 </Border>
             </ControlTemplate>
         </Setter>
+    </Style>
+    <Style Selector="Expander.StepCard:pointerover">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+    <Style Selector="Expander.StepCard.pinned">
+        <Setter Property="Opacity" Value="1"/>
     </Style>
     <Style Selector="Expander.StepCard /template/ TextBlock#Chevron">
         <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>

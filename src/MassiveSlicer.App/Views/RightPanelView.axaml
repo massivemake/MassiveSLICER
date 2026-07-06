@@ -769,7 +769,7 @@
             </Grid>
 
             <!-- SCAN tab -->
-            <Grid Grid.Row="1" IsVisible="{Binding IsScanTab}">
+            <Grid Grid.Row="1" IsVisible="{Binding IsScanTab}" Background="#E62e2e2e">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -1035,8 +1035,8 @@
             <ScrollViewer Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Disabled"
-                          Background="{DynamicResource Bg2}"
-                          IsVisible="{Binding IsSubtractiveTab}">
+                          IsVisible="{Binding IsSubtractiveTab}"
+                          Background="#E62e2e2e">
                 <StackPanel Margin="0,8">
                 <Button Grid.Row="0"
                         HorizontalAlignment="Left"
@@ -1185,15 +1185,14 @@
             </ScrollViewer>
 
             <!-- TOOLPATH tab -->
-            <Grid Grid.Row="1" IsVisible="{Binding IsToolpathTab}">
+            <Grid Grid.Row="1" IsVisible="{Binding IsToolpathTab}" Background="#E62e2e2e">
                 <!-- Steps are the panel home; this grid opens from step 4 / toolpath selection -->
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
             <ScrollViewer Grid.Row="0"
                           VerticalScrollBarVisibility="Auto"
-                          HorizontalScrollBarVisibility="Disabled"
-                          Background="{DynamicResource Bg2}">
+                          HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,8">
                 <Button Grid.Row="0"
                         HorizontalAlignment="Left"

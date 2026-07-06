@@ -11,38 +11,14 @@
         <converters:BoolToEyeIconConverter x:Key="BoolToEyeIcon"/>
     </UserControl.Resources>
 
-    <Border Background="Transparent"
-            BorderBrush="{DynamicResource Border1}"
-            BorderThickness="0">
-        <Grid>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="36"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="Auto"/>
-                <RowDefinition Height="1"/>
-                <RowDefinition Height="32"/>
-                <RowDefinition Height="*"/>
-            </Grid.RowDefinitions>
+    <!-- Individual floating cards — no sidebar container. -->
+    <StackPanel>
 
-            <!-- Panel header -->
-            <Border Grid.Row="0"
-                    Background="{DynamicResource Bg3}"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,0,0,1">
-                <TextBlock Text="WORKSPACE"
-                           Classes="SectionHeader"
-                           Margin="8,0"
-                           VerticalAlignment="Center"/>
-            </Border>
-
-            <!-- Robot cell selector -->
-            <Border Grid.Row="1"
-                    Background="Transparent"
-                    Padding="8,6"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,0,0,1">
-                <StackPanel>
-                    <TextBlock Text="ROBOT CELL" Classes="LabelMuted" Margin="0,0,0,4"/>
+    <Expander Classes="StepCard" IsExpanded="True">
+        <Expander.Header>
+            <TextBlock Text="ROBOT CELL" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,2,10,10">
                     <ComboBox ItemsSource="{Binding CellNames}"
                               SelectedIndex="{Binding SelectedCellIndex, Mode=TwoWay}"
                               HorizontalAlignment="Stretch"
@@ -58,19 +34,15 @@
                             Command="{Binding DataContext.Toolbar.SyncRobotCommand,
                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                             ToolTip.Tip="Connect to the KRC4 controller (live joint streaming). Click again to desync."/>
-                </StackPanel>
-            </Border>
-
-            <!-- Separator -->
-            <!-- Import dropzone — click to browse, or drop model files -->
-            <Border Grid.Row="2"
-                    Background="Transparent"
-                    Padding="8,8"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,0,0,1">
-                <StackPanel>
-                    <TextBlock Text="IMPORT" Classes="LabelMuted" Margin="0,0,0,4"/>
-                    <Border x:Name="ImportDropZone"
+                
+        </StackPanel>
+    </Expander>
+    <Expander Classes="StepCard" IsExpanded="True">
+        <Expander.Header>
+            <TextBlock Text="IMPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,2,10,10">
+<Border x:Name="ImportDropZone"
                             Background="{DynamicResource Bg3}"
                             BorderBrush="{DynamicResource Border2}"
                             BorderThickness="1"
@@ -90,35 +62,14 @@
                                        HorizontalAlignment="Center"/>
                         </StackPanel>
                     </Border>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Row="3" Background="{DynamicResource Border1}"/>
-
-            <!-- Tab bar -->
-            <Border Grid.Row="4"
-                    Background="{DynamicResource Bg3}"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,0,0,1">
-                <StackPanel Orientation="Horizontal">
-                    <Button Content="OUTLINER" Classes="TabButton"
-                            Classes.active="{Binding IsOutlinerTabActive}"
-                            Command="{Binding SetTabCommand}" CommandParameter="Outliner"/>
-                    <Button Content="ROBOT"    Classes="TabButton"
-                            Classes.active="{Binding IsRobotTabActive}"
-                            Command="{Binding SetTabCommand}" CommandParameter="Robot"/>
-                    <Button Content="VIEWPORT" Classes="TabButton"
-                            Classes.active="{Binding IsViewportTabActive}"
-                            Command="{Binding SetTabCommand}" CommandParameter="Viewport"/>
-                </StackPanel>
-            </Border>
-
-            <!-- Tab content -->
-            <Grid Grid.Row="5">
-
-                <!-- Outliner tab (ItemsControl — not ListBox — so nested scan rows don't highlight the bed parent) -->
-                <ScrollViewer IsVisible="{Binding IsOutlinerTabActive}"
-                              VerticalScrollBarVisibility="Auto"
+        </StackPanel>
+    </Expander>
+    <Expander Classes="StepCard" IsExpanded="True">
+        <Expander.Header>
+            <TextBlock Text="OUTLINER" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,2,10,10">
+<ScrollViewer MaxHeight="420"                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               Background="Transparent">
                     <ItemsControl ItemsSource="{Binding OutlinerItems}" Padding="0">
@@ -131,455 +82,14 @@
                 </ScrollViewer>
 
                 <!-- Viewport tab -->
-                <ScrollViewer IsVisible="{Binding IsViewportTabActive}"
-                              VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="8,6">
-
-                        <!-- Backdrop -->
-                        <TextBlock Text="BACKDROP" Classes="SectionHeader" Margin="0,0,0,6"/>
-                        <ComboBox HorizontalAlignment="Stretch"
-                                  Margin="0,0,0,4"
-                                  ItemsSource="{Binding DataContext.Viewport.AvailableBackdrops,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedItem="{Binding DataContext.Viewport.ActiveBackdrop,
-                                                 RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                 Mode=TwoWay}">
-                            <ComboBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Name}"/>
-                                </DataTemplate>
-                            </ComboBox.ItemTemplate>
-                        </ComboBox>
-                        <!-- Opacity -->
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0"
-                                       Text="Opacity"
-                                       Classes="LabelMuted"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"/>
-                            <Slider Grid.Column="1"
-                                    Minimum="0" Maximum="1"
-                                    VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.BackdropOpacity,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                            Mode=TwoWay}"
-                                    ToolTip.Tip="Blend HDR backdrop over the shader background (works in all shader modes including Arctic)"/>
-                        </Grid>
-                        <!-- Blur -->
-                        <Grid Margin="0,0,0,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0"
-                                       Text="Blur"
-                                       Classes="LabelMuted"
-                                       VerticalAlignment="Center"
-                                       Margin="0,0,8,0"/>
-                            <Slider Grid.Column="1"
-                                    Minimum="0" Maximum="7"
-                                    VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.BackdropBlur,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                            Mode=TwoWay}"
-                                    ToolTip.Tip="Backdrop blur"/>
-                        </Grid>
-
-                        <!-- Shader mode — circular sphere buttons matching the prototype matcap grid.
-                             Center/GradientOrigin use % for relative coords; Radius is fraction of longest edge. -->
-                        <TextBlock Text="SHADER" Classes="SectionHeader" Margin="0,0,0,8"/>
-                        <WrapPanel HorizontalAlignment="Center">
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Standard"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Standard}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Standard">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#d0d0cc" Offset="0"/>
-                                        <GradientStop Color="#888888" Offset="0.55"/>
-                                        <GradientStop Color="#333333" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Clay"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Clay}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Clay">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#d4956a" Offset="0"/>
-                                        <GradientStop Color="#a0522d" Offset="0.55"/>
-                                        <GradientStop Color="#3d1a08" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Arctic — Rhino-style white clay presentation"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Arctic}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Arctic">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#ffffff" Offset="0"/>
-                                        <GradientStop Color="#e8e8ec" Offset="0.45"/>
-                                        <GradientStop Color="#b8bcc4" Offset="0.78"/>
-                                        <GradientStop Color="#f4f4f6" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Metal"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metal}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Metal">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#f0f0f0" Offset="0"/>
-                                        <GradientStop Color="#909090" Offset="0.40"/>
-                                        <GradientStop Color="#202020" Offset="0.75"/>
-                                        <GradientStop Color="#707070" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Chrome"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Chrome}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Chrome">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#ffffff" Offset="0"/>
-                                        <GradientStop Color="#ffffff" Offset="0.15"/>
-                                        <GradientStop Color="#555555" Offset="0.40"/>
-                                        <GradientStop Color="#eeeeee" Offset="0.60"/>
-                                        <GradientStop Color="#333333" Offset="0.80"/>
-                                        <GradientStop Color="#aaaaaa" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Matte Black"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=MatteBlack}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="MatteBlack">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#444444" Offset="0"/>
-                                        <GradientStop Color="#111111" Offset="0.55"/>
-                                        <GradientStop Color="#000000" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Purple"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Purple}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Purple">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#c8a0f0" Offset="0"/>
-                                        <GradientStop Color="#7030c0" Offset="0.55"/>
-                                        <GradientStop Color="#1a0040" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                            <Button Classes="ShaderSphereBtn" Margin="3"
-                                    ToolTip.Tip="Normals"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Normals}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Normals">
-                                <Button.Background>
-                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#ff9090" Offset="0"/>
-                                        <GradientStop Color="#8888ff" Offset="0.50"/>
-                                        <GradientStop Color="#22cc88" Offset="1"/>
-                                    </RadialGradientBrush>
-                                </Button.Background>
-                            </Button>
-
-                        </WrapPanel>
-
-                        <!-- Material channels — inspector debug views of the selected mesh's PBR maps. -->
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
-                        <TextBlock Text="MATERIAL CHANNELS" Classes="SectionHeader" Margin="0,0,0,6"/>
-                        <WrapPanel>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Base Color"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="BaseColor"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Metalness"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Metalness"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Roughness"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Roughness"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Normal"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="NormalMap"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="AO"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="AO"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Emission"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Emission"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="UV Checker"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="UvChecker"/>
-                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Wireframe"
-                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
-                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
-                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    CommandParameter="Wireframe"
-                                    ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
-                        </WrapPanel>
-
-                        <!-- Lighting -->
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
-                        <TextBlock Text="LIGHTING" Classes="SectionHeader" Margin="0,0,0,6"/>
-
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Azimuth" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="360" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.LightAzimuth,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Light azimuth (horizontal rotation)"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Elevation" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="90" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.LightElevation,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Light elevation (vertical angle)"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Intensity" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.LightIntensity,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Light intensity"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0.4" Maximum="2.5" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.Exposure,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="3" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.IblIntensity,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Environment reflection / IBL gain"/>
-                        </Grid>
-
-                        <!-- Cavity (Blender-style viewport shading) -->
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
-                        <TextBlock Text="CAVITY" Classes="SectionHeader" Margin="0,0,0,6"/>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
-                                      IsChecked="{Binding DataContext.Viewport.CavityEnabled,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                      ToolTip.Tip="Accentuate ridges and valleys for form readability"/>
-                            <TextBlock Grid.Column="1" Text="Cavity" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                                <TextBlock Text="Type" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
-                                <ComboBox MinWidth="72" FontSize="11"
-                                          ItemsSource="{Binding DataContext.Viewport.CavityModeOptions,
-                                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                          SelectedItem="{Binding DataContext.Viewport.CavityModeOption,
-                                                         RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                            </StackPanel>
-                        </Grid>
-                        <TextBlock Text="World Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
-                        <Grid Margin="0,0,0,2">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <Grid Grid.Column="0" Margin="0,0,0,4">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Ridge" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                        Value="{Binding DataContext.Viewport.CavityWorldRidge,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                            </Grid>
-                            <Grid Grid.Column="2">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Valley" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                        Value="{Binding DataContext.Viewport.CavityWorldValley,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                            </Grid>
-                        </Grid>
-                        <Grid Margin="0,0,0,6">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Distance" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"
-                                       ToolTip.Tip="World-space sampling radius (mm)"/>
-                            <Slider Grid.Column="1" Minimum="0.5" Maximum="50" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.CavityWorldDistance,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                        </Grid>
-                        <TextBlock Text="Screen Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
-                        <Grid Margin="0,0,0,12">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <Grid Grid.Column="0">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Ridge" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                        Value="{Binding DataContext.Viewport.CavityScreenRidge,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                            </Grid>
-                            <Grid Grid.Column="2">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Valley" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                        Value="{Binding DataContext.Viewport.CavityScreenValley,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                            </Grid>
-                        </Grid>
-
-                        <!-- Contact shadows -->
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
-                        <TextBlock Text="SHADOWS" Classes="SectionHeader" Margin="0,0,0,6"/>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Contact shadows" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
-                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
-                                       IsChecked="{Binding DataContext.Viewport.ShowContactShadows,
-                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                       ToolTip.Tip="Soft multiply shadows under bed, pedestal, and objects"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Size" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0.25" Maximum="3" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.ContactShadowSize,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Shadow spread (1 = default; higher = larger/softer)"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Darkness" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.ContactShadowDarkness,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Shadow strength (1 = default; 0 = off; higher = darker)"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Blur" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="3" VerticalAlignment="Center"
-                                    Value="{Binding DataContext.Viewport.ContactShadowBlur,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
-                                    ToolTip.Tip="Shadow edge softness (1 = default; 0 = sharp; higher = softer)"/>
-                        </Grid>
-
-                        <!-- Visibility toggles -->
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
-                        <TextBlock Text="VISIBILITY" Classes="SectionHeader" Margin="0,0,0,6"/>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Grid"     Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
-                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
-                                       IsChecked="{Binding DataContext.Viewport.ShowGrid,
-                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Axes"     Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
-                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
-                                       IsChecked="{Binding DataContext.Viewport.ShowAxes,
-                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                        </Grid>
-                        <Grid Margin="0,0,0,4">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Bed grid" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
-                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
-                                       IsChecked="{Binding DataContext.Viewport.ShowBedGrid,
-                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
-                        </Grid>
-
-                    </StackPanel>
-                </ScrollViewer>
-
-                <!-- Robot tab -->
-                <ScrollViewer IsVisible="{Binding IsRobotTabActive}"
-                              VerticalScrollBarVisibility="Auto"
+        </StackPanel>
+    </Expander>
+    <Expander Classes="StepCard" IsExpanded="False">
+        <Expander.Header>
+            <TextBlock Text="ROBOT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,2,10,10">
+<ScrollViewer MaxHeight="520"                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="0,8">
 
@@ -1062,9 +572,461 @@
 
                     </StackPanel>
                 </ScrollViewer>
+        </StackPanel>
+    </Expander>
+    <Expander Classes="StepCard" IsExpanded="False">
+        <Expander.Header>
+            <TextBlock Text="VIEWPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,2,10,10">
+<ScrollViewer MaxHeight="520"                               VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="8,6">
 
-            </Grid>
-        </Grid>
-    </Border>
+                        <!-- Backdrop -->
+                        <TextBlock Text="BACKDROP" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <ComboBox HorizontalAlignment="Stretch"
+                                  Margin="0,0,0,4"
+                                  ItemsSource="{Binding DataContext.Viewport.AvailableBackdrops,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                  SelectedItem="{Binding DataContext.Viewport.ActiveBackdrop,
+                                                 RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                 Mode=TwoWay}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Name}"/>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <!-- Opacity -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Opacity"
+                                       Classes="LabelMuted"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <Slider Grid.Column="1"
+                                    Minimum="0" Maximum="1"
+                                    VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.BackdropOpacity,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                            Mode=TwoWay}"
+                                    ToolTip.Tip="Blend HDR backdrop over the shader background (works in all shader modes including Arctic)"/>
+                        </Grid>
+                        <!-- Blur -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Blur"
+                                       Classes="LabelMuted"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <Slider Grid.Column="1"
+                                    Minimum="0" Maximum="7"
+                                    VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.BackdropBlur,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                            Mode=TwoWay}"
+                                    ToolTip.Tip="Backdrop blur"/>
+                        </Grid>
+
+                        <!-- Shader mode — circular sphere buttons matching the prototype matcap grid.
+                             Center/GradientOrigin use % for relative coords; Radius is fraction of longest edge. -->
+                        <TextBlock Text="SHADER" Classes="SectionHeader" Margin="0,0,0,8"/>
+                        <WrapPanel HorizontalAlignment="Center">
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Standard"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Standard}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Standard">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#d0d0cc" Offset="0"/>
+                                        <GradientStop Color="#888888" Offset="0.55"/>
+                                        <GradientStop Color="#333333" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Clay"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Clay}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Clay">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#d4956a" Offset="0"/>
+                                        <GradientStop Color="#a0522d" Offset="0.55"/>
+                                        <GradientStop Color="#3d1a08" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Arctic — Rhino-style white clay presentation"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Arctic}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Arctic">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#ffffff" Offset="0"/>
+                                        <GradientStop Color="#e8e8ec" Offset="0.45"/>
+                                        <GradientStop Color="#b8bcc4" Offset="0.78"/>
+                                        <GradientStop Color="#f4f4f6" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Metal"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metal}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Metal">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#f0f0f0" Offset="0"/>
+                                        <GradientStop Color="#909090" Offset="0.40"/>
+                                        <GradientStop Color="#202020" Offset="0.75"/>
+                                        <GradientStop Color="#707070" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Chrome"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Chrome}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Chrome">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#ffffff" Offset="0"/>
+                                        <GradientStop Color="#ffffff" Offset="0.15"/>
+                                        <GradientStop Color="#555555" Offset="0.40"/>
+                                        <GradientStop Color="#eeeeee" Offset="0.60"/>
+                                        <GradientStop Color="#333333" Offset="0.80"/>
+                                        <GradientStop Color="#aaaaaa" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Matte Black"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=MatteBlack}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="MatteBlack">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#444444" Offset="0"/>
+                                        <GradientStop Color="#111111" Offset="0.55"/>
+                                        <GradientStop Color="#000000" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Purple"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Purple}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Purple">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#c8a0f0" Offset="0"/>
+                                        <GradientStop Color="#7030c0" Offset="0.55"/>
+                                        <GradientStop Color="#1a0040" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                            <Button Classes="ShaderSphereBtn" Margin="3"
+                                    ToolTip.Tip="Normals"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Normals}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Normals">
+                                <Button.Background>
+                                    <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
+                                        <GradientStop Color="#ff9090" Offset="0"/>
+                                        <GradientStop Color="#8888ff" Offset="0.50"/>
+                                        <GradientStop Color="#22cc88" Offset="1"/>
+                                    </RadialGradientBrush>
+                                </Button.Background>
+                            </Button>
+
+                        </WrapPanel>
+
+                        <!-- Material channels — inspector debug views of the selected mesh's PBR maps. -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="MATERIAL CHANNELS" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <WrapPanel>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Base Color"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="BaseColor"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Metalness"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Metalness"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Roughness"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Roughness"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Normal"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="NormalMap"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="AO"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="AO"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Emission"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Emission"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="UV Checker"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="UvChecker"/>
+                            <Button Classes="ToolbarButton" Margin="0,0,4,4" Content="Wireframe"
+                                    Classes.active="{Binding DataContext.Viewport.ActiveShaderMode,
+                                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                                     Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
+                                    Command="{Binding DataContext.Viewport.SetShaderModeCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    CommandParameter="Wireframe"
+                                    ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
+                        </WrapPanel>
+
+                        <!-- Lighting -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="LIGHTING" Classes="SectionHeader" Margin="0,0,0,6"/>
+
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Azimuth" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="360" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.LightAzimuth,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Light azimuth (horizontal rotation)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Elevation" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="90" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.LightElevation,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Light elevation (vertical angle)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Intensity" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.LightIntensity,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Light intensity"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0.4" Maximum="2.5" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.Exposure,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="3" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.IblIntensity,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Environment reflection / IBL gain"/>
+                        </Grid>
+
+                        <!-- Cavity (Blender-style viewport shading) -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="CAVITY" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
+                                      IsChecked="{Binding DataContext.Viewport.CavityEnabled,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                      ToolTip.Tip="Accentuate ridges and valleys for form readability"/>
+                            <TextBlock Grid.Column="1" Text="Cavity" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="Type" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <ComboBox MinWidth="72" FontSize="11"
+                                          ItemsSource="{Binding DataContext.Viewport.CavityModeOptions,
+                                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                          SelectedItem="{Binding DataContext.Viewport.CavityModeOption,
+                                                         RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="World Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
+                        <Grid Margin="0,0,0,2">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid Grid.Column="0" Margin="0,0,0,4">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ridge" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                        Value="{Binding DataContext.Viewport.CavityWorldRidge,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Grid.Column="2">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Valley" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                        Value="{Binding DataContext.Viewport.CavityWorldValley,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                        </Grid>
+                        <Grid Margin="0,0,0,6">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Distance" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"
+                                       ToolTip.Tip="World-space sampling radius (mm)"/>
+                            <Slider Grid.Column="1" Minimum="0.5" Maximum="50" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.CavityWorldDistance,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+                        <TextBlock Text="Screen Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid Grid.Column="0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Ridge" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                        Value="{Binding DataContext.Viewport.CavityScreenRidge,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Grid.Column="2">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="44"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="Valley" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                                <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                        Value="{Binding DataContext.Viewport.CavityScreenValley,
+                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                        </Grid>
+
+                        <!-- Contact shadows -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="SHADOWS" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Contact shadows" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowContactShadows,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                       ToolTip.Tip="Soft multiply shadows under bed, pedestal, and objects"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Size" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0.25" Maximum="3" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.ContactShadowSize,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Shadow spread (1 = default; higher = larger/softer)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Darkness" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="2" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.ContactShadowDarkness,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Shadow strength (1 = default; 0 = off; higher = darker)"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="60"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Blur" Foreground="{DynamicResource TextSecondary}" FontSize="11" VerticalAlignment="Center"/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="3" VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.ContactShadowBlur,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                    ToolTip.Tip="Shadow edge softness (1 = default; 0 = sharp; higher = softer)"/>
+                        </Grid>
+
+                        <!-- Visibility toggles -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+                        <TextBlock Text="VISIBILITY" Classes="SectionHeader" Margin="0,0,0,6"/>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Grid"     Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowGrid,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Axes"     Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowAxes,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Bed grid" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowBedGrid,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
+
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Robot tab -->
+        </StackPanel>
+    </Expander>
+    </StackPanel>
 
 </UserControl>
