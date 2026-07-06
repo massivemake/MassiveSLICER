@@ -116,6 +116,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "seqtest",
+            Description = "Debug: select first toolpath, range-extend to last",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var models = v.GetUserModelItems()
+                    .Where(m => m.Children.Any(c => c.IsToolpath)).ToList();
+                if (models.Count < 2) { ctx.Log($"[seqtest] need 2+ sliced models, have {models.Count}"); return; }
+                var firstTp = models[0].Children.First(c => c.IsToolpath);
+                v.ForceSelectNode?.Invoke(firstTp.Node);
+                var lastTp = models[^1].Children.First(c => c.IsToolpath);
+                bool ok = v.TryToggleToolpathSequenceSelection(lastTp);
+                ctx.Log($"[seqtest] toggled={ok} selected={v.GetSequenceCount?.Invoke() ?? -1} of {models.Count}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "massivebrain",
             Aliases = ["brain"],
             Description = "MassiveBRAIN sync server: massivebrain on|off|status",

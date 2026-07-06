@@ -305,6 +305,7 @@ public partial class ViewportView : UserControl
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
             vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
+            vm.GetSequenceCount          = () => _renderer.SelectedToolpathCount;
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>

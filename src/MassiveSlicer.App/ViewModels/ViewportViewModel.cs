@@ -4402,6 +4402,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Wired by the viewport code-behind: shift+click sequence toggle.</summary>
     internal Action<SceneNode>? OnSequenceToggleRequested { get; set; }
 
+    /// <summary>Wired by the viewport code-behind: current sequence-selection size (diagnostics).</summary>
+    internal Func<int>? GetSequenceCount { get; set; }
+
     /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
     internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
 

@@ -1255,8 +1255,14 @@ public sealed class SceneRenderer : IDisposable
     public void SetScanSelection(IReadOnlyList<SceneNode> scans, SceneNode? primary = null)
     {
         _selectedScanOrder.Clear();
-        _selectedToolpaths.Clear();
-        _selectedToolpathOrder.Clear();
+        // Only an ACTUAL scan multi-select displaces the toolpath sequence selection.
+        // Empty syncs (routine scan-selection clears fired by every outliner update)
+        // must not wipe a shift+click toolpath sequence in progress.
+        if (scans.Count > 0 || primary is not null)
+        {
+            _selectedToolpaths.Clear();
+            _selectedToolpathOrder.Clear();
+        }
         foreach (var scan in scans)
         {
             if (scan is null) continue;
