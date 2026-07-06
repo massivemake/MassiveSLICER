@@ -22,55 +22,69 @@
     </Window.KeyBindings>
 
     <!--
-        Root layout: three rows.
-          Row 0 — Toolbar (48 px, fixed)
-          Row 1 — Main work area (left | viewport | right)
-          Row 2 — Bottom dock (status + optional console), full width
+        Root layout: full-bleed viewport with floating chrome.
+          Row 0 — Work area: the 3D viewport fills the window; the left/right
+                  panels float over it as rounded cards; the toolbar is a
+                  ghosted overlay that fades in when the pointer nears the top.
+          Row 1 — Bottom dock (status + optional console), full width
     -->
     <Grid>
         <Grid.RowDefinitions>
-            <RowDefinition Height="48"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <!-- ── Toolbar ──────────────────────────────────────────────────── -->
-        <views:ToolbarView Grid.Row="0"
-                           DataContext="{Binding Toolbar}"/>
+        <Grid x:Name="WorkAreaGrid" Grid.Row="0">
 
-        <!-- ── Main area: left panel | viewport | right panel ───────────── -->
-        <Grid x:Name="WorkAreaGrid" Grid.Row="1">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300" MinWidth="0"/>
-                <ColumnDefinition Width="4"/>
-                <ColumnDefinition Width="*" MinWidth="200"/>
-                <ColumnDefinition Width="4"/>
-                <ColumnDefinition Width="300" MinWidth="0"/>
-            </Grid.ColumnDefinitions>
-
-            <!-- Left panel -->
-            <views:LeftPanelView Grid.Column="0"
-                                 DataContext="{Binding LeftPanel}"/>
-
-            <GridSplitter Grid.Column="1"
-                          Background="{DynamicResource Border0}"/>
-
-            <!-- Viewport — overlays are hosted in ViewportView's VisualLayerManager.OverlayLayer -->
+            <!-- Viewport — fills the entire work area; floating cards render above it -->
             <views:ViewportView x:Name="Viewport"
-                                Grid.Column="2"
                                 DataContext="{Binding Viewport}"/>
 
-            <GridSplitter Grid.Column="3"
-                          Background="{DynamicResource Border0}"/>
+            <!-- Left floating panel: cell / import / outliner -->
+            <Border x:Name="LeftPanelCard"
+                    HorizontalAlignment="Left"
+                    Width="300"
+                    Margin="10,56,0,10"
+                    CornerRadius="8"
+                    ClipToBounds="True"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    ZIndex="5">
+                <views:LeftPanelView DataContext="{Binding LeftPanel}"/>
+            </Border>
 
-            <!-- Right panel — visibility toggled from code-behind -->
-            <views:RightPanelView x:Name="RightPanel"
-                                  Grid.Column="4"
-                                  DataContext="{Binding RightPanel}"/>
+            <!-- Right floating panel: numbered workflow steps -->
+            <Border x:Name="RightPanelCard"
+                    HorizontalAlignment="Right"
+                    Width="300"
+                    Margin="0,56,10,10"
+                    CornerRadius="8"
+                    ClipToBounds="True"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    ZIndex="5">
+                <views:RightPanelView x:Name="RightPanel" DataContext="{Binding RightPanel}"/>
+            </Border>
+
+            <!-- Ghosted toolbar — overlay; opacity driven from code-behind on pointer-y -->
+            <Border x:Name="ToolbarHost"
+                    VerticalAlignment="Top"
+                    Height="48"
+                    ZIndex="10"
+                    Opacity="0.15">
+                <Border.Transitions>
+                    <Transitions>
+                        <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
+                    </Transitions>
+                </Border.Transitions>
+                <views:ToolbarView DataContext="{Binding Toolbar}"/>
+            </Border>
         </Grid>
 
         <!-- ── Bottom dock: full width under all panels ─────────────────── -->
-        <views:BottomLeftDockView Grid.Row="2"
+        <views:BottomLeftDockView Grid.Row="1"
                                   DataContext="{Binding}"
                                   HorizontalAlignment="Stretch"
                                   VerticalAlignment="Bottom"/>

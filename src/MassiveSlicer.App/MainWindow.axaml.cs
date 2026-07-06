@@ -51,19 +51,22 @@ public partial class MainWindow : Window
         // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
         vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
 
-        // -- Right panel column toggle -----------------------------------------
+        // -- Right panel toggle (floating card) --------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName != nameof(ToolbarViewModel.IsRightPanelVisible)) return;
-            bool visible = vm.Toolbar.IsRightPanelVisible;
-            WorkAreaGrid.ColumnDefinitions[3].Width = visible ? new GridLength(4)   : new GridLength(0);
-            WorkAreaGrid.ColumnDefinitions[4].Width = visible ? new GridLength(300)  : new GridLength(0);
+            RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
         };
 
         // Apply persisted panel visibility before first layout pass.
-        bool rightVisible = vm.Toolbar.IsRightPanelVisible;
-        WorkAreaGrid.ColumnDefinitions[3].Width = rightVisible ? new GridLength(4)   : new GridLength(0);
-        WorkAreaGrid.ColumnDefinitions[4].Width = rightVisible ? new GridLength(300)  : new GridLength(0);
+        RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
+
+        // -- Ghosted toolbar: fades in when the pointer nears the top edge -----
+        PointerMoved += (_, e) =>
+        {
+            double y = e.GetPosition(this).Y;
+            ToolbarHost.Opacity = y <= 56 ? 1.0 : 0.15;
+        };
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
@@ -358,8 +361,23 @@ public partial class MainWindow : Window
         var viewportPng = await Viewport.CaptureScreenshotAsync();
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
+            // Capture the ghosted toolbar at full opacity so screenshots show the chrome.
+            // Transitions are suspended so the opacity change is instant for the capture.
+            double toolbarOpacity = ToolbarHost.Opacity;
+            var toolbarTransitions = ToolbarHost.Transitions;
+            ToolbarHost.Transitions = null;
+            ToolbarHost.Opacity = 1.0;
             UpdateLayout();
-            return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface);
+            try
+            {
+                return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface,
+                    [LeftPanelCard, RightPanelCard, ToolbarHost]);
+            }
+            finally
+            {
+                ToolbarHost.Opacity = toolbarOpacity;
+                ToolbarHost.Transitions = toolbarTransitions;
+            }
         });
     }
 }

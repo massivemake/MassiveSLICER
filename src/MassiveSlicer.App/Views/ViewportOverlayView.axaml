@@ -14,7 +14,8 @@
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
     </UserControl.Resources>
 
-    <Grid Background="Transparent">
+    <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
+    <Grid Background="Transparent" Margin="312,48,312,0">
 
         <!-- Slice errors / validation alerts render inline in the bottom status bar. -->
 

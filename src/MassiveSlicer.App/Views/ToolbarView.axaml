@@ -4,7 +4,8 @@
              x:Class="MassiveSlicer.App.Views.ToolbarView"
              x:CompileBindings="False">
 
-    <Border Background="{DynamicResource Bg1}"
+    <!-- Translucent: the toolbar ghosts over the full-bleed viewport -->
+    <Border Background="#E0222222"
             BorderBrush="{DynamicResource Border1}"
             BorderThickness="0,0,0,1">
         <Grid>
