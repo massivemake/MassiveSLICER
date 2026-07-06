@@ -844,12 +844,6 @@ public sealed class ToolpathRenderer : IDisposable
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
         _shader.SetFloat("uOpacity", lineOpacity);
-        bool lineBlend = lineOpacity < 0.999f;
-        if (lineBlend)
-        {
-            GL.Enable(EnableCap.Blend);
-            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-        }
 
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
@@ -903,8 +897,6 @@ public sealed class ToolpathRenderer : IDisposable
                 }
             }
         }
-
-        if (lineBlend) GL.Disable(EnableCap.Blend);
 
         if (showOrientationPreview && _orientationVao != 0 && beadCount > 0)
         {

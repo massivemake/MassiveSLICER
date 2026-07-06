@@ -970,6 +970,8 @@ public sealed class SceneRenderer : IDisposable
 
         // Translucent helper geometry (effector range glow, …): depth-tested but not
         // depth-written, after toolpaths so lines inside the volume stay visible.
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.DepthMask(false);
         foreach (var n in SceneRoot.SelfAndDescendants())
         {
