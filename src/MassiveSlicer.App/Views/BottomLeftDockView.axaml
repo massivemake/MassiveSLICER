@@ -33,7 +33,7 @@
                         Width="36"
                         Background="{DynamicResource TextMuted}"
                         Opacity="0.45"
-                        CornerRadius="1"
+                        CornerRadius="5"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"/>
             </Border>

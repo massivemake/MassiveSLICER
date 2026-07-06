@@ -113,7 +113,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -145,7 +145,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -168,7 +168,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94"
@@ -182,7 +182,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             Command="{Binding SaveViewCommand}"
                             ToolTip.Tip="Save the current camera angle as this cell's default view. Persists to the cell file, so it's restored next time you (or anyone) opens the app.">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -196,7 +196,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -211,7 +211,7 @@
                                   Background="{DynamicResource Bg2}"
                                   BorderBrush="{DynamicResource Border1}"
                                   BorderThickness="1"
-                                  CornerRadius="4"
+                                  CornerRadius="5"
                                   ToolTip.Tip="Edit cell layout: select print bed, rotary bed, tool stands, or docked tools and move/rotate them.">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <ia:Icon Value="mdi-wrench-outline" FontSize="14"/>
@@ -231,7 +231,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             IsVisible="{Binding IsDevMode}"
                             Command="{Binding SaveAllDevTransformsCommand}"
                             ToolTip.Tip="Write every stand, bed, rotary bed, and dock pose to the cell JSON, then reload.">
@@ -247,7 +247,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             IsVisible="{Binding IsDevObjectSelected}"
                             Command="{Binding SaveDevTransformCommand}"
                             ToolTip.Tip="Write position and rotation to the cell JSON file.">
@@ -263,7 +263,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -305,7 +305,7 @@
             <Border Background="#CC0B1220"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94"
@@ -368,7 +368,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4">
+                CornerRadius="5">
             <Expander Classes="SectionExpander"
                       Header="DATA VISUALIZATION"
                       IsExpanded="False">
@@ -392,7 +392,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="4">
             <StackPanel Orientation="Vertical" Spacing="4">
                 <!-- Gizmo mode buttons -->
@@ -464,7 +464,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
                 <!-- Transformation tools: place the object on the plate -->
@@ -596,7 +596,7 @@
                     Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="10,8">
             <Grid>
@@ -628,7 +628,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 MaxHeight="220"
                 ZIndex="31">
@@ -660,7 +660,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 ZIndex="30">
             <Grid ColumnDefinitions="Auto,*,Auto">
@@ -715,7 +715,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 ZIndex="30">
             <Grid ColumnDefinitions="Auto,*,Auto">
@@ -768,7 +768,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="6,4">
             <StackPanel Spacing="4">
 
@@ -840,7 +840,7 @@
                 <!-- Keyframe track — placeholder; wired up when keyframe functionality is added -->
                 <Grid Height="22">
                     <Border Background="{DynamicResource Border1}"
-                            CornerRadius="2"
+                            CornerRadius="5"
                             Margin="0,2"
                             Opacity="0.4"/>
                     <TextBlock Text="KEYFRAMES"
@@ -870,7 +870,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="8,6">
             <StackPanel>
@@ -911,7 +911,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="8,6">
             <StackPanel>
