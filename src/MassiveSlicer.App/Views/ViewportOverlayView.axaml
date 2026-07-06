@@ -599,6 +599,42 @@
                 <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
                         IsVisible="{Binding !IsToolpathSelected}"/>
 
+                <!-- Data visualizer: toolpath display layers (visible for toolpaths) -->
+                <Button Classes="ToolbarButton"
+                        Padding="6,4"
+                        IsVisible="{Binding IsToolpathSelected}"
+                        ToolTip.Tip="Data visualizer — toggle toolpath display layers">
+                    <StackPanel Orientation="Horizontal" Spacing="3">
+                        <ia:Icon Value="mdi-chart-scatter-plot" FontSize="14" VerticalAlignment="Center"/>
+                        <ia:Icon Value="mdi-chevron-down" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="200" Spacing="6">
+                                <TextBlock Text="DATA VISUALIZER" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <CheckBox Content="Extrusion lines" FontSize="11"
+                                          IsChecked="{Binding ShowExtrusionMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Print moves as coloured lines (Speed/RPM views recolour them)"/>
+                                <CheckBox Content="Travel moves" FontSize="11"
+                                          IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Rapid repositioning moves"/>
+                                <CheckBox Content="Seam points" FontSize="11"
+                                          IsChecked="{Binding ShowSeam, Mode=TwoWay}"
+                                          ToolTip.Tip="Layer seam locations"/>
+                                <CheckBox Content="Bead surface" FontSize="11"
+                                          IsChecked="{Binding ShowBead, Mode=TwoWay}"
+                                          ToolTip.Tip="Solid extruded-bead preview (printed-part look)"/>
+                                <CheckBox Content="Bead overhang heatmap" FontSize="11"
+                                          IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
+                                          ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>
+                                <CheckBox Content="Orientation preview" FontSize="11"
+                                          IsChecked="{Binding ShowOrientationPreview, Mode=TwoWay}"
+                                          ToolTip.Tip="Bead colored by tool orientation change rate"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+
                 <!-- Material options: view channels + exposure/reflection adjust -->
                 <Button Classes="ToolbarButton"
                         Padding="6,4"
