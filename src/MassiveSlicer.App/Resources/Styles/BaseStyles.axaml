@@ -8,6 +8,26 @@
         <Setter Property="FontFamily" Value="avares://MassiveSlicer.App/Assets/Fonts#SF Pro Display"/>
     </Style>
 
+    <!-- Item highlights: rounded (5px floor) -->
+    <Style Selector="MenuItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="MenuItem /template/ Border">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ComboBoxItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ComboBoxItem /template/ ContentPresenter">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ListBoxItem /template/ ContentPresenter">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+
     <!-- Menu popups: rounded like the rest of the chrome -->
     <Style Selector="MenuItem /template/ Popup Border">
         <Setter Property="CornerRadius" Value="8"/>

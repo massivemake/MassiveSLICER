@@ -98,6 +98,19 @@ public partial class App : Application
 
         // ── Accent / highlight ───────────────────────────────────────────────────
         Sync("ThemeAccent",               B("Accent"));
+        if (B("Accent") is { } accent)
+        {
+            var c = accent.Color;
+            void SyncAlpha(string key, byte a)
+            {
+                var col = Avalonia.Media.Color.FromArgb(a, c.R, c.G, c.B);
+                rd[key + "Color"] = col;
+                rd[key + "Brush"] = new SolidColorBrush(col);
+            }
+            SyncAlpha("ThemeAccent2", 0xCC);
+            SyncAlpha("ThemeAccent3", 0x99);
+            SyncAlpha("ThemeAccent4", 0x66);
+        }
         Sync("ThemeControlHighlightHigh", B("AccentHover"));
         Sync("ThemeControlHighlightMid",  B("Accent"));
         Sync("ThemeControlHighlightLow",  B("AccentMuted"));

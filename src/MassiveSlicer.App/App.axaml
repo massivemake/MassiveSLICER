@@ -26,9 +26,16 @@
                     <Color x:Key="ThemeForegroundLowColor">#acacac</Color>
                     <SolidColorBrush x:Key="ThemeForegroundLowBrush" Color="#acacac"/>
 
-                    <!-- Accent — MassiveMAKE green -->
+                    <!-- Accent — MassiveMAKE green (2/3/4 = translucent variants used by
+                         SimpleTheme for menu/list hover + selection highlights) -->
                     <Color x:Key="ThemeAccentColor">#40b840</Color>
                     <SolidColorBrush x:Key="ThemeAccentBrush" Color="#40b840"/>
+                    <Color x:Key="ThemeAccentColor2">#CC40b840</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush2" Color="#CC40b840"/>
+                    <Color x:Key="ThemeAccentColor3">#9940b840</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush3" Color="#9940b840"/>
+                    <Color x:Key="ThemeAccentColor4">#6640b840</Color>
+                    <SolidColorBrush x:Key="ThemeAccentBrush4" Color="#6640b840"/>
 
                     <!-- Borders -->
                     <Color x:Key="ThemeBorderHighColor">#575757</Color>
