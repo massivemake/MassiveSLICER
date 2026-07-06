@@ -1359,6 +1359,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 SliceCommand?.RaiseCanExecuteChanged();
                 RecenterCommand?.RaiseCanExecuteChanged();
+                ResetModelTransformUi();
             }
         }
     }
@@ -1804,6 +1805,111 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnFocusRequested      { get; set; }
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
+
+    // ── Model quick-transform (MODEL step card) ─────────────────────────────
+    private double _modelScale = 1.0;
+    private Vector3? _modelPivot;   // bottom-centre pivot, cached per selection
+
+    /// <summary>Uniform scale multiplier for the selected model (relative to selection time).</summary>
+    public double ModelScale
+    {
+        get => _modelScale;
+        set
+        {
+            value = Math.Clamp(value, 0.05, 10.0);
+            double ratio = value / _modelScale;
+            if (!SetField(ref _modelScale, value)) return;
+            if (Math.Abs(ratio - 1.0) > 1e-9) ScaleSelectedModel((float)ratio);
+        }
+    }
+
+    private void ResetModelTransformUi()
+    {
+        _modelScale = 1.0;
+        _modelPivot = null;
+        OnPropertyChanged(nameof(ModelScale));
+    }
+
+    private SceneNode? SelectedUserMesh()
+        => HasMeshSelected ? GetSelectedSceneNode?.Invoke() : null;
+
+    private Vector3? ComputeWorldPivot(SceneNode node)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            var positions = n.Mesh?.PickingData?.Positions ?? (n.PendingMesh?.Positions);
+            if (positions is null) continue;
+            var w = n.WorldTransform;
+            foreach (var lp in positions)
+            {
+                var p = OpenTK.Mathematics.Vector3.TransformPosition(lp, w);
+                min = Vector3.ComponentMin(min, p);
+                max = Vector3.ComponentMax(max, p);
+            }
+        }
+        if (min.X > max.X) return null;
+        return new Vector3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, min.Z);
+    }
+
+    private void ApplyWorldTransformToSelected(Matrix4 worldOp, bool dropAfter)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        node.LocalTransform = node.WorldTransform * worldOp * parentWorld.Inverted();
+        if (dropAfter)
+        {
+            _modelPivot = null;
+            OnDropToPlateRequested?.Invoke();
+        }
+        NotifyRenderNeeded();
+    }
+
+    private void ScaleSelectedModel(float ratio)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        _modelPivot ??= ComputeWorldPivot(node);
+        if (_modelPivot is not { } pivot) return;
+        var op = Matrix4.CreateTranslation(-pivot)
+               * Matrix4.CreateScale(ratio)
+               * Matrix4.CreateTranslation(pivot);
+        ApplyWorldTransformToSelected(op, dropAfter: false);
+    }
+
+    private void RotateSelectedModel(Vector3 axis)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        var pivot = ComputeWorldPivot(node);
+        if (pivot is not { } c) return;
+        var centre = new Vector3(c.X, c.Y, c.Z);
+        var op = Matrix4.CreateTranslation(-centre)
+               * Matrix4.CreateFromAxisAngle(axis, MathF.PI / 2f)
+               * Matrix4.CreateTranslation(centre);
+        ApplyWorldTransformToSelected(op, dropAfter: true);
+    }
+
+    /// <summary>Rotates the selected model 90° about world X, then drops it to the plate.</summary>
+    public RelayCommand RotateModelXCommand => _rotateModelXCommand ??=
+        new RelayCommand(() => RotateSelectedModel(Vector3.UnitX));
+    private RelayCommand? _rotateModelXCommand;
+
+    /// <summary>Rotates the selected model 90° about world Y, then drops it to the plate.</summary>
+    public RelayCommand RotateModelYCommand => _rotateModelYCommand ??=
+        new RelayCommand(() => RotateSelectedModel(Vector3.UnitY));
+    private RelayCommand? _rotateModelYCommand;
+
+    /// <summary>Removes the selected model from the scene.</summary>
+    public RelayCommand ClearModelCommand => _clearModelCommand ??=
+        new RelayCommand(() =>
+        {
+            var node = SelectedUserMesh();
+            if (node is not null) RequestDeleteNode(node);
+        });
+    private RelayCommand? _clearModelCommand;
 
     internal Action? OnRecenterRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to ungroup the selection.</summary>

@@ -89,7 +89,7 @@
             <TextBlock Text="ROBOT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
-<ScrollViewer MaxHeight="520"                               VerticalScrollBarVisibility="Auto"
+<ScrollViewer VerticalScrollBarVisibility="Disabled"
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="0,8">
 
