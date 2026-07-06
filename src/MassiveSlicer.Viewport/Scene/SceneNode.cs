@@ -59,6 +59,13 @@ public sealed class SceneNode
     /// node's own mesh material untouched (used by gizmo-like handles, e.g. effectors).</summary>
     public bool KeepOwnMaterial { get; set; } = false;
 
+    /// <summary>Drawn in the late translucent pass (depth-tested, no depth write) so
+    /// geometry and toolpaths inside the volume stay visible (e.g. effector range glow).</summary>
+    public bool TranslucentPass { get; set; } = false;
+
+    /// <summary>Excluded from ray picking entirely (never steals clicks).</summary>
+    public bool PickIgnore { get; set; } = false;
+
     /// <summary>
     /// When <c>false</c> this node and its entire subtree are skipped during rendering.
     /// Toggle to show or hide geometry without removing it from the scene graph.
@@ -133,7 +140,8 @@ public sealed class SceneNode
         Mesh?.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);
 
         foreach (var child in Children)
-            child.Draw(viewProj, viewPos, lightDir, lightIntensity);
+            if (!child.TranslucentPass)
+                child.Draw(viewProj, viewPos, lightDir, lightIntensity);
     }
 
     // -- Traversal -------------------------------------------------------------

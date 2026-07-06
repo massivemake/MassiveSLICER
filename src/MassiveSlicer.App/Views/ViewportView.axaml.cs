@@ -3477,6 +3477,8 @@ public partial class ViewportView : UserControl
         if (vm.AdditiveSettings is { } add)
             add.PropertyChanged += (_, e) =>
             {
+                if (e.PropertyName == nameof(AdditiveSettingsViewModel.EffectorRange))
+                    vm.UpdateEffectorRangeIndicators((float)add.EffectorRange);
                 if (e.PropertyName is { } name && RealtimeSliceProps.Contains(name))
                     ScheduleRealtimeSlice(vm);
             };

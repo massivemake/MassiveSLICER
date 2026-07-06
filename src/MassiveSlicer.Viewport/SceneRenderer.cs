@@ -968,6 +968,20 @@ public sealed class SceneRenderer : IDisposable
                 eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
         }
 
+        // Translucent helper geometry (effector range glow, …): depth-tested but not
+        // depth-written, after toolpaths so lines inside the volume stay visible.
+        GL.DepthMask(false);
+        foreach (var n in SceneRoot.SelfAndDescendants())
+        {
+            if (!n.TranslucentPass) continue;
+            bool ancestorsVisible = true;
+            for (var a = n.Parent; a is not null; a = a.Parent)
+                if (!a.Visible) { ancestorsVisible = false; break; }
+            if (!ancestorsVisible) continue;
+            n.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
+        }
+        GL.DepthMask(true);
+
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
 

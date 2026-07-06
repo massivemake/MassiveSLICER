@@ -2353,11 +2353,9 @@ public sealed class ViewportViewModel : ViewModelBase
         return list;
     }
 
-    /// <summary>Glowing lime sphere handle, spawned near the active model (or bed centre).</summary>
-    private SceneNode BuildEffectorNode(int number)
+    private static (OpenTK.Mathematics.Vector3[] Pos, OpenTK.Mathematics.Vector3[] Nrm, uint[] Idx)
+        BuildSphereGeometry(float r, int seg = 18, int rings = 12)
     {
-        const float r = 40f;
-        const int seg = 18, rings = 12;
         var positions = new List<OpenTK.Mathematics.Vector3>();
         var normals   = new List<OpenTK.Mathematics.Vector3>();
         var indices   = new List<uint>();
@@ -2380,17 +2378,34 @@ public sealed class ViewportViewModel : ViewModelBase
                 uint b = (uint)(a + seg + 1);
                 indices.AddRange([a, b, a + 1, a + 1, b, b + 1]);
             }
+        return (positions.ToArray(), normals.ToArray(), indices.ToArray());
+    }
 
-        var mesh = new MeshData(positions.ToArray(), normals.ToArray(), indices.ToArray(),
-            $"Effector {number}", new OpenTK.Mathematics.Vector4(0.64f, 0.87f, 0.22f, 1f),
-            metallic: 0f, roughness: 0.25f);
+    private static readonly OpenTK.Mathematics.Vector3 EffectorLime = new(0.64f, 0.87f, 0.22f);
+
+    /// <summary>Glowing lime sphere handle, spawned near the active model (or bed centre).</summary>
+    private SceneNode BuildEffectorNode(int number)
+    {
+        var core = BuildSphereGeometry(40f);
+        var mesh = new MeshData(core.Pos, core.Nrm, core.Idx,
+            $"Effector {number}",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 1f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 1f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                // Self-lit so the handle reads as a luminous point in every shader/view.
+                EmissiveFactor  = EffectorLime * 1.1f,
+            });
 
         // Spawn at the active model's bounding-box centre, else above the bed centre.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
         if (ResolveActivePrintObjectItem() is { } model && ComputeWorldCenter(model.Node) is { } centre)
             spawn = centre;
 
-        return new SceneNode
+        var node = new SceneNode
         {
             Name            = $"Effector {number}",
             PendingMesh     = mesh,
@@ -2398,6 +2413,47 @@ public sealed class ViewportViewModel : ViewModelBase
             KeepOwnMaterial = true,
             LocalTransform  = OpenTK.Mathematics.Matrix4.CreateTranslation(spawn),
         };
+
+        // Soft glow shell visualising the influence radius (Range slider, mm).
+        var shell = BuildSphereGeometry(1f, seg: 36, rings: 24);
+        var glowMesh = new MeshData(shell.Pos, shell.Nrm, shell.Idx,
+            $"Effector {number} Range",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.10f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.10f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                EmissiveFactor  = EffectorLime * 0.35f,
+                AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
+            });
+        float range = (float)(AdditiveSettings?.EffectorRange ?? 400.0);
+        node.AddChild(new SceneNode
+        {
+            Name            = $"Effector {number} Range",
+            PendingMesh     = glowMesh,
+            Selectable      = false,
+            PickIgnore      = true,
+            TranslucentPass = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f)),
+        });
+        return node;
+    }
+
+    /// <summary>Rescales every effector's glow shell to the current Range (mm).</summary>
+    internal void UpdateEffectorRangeIndicators(float rangeMm)
+    {
+        float scale = MathF.Max(rangeMm, 1f);
+        foreach (var node in _effectorNodes)
+        {
+            if (node is null) continue;
+            foreach (var child in node.Children)
+                if (child.TranslucentPass)
+                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(scale);
+        }
+        NotifyRenderNeeded();
     }
 
     /// <summary>Fits the whole scene in view (viewport top-right icon).</summary>
