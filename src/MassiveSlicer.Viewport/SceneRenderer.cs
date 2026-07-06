@@ -455,6 +455,14 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Backdrop blend over the shader background. 0 = shader only, 1 = full HDR.</summary>
     public float BackdropOpacity { get; set; } = 1f;
 
+    /// <summary>
+    /// Dark flat-matte presentation for the toolpath line views: flat near-black
+    /// background, HDR backdrop suppressed — maximum contrast for toolpath lines
+    /// while cell geometry stays visible via the mesh shader mode.
+    /// </summary>
+    public bool DarkMattePresentation { get; set; }
+
+    private static readonly Vector3 DarkMatteBackground   = new(0.045f, 0.045f, 0.045f);   // ~#0b0b0b flat
     private static readonly Vector3 DarkShaderBackground  = new(0.086f, 0.086f, 0.086f);   // #161616 — matches the MassiveMake theme
     private static readonly Vector3 ArcticShaderBackground = new(1f, 1f, 1f);
 
@@ -835,7 +843,9 @@ public sealed class SceneRenderer : IDisposable
 
         // -- Scene pass --------------------------------------------------------
         bool arcticPresentation = _shaderMode == ShaderMode.Arctic;
-        var shaderBg = arcticPresentation ? ArcticShaderBackground : DarkShaderBackground;
+        var shaderBg = DarkMattePresentation ? DarkMatteBackground
+                     : arcticPresentation    ? ArcticShaderBackground
+                     :                          DarkShaderBackground;
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
         GL.ClearColor(shaderBg.X, shaderBg.Y, shaderBg.Z, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -845,7 +855,7 @@ public sealed class SceneRenderer : IDisposable
             _contactShadows.ArcticPresentation = arcticPresentation;
 
         // Draw backdrop before any 3-D content, blended over the shader background.
-        if (_backdrop is not null && BackdropOpacity > 0f)
+        if (_backdrop is not null && BackdropOpacity > 0f && !DarkMattePresentation)
         {
             // Strip camera translation from the view matrix before inverting.
             // The backdrop is at infinity -- only rotation and FOV matter.
