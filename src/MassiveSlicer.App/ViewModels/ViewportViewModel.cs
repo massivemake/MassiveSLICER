@@ -1872,6 +1872,28 @@ public sealed class ViewportViewModel : ViewModelBase
         return new Vector3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, min.Z);
     }
 
+    /// <summary>Full bounding-box centre (mid Z, unlike <see cref="ComputeWorldPivot"/>
+    /// whose Z is the base). Used to spawn effector handles inside the model.</summary>
+    private Vector3? ComputeWorldCenter(SceneNode node)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            var positions = n.Mesh?.PickingData?.Positions ?? (n.PendingMesh?.Positions);
+            if (positions is null) continue;
+            var w = n.WorldTransform;
+            foreach (var lp in positions)
+            {
+                var p = OpenTK.Mathematics.Vector3.TransformPosition(lp, w);
+                min = Vector3.ComponentMin(min, p);
+                max = Vector3.ComponentMax(max, p);
+            }
+        }
+        if (min.X > max.X) return null;
+        return (min + max) * 0.5f;
+    }
+
     private void ApplyWorldTransformToSelected(Matrix4 worldOp, bool dropAfter)
     {
         var node = SelectedUserMesh();
@@ -2343,10 +2365,10 @@ public sealed class ViewportViewModel : ViewModelBase
             $"Effector {number}", new OpenTK.Mathematics.Vector4(0.64f, 0.87f, 0.22f, 1f),
             metallic: 0f, roughness: 0.25f);
 
-        // Spawn near the active model's front face, else above the bed centre.
+        // Spawn at the active model's bounding-box centre, else above the bed centre.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
-        if (ResolveActivePrintObjectItem() is { } model && ComputeWorldPivot(model.Node) is { } pivot)
-            spawn = new OpenTK.Mathematics.Vector3(pivot.X, pivot.Y - 400f, pivot.Z + 600f);
+        if (ResolveActivePrintObjectItem() is { } model && ComputeWorldCenter(model.Node) is { } centre)
+            spawn = centre;
 
         return new SceneNode
         {
