@@ -945,12 +945,14 @@
                                   Padding="8,8,8,6"
                                   Cursor="Hand">
                         <Grid ColumnDefinitions="*,14">
-                            <TextBlock Grid.Column="0"
-                                       Text="{TemplateBinding Header}"
-                                       Foreground="{DynamicResource TextSecondary}"
-                                       FontSize="11"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center"/>
+                            <!-- ContentPresenter so headers can be rich content (step badges),
+                                 while plain string headers keep the same text styling. -->
+                            <ContentPresenter Grid.Column="0"
+                                              Content="{TemplateBinding Header}"
+                                              Foreground="{DynamicResource TextSecondary}"
+                                              FontSize="11"
+                                              FontWeight="SemiBold"
+                                              VerticalAlignment="Center"/>
                             <TextBlock Name="Chevron"
                                        Grid.Column="1"
                                        Text="›"
