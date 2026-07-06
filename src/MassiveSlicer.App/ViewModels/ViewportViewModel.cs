@@ -1642,6 +1642,8 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowSimTimeline));
                 OnPropertyChanged(nameof(ShowPlaybackTimeline));
+                ExportKrlCommand?.RaiseCanExecuteChanged();
+                SendToRobotCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -2697,11 +2699,11 @@ public sealed class ViewportViewModel : ViewModelBase
 
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null);
 
         SendToRobotCommand = new RelayCommand(
             execute:    () => _ = OnSendToRobotRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null && ActiveCell is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null && ActiveCell is not null);
 
         MergeToolpathsCommand = new RelayCommand(
             execute:    () => OnMergeToolpathsRequested?.Invoke(),
