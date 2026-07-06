@@ -4402,14 +4402,39 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Wired by the viewport code-behind: shift+click sequence toggle.</summary>
     internal Action<SceneNode>? OnSequenceToggleRequested { get; set; }
 
-    /// <summary>Outliner shift+click: toggles the row's toolpath in the print-sequence
-    /// selection (models resolve to their toolpath child). False = not sequenceable.</summary>
+    /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
+    internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
+
+    /// <summary>Outliner shift+click: extends the print-sequence selection from the
+    /// current anchor through the clicked row (models resolve to their toolpath child).</summary>
     internal bool TryToggleToolpathSequenceSelection(OutlinerItemViewModel item)
     {
-        bool sequenceable = item.IsToolpath || IsUserModelItem(item);
-        if (!sequenceable || OnSequenceToggleRequested is null) return false;
-        OnSequenceToggleRequested.Invoke(item.Node);
+        bool sequenceable = item.IsToolpath || IsUserModelItem(item)
+            || (item.IsToolpath is false && OwningModelItem(item) is not null);
+        if (!sequenceable || OnSequenceRangeRequested is null) return false;
+        OnSequenceRangeRequested.Invoke(item);
         return true;
+    }
+
+    /// <summary>Top-level user model rows in outliner order (sequence range selection).</summary>
+    internal List<OutlinerItemViewModel> GetUserModelItems() => EnumerateUserModelItems().ToList();
+
+    /// <summary>Highlights outliner rows whose toolpath is in the sequence selection.</summary>
+    internal void SyncSequenceRowHighlights(IReadOnlyList<SceneNode> selectedToolpaths)
+    {
+        bool multi = selectedToolpaths.Count >= 2;
+        foreach (var model in EnumerateUserModelItems())
+        {
+            bool anyChild = false;
+            foreach (var child in model.Children)
+            {
+                if (!child.IsToolpath) continue;
+                bool on = multi && selectedToolpaths.Contains(child.Node);
+                child.IsSequenceSelected = on;
+                anyChild |= on;
+            }
+            model.IsSequenceSelected = anyChild;
+        }
     }
 
     /// <summary>True when the row is a user-imported print model (context-menu gating).</summary>

@@ -304,6 +304,7 @@ public partial class ViewportView : UserControl
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
+            vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>
@@ -5000,6 +5001,7 @@ public partial class ViewportView : UserControl
         bool isDevNode        = vm.IsDevMode && IsDevNode(selected);
         bool multiToolpath    = _renderer.SelectedToolpathCount >= 2;
         vm.CanMergeToolpaths  = multiToolpath;
+        vm.SyncSequenceRowHighlights(_renderer.SelectedToolpaths);
         vm.IsToolpathSelected = isToolpath && !multiToolpath;
         bool isMerged = isToolpath && selected is not null && _mergedByNode.ContainsKey(selected);
         vm.IsMergedToolpathSelected = isMerged;
@@ -6543,6 +6545,46 @@ public partial class ViewportView : UserControl
                 _renderer.ToggleToolpathSelection(curTp);
         }
         _renderer.ToggleToolpathSelection(tp);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Outliner shift+click: standard range extension — selects every user model's
+    /// toolpath from the anchor (current selection / first sequence member) through
+    /// the clicked row, in outliner order. No anchor falls back to a single toggle.
+    /// </summary>
+    private void SequenceRangeSelect(ViewportViewModel vm, OutlinerItemViewModel clicked)
+    {
+        var clickedModel = clicked.IsToolpath ? vm.OwningModelItem(clicked) : clicked;
+        if (clickedModel is null) return;
+
+        var models = vm.GetUserModelItems();
+        int target = models.IndexOf(clickedModel);
+        if (target < 0) return;
+
+        OutlinerItemViewModel? anchorModel = null;
+        if (_renderer.SelectedToolpathCount > 0 &&
+            vm.FindOutlinerItem(_renderer.SelectedToolpaths[0]) is { } firstItem)
+            anchorModel = vm.OwningModelItem(firstItem);
+        else if (_renderer.SelectedNode is { } cur)
+            anchorModel = vm.FindUserMeshOutlinerItem(cur);
+
+        int a = anchorModel is not null ? models.IndexOf(anchorModel) : -1;
+        if (a < 0)
+        {
+            ToggleSequenceSelection(vm, clickedModel.Node);
+            return;
+        }
+
+        int step = target >= a ? 1 : -1;
+        for (int i = a; i != target + step; i += step)
+        {
+            var tp = models[i].Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+            if (tp is null) continue;
+            if (!_renderer.SelectedToolpaths.Contains(tp))
+                _renderer.ToggleToolpathSelection(tp);
+        }
         UpdateFocusOverlay();
         GlCanvas.RequestNextFrameRendering();
     }

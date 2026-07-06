@@ -126,7 +126,23 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         }
     }
 
-    void SyncRowHighlighted() => IsRowHighlighted = _isScanMultiSelected || _isOutlinerSelected;
+    private bool _isSequenceSelected;
+
+    /// <summary>Row is part of the shift+click toolpath sequence selection.</summary>
+    public bool IsSequenceSelected
+    {
+        get => _isSequenceSelected;
+        set
+        {
+            if (_isSequenceSelected == value) return;
+            _isSequenceSelected = value;
+            OnPropertyChanged();
+            SyncRowHighlighted();
+        }
+    }
+
+    void SyncRowHighlighted()
+        => IsRowHighlighted = _isScanMultiSelected || _isOutlinerSelected || _isSequenceSelected;
 
     public void AddChild(OutlinerItemViewModel child)
     {
