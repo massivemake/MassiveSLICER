@@ -135,6 +135,13 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowChildren));
     }
 
+    public void InsertChild(OutlinerItemViewModel child, int index)
+    {
+        Children.Insert(Math.Clamp(index, 0, Children.Count), child);
+        OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ShowChildren));
+    }
+
     public void RemoveChild(OutlinerItemViewModel child)
     {
         Children.Remove(child);

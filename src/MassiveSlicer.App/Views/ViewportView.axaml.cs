@@ -2414,6 +2414,9 @@ public partial class ViewportView : UserControl
 
         switch (e.Key)
         {
+            case Key.X when e.KeyModifiers == KeyModifiers.None:
+                if (TryDeleteSelectedWithUndo()) e.Handled = true;
+                break;
             case Key.F:      FocusSelected();                          e.Handled = true; break;
             case Key.G:
                 SetGizmoMode(GizmoMode.None);
@@ -5277,6 +5280,49 @@ public partial class ViewportView : UserControl
             dst.Layers.Add(nl);
         }
         return dst;
+    }
+
+    /// <summary>
+    /// X-key delete: removes the selected user mesh or toolpath without confirmation
+    /// and pushes a <see cref="NodeDeleteAction"/> so Cmd/Ctrl+Z restores it (outliner
+    /// row, meshes re-uploaded from retained CPU data, toolpaths rebuilt from snapshots).
+    /// </summary>
+    private bool TryDeleteSelectedWithUndo()
+    {
+        if (DataContext is not ViewportViewModel vm) return false;
+        var selected = _renderer.SelectedNode;
+        if (selected is null) return false;
+
+        bool isToolpath = _renderer.IsToolpathNode(selected);
+        var  node       = selected;
+        if (!isToolpath)
+        {
+            // Only user imports — never the robot/toolhead/bed/dev objects; effectors
+            // have their own toggle lifecycle (pattern panel buttons).
+            var userItem = vm.FindUserMeshOutlinerItem(selected);
+            if (userItem is null || userItem.IsEffector) return false;
+            if (IsToolNodeSelected() || IsDevNode(selected)) return false;
+            node = userItem.Node;
+        }
+
+        if (vm.CaptureOutlinerContext(node) is not { } ctx) return false;
+
+        // Snapshot every toolpath being deleted so undo can rebuild the renderers.
+        var restores = new List<NodeDeleteAction.ToolpathRestore>();
+        void Capture(SceneNode n)
+        {
+            if (GetToolpathSnapshot(n) is not { } snap) return;
+            _toolpathOriginByNode.TryGetValue(n, out var origin);
+            restores.Add(new NodeDeleteAction.ToolpathRestore(n, snap, n.LocalTransform, origin));
+        }
+        if (isToolpath) Capture(node);
+        else
+            foreach (var child in ctx.Item.Children)
+                if (child.IsToolpath) Capture(child.Node);
+
+        vm.RequestDeleteNode(node);
+        vm.UndoRedo?.Push(new NodeDeleteAction(vm, ctx.Item, ctx.Parent, ctx.Index, node, isToolpath, restores));
+        return true;
     }
 
     // -- Scrub IK --------------------------------------------------------------

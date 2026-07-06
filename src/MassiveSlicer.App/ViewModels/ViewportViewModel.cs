@@ -4374,6 +4374,31 @@ public sealed class ViewportViewModel : ViewModelBase
     /// removes it from the outliner, and queues the root for GL disposal.
     /// Must be called on the UI thread.
     /// </summary>
+    /// <summary>Snapshot of an outliner row's position for delete-undo.</summary>
+    internal (OutlinerItemViewModel Item, OutlinerItemViewModel? Parent, int Index)? CaptureOutlinerContext(SceneNode node)
+    {
+        if (FindOutlinerItem(node) is not { } item) return null;
+        var parent = FindParentOutlinerItem(item);
+        int index  = parent is null ? OutlinerItems.IndexOf(item) : parent.Children.IndexOf(item);
+        return (item, parent, Math.Max(index, 0));
+    }
+
+    /// <summary>Re-inserts a previously deleted outliner row at its old position (delete-undo).</summary>
+    internal void RestoreOutlinerItem(OutlinerItemViewModel item, OutlinerItemViewModel? parent, int index)
+    {
+        if (parent is null)
+        {
+            if (!OutlinerItems.Contains(item))
+                OutlinerItems.Insert(Math.Clamp(index, 0, OutlinerItems.Count), item);
+        }
+        else if (!parent.Children.Contains(item))
+        {
+            parent.InsertChild(item, index);
+        }
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
     public void RequestDeleteNode(SceneNode node)
     {
         if (FindOutlinerItem(node) is not { } item) return;
