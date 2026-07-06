@@ -2254,10 +2254,11 @@ public sealed class ViewportViewModel : ViewModelBase
 
         return new SceneNode
         {
-            Name           = $"Effector {number}",
-            PendingMesh    = mesh,
-            Selectable     = true,
-            LocalTransform = OpenTK.Mathematics.Matrix4.CreateTranslation(spawn),
+            Name            = $"Effector {number}",
+            PendingMesh     = mesh,
+            Selectable      = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateTranslation(spawn),
         };
     }
 
@@ -3512,7 +3513,8 @@ public sealed class ViewportViewModel : ViewModelBase
         if (GetSelectedSceneNode?.Invoke() is { } selected)
         {
             var selectedItem = FindUserMeshOutlinerItem(selected);
-            if (selectedItem is not null && !OutlinerModelOps.IsScanItem(selectedItem))
+            if (selectedItem is not null && !selectedItem.IsEffector
+                && !OutlinerModelOps.IsScanItem(selectedItem))
                 return selectedItem;
         }
 

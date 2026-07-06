@@ -1632,6 +1632,13 @@ public sealed class SceneRenderer : IDisposable
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
+            if (n.KeepOwnMaterial)
+            {
+                mesh.Exposure = _exposure;
+                mesh.IblGain  = _iblIntensity;
+                mesh.FloorZ   = BedZ;
+                continue;
+            }
             bool forceLayerPreview = InheritsLayerPreview(n);
             mesh.Exposure         = _exposure;
             mesh.IblGain          = _iblIntensity;

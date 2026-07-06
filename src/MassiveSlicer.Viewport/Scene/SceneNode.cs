@@ -55,6 +55,10 @@ public sealed class SceneNode
     /// </summary>
     public bool Overlay { get; set; } = false;
 
+    /// <summary>When true, viewport shader modes (MatteBlack, Clay, …) leave this
+    /// node's own mesh material untouched (used by gizmo-like handles, e.g. effectors).</summary>
+    public bool KeepOwnMaterial { get; set; } = false;
+
     /// <summary>
     /// When <c>false</c> this node and its entire subtree are skipped during rendering.
     /// Toggle to show or hide geometry without removing it from the scene graph.
