@@ -14,7 +14,7 @@
                        FontSize="10"
                        FontWeight="SemiBold"
                        LetterSpacing="0.8"
-                       Foreground="#59FF0D"
+                       Foreground="#40b840"
                        VerticalAlignment="Center"/>
             <Button Grid.Column="1"
                     Classes="Lfam3SeqCollapseBtn"
@@ -22,7 +22,7 @@
                     ToolTip.Tip="Hide playback"
                     Width="24" Height="24"
                     Padding="0">
-                <ia:Icon Value="mdi-chevron-up" FontSize="14" Foreground="#9ca3af"/>
+                <ia:Icon Value="mdi-chevron-up" FontSize="14" Foreground="#acacac"/>
             </Button>
         </Grid>
 
@@ -33,7 +33,7 @@
                     ToolTip.Tip="Play / pause"
                     Width="32" Height="32"
                     Padding="0">
-                <ia:Icon Value="{Binding PlaybackToggleIcon}" FontSize="14" Foreground="#e8eaef"/>
+                <ia:Icon Value="{Binding PlaybackToggleIcon}" FontSize="14" Foreground="#e8e8e8"/>
             </Button>
             <Slider Grid.Column="1"
                     Minimum="0"
@@ -45,12 +45,12 @@
 
         <TextBlock Text="{Binding StepTextCompact}"
                    FontSize="10"
-                   Foreground="#9ca3af"
+                   Foreground="#acacac"
                    TextWrapping="Wrap"/>
 
         <StackPanel Orientation="Horizontal" Spacing="16">
             <StackPanel Orientation="Horizontal" Spacing="4">
-                <Border Width="14" Height="2" Background="#59FF0D" VerticalAlignment="Center" CornerRadius="5"/>
+                <Border Width="14" Height="2" Background="#40b840" VerticalAlignment="Center" CornerRadius="5"/>
                 <TextBlock Text="LIN" Classes="Lfam3SeqLegendLin" FontSize="9"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="4">
