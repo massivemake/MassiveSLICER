@@ -113,6 +113,14 @@ public partial class OutlinerItemView : UserControl
             _ = mvm.Viewport.OnExportScanMeshRequested?.Invoke(item.Node);
     }
 
+    private void OnCreateToolpathClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not OutlinerItemViewModel item) return;
+        if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel mvm })
+            return;
+        mvm.Viewport.RequestCreateToolpath(item);
+    }
+
     void RequestMergeFromContextMenu(ScanMergeOutput output)
     {
         if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel mvm })
@@ -137,6 +145,10 @@ public partial class OutlinerItemView : UserControl
 
         mvm.Viewport.MergeScansAsPointCloudCommand.RaiseCanExecuteChanged();
         mvm.Viewport.MergeScansAsMeshCommand.RaiseCanExecuteChanged();
+
+        CreateToolpathItem.IsVisible =
+            DataContext is OutlinerItemViewModel modelRow
+            && mvm.Viewport.IsUserModelItem(modelRow);
 
         foreach (var child in RowContextMenu.Items)
         {

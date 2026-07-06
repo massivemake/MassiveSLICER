@@ -4399,6 +4399,19 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>True when the row is a user-imported print model (context-menu gating).</summary>
+    internal bool IsUserModelItem(OutlinerItemViewModel item)
+        => EnumerateUserModelItems().Contains(item);
+
+    /// <summary>Explicitly (re)creates the toolpath for a model — recovery path after the
+    /// realtime toolpath was deleted; slicing re-adopts it into the live sync loop.</summary>
+    internal void RequestCreateToolpath(OutlinerItemViewModel item)
+    {
+        ForceSelectNode?.Invoke(item.Node);
+        if (SliceCommand.CanExecute(null))
+            SliceCommand.Execute(null);
+    }
+
     public void RequestDeleteNode(SceneNode node)
     {
         if (FindOutlinerItem(node) is not { } item) return;

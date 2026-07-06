@@ -41,6 +41,9 @@
                                   Header="Export Mesh..."
                                   Click="OnExportScanMeshClick"/>
                         <Separator/>
+                        <MenuItem x:Name="CreateToolpathItem"
+                                  Header="Create New Toolpath"
+                                  Click="OnCreateToolpathClick"/>
                         <MenuItem Header="Reload Model"
                                   Command="{Binding ReloadModelCommand}"/>
                         <MenuItem Header="Replace Model"
