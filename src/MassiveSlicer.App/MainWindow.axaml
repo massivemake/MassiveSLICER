@@ -40,8 +40,24 @@
             <views:ViewportView x:Name="Viewport"
                                 DataContext="{Binding Viewport}"/>
 
+            <!-- Ghosted sidebar cards: translucent until hovered, then fade to full. -->
+            <Grid.Styles>
+                <Style Selector="Border.GhostCard">
+                    <Setter Property="Opacity" Value="0.35"/>
+                    <Setter Property="Transitions">
+                        <Transitions>
+                            <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
+                        </Transitions>
+                    </Setter>
+                </Style>
+                <Style Selector="Border.GhostCard:pointerover">
+                    <Setter Property="Opacity" Value="1"/>
+                </Style>
+            </Grid.Styles>
+
             <!-- Left floating panel: cell / import / outliner -->
             <Border x:Name="LeftPanelCard"
+                    Classes="GhostCard"
                     HorizontalAlignment="Left"
                     Width="300"
                     Margin="10,56,0,10"
@@ -56,6 +72,7 @@
 
             <!-- Right floating panel: numbered workflow steps -->
             <Border x:Name="RightPanelCard"
+                    Classes="GhostCard"
                     HorizontalAlignment="Right"
                     Width="300"
                     Margin="0,56,10,10"
@@ -68,17 +85,11 @@
                 <views:RightPanelView x:Name="RightPanel" DataContext="{Binding RightPanel}"/>
             </Border>
 
-            <!-- Ghosted toolbar — overlay; opacity driven from code-behind on pointer-y -->
+            <!-- Toolbar — constant slight translucency (background set in ToolbarView) -->
             <Border x:Name="ToolbarHost"
                     VerticalAlignment="Top"
                     Height="48"
-                    ZIndex="10"
-                    Opacity="0.15">
-                <Border.Transitions>
-                    <Transitions>
-                        <DoubleTransition Property="Opacity" Duration="0:0:0.18"/>
-                    </Transitions>
-                </Border.Transitions>
+                    ZIndex="10">
                 <views:ToolbarView DataContext="{Binding Toolbar}"/>
             </Border>
         </Grid>

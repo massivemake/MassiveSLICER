@@ -61,13 +61,6 @@ public partial class MainWindow : Window
         // Apply persisted panel visibility before first layout pass.
         RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
 
-        // -- Ghosted toolbar: fades in when the pointer nears the top edge -----
-        PointerMoved += (_, e) =>
-        {
-            double y = e.GetPosition(this).Y;
-            ToolbarHost.Opacity = y <= 56 ? 1.0 : 0.15;
-        };
-
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
         vm.Viewport.OnDevCellReloadRequested = SwitchCell;
@@ -361,12 +354,17 @@ public partial class MainWindow : Window
         var viewportPng = await Viewport.CaptureScreenshotAsync();
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            // Capture the ghosted toolbar at full opacity so screenshots show the chrome.
-            // Transitions are suspended so the opacity change is instant for the capture.
-            double toolbarOpacity = ToolbarHost.Opacity;
-            var toolbarTransitions = ToolbarHost.Transitions;
-            ToolbarHost.Transitions = null;
-            ToolbarHost.Opacity = 1.0;
+            // Capture the ghosted sidebar cards at full opacity so screenshots show the
+            // chrome. Local Opacity values beat the GhostCard style; transitions are
+            // suspended so the change is instant, then everything reverts to the style.
+            Avalonia.Controls.Border[] ghostCards = [LeftPanelCard, RightPanelCard];
+            var savedTransitions = new Avalonia.Animation.Transitions?[ghostCards.Length];
+            for (int i = 0; i < ghostCards.Length; i++)
+            {
+                savedTransitions[i] = ghostCards[i].Transitions;
+                ghostCards[i].Transitions = null;
+                ghostCards[i].Opacity = 1.0;
+            }
             UpdateLayout();
             try
             {
@@ -375,8 +373,11 @@ public partial class MainWindow : Window
             }
             finally
             {
-                ToolbarHost.Opacity = toolbarOpacity;
-                ToolbarHost.Transitions = toolbarTransitions;
+                for (int i = 0; i < ghostCards.Length; i++)
+                {
+                    ghostCards[i].ClearValue(Avalonia.Visual.OpacityProperty);
+                    ghostCards[i].Transitions = savedTransitions[i];
+                }
             }
         });
     }
