@@ -635,6 +635,25 @@
                                             Mode=TwoWay}"
                                     ToolTip.Tip="Backdrop blur"/>
                         </Grid>
+                        <!-- Toolpath line opacity -->
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="Toolpath lines"
+                                       Classes="LabelMuted"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,8,0"/>
+                            <Slider Grid.Column="1"
+                                    Minimum="0" Maximum="1"
+                                    VerticalAlignment="Center"
+                                    Value="{Binding DataContext.Viewport.ToolpathLineOpacity,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                            Mode=TwoWay}"
+                                    ToolTip.Tip="Opacity of the toolpath extrusion/travel lines (saved per view)"/>
+                        </Grid>
 
                         <!-- Shader mode — circular sphere buttons matching the prototype matcap grid.
                              Center/GradientOrigin use % for relative coords; Radius is fraction of longest edge. -->

@@ -305,6 +305,15 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _toolpathExtrudeColor, value);
     }
 
+    private float _toolpathLineOpacity = 1f;
+
+    /// <summary>Opacity of the toolpath extrusion/travel lines (per-view profile setting).</summary>
+    public float ToolpathLineOpacity
+    {
+        get => _toolpathLineOpacity;
+        set { if (SetField(ref _toolpathLineOpacity, Math.Clamp(value, 0f, 1f))) NotifyRenderNeeded(); }
+    }
+
     // Live bead colour — applied every frame as a shader uniform, so changing it
     // recolours already-sliced beads instantly (no re-slice, no VBO rebuild).
     private System.Numerics.Vector3 _beadColor = new(0.655f, 0.906f, 0.05f);   // lime, matches Blender "3dp.001"
@@ -2038,6 +2047,7 @@ public sealed class ViewportViewModel : ViewModelBase
         public string ShaderMode { get; set; } = "Standard";
         public float BackdropOpacity { get; set; } = 1f;
         public float BackdropBlur { get; set; } = 2.5f;
+        public float ToolpathLineOpacity { get; set; } = 1f;
     }
 
     private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
@@ -2076,7 +2086,7 @@ public sealed class ViewportViewModel : ViewModelBase
         nameof(ShowGrid), nameof(ShowAxes), nameof(ShowBedGrid),
         nameof(ShowContactShadows), nameof(ShowTcpFrame), nameof(CavityEnabled),
         nameof(DarkViewportBackground), nameof(ActiveShaderMode),
-        nameof(BackdropOpacity), nameof(BackdropBlur),
+        nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
     ];
 
     /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
@@ -2097,6 +2107,7 @@ public sealed class ViewportViewModel : ViewModelBase
             prof.ShaderMode         = ActiveShaderMode.ToString();
             prof.BackdropOpacity    = BackdropOpacity;
             prof.BackdropBlur       = BackdropBlur;
+            prof.ToolpathLineOpacity = ToolpathLineOpacity;
         };
     }
 
@@ -2116,6 +2127,7 @@ public sealed class ViewportViewModel : ViewModelBase
             DarkViewportBackground = prof.DarkBackground;
             BackdropOpacity    = prof.BackdropOpacity;
             BackdropBlur       = prof.BackdropBlur;
+            ToolpathLineOpacity = prof.ToolpathLineOpacity;
             if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
                 ActiveShaderMode = sm;
         }

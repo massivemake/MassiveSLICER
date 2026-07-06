@@ -517,6 +517,9 @@ public sealed class SceneRenderer : IDisposable
 
     private Vector3 _toolpathBeadColor = new(0.95f, 0.95f, 0.95f);
 
+    /// <summary>Opacity of the extrusion/travel toolpath lines (1 = opaque).</summary>
+    public float ToolpathLineOpacity { get; set; } = 1f;
+
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
@@ -955,7 +958,7 @@ public sealed class SceneRenderer : IDisposable
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue,
-                eyeLocal: eyeLocal);
+                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
         }
 
         // Draw the angled-slice plane preview (only present when Angled method is active).

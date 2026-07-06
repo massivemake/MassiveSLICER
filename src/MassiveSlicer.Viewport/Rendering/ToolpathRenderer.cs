@@ -62,9 +62,10 @@ public sealed class ToolpathRenderer : IDisposable
         in vec3 vColor;
         uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
         uniform vec3  uOverrideColor;
+        uniform float uOpacity;        // line transparency (1 = opaque)
         out vec4 fragColor;
         void main() {
-            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, 1.0);
+            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
         }
         """;
 
@@ -833,12 +834,19 @@ public sealed class ToolpathRenderer : IDisposable
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showBeadOverhang = false,
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
-                     Vector3 eyeLocal = default)
+                     Vector3 eyeLocal = default, float lineOpacity = 1f)
     {
         if (_disposed) return;
 
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetFloat("uOpacity", lineOpacity);
+        bool lineBlend = lineOpacity < 0.999f;
+        if (lineBlend)
+        {
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        }
 
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
@@ -871,6 +879,7 @@ public sealed class ToolpathRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
             }
 
+            _shader.SetFloat("uOpacity", 1f);
             if (showSeam && seamCount > 0)
             {
                 GL.PointSize(8f);
@@ -892,9 +901,12 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
+        if (lineBlend) GL.Disable(EnableCap.Blend);
+
         if (showOrientationPreview && _orientationVao != 0 && beadCount > 0)
         {
             _shader.Use();
+            _shader.SetFloat("uOpacity", 1f);
             _shader.SetMatrix4("uMVP", ref mvp);
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
