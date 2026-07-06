@@ -23,7 +23,9 @@ public static class PatternEffect
 
     public static Toolpath Apply(Toolpath toolpath, SliceSettings settings)
     {
-        if (settings.PatternType == PatternType.Smooth || settings.PatternAmplitude <= 0f)
+        bool effectorActive = settings.EffectorPoints.Count > 0 && settings.EffectorStrengthMm > 0f;
+        if (settings.PatternType == PatternType.Smooth ||
+            (settings.PatternAmplitude <= 0f && !effectorActive))
             return toolpath;
         if (toolpath.Layers.Count == 0) return toolpath;
 
@@ -50,6 +52,9 @@ public static class PatternEffect
             OffsetRad = settings.PatternOffsetDeg * MathF.PI / 180f,
             FadeIn    = MathF.Max(0f, settings.PatternFadeInMm),
             FadeOut   = MathF.Max(0f, settings.PatternFadeOutMm),
+            Effectors = settings.EffectorPoints,
+            EffectorRadius   = MathF.Max(1e-3f, settings.EffectorRadiusMm),
+            EffectorStrength = MathF.Max(0f, settings.EffectorStrengthMm),
             Cx        = (minX + maxX) * 0.5f,
             Cy        = (minY + maxY) * 0.5f,
             ZMin      = minZ,
@@ -114,6 +119,8 @@ public static class PatternEffect
     {
         public PatternType Type;
         public float Amplitude, Frequency, TwistRad, OffsetRad, FadeIn, FadeOut;
+        public IReadOnlyList<Vector3> Effectors = [];
+        public float EffectorRadius = 400f, EffectorStrength;
         public float Cx, Cy, ZMin, Height, Radius, CellMm;
         private (float theta, float z)[] _sunflower = [];
         private float _sunBumpR;
@@ -126,7 +133,26 @@ public static class PatternEffect
             if (FadeIn  > 0f) fade *= Math.Clamp(z / FadeIn, 0f, 1f);
             if (FadeOut > 0f) fade *= Math.Clamp((Height - z) / FadeOut, 0f, 1f);
             if (fade <= 0f) return 0f;
-            return Amplitude * fade * Value(theta + TwistRad * z - OffsetRad, z);
+            // Live effector: smoothstep bell boosts the local amplitude (OGcode model).
+            float amp = Amplitude + EffectorStrength * EffectorBell(p);
+            if (amp <= 0f) return 0f;
+            return amp * fade * Value(theta + TwistRad * z - OffsetRad, z);
+        }
+
+        /// <summary>Max smoothstep falloff t²(3−2t) over all effector points; 0 outside radius.</summary>
+        private float EffectorBell(Vector3 p)
+        {
+            if (EffectorStrength <= 0f || Effectors.Count == 0) return 0f;
+            float best = 0f;
+            foreach (var e in Effectors)
+            {
+                float dist = Vector3.Distance(p, e);
+                if (dist >= EffectorRadius) continue;
+                float t = 1f - dist / EffectorRadius;
+                float bell = t * t * (3f - 2f * t);
+                if (bell > best) best = bell;
+            }
+            return best;
         }
 
         private float Value(float theta, float z) => Type switch

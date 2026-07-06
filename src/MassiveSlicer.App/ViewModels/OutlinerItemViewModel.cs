@@ -27,6 +27,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     /// <summary>True for toolpath entries (set by RegisterToolpathInOutliner).</summary>
     public bool IsToolpath { get; set; }
 
+    /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
+    public bool IsEffector { get; set; }
+
     private bool _isLocked;
     /// <summary>Locked rows can't be selected (outliner or viewport); toggled via the padlock.</summary>
     public bool IsLocked

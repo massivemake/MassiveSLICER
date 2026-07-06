@@ -2006,6 +2006,113 @@ public sealed class ViewportViewModel : ViewModelBase
     /// drives the realtime re-slice.</summary>
     internal Action? OnModelGeometryChanged { get; set; }
 
+    // ── Live effector handles (glowing draggable points, up to 3) ──────────
+    private readonly SceneNode?[] _effectorNodes = new SceneNode?[3];
+    private readonly OutlinerItemViewModel?[] _effectorItems = new OutlinerItemViewModel?[3];
+
+    public bool EffectorPoint1Active => _effectorNodes[0] is not null;
+    public bool EffectorPoint2Active => _effectorNodes[1] is not null;
+    public bool EffectorPoint3Active => _effectorNodes[2] is not null;
+
+    public RelayCommand<string> ToggleEffectorPointCommand => _toggleEffectorPointCommand ??=
+        new RelayCommand<string>(idxStr =>
+        {
+            if (!int.TryParse(idxStr, out int n) || n < 1 || n > 3) return;
+            int i = n - 1;
+            if (_effectorNodes[i] is { } existing)
+            {
+                RequestDeleteNode(existing);
+                _effectorNodes[i] = null;
+                _effectorItems[i] = null;
+            }
+            else
+            {
+                var node = BuildEffectorNode(n);
+                PendingNodes.Enqueue(node);
+                var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
+                {
+                    OutlinerItems.Remove(it);
+                    PendingRemoveNodes.Enqueue(it.Node);
+                    int slot = Array.IndexOf(_effectorNodes, it.Node);
+                    if (slot >= 0) { _effectorNodes[slot] = null; _effectorItems[slot] = null; NotifyEffectorPoints(); }
+                    NotifyRenderNeeded();
+                }, null, $"Effector {n}", canDelete: true)
+                { IsEffector = true };
+                OutlinerItems.Add(item);
+                _effectorNodes[i] = node;
+                _effectorItems[i] = item;
+            }
+            NotifyEffectorPoints();
+            OnModelGeometryChanged?.Invoke();
+        });
+    private RelayCommand<string>? _toggleEffectorPointCommand;
+
+    void NotifyEffectorPoints()
+    {
+        OnPropertyChanged(nameof(EffectorPoint1Active));
+        OnPropertyChanged(nameof(EffectorPoint2Active));
+        OnPropertyChanged(nameof(EffectorPoint3Active));
+    }
+
+    /// <summary>World positions of the active effector handles (for the slicer).</summary>
+    internal List<System.Numerics.Vector3> GetActiveEffectorPositions()
+    {
+        var list = new List<System.Numerics.Vector3>();
+        foreach (var node in _effectorNodes)
+        {
+            if (node is null) continue;
+            var w = node.WorldTransform;
+            list.Add(new System.Numerics.Vector3(w.M41, w.M42, w.M43));
+        }
+        return list;
+    }
+
+    /// <summary>Glowing lime sphere handle, spawned near the active model (or bed centre).</summary>
+    private SceneNode BuildEffectorNode(int number)
+    {
+        const float r = 40f;
+        const int seg = 18, rings = 12;
+        var positions = new List<OpenTK.Mathematics.Vector3>();
+        var normals   = new List<OpenTK.Mathematics.Vector3>();
+        var indices   = new List<uint>();
+        for (int ri = 0; ri <= rings; ri++)
+        {
+            float v = ri / (float)rings * MathF.PI;
+            for (int si = 0; si <= seg; si++)
+            {
+                float u = si / (float)seg * 2f * MathF.PI;
+                var nrm = new OpenTK.Mathematics.Vector3(
+                    MathF.Sin(v) * MathF.Cos(u), MathF.Sin(v) * MathF.Sin(u), MathF.Cos(v));
+                positions.Add(nrm * r);
+                normals.Add(nrm);
+            }
+        }
+        for (int ri = 0; ri < rings; ri++)
+            for (int si = 0; si < seg; si++)
+            {
+                uint a = (uint)(ri * (seg + 1) + si);
+                uint b = (uint)(a + seg + 1);
+                indices.AddRange([a, b, a + 1, a + 1, b, b + 1]);
+            }
+
+        var mesh = new MeshData(positions.ToArray(), normals.ToArray(), indices.ToArray(),
+            $"Effector {number}", new OpenTK.Mathematics.Vector4(0.64f, 0.87f, 0.22f, 1f),
+            metallic: 0f, roughness: 0.25f);
+
+        // Spawn near the active model's front face, else above the bed centre.
+        var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
+        if (ResolveActivePrintObjectItem() is { } model && ComputeWorldPivot(model.Node) is { } pivot)
+            spawn = new OpenTK.Mathematics.Vector3(pivot.X, pivot.Y - 400f, pivot.Z + 600f);
+
+        return new SceneNode
+        {
+            Name           = $"Effector {number}",
+            PendingMesh    = mesh,
+            Selectable     = true,
+            LocalTransform = OpenTK.Mathematics.Matrix4.CreateTranslation(spawn),
+        };
+    }
+
     /// <summary>Fits the whole scene in view (viewport top-right icon).</summary>
     public RelayCommand FrameAllCommand => _frameAllCommand ??=
         new RelayCommand(() => OnFrameAllRequested?.Invoke());
@@ -3372,7 +3479,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 foreach (var child in item.Children)
                 {
-                    if (!OutlinerModelOps.IsScanItem(child))
+                    if (!OutlinerModelOps.IsScanItem(child) && !child.IsEffector)
                         yield return child;
                 }
                 continue;
@@ -3380,6 +3487,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (item == _robotGroupItem) continue;
             if (item == _toolheadGroupItem) continue;
             if (_cellEnvOutlinerItems.Contains(item)) continue;
+            if (item.IsEffector) continue;
             if (!OutlinerModelOps.IsScanItem(item))
                 yield return item;
         }

@@ -324,6 +324,31 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _passAngle, value);
     }
 
+    // ── Live effector ──────────────────────────────────────────────────────
+    private bool _effectorEnabled;
+    /// <summary>Master toggle for the live effector points.</summary>
+    public bool EffectorEnabled
+    {
+        get => _effectorEnabled;
+        set => SetField(ref _effectorEnabled, value);
+    }
+
+    private double _effectorRange = 400.0;
+    /// <summary>Effector influence radius (mm).</summary>
+    public double EffectorRange
+    {
+        get => _effectorRange;
+        set => SetField(ref _effectorRange, Math.Clamp(value, 10.0, 3000.0));
+    }
+
+    private double _effectorStrength = 30.0;
+    /// <summary>Amplitude boost at the effector centre (mm).</summary>
+    public double EffectorStrength
+    {
+        get => _effectorStrength;
+        set => SetField(ref _effectorStrength, Math.Clamp(value, 0.0, 200.0));
+    }
+
     // ── Pattern & texture (effector port) ─────────────────────────────────
     private string _patternType = "Smooth";
     /// <summary>Selected decorative pattern name (matches Core PatternType).</summary>

@@ -700,6 +700,57 @@
                                 </StackPanel>
                             </Grid>
 
+                            <!-- Live effector: draggable glowing points that locally boost the pattern -->
+                            <ToggleButton Classes="ExportCta" Margin="10,12,10,4"
+                                          HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                          IsChecked="{Binding Additive.EffectorEnabled, Mode=TwoWay}"
+                                          ToolTip.Tip="Enable the live effector: place glowing points in the viewport (select and move them with the gizmo); the pattern amplitude is boosted within their range.">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <ia:Icon Value="mdi-white-balance-sunny" FontSize="13"/>
+                                    <TextBlock Text="Live effector" FontWeight="SemiBold"/>
+                                </StackPanel>
+                            </ToggleButton>
+
+                            <Grid ColumnDefinitions="*,6,*,6,*" Margin="10,0,10,4"
+                                  IsVisible="{Binding Additive.EffectorEnabled}">
+                                <Button Grid.Column="0" Content="● 1" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Classes="PatternTile"
+                                        Classes.active="{Binding $parent[Window].DataContext.Viewport.EffectorPoint1Active}"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ToggleEffectorPointCommand}"
+                                        CommandParameter="1" Padding="0,6"/>
+                                <Button Grid.Column="2" Content="● 2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Classes="PatternTile"
+                                        Classes.active="{Binding $parent[Window].DataContext.Viewport.EffectorPoint2Active}"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ToggleEffectorPointCommand}"
+                                        CommandParameter="2" Padding="0,6"/>
+                                <Button Grid.Column="4" Content="● 3" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Classes="PatternTile"
+                                        Classes.active="{Binding $parent[Window].DataContext.Viewport.EffectorPoint3Active}"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ToggleEffectorPointCommand}"
+                                        CommandParameter="3" Padding="0,6"/>
+                            </Grid>
+
+                            <StackPanel IsVisible="{Binding Additive.EffectorEnabled}">
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Range" FontSize="11" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                        <TextBlock Text="{Binding Additive.EffectorRange, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="mm" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Slider Margin="10,0,10,2" Minimum="10" Maximum="3000" TickFrequency="10" IsSnapToTickEnabled="True"
+                                        Value="{Binding Additive.EffectorRange, Mode=TwoWay}"/>
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Strength" FontSize="11" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                        <TextBlock Text="{Binding Additive.EffectorStrength, StringFormat={}{0:0.0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                        <TextBlock Text="mm" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Slider Margin="10,0,10,6" Minimum="0" Maximum="200" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                        Value="{Binding Additive.EffectorStrength, Mode=TwoWay}"/>
+                            </StackPanel>
+
                             <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
 

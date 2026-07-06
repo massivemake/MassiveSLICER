@@ -2173,7 +2173,12 @@ public partial class ViewportView : UserControl
                 _renderer.ActiveDragAxis = GizmoAxis.None;
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (DataContext is ViewportViewModel vmGz2) SyncSelectionTransformDisplay(vmGz2);
+                if (DataContext is ViewportViewModel vmGz2)
+                {
+                    SyncSelectionTransformDisplay(vmGz2);
+                    // Moving a model or effector handle invalidates the slice.
+                    vmGz2.OnModelGeometryChanged?.Invoke();
+                }
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
@@ -2972,6 +2977,7 @@ public partial class ViewportView : UserControl
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
+            ApplyEffectorSettings(vm, settings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
@@ -3130,6 +3136,15 @@ public partial class ViewportView : UserControl
         {
             add.IsAutoTiltRunning = false;
         }
+    }
+
+    /// <summary>Feeds the live-effector handles (world positions + range/strength) into the slice.</summary>
+    private static void ApplyEffectorSettings(ViewportViewModel vm, SliceSettings settings)
+    {
+        if (vm.AdditiveSettings is not { EffectorEnabled: true } add) return;
+        settings.EffectorPoints     = vm.GetActiveEffectorPositions();
+        settings.EffectorRadiusMm   = (float)add.EffectorRange;
+        settings.EffectorStrengthMm = (float)add.EffectorStrength;
     }
 
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
@@ -3440,6 +3455,9 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PatternOffset),
         nameof(AdditiveSettingsViewModel.PatternFadeIn),
         nameof(AdditiveSettingsViewModel.PatternFadeOut),
+        nameof(AdditiveSettingsViewModel.EffectorEnabled),
+        nameof(AdditiveSettingsViewModel.EffectorRange),
+        nameof(AdditiveSettingsViewModel.EffectorStrength),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
@@ -3514,6 +3532,7 @@ public partial class ViewportView : UserControl
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
+            ApplyEffectorSettings(vm, settings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
                 pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
