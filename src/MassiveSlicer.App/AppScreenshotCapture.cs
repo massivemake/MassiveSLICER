@@ -17,7 +17,8 @@ internal static class AppScreenshotCapture
     /// surface isn't captured by <see cref="RenderTargetBitmap"/> (it composites separately),
     /// so without this overlay the viewport region would be black.
     /// </summary>
-    public static byte[]? CapturePng(Window window, byte[]? viewportOverlayPng, Control? viewportControl)
+    public static byte[]? CapturePng(Window window, byte[]? viewportOverlayPng, Control? viewportControl,
+                                     IReadOnlyList<Control>? chromeOverlays = null)
     {
         if (window.Bounds.Width <= 1 || window.Bounds.Height <= 1)
             return null;
@@ -50,6 +51,22 @@ internal static class AppScreenshotCapture
                         var dest = new Rect(topLeft.X, topLeft.Y,
                                             viewportControl.Bounds.Width, viewportControl.Bounds.Height);
                         ctx.DrawImage(vpBmp, new Rect(vpBmp.Size), dest);
+
+                        // The viewport is full-bleed (chrome floats over it), so the GL paste
+                        // above covers the floating cards; re-render each chrome control on top.
+                        foreach (var chrome in chromeOverlays ?? [])
+                        {
+                            if (!chrome.IsVisible || chrome.Bounds.Width < 1 || chrome.Bounds.Height < 1) continue;
+                            if (chrome.TranslatePoint(new Point(0, 0), window) is not { } p) continue;
+
+                            var chromeSize = new PixelSize(
+                                Math.Max(1, (int)Math.Ceiling(chrome.Bounds.Width * scaling)),
+                                Math.Max(1, (int)Math.Ceiling(chrome.Bounds.Height * scaling)));
+                            using var chromeRtb = new RenderTargetBitmap(chromeSize, dpi);
+                            chromeRtb.Render(chrome);
+                            ctx.DrawImage(chromeRtb, new Rect(chromeRtb.Size),
+                                new Rect(p.X, p.Y, chrome.Bounds.Width, chrome.Bounds.Height));
+                        }
                     }
                     using var msC = new MemoryStream();
                     combined.Save(msC);

@@ -75,6 +75,31 @@ public sealed class SliceSettings
     public float ApproachZ { get; init; } = 50f;
 
     /// <summary>Tilt around the Y-axis in degrees for the Angled method (leans the plane toward ±X).</summary>
+    // ── Live effector (MassiveCODE port): world-space points that locally boost
+    //    the pattern amplitude with a smoothstep bell falloff. ─────────────────
+    /// <summary>Enabled effector positions (world mm). Empty = no effector.</summary>
+    public IReadOnlyList<System.Numerics.Vector3> EffectorPoints { get; set; } = [];
+    /// <summary>Effector influence radius (mm).</summary>
+    public float EffectorRadiusMm { get; set; } = 400f;
+    /// <summary>Amplitude boost at an effector's centre (mm).</summary>
+    public float EffectorStrengthMm { get; set; } = 30f;
+
+    // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
+    /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
+    public Slicing.Effects.PatternType PatternType { get; init; } = Slicing.Effects.PatternType.Smooth;
+    /// <summary>Pattern relief depth in mm (0 disables).</summary>
+    public float PatternAmplitude { get; init; } = 0f;
+    /// <summary>Pattern repetitions around the part.</summary>
+    public float PatternFrequency { get; init; } = 15f;
+    /// <summary>Rotates the pattern with height (degrees per mm).</summary>
+    public float PatternTwistDegPerMm { get; init; } = 0f;
+    /// <summary>Phase rotation of the pattern around the part (degrees).</summary>
+    public float PatternOffsetDeg { get; init; } = 0f;
+    /// <summary>Ease-in distance from the bottom (mm).</summary>
+    public float PatternFadeInMm { get; init; } = 0f;
+    /// <summary>Ease-out distance to the top (mm).</summary>
+    public float PatternFadeOutMm { get; init; } = 0f;
+
     public float TiltAngle { get; init; } = 0f;
 
     /// <summary>Tilt around the X-axis in degrees for the Angled method (leans the plane toward ±Y).</summary>

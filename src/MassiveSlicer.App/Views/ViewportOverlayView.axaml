@@ -14,7 +14,91 @@
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
     </UserControl.Resources>
 
-    <Grid Background="Transparent">
+    <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
+    <Grid Background="Transparent" Margin="320,52,320,0">
+
+        <!-- View-mode pills (effector style) — top right -->
+        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,8,0,0" ZIndex="15"
+                Background="#B3222222" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="3">
+            <StackPanel Orientation="Horizontal" Spacing="2">
+                <Button Classes="ViewPill" Content="Body"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Body}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Body"/>
+                <Button Classes="ViewPill" Content="Toolpath"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Toolpath}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Toolpath"/>
+                <Button Classes="ViewPill" Content="Speed"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Speed}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Speed"/>
+                <Button Classes="ViewPill" Content="RPM"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=RPM}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="RPM"
+                        ToolTip.Tip="Extrusion rate / flowrate demand"/>
+                <Button Classes="ViewPill" Content="Preview"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
+            </StackPanel>
+        </Border>
+
+        <!-- View pie menu (Ctrl+Space) — appears around the pointer -->
+        <Grid Background="#01000000" ZIndex="60" IsVisible="{Binding IsViewPieOpen}">
+            <Grid.GestureRecognizers/>
+            <Button Background="Transparent" BorderThickness="0" Padding="0"
+                    HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                    Command="{Binding CloseViewPieCommand}"/>
+            <Canvas>
+                <Canvas Canvas.Left="{Binding ViewPieX}" Canvas.Top="{Binding ViewPieY}">
+                    <Canvas Canvas.Left="-150" Canvas.Top="-110" Width="300" Height="220">
+                        <Ellipse Canvas.Left="134" Canvas.Top="94" Width="32" Height="32"
+                                 Fill="#CC2b2b2b" Stroke="{DynamicResource Accent}" StrokeThickness="1"/>
+                <Button Canvas.Left="118" Canvas.Top="0" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Top"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Top"/>
+                <Button Canvas.Left="28" Canvas.Top="28" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Iso"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Iso"/>
+                <Button Canvas.Left="208" Canvas.Top="28" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Frame"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Frame"/>
+                <Button Canvas.Left="0" Canvas.Top="95" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Left"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Left"/>
+                <Button Canvas.Left="236" Canvas.Top="95" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Right"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Right"/>
+                <Button Canvas.Left="48" Canvas.Top="162" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Back"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Back"/>
+                <Button Canvas.Left="188" Canvas.Top="162" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Front"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Front"/>
+                <Button Canvas.Left="118" Canvas.Top="190" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Bottom"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Bottom"/>
+                    </Canvas>
+                </Canvas>
+            </Canvas>
+        </Grid>
 
         <!-- Slice errors / validation alerts render inline in the bottom status bar. -->
 
@@ -26,10 +110,10 @@
                     ZIndex="20"
                     IsVisible="{Binding IsSyncHudOpen}">
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -58,10 +142,10 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -81,10 +165,10 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94"
@@ -98,7 +182,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             Command="{Binding SaveViewCommand}"
                             ToolTip.Tip="Save the current camera angle as this cell's default view. Persists to the cell file, so it's restored next time you (or anyone) opens the app.">
                         <StackPanel Orientation="Horizontal" Spacing="6">
@@ -109,10 +193,10 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -127,7 +211,7 @@
                                   Background="{DynamicResource Bg2}"
                                   BorderBrush="{DynamicResource Border1}"
                                   BorderThickness="1"
-                                  CornerRadius="4"
+                                  CornerRadius="5"
                                   ToolTip.Tip="Edit cell layout: select print bed, rotary bed, tool stands, or docked tools and move/rotate them.">
                         <StackPanel Orientation="Horizontal" Spacing="6">
                             <ia:Icon Value="mdi-wrench-outline" FontSize="14"/>
@@ -147,7 +231,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             IsVisible="{Binding IsDevMode}"
                             Command="{Binding SaveAllDevTransformsCommand}"
                             ToolTip.Tip="Write every stand, bed, rotary bed, and dock pose to the cell JSON, then reload.">
@@ -163,7 +247,7 @@
                             Background="{DynamicResource Bg2}"
                             BorderBrush="{DynamicResource Border1}"
                             BorderThickness="1"
-                            CornerRadius="4"
+                            CornerRadius="5"
                             IsVisible="{Binding IsDevObjectSelected}"
                             Command="{Binding SaveDevTransformCommand}"
                             ToolTip.Tip="Write position and rotation to the cell JSON file.">
@@ -176,10 +260,10 @@
             </Border>
 
             <!-- PLASTICITY — collapsible live bridge to a Plasticity CAD session -->
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94">
@@ -218,10 +302,10 @@
                 </Expander>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
-                    CornerRadius="4"
+                    CornerRadius="5"
                     Padding="10,8"
                     Width="268"
                     Opacity="0.94"
@@ -284,7 +368,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4">
+                CornerRadius="5">
             <Expander Classes="SectionExpander"
                       Header="DATA VISUALIZATION"
                       IsExpanded="False">
@@ -300,87 +384,107 @@
             </Expander>
         </Border>
 
-        <!-- Transform toolbar — top-center (move / rotate / scale) -->
-        <Border
-                HorizontalAlignment="Center"
-                VerticalAlignment="Top"
-                Margin="8"
-                Background="{DynamicResource Bg2}"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="4"
-                Padding="4">
-            <StackPanel Orientation="Vertical" Spacing="4">
-                <!-- Gizmo mode buttons -->
-                <StackPanel Orientation="Horizontal">
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Move"   Padding="6,4" Margin="0,0,2,0"
+        <!-- Transform toolbar — top-center: icon tab above the axis-value row -->
+        <StackPanel HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="0,8,0,0"
+                    ZIndex="14">
+
+            <!-- Icon tab (notch) -->
+            <Border HorizontalAlignment="Center"
+                    Background="#F2262626"
+                    BorderBrush="#3D3D3D"
+                    BorderThickness="1"
+                    CornerRadius="6"
+                    Padding="3">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="12,4"
                             Classes.active="{Binding IsMoveActive}"
                             Command="{Binding GizmoMoveCommand}">
                         <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="6,4" Margin="0,0,2,0"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="12,4"
                             Classes.active="{Binding IsRotateActive}"
                             Command="{Binding GizmoRotateCommand}">
                         <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale"  Padding="6,4" Margin="0,0,2,0"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="12,4"
                             Classes.active="{Binding IsScaleActive}"
                             Command="{Binding GizmoScaleCommand}">
                         <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
                     </Button>
-                    <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2,4,2"/>
-                    <Button Classes="ToolbarButton"
-                            Padding="6,4"
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
+                    <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
                             ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
                         <ia:Icon Value="mdi-target-variant" FontSize="14"/>
                     </Button>
                 </StackPanel>
-                <!-- XYZ position inputs — visible when Move is active -->
-                <StackPanel Orientation="Horizontal" Spacing="4"
-                            IsVisible="{Binding IsMoveActive}">
-                    <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                </StackPanel>
-                <!-- ABC rotation inputs — visible when Rotate is active -->
-                <StackPanel Orientation="Horizontal" Spacing="4"
-                            IsVisible="{Binding IsRotateActive}">
-                    <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                </StackPanel>
-            </StackPanel>
-        </Border>
+            </Border>
+
+            <!-- Axis values -->
+                <Border Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8,6"
+                        Margin="0,-3,0,0"
+                        IsVisible="{Binding IsMoveActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                    </StackPanel>
+                </Border>
+                <Border Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8,6"
+                        Margin="0,-3,0,0"
+                        IsVisible="{Binding IsRotateActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                    </StackPanel>
+                </Border>
+        </StackPanel>
 
         <!-- Focus overlay — top-left, visible only when an object is selected -->
         <Border IsVisible="{Binding HasSelection}"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Margin="8"
+                Margin="0,8,8,8"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
                 <!-- Transformation tools: place the object on the plate -->
@@ -405,6 +509,11 @@
                         IsVisible="{Binding !IsToolpathSelected}"/>
 
                 <!-- Other tools: camera + mesh structure -->
+                <Button Classes="ToolbarButton" Padding="6"
+                        Command="{Binding FrameAllCommand}"
+                        ToolTip.Tip="Frame All — fit the whole scene in view">
+                    <ia:Icon Value="mdi-fit-to-screen-outline" FontSize="14"/>
+                </Button>
                 <Button Classes="ToolbarButton"
                         Padding="6,4"
                         Command="{Binding FocusCommand}"
@@ -496,10 +605,10 @@
             </StackPanel>
         </Border>
 
-        <!-- Toolpath stats — top-right -->
+        <!-- Toolpath stats — top-right, below the view pills -->
         <StackPanel HorizontalAlignment="Right"
                     VerticalAlignment="Top"
-                    Margin="8"
+                    Margin="0,58,0,8"
                     Spacing="6"
                     ZIndex="32">
             <!-- Toolpath stats -->
@@ -507,7 +616,7 @@
                     Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="10,8">
             <Grid>
@@ -539,7 +648,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 MaxHeight="220"
                 ZIndex="31">
@@ -571,7 +680,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 ZIndex="30">
             <Grid ColumnDefinitions="Auto,*,Auto">
@@ -626,7 +735,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="8,6"
                 ZIndex="30">
             <Grid ColumnDefinitions="Auto,*,Auto">
@@ -671,15 +780,59 @@
             </StackPanel>
         </Button>
 
-        <!-- Horizontal timeline — bottom, visible when toolpath selected -->
-        <Border IsVisible="{Binding IsToolpathSelected}"
+        <!-- Simulate timeline — bottom-center, Toolpath view (hidden when the
+             full playback card for a selected toolpath is showing) -->
+        <Border IsVisible="{Binding ShowSimTimeline}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,16"
+                Width="440"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="10,5"
+                ZIndex="24">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+                <Button Grid.Column="0" Classes="ToolbarButton" Padding="6,4" Margin="0,0,2,0"
+                        Command="{Binding SimResetCommand}"
+                        ToolTip.Tip="Reset simulation to 0%">
+                    <ia:Icon Value="mdi-restore" FontSize="15"/>
+                </Button>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="6,4" Margin="0,0,8,0"
+                        Command="{Binding SimPlayPauseCommand}"
+                        ToolTip.Tip="Simulate the full toolpath (6 s)">
+                    <Panel>
+                        <ia:Icon Value="mdi-play"  FontSize="15" IsVisible="{Binding !SimPlaying}"/>
+                        <ia:Icon Value="mdi-pause" FontSize="15" IsVisible="{Binding SimPlaying}"/>
+                    </Panel>
+                </Button>
+                <Slider Grid.Column="2" Classes="ScrubSlider"
+                        Minimum="0" Maximum="100"
+                        VerticalAlignment="Center"
+                        Value="{Binding SimTimelinePercent, Mode=TwoWay}"/>
+                <TextBlock Grid.Column="3" Text="{Binding SimTimelineLabel}"
+                           Classes="Readout" FontSize="11" Width="38"
+                           TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                <Button Grid.Column="4" Classes="ToolbarButton" Padding="6,4" Margin="6,0,0,0"
+                        Command="{Binding SimExportVideoCommand}"
+                        IsEnabled="{Binding !SimRecording}"
+                        ToolTip.Tip="Download the 6-second simulation as an MP4 video">
+                    <ia:Icon Value="mdi-download" FontSize="15"/>
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Horizontal timeline — Preview view only, while a scrub session is live
+             (stays up when the TCP is selected for keyframe adjustments) -->
+        <Border IsVisible="{Binding ShowPlaybackTimeline}"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Margin="8"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Padding="6,4">
             <StackPanel Spacing="4">
 
@@ -687,7 +840,7 @@
                 <Grid ColumnDefinitions="Auto,*,Auto">
 
                     <!-- Play / pause + speed -->
-                    <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4"
+                    <StackPanel x:Name="ScrubPlayControls" Grid.Column="0" Orientation="Horizontal" Spacing="4"
                                 VerticalAlignment="Center" Margin="0,0,8,0">
                         <Button Classes="ToolbarButton"
                                 IsEnabled="{Binding !IsValidating}"
@@ -705,6 +858,17 @@
                                   Width="64"
                                   VerticalAlignment="Center"
                                   ToolTip.Tip="Playback speed"/>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                Command="{Binding AddTcpKeyframeCommand}"
+                                ToolTip.Tip="Add a TCP keyframe at this moment — drag the TCP first (or click to pin the nominal position). The offset eases in/out over nearby moves.">
+                            <ia:Icon Value="mdi-key-plus" FontSize="15"/>
+                        </Button>
+                        <Button Classes="ToolbarButton" Padding="6,4"
+                                IsVisible="{Binding HasTcpKeyframes}"
+                                Command="{Binding ClearTcpKeyframesCommand}"
+                                ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
+                            <ia:Icon Value="mdi-key-remove" FontSize="15"/>
+                        </Button>
                     </StackPanel>
 
                     <!-- Horizontal scrubber track -->
@@ -726,10 +890,16 @@
                                              MarkerBrush="#9955DD"
                                              Height="6" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
+                        <!-- TCP keyframe markers — lime ticks -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
+                                             MarkerBrush="#7ed87e"
+                                             Height="10" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
                     </Grid>
 
-                    <!-- Move counter + analysing indicator -->
-                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="2">
+                    <!-- Move counter + analysing indicator + video export -->
+                    <StackPanel x:Name="ScrubRightControls" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="6">
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock IsVisible="{Binding IsValidating}"
                                    Text="Analysing…"
                                    Foreground="{DynamicResource TextSecondary}"
@@ -745,29 +915,42 @@
                                        VerticalAlignment="Center"/>
                         </StackPanel>
                     </StackPanel>
+                    <Button Classes="ToolbarButton" Padding="6,4" VerticalAlignment="Center"
+                            Command="{Binding SimExportVideoCommand}"
+                            IsEnabled="{Binding !SimRecording}"
+                            ToolTip.Tip="Download a 6-second MP4 simulation of the viewport">
+                        <ia:Icon Value="mdi-download" FontSize="15"/>
+                    </Button>
+                    </StackPanel>
 
                 </Grid>
 
-                <!-- Keyframe track — placeholder; wired up when keyframe functionality is added -->
-                <Grid Height="22">
-                    <Border Background="{DynamicResource Border1}"
-                            CornerRadius="2"
-                            Margin="0,2"
-                            Opacity="0.4"/>
-                    <TextBlock Text="KEYFRAMES"
-                               Classes="LabelMuted"
-                               FontSize="9"
-                               VerticalAlignment="Center"
-                               HorizontalAlignment="Left"
-                               Margin="8,0,0,0"/>
-                    <Button Classes="ToolbarButton"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Padding="4,2"
-                            Margin="4,0"
-                            ToolTip.Tip="Add orientation keyframe at current move">
-                        <ia:Icon Value="mdi-plus" FontSize="11"/>
-                    </Button>
+                <!-- Keyframe lane — slides open once the first TCP keyframe exists.
+                     Diamonds are clickable (jump + select); the small side ticks drag
+                     to resize each key's ease-in / ease-out influence window. -->
+                <Grid Height="24" Margin="0,2,0,0"
+                      IsVisible="{Binding HasTcpKeyframes}"
+                      ColumnDefinitions="Auto,*,Auto">
+                    <Border Grid.Column="0" Margin="0,0,8,0"
+                            Width="{Binding #ScrubPlayControls.Bounds.Width}">
+                        <TextBlock Text="KEYFRAMES"
+                                   Classes="LabelMuted"
+                                   FontSize="9"
+                                   VerticalAlignment="Center"
+                                   HorizontalAlignment="Left"
+                                   Margin="2,0,0,0"/>
+                    </Border>
+                    <Grid Grid.Column="1">
+                        <Border Background="{DynamicResource Border1}"
+                                CornerRadius="5"
+                                Margin="0,3"
+                                Opacity="0.35"/>
+                        <ctrl:KeyframeLaneBar x:Name="KeyframeLane"
+                                              Items="{Binding KeyframeLaneItems}"
+                                              Cursor="Hand"/>
+                    </Grid>
+                    <Border Grid.Column="2" Margin="8,0,0,0"
+                            Width="{Binding #ScrubRightControls.Bounds.Width}"/>
                 </Grid>
 
             </StackPanel>
@@ -781,7 +964,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="8,6">
             <StackPanel>
@@ -822,7 +1005,7 @@
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
-                CornerRadius="4"
+                CornerRadius="5"
                 Opacity="0.88"
                 Padding="8,6">
             <StackPanel>

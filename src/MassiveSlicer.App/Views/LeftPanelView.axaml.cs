@@ -1,12 +1,38 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Platform.Storage;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
 
 public partial class LeftPanelView : UserControl
 {
-    public LeftPanelView() => InitializeComponent();
+    /// <summary>Raised when the import dropzone is clicked — the window shows the file picker.</summary>
+    public event Action? ImportClickRequested;
+
+    /// <summary>Raised with local file paths dropped onto the import dropzone.</summary>
+    public event Action<string[]>? ImportFilesDropped;
+
+    public LeftPanelView()
+    {
+        InitializeComponent();
+
+        ImportDropZone.PointerPressed += (_, _) => ImportClickRequested?.Invoke();
+        ImportDropZone.AddHandler(DragDrop.DragOverEvent, (_, e) =>
+        {
+            e.DragEffects = e.DataTransfer.Contains(DataFormat.File) ? DragDropEffects.Copy : DragDropEffects.None;
+        });
+        ImportDropZone.AddHandler(DragDrop.DropEvent, (_, e) =>
+        {
+            var paths = e.DataTransfer.TryGetFiles()?
+                .Select(f => f.TryGetLocalPath())
+                .Where(p => p is not null)
+                .Select(p => p!)
+                .ToArray();
+            if (paths is { Length: > 0 })
+                ImportFilesDropped?.Invoke(paths);
+        });
+    }
 
     private void JointAngle_KeyDown(object? sender, KeyEventArgs e)
     {

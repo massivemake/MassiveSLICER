@@ -16,6 +16,17 @@ namespace MassiveSlicer.Viewport.Rendering;
 ///
 /// Depth test is disabled so lines are never occluded by mesh geometry.
 /// </summary>
+/// <summary>How toolpath extrude lines are coloured.</summary>
+public enum ToolpathColorMode
+{
+    /// <summary>Kind-based colours (extrude/travel/wipe/seam).</summary>
+    Normal,
+    /// <summary>Gradient by effective print speed (blue slow → red fast).</summary>
+    Speed,
+    /// <summary>Gradient by extrusion rate / RPM demand (blue low → red high).</summary>
+    Rpm,
+}
+
 public sealed class ToolpathRenderer : IDisposable
 {
     // Separate VAOs per category so each can be toggled independently.
@@ -51,9 +62,10 @@ public sealed class ToolpathRenderer : IDisposable
         in vec3 vColor;
         uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
         uniform vec3  uOverrideColor;
+        uniform float uOpacity;        // line transparency (1 = opaque)
         out vec4 fragColor;
         void main() {
-            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, 1.0);
+            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
         }
         """;
 
@@ -63,24 +75,36 @@ public sealed class ToolpathRenderer : IDisposable
         layout(location = 1) in vec3 aNormal;
         uniform mat4 uMVP;
         out vec3 vNormal;
+        out vec3 vPos;
         void main() {
             gl_Position = vec4(aPos, 1.0) * uMVP;
             vNormal = aNormal;
+            vPos    = aPos;
         }
         """;
 
+    // Glossy semi-metallic plastic matched to the Blender "3dp.001" reference
+    // (Principled BSDF: roughness 0.21, metallic 0.73, lime base).
     private static readonly string BeadFragSrc = """
         #version 330 core
         in vec3 vNormal;
+        in vec3 vPos;
         uniform vec3 uColor;
+        uniform vec3 uEye;
         out vec4 fragColor;
         void main() {
             vec3 L = normalize(vec3(0.6, 0.4, 1.0));
             vec3 n = normalize(vNormal);
-            float d = max(dot(n, L), 0.0);
+            vec3 V = normalize(uEye - vPos);
+            float d    = max(dot(n, L), 0.0);
             float fill = max(dot(n, vec3(-0.3, -0.2, -0.7)), 0.0) * 0.15;
-            float light = 0.20 + d * 0.72 + fill;
-            fragColor = vec4(uColor * light, 1.0);
+            float light = 0.22 + d * 0.62 + fill;
+            vec3  H     = normalize(L + V);
+            float spec  = pow(max(dot(n, H), 0.0), 64.0);
+            float fres  = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+            vec3  specCol = mix(vec3(1.0), uColor, 0.55);
+            vec3  col = uColor * light + specCol * (spec * 0.9 + fres * 0.12);
+            fragColor = vec4(col, 1.0);
         }
         """;
 
@@ -115,6 +139,9 @@ public sealed class ToolpathRenderer : IDisposable
     private Toolpath _toolpath;
     private NVec3    _origin;
     private bool[]?  _reachability;  // per flat-move index; null = all reachable
+
+    /// <summary>Total flat move count (scrub/simulation range).</summary>
+    public int TotalMoveCount => _totalMoveCount;
 
     // Prefix-sum arrays: cumulative[i] = total VBO vertices for the first i flat moves.
     // Index 0 = 0 (nothing drawn), index _totalMoveCount = full count.
@@ -159,6 +186,16 @@ public sealed class ToolpathRenderer : IDisposable
     /// takes effect immediately with no VBO rebuild. Safe to call from any thread.
     /// </summary>
     public void SetBeadColor(Vector3 color) => _beadMaterialColor = color;
+
+    private ToolpathColorMode _colorMode = ToolpathColorMode.Normal;
+
+    /// <summary>Switches the extrude-line colour mode and rebuilds VBOs. GL thread only.</summary>
+    public void SetColorMode(ToolpathColorMode mode)
+    {
+        if (_colorMode == mode) return;
+        _colorMode = mode;
+        RebuildLineVbos();
+    }
 
     /// <summary>
     /// Updates toolpath line colours and rebuilds affected VBOs. Must be called on the GL thread.
@@ -212,6 +249,21 @@ public sealed class ToolpathRenderer : IDisposable
             extData[ei++] = c.X;             extData[ei++] = c.Y;             extData[ei++] = c.Z;
         }
 
+        // Speed/RPM gradients: normalise the per-move factor over the whole toolpath.
+        float scalarMin = float.MaxValue, scalarMax = float.MinValue;
+        if (_colorMode != ToolpathColorMode.Normal)
+        {
+            foreach (var layer in _toolpath.Layers)
+                foreach (var move in layer.Moves)
+                    if (move.Kind == MoveKind.Extrude)
+                    {
+                        float v = MoveScalar(move, layer);
+                        if (v < scalarMin) scalarMin = v;
+                        if (v > scalarMax) scalarMax = v;
+                    }
+        }
+        float scalarRange = scalarMax - scalarMin;
+
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
@@ -223,6 +275,10 @@ public sealed class ToolpathRenderer : IDisposable
                         color = UnreachableColor;
                     else if (move.Kind == MoveKind.Mill)
                         color = _millColor;
+                    else if (_colorMode != ToolpathColorMode.Normal)
+                        color = scalarRange < 1e-6f
+                            ? GradientColor(0.5f)
+                            : GradientColor((MoveScalar(move, layer) - scalarMin) / scalarRange);
                     else if (move.IsWipe)
                         color = _wipeColor;
                     else
@@ -234,6 +290,29 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
         return extData;
+    }
+
+    /// <summary>Per-move factor for the active gradient mode (relative units — normalised later).</summary>
+    private float MoveScalar(ToolpathMove move, ToolpathLayer layer)
+    {
+        float speed = move.PrintSpeedScale * (move.IsResumeRamp ? move.ResumeSpeedScale : 1f);
+        if (_colorMode == ToolpathColorMode.Speed) return speed;
+        // RPM demand ∝ speed · layer height (bead width constant per slice) · ramp/wipe scales.
+        float rpm = speed
+                  * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
+                  * (move.IsWipe ? move.WipeRpmScale : 1f)
+                  * MathF.Max(0.1f, layer.Height);
+        return rpm;
+    }
+
+    /// <summary>Blue → green → red gradient over t ∈ [0,1].</summary>
+    private static Vector3 GradientColor(float t)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        var lo  = new Vector3(0.20f, 0.45f, 1.00f);
+        var mid = new Vector3(0.25f, 0.85f, 0.30f);
+        var hi  = new Vector3(1.00f, 0.25f, 0.15f);
+        return t < 0.5f ? Vector3.Lerp(lo, mid, t * 2f) : Vector3.Lerp(mid, hi, (t - 0.5f) * 2f);
     }
 
     /// <summary>Creates and populates a VAO+VBO pair. Both handles are returned.</summary>
@@ -757,12 +836,14 @@ public sealed class ToolpathRenderer : IDisposable
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showBeadOverhang = false,
-                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue)
+                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
+                     Vector3 eyeLocal = default, float lineOpacity = 1f)
     {
         if (_disposed) return;
 
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetFloat("uOpacity", lineOpacity);
 
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
@@ -795,6 +876,7 @@ public sealed class ToolpathRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
             }
 
+            _shader.SetFloat("uOpacity", 1f);
             if (showSeam && seamCount > 0)
             {
                 GL.PointSize(8f);
@@ -819,6 +901,7 @@ public sealed class ToolpathRenderer : IDisposable
         if (showOrientationPreview && _orientationVao != 0 && beadCount > 0)
         {
             _shader.Use();
+            _shader.SetFloat("uOpacity", 1f);
             _shader.SetMatrix4("uMVP", ref mvp);
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
@@ -843,6 +926,7 @@ public sealed class ToolpathRenderer : IDisposable
             _beadShader.Use();
             _beadShader.SetMatrix4("uMVP", ref mvp);
             _beadShader.SetVector3("uColor", _beadMaterialColor);
+            _beadShader.SetVector3("uEye",   eyeLocal);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
             GL.DrawElements(PrimitiveType.Triangles, beadCount, DrawElementsType.UnsignedInt, 0);

@@ -129,7 +129,9 @@ public enum SliceMethod
 /// <summary>Application colour theme.</summary>
 public enum AppTheme
 {
-    /// <summary>Dark grey with lime-green accent (default).</summary>
+    /// <summary>MassiveMAKE brand: neutral grayscale with brand-green accent (default).</summary>
+    MassiveMake,
+    /// <summary>Dark grey with lime-green accent.</summary>
     Obsidian,
     /// <summary>Cool dark blue with cyan accent.</summary>
     Arctic,

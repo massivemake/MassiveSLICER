@@ -51,6 +51,7 @@ public partial class OutlinerItemView : UserControl
             }
             else
             {
+                if (item.IsLocked) { e.Handled = true; return; }
                 mvm.Viewport.ClearScanOutlinerSelection();
                 mvm.Viewport.OnOutlinerSelectRequested?.Invoke(item.Node);
             }
@@ -68,7 +69,7 @@ public partial class OutlinerItemView : UserControl
                 if (mvm.Viewport.SelectedScanCount < 2)
                     mvm.Viewport.OnOutlinerSelectRequested?.Invoke(item.Node);
             }
-            else
+            else if (!item.IsLocked)
                 mvm.Viewport.OnOutlinerSelectRequested?.Invoke(item.Node);
         }
     }

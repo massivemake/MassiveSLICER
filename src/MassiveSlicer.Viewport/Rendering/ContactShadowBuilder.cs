@@ -83,7 +83,7 @@ public static class ContactShadowBuilder
 
         foreach (var n in root.SelfAndDescendants())
         {
-            if (!n.Visible) continue;
+            if (!n.Visible || n.TranslucentPass) continue;
             if (n.Mesh?.PickingData is not null || n.PendingMesh is not null)
                 return true;
         }

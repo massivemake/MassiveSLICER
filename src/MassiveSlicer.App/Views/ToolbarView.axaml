@@ -4,7 +4,8 @@
              x:Class="MassiveSlicer.App.Views.ToolbarView"
              x:CompileBindings="False">
 
-    <Border Background="{DynamicResource Bg1}"
+    <!-- Translucent: the toolbar ghosts over the full-bleed viewport -->
+    <Border Background="#E0222222"
             BorderBrush="{DynamicResource Border1}"
             BorderThickness="0,0,0,1">
         <Grid>
@@ -63,22 +64,48 @@
             </StackPanel>
 
             <!-- ── Right: camera presets + units + toggles ───────────────────── -->
-            <StackPanel Grid.Column="2" Orientation="Horizontal"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Center" Margin="0,0,12,0">
+            <!-- Width matches the right sidebar host (309 incl. its 9px edge lane) so
+                 the Realtime toggle's left edge lines up with the floating step cards. -->
+            <Grid Grid.Column="2" Width="309"
+                  HorizontalAlignment="Right" VerticalAlignment="Center"
+                  ColumnDefinitions="Auto,Auto,*,Auto,Auto">
 
-                <Button Content="Frame All" Classes="ToolbarButton" Command="{Binding FrameAllCommand}"      Margin="0,0,4,0"/>
-                <Button Content="Top"       Classes="ToolbarButton" Command="{Binding TopViewCommand}"       Margin="0,0,4,0"/>
-                <Button Content="Front"     Classes="ToolbarButton" Command="{Binding FrontViewCommand}"     Margin="0,0,4,0"/>
-                <Button Content="Iso"       Classes="ToolbarButton" Command="{Binding IsometricViewCommand}" Margin="0,0,12,0"/>
+                <!-- Frame All lives as a viewport icon (top-right); view presets via the
+                     Ctrl+Space pie menu. -->
 
-                <Button Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
-                    <ia:Icon Value="mdi-console" FontSize="14"/>
+                <ToggleButton Grid.Column="0" Classes="RealtimePause" Width="96" Margin="0,0,8,0"
+                              IsChecked="{Binding $parent[Window].DataContext.Viewport.RealtimeSlicingPaused, Mode=TwoWay}"
+                              ToolTip.Tip="Pause realtime slicing — batch up changes, then untoggle to re-slice once">
+                    <Panel HorizontalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" Spacing="5"
+                                    IsVisible="{Binding !$parent[ToggleButton].IsChecked}">
+                            <ia:Icon Value="mdi-pause" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Realtime" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="5"
+                                    IsVisible="{Binding $parent[ToggleButton].IsChecked}">
+                            <ia:Icon Value="mdi-play" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Paused" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                        </StackPanel>
+                    </Panel>
+                </ToggleButton>
+
+                <Button Grid.Column="1" Classes="ExportCta" Padding="10,4"
+                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
+                        ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src)">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <ia:Icon Value="mdi-robot-industrial" FontSize="12"/>
+                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11"/>
+                    </StackPanel>
                 </Button>
-                <Button Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel">
-                    <ia:Icon Value="mdi-menu" FontSize="14"/>
+
+                <Button Grid.Column="3" Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
+                    <ia:Icon Value="mdi-console" FontSize="13"/>
                 </Button>
-            </StackPanel>
+                <Button Grid.Column="4" Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel" Margin="0,0,9,0">
+                    <ia:Icon Value="mdi-menu" FontSize="13"/>
+                </Button>
+            </Grid>
         </Grid>
     </Border>
 

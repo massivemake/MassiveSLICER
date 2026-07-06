@@ -2073,6 +2073,10 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Viewport.AddImportNode(node);
 
+        // Guide the workflow: importing opens MODEL and SLICE.
+        RightPanel.StepModelExpanded = true;
+        RightPanel.StepSliceExpanded = true;
+
         Console.Log($"[import] Added '{node.Name}' to scene.");
         return true;
     }
@@ -2620,6 +2624,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Shader mode
         if (Enum.TryParse<ShaderMode>(p.ShaderMode, out var sm))
             vp.ActiveShaderMode = sm;
+        vp.LoadViewProfiles(p.ViewModeProfiles);
 
         // Backdrop
         if (p.DefaultBackdropPath is { } backdropPath)
@@ -2746,13 +2751,23 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     void SyncRightPanelToViewportSelection()
     {
+        // Selecting a toolpath no longer swaps to the legacy Toolpath tab —
+        // the numbered workflow steps (Additive) stay up for all selections.
         if (Viewport.IsToolpathSelected)
         {
-            RightPanel.ActiveTab = RightPanelTab.Toolpath;
+            if (RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
             return;
         }
 
-        if (!Viewport.HasMeshSelected) return;
+        if (!Viewport.HasMeshSelected)
+        {
+            // Nothing selected: leave the toolpath-options view and show the workflow
+            // steps again (don't disturb Scan/Subtractive/Settings if those are active).
+            if (RightPanel.ActiveTab == RightPanelTab.Toolpath && RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
+            return;
+        }
 
         if (RightPanel.ShowAdditiveTabButton)
         {
@@ -2862,6 +2877,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Shader mode & backdrop
         p.ShaderMode          = vp.ActiveShaderMode.ToString();
+        p.ViewModeProfiles    = vp.SerializeViewProfiles();
         p.DefaultBackdropPath = vp.ActiveBackdropPath;
         p.DefaultBackdropBlur    = vp.BackdropBlur;
         p.DefaultBackdropOpacity = vp.BackdropOpacity;
