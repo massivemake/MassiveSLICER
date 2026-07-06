@@ -307,7 +307,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // Live bead colour — applied every frame as a shader uniform, so changing it
     // recolours already-sliced beads instantly (no re-slice, no VBO rebuild).
-    private System.Numerics.Vector3 _beadColor = new(0.95f, 0.95f, 0.95f);
+    private System.Numerics.Vector3 _beadColor = new(0.655f, 0.906f, 0.05f);   // lime, matches Blender "3dp.001"
 
     public System.Numerics.Vector3 BeadColor
     {

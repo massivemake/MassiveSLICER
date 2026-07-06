@@ -949,11 +949,13 @@ public sealed class SceneRenderer : IDisposable
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
+            var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
-                scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue);
+                scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue,
+                eyeLocal: eyeLocal);
         }
 
         // Draw the angled-slice plane preview (only present when Angled method is active).

@@ -74,24 +74,36 @@ public sealed class ToolpathRenderer : IDisposable
         layout(location = 1) in vec3 aNormal;
         uniform mat4 uMVP;
         out vec3 vNormal;
+        out vec3 vPos;
         void main() {
             gl_Position = vec4(aPos, 1.0) * uMVP;
             vNormal = aNormal;
+            vPos    = aPos;
         }
         """;
 
+    // Glossy semi-metallic plastic matched to the Blender "3dp.001" reference
+    // (Principled BSDF: roughness 0.21, metallic 0.73, lime base).
     private static readonly string BeadFragSrc = """
         #version 330 core
         in vec3 vNormal;
+        in vec3 vPos;
         uniform vec3 uColor;
+        uniform vec3 uEye;
         out vec4 fragColor;
         void main() {
             vec3 L = normalize(vec3(0.6, 0.4, 1.0));
             vec3 n = normalize(vNormal);
-            float d = max(dot(n, L), 0.0);
+            vec3 V = normalize(uEye - vPos);
+            float d    = max(dot(n, L), 0.0);
             float fill = max(dot(n, vec3(-0.3, -0.2, -0.7)), 0.0) * 0.15;
-            float light = 0.20 + d * 0.72 + fill;
-            fragColor = vec4(uColor * light, 1.0);
+            float light = 0.22 + d * 0.62 + fill;
+            vec3  H     = normalize(L + V);
+            float spec  = pow(max(dot(n, H), 0.0), 64.0);
+            float fres  = pow(1.0 - max(dot(n, V), 0.0), 4.0);
+            vec3  specCol = mix(vec3(1.0), uColor, 0.55);
+            vec3  col = uColor * light + specCol * (spec * 0.9 + fres * 0.12);
+            fragColor = vec4(col, 1.0);
         }
         """;
 
@@ -820,7 +832,8 @@ public sealed class ToolpathRenderer : IDisposable
     public void Draw(Matrix4 mvp, bool selected = false,
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showBeadOverhang = false,
-                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue)
+                     bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
+                     Vector3 eyeLocal = default)
     {
         if (_disposed) return;
 
@@ -906,6 +919,7 @@ public sealed class ToolpathRenderer : IDisposable
             _beadShader.Use();
             _beadShader.SetMatrix4("uMVP", ref mvp);
             _beadShader.SetVector3("uColor", _beadMaterialColor);
+            _beadShader.SetVector3("uEye",   eyeLocal);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
             GL.DrawElements(PrimitiveType.Triangles, beadCount, DrawElementsType.UnsignedInt, 0);
