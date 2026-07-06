@@ -2756,7 +2756,14 @@ public sealed class MainWindowViewModel : ViewModelBase
             return;
         }
 
-        if (!Viewport.HasMeshSelected) return;
+        if (!Viewport.HasMeshSelected)
+        {
+            // Nothing selected: leave the toolpath-options view and show the workflow
+            // steps again (don't disturb Scan/Subtractive/Settings if those are active).
+            if (RightPanel.ActiveTab == RightPanelTab.Toolpath && RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
+            return;
+        }
 
         if (RightPanel.ShowAdditiveTabButton)
         {
