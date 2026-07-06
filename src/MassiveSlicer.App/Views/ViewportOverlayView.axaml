@@ -824,10 +824,10 @@
                 Classes="PrimaryButton"
                 ZIndex="25"
                 Command="{Binding MergeToolpathsCommand}"
-                ToolTip.Tip="Combine the selected toolpaths into one continuous path with retraction and travel between each segment">
+                ToolTip.Tip="Print the selected objects one after another: each toolpath completes, retracts, and travels to the next (selection order = print order)">
             <StackPanel Orientation="Horizontal" Spacing="6">
                 <ia:Icon Value="mdi-vector-combine" FontSize="14"/>
-                <TextBlock Text="Merge Toolpaths" FontSize="11" VerticalAlignment="Center"/>
+                <TextBlock Text="Create Toolpath Sequence" FontSize="11" VerticalAlignment="Center"/>
             </StackPanel>
         </Button>
 

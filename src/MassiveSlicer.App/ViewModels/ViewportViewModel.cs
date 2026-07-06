@@ -4399,6 +4399,19 @@ public sealed class ViewportViewModel : ViewModelBase
         NotifyRenderNeeded();
     }
 
+    /// <summary>Wired by the viewport code-behind: shift+click sequence toggle.</summary>
+    internal Action<SceneNode>? OnSequenceToggleRequested { get; set; }
+
+    /// <summary>Outliner shift+click: toggles the row's toolpath in the print-sequence
+    /// selection (models resolve to their toolpath child). False = not sequenceable.</summary>
+    internal bool TryToggleToolpathSequenceSelection(OutlinerItemViewModel item)
+    {
+        bool sequenceable = item.IsToolpath || IsUserModelItem(item);
+        if (!sequenceable || OnSequenceToggleRequested is null) return false;
+        OnSequenceToggleRequested.Invoke(item.Node);
+        return true;
+    }
+
     /// <summary>True when the row is a user-imported print model (context-menu gating).</summary>
     internal bool IsUserModelItem(OutlinerItemViewModel item)
         => EnumerateUserModelItems().Contains(item);

@@ -303,6 +303,7 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
+            vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>
@@ -2308,8 +2309,9 @@ public partial class ViewportView : UserControl
                     var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
                     var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
-                        _renderer.ToggleToolpathSelection(picked);
+                    if (shiftHeld && picked is not null
+                        && ResolveSequenceToolpath(pickVm, picked) is not null)
+                        ToggleSequenceSelection(pickVm, picked);
                     else
                         RequestSceneSelection(pickVm, picked);
                 }
@@ -6513,6 +6515,36 @@ public partial class ViewportView : UserControl
 
         System.Console.WriteLine(
             $"[scan-merge] {label}: {result.PointCount:N0} points, {result.TriangleCount:N0} triangles");
+    }
+
+    /// <summary>Toolpath node used for sequence selection: the node itself when it is a
+    /// toolpath, else the picked model's toolpath child (shift+click on a mesh).</summary>
+    private SceneNode? ResolveSequenceToolpath(ViewportViewModel vm, SceneNode picked)
+    {
+        if (_renderer.IsToolpathNode(picked)) return picked;
+        var item = vm.FindUserMeshOutlinerItem(picked);
+        return item?.Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+    }
+
+    /// <summary>
+    /// Shift+click sequence toggle (viewport pick or outliner row). Selection order
+    /// defines the print order; when starting from a plain single selection, that
+    /// object's toolpath is added first so "select A, shift+click B" yields A → B.
+    /// </summary>
+    private void ToggleSequenceSelection(ViewportViewModel vm, SceneNode picked)
+    {
+        var tp = ResolveSequenceToolpath(vm, picked);
+        if (tp is null) return;
+
+        if (_renderer.SelectedToolpathCount == 0 && _renderer.SelectedNode is { } cur)
+        {
+            var curTp = ResolveSequenceToolpath(vm, cur);
+            if (curTp is not null && curTp != tp)
+                _renderer.ToggleToolpathSelection(curTp);
+        }
+        _renderer.ToggleToolpathSelection(tp);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
     }
 
     private void MergeToolpaths(ViewportViewModel vm)

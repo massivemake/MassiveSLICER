@@ -52,6 +52,11 @@ public partial class OutlinerItemView : UserControl
             else
             {
                 if (item.IsLocked) { e.Handled = true; return; }
+                if (shiftHeld && mvm.Viewport.TryToggleToolpathSequenceSelection(item))
+                {
+                    e.Handled = true;
+                    return;
+                }
                 mvm.Viewport.ClearScanOutlinerSelection();
                 mvm.Viewport.OnOutlinerSelectRequested?.Invoke(item.Node);
             }
@@ -113,6 +118,14 @@ public partial class OutlinerItemView : UserControl
             _ = mvm.Viewport.OnExportScanMeshRequested?.Invoke(item.Node);
     }
 
+    private void OnCreateSequenceClick(object? sender, RoutedEventArgs e)
+    {
+        if (TopLevel.GetTopLevel(this) is not Window { DataContext: MainWindowViewModel mvm })
+            return;
+        if (mvm.Viewport.MergeToolpathsCommand.CanExecute(null))
+            mvm.Viewport.MergeToolpathsCommand.Execute(null);
+    }
+
     private void OnCreateToolpathClick(object? sender, RoutedEventArgs e)
     {
         if (DataContext is not OutlinerItemViewModel item) return;
@@ -149,6 +162,7 @@ public partial class OutlinerItemView : UserControl
         CreateToolpathItem.IsVisible =
             DataContext is OutlinerItemViewModel modelRow
             && mvm.Viewport.IsUserModelItem(modelRow);
+        CreateSequenceItem.IsVisible = mvm.Viewport.CanMergeToolpaths;
 
         foreach (var child in RowContextMenu.Items)
         {

@@ -44,6 +44,9 @@
                         <MenuItem x:Name="CreateToolpathItem"
                                   Header="Create New Toolpath"
                                   Click="OnCreateToolpathClick"/>
+                        <MenuItem x:Name="CreateSequenceItem"
+                                  Header="Create Toolpath Sequence"
+                                  Click="OnCreateSequenceClick"/>
                         <MenuItem Header="Reload Model"
                                   Command="{Binding ReloadModelCommand}"/>
                         <MenuItem Header="Replace Model"
