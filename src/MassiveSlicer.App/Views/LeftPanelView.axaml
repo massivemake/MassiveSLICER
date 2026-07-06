@@ -18,6 +18,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="36"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="1"/>
                 <RowDefinition Height="32"/>
                 <RowDefinition Height="*"/>
@@ -61,10 +62,41 @@
             </Border>
 
             <!-- Separator -->
-            <Border Grid.Row="2" Background="{DynamicResource Border1}"/>
+            <!-- Import dropzone — click to browse, or drop model files -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg2}"
+                    Padding="8,8"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1">
+                <StackPanel>
+                    <TextBlock Text="IMPORT" Classes="LabelMuted" Margin="0,0,0,4"/>
+                    <Border x:Name="ImportDropZone"
+                            Background="{DynamicResource Bg3}"
+                            BorderBrush="{DynamicResource Border2}"
+                            BorderThickness="1"
+                            CornerRadius="6"
+                            Padding="8,12"
+                            Cursor="Hand"
+                            DragDrop.AllowDrop="True"
+                            ToolTip.Tip="Import a model: drop a file here or click to choose (STL, STEP, OBJ, GLB, 3MF)">
+                        <StackPanel Spacing="4" HorizontalAlignment="Center">
+                            <ia:Icon Value="mdi-tray-arrow-down" FontSize="20"
+                                     HorizontalAlignment="Center"
+                                     Foreground="{DynamicResource TextSecondary}"/>
+                            <TextBlock Text="Drop model here" FontSize="11"
+                                       HorizontalAlignment="Center"/>
+                            <TextBlock Text="or click to choose" FontSize="10"
+                                       Foreground="{DynamicResource TextMuted}"
+                                       HorizontalAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Background="{DynamicResource Border1}"/>
 
             <!-- Tab bar -->
-            <Border Grid.Row="3"
+            <Border Grid.Row="4"
                     Background="{DynamicResource Bg3}"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1">
@@ -82,7 +114,7 @@
             </Border>
 
             <!-- Tab content -->
-            <Grid Grid.Row="4">
+            <Grid Grid.Row="5">
 
                 <!-- Outliner tab (ItemsControl — not ListBox — so nested scan rows don't highlight the bed parent) -->
                 <ScrollViewer IsVisible="{Binding IsOutlinerTabActive}"

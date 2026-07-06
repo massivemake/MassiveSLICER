@@ -67,7 +67,7 @@
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     ZIndex="5">
-                <views:LeftPanelView DataContext="{Binding LeftPanel}"/>
+                <views:LeftPanelView x:Name="LeftPanelControl" DataContext="{Binding LeftPanel}"/>
             </Border>
 
             <!-- Right floating panel: numbered workflow steps -->
