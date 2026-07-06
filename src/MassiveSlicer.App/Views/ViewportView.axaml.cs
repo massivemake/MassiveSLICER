@@ -6567,8 +6567,9 @@ public partial class ViewportView : UserControl
         if (_renderer.SelectedToolpathCount > 0 &&
             vm.FindOutlinerItem(_renderer.SelectedToolpaths[0]) is { } firstItem)
             anchorModel = vm.OwningModelItem(firstItem);
-        else if (_renderer.SelectedNode is { } cur)
-            anchorModel = vm.FindUserMeshOutlinerItem(cur);
+        else if (_renderer.SelectedNode is { } cur
+                 && vm.FindUserMeshOutlinerItem(cur) is { } curItem)
+            anchorModel = curItem.IsToolpath ? vm.OwningModelItem(curItem) : curItem;
 
         int a = anchorModel is not null ? models.IndexOf(anchorModel) : -1;
         if (a < 0)

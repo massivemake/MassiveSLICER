@@ -135,7 +135,67 @@ public sealed class LeftPanelViewModel : ViewModelBase
     public ObservableCollection<OutlinerItemViewModel>? OutlinerItems
     {
         get => _outlinerItems;
-        internal set => SetField(ref _outlinerItems, value);
+        internal set
+        {
+            if (!SetField(ref _outlinerItems, value)) return;
+            HookOutlinerForFilter(value);
+            RebuildFilteredToolpaths();
+            OnPropertyChanged(nameof(VisibleOutlinerRows));
+        }
+    }
+
+    // -- Toolpaths-only filter ---------------------------------------------------
+
+    private bool _filterToolpathsOnly;
+
+    /// <summary>Outliner filter: show a flat, curated list of toolpaths only —
+    /// range shift+click then walks just the toolpaths.</summary>
+    public bool FilterToolpathsOnly
+    {
+        get => _filterToolpathsOnly;
+        set
+        {
+            if (!SetField(ref _filterToolpathsOnly, value)) return;
+            RebuildFilteredToolpaths();
+            OnPropertyChanged(nameof(VisibleOutlinerRows));
+        }
+    }
+
+    /// <summary>Flat list of every model's toolpath rows (outliner order).</summary>
+    public ObservableCollection<OutlinerItemViewModel> FilteredToolpaths { get; } = [];
+
+    /// <summary>What the outliner list actually shows: full hierarchy or the toolpath filter.</summary>
+    public System.Collections.IEnumerable? VisibleOutlinerRows
+        => _filterToolpathsOnly ? FilteredToolpaths : _outlinerItems;
+
+    private readonly HashSet<OutlinerItemViewModel> _filterHooked = [];
+
+    private void HookOutlinerForFilter(ObservableCollection<OutlinerItemViewModel>? items)
+    {
+        if (items is null) return;
+        items.CollectionChanged += (_, _) =>
+        {
+            foreach (var it in items) HookItemChildren(it);
+            RebuildFilteredToolpaths();
+        };
+        foreach (var it in items) HookItemChildren(it);
+    }
+
+    private void HookItemChildren(OutlinerItemViewModel item)
+    {
+        if (!_filterHooked.Add(item)) return;
+        item.Children.CollectionChanged += (_, _) => RebuildFilteredToolpaths();
+    }
+
+    private void RebuildFilteredToolpaths()
+    {
+        if (!_filterToolpathsOnly && FilteredToolpaths.Count == 0) return;
+        FilteredToolpaths.Clear();
+        if (_outlinerItems is null) return;
+        foreach (var top in _outlinerItems)
+            foreach (var child in top.Children)
+                if (child.IsToolpath)
+                    FilteredToolpaths.Add(child);
     }
 
     // -- Tab management --------------------------------------------------------
