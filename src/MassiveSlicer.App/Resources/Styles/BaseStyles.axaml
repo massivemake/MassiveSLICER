@@ -8,6 +8,15 @@
         <Setter Property="FontFamily" Value="avares://MassiveSlicer.App/Assets/Fonts#SF Pro Display"/>
     </Style>
 
+    <!-- Progress bars: 5px rounded track + indicator -->
+    <Style Selector="ProgressBar">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ProgressBar /template/ Border">
+        <Setter Property="CornerRadius" Value="5"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+
     <!-- Item highlights: rounded (5px floor) -->
     <Style Selector="MenuItem">
         <Setter Property="CornerRadius" Value="5"/>

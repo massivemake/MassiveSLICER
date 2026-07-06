@@ -1973,7 +1973,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Applies the view mode to every user model and its toolpath children.</summary>
     internal void ApplyViewMode()
     {
-        bool showBody = _viewMode is "Body" or "Preview";
+        bool showBody = _viewMode == "Body";
         bool showPath = _viewMode != "Body";
 
         // Per-mode toolpath render presets (users can still override in VISIBILITY):

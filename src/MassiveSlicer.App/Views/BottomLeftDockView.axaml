@@ -55,16 +55,17 @@
                     BorderThickness="0,1,0,0">
                 <StackPanel>
                     <!-- Inline busy progress (project open / slicing) — no popup -->
-                    <Grid Margin="8,3,8,3" IsVisible="{Binding BusyOverlayVisible}" ColumnDefinitions="Auto,180,Auto,*">
+                    <Grid Margin="8,4,8,4" IsVisible="{Binding BusyOverlayVisible}" ColumnDefinitions="Auto,190,Auto,*">
                         <TextBlock Grid.Column="0" Text="{Binding BusyTitle}" Classes="LabelMuted" FontWeight="SemiBold"
-                                   VerticalAlignment="Center" Margin="0,0,8,0"/>
-                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Height="6"
+                                   VerticalAlignment="Center" Margin="0,0,14,0"/>
+                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="100" Height="8"
                                      Value="{Binding BusyProgress}"
                                      Foreground="{DynamicResource Accent}"
                                      Background="{DynamicResource Border1}"
+                                     Margin="0,0,14,0"
                                      VerticalAlignment="Center"/>
                         <TextBlock Grid.Column="2" Text="{Binding BusyProgress, StringFormat={}{0:F0}%}"
-                                   Classes="LabelMuted" VerticalAlignment="Center" Margin="8,0,8,0"/>
+                                   Classes="LabelMuted" VerticalAlignment="Center" Margin="0,0,14,0"/>
                         <TextBlock Grid.Column="3" Text="{Binding BusyDetail}" Classes="LabelMuted"
                                    VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
                     </Grid>
