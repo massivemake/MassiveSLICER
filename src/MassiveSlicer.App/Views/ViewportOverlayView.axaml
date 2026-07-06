@@ -396,29 +396,29 @@
                     BorderBrush="#3D3D3D"
                     BorderThickness="1"
                     CornerRadius="6"
-                    Padding="5,3">
+                    Padding="10,6">
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="4,3"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="8,6"
                             Classes.active="{Binding IsMoveActive}"
                             Command="{Binding GizmoMoveCommand}">
-                        <ia:Icon Value="mdi-cursor-move" FontSize="11"/>
+                        <ia:Icon Value="mdi-cursor-move" FontSize="16"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="4,3"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="8,6"
                             Classes.active="{Binding IsRotateActive}"
                             Command="{Binding GizmoRotateCommand}">
-                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="11"/>
+                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="16"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="4,3"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="8,6"
                             Classes.active="{Binding IsScaleActive}"
                             Command="{Binding GizmoScaleCommand}">
-                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="11"/>
+                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="16"/>
                     </Button>
-                    <Border Width="1" Background="#3D3D3D" Margin="3,2"/>
-                    <Button Classes="ToolbarButton" Padding="4,3"
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
+                    <Button Classes="ToolbarButton" Padding="8,6"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
                             ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
-                        <ia:Icon Value="mdi-target-variant" FontSize="11"/>
+                        <ia:Icon Value="mdi-target-variant" FontSize="16"/>
                     </Button>
                 </StackPanel>
             </Border>
@@ -428,50 +428,50 @@
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
-                        Padding="7,5"
+                        Padding="8,6"
                         Margin="0,-3,0,0"
                         IsVisible="{Binding IsMoveActive}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="10" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="66" FontSize="10"
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="10" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="66" FontSize="10"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="10" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="66" FontSize="10"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Border>
                 <Border Background="#F2262626"
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
-                        Padding="7,5"
+                        Padding="8,6"
                         Margin="0,-3,0,0"
                         IsVisible="{Binding IsRotateActive}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="10" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="66" FontSize="10"
+                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="10" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="66" FontSize="10"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="10" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="66" FontSize="10"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
                                        Increment="1" AllowSpin="False" ShowButtonSpinner="False"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="4,3" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Border>
         </StackPanel>
