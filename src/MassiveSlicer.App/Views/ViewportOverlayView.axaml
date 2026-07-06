@@ -110,7 +110,7 @@
                     ZIndex="20"
                     IsVisible="{Binding IsSyncHudOpen}">
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"
@@ -142,7 +142,7 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"
@@ -165,7 +165,7 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"
@@ -193,7 +193,7 @@
                 </StackPanel>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"
@@ -260,7 +260,7 @@
             </Border>
 
             <!-- PLASTICITY — collapsible live bridge to a Plasticity CAD session -->
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"
@@ -302,7 +302,7 @@
                 </Expander>
             </Border>
 
-            <Border Background="#CC0B1220"
+            <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     CornerRadius="5"

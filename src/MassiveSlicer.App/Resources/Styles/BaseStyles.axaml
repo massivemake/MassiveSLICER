@@ -8,6 +8,21 @@
         <Setter Property="FontFamily" Value="avares://MassiveSlicer.App/Assets/Fonts#SF Pro Display"/>
     </Style>
 
+    <!-- Menu popups: rounded like the rest of the chrome -->
+    <Style Selector="MenuItem /template/ Popup Border">
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="ContextMenu">
+        <Setter Property="CornerRadius" Value="8"/>
+    </Style>
+    <Style Selector="ContextMenu /template/ Border">
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+
     <!-- Text inputs: 5px rounded corners app-wide -->
     <Style Selector="TextBox">
         <Setter Property="CornerRadius" Value="5"/>
