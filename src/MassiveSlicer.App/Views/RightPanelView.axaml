@@ -1492,32 +1492,8 @@
 
                     </StackPanel>
 
-                        
-                        <StackPanel Margin="0,0,0,6">
 
-                        <StackPanel Margin="0,2,0,6">
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="TOOL_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ToolDataIndex}"/>
-                            </Grid>
-
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="BASE_DATA #" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BaseDataIndex}"/>
-                            </Grid>
-                        </StackPanel>
-                    
-                            <!-- Export to Robot lives in the top menu bar. -->
-                        </StackPanel>
-                    
+                        <!-- TOOL_DATA / BASE_DATA indices come from the LFAM cell settings. -->
                         </StackPanel>
                     </Expander>
 
