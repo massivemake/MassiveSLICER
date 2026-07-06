@@ -15,11 +15,11 @@
     </UserControl.Resources>
 
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
-    <Grid Background="Transparent" Margin="312,48,312,0">
+    <Grid Background="Transparent" Margin="320,52,320,0">
 
         <!-- View-mode pills (effector style) — top right -->
         <Border HorizontalAlignment="Right" VerticalAlignment="Top"
-                Margin="0,8,8,0" ZIndex="15"
+                Margin="0,8,0,0" ZIndex="15"
                 Background="#B3222222" CornerRadius="6"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                 Padding="3">
@@ -460,7 +460,7 @@
         <Border IsVisible="{Binding HasSelection}"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Margin="8"
+                Margin="0,8,8,8"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
@@ -585,10 +585,10 @@
             </StackPanel>
         </Border>
 
-        <!-- Toolpath stats — top-right -->
+        <!-- Toolpath stats — top-right, below the view pills -->
         <StackPanel HorizontalAlignment="Right"
                     VerticalAlignment="Top"
-                    Margin="8"
+                    Margin="0,48,0,8"
                     Spacing="6"
                     ZIndex="32">
             <!-- Toolpath stats -->
