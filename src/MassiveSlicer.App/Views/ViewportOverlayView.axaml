@@ -17,6 +17,72 @@
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid Background="Transparent" Margin="312,48,312,0">
 
+        <!-- Frame All — viewport top-right icon -->
+        <Button HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,8,8,0" Padding="7" ZIndex="15"
+                Background="#B32b2b2b" CornerRadius="6"
+                Command="{Binding FrameAllCommand}"
+                ToolTip.Tip="Frame All — fit the whole scene in view">
+            <ia:Icon Value="mdi-fit-to-screen-outline" FontSize="16"/>
+        </Button>
+
+        <!-- View pie menu (Ctrl+Space) — appears around the pointer -->
+        <Grid Background="#01000000" ZIndex="60" IsVisible="{Binding IsViewPieOpen}">
+            <Grid.GestureRecognizers/>
+            <Button Background="Transparent" BorderThickness="0" Padding="0"
+                    HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                    Command="{Binding CloseViewPieCommand}"/>
+            <Canvas>
+                <Canvas Canvas.Left="{Binding ViewPieX}" Canvas.Top="{Binding ViewPieY}">
+                    <Canvas Canvas.Left="-150" Canvas.Top="-110" Width="300" Height="220">
+                        <Ellipse Canvas.Left="134" Canvas.Top="94" Width="32" Height="32"
+                                 Fill="#CC2b2b2b" Stroke="{DynamicResource Accent}" StrokeThickness="1"/>
+                <Button Canvas.Left="118" Canvas.Top="0" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Top"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Top"/>
+                <Button Canvas.Left="28" Canvas.Top="28" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Iso"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Iso"/>
+                <Button Canvas.Left="208" Canvas.Top="28" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Frame"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Frame"/>
+                <Button Canvas.Left="0" Canvas.Top="95" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Left"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Left"/>
+                <Button Canvas.Left="236" Canvas.Top="95" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Right"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Right"/>
+                <Button Canvas.Left="48" Canvas.Top="162" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Back"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Back"/>
+                <Button Canvas.Left="188" Canvas.Top="162" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Front"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Front"/>
+                <Button Canvas.Left="118" Canvas.Top="190" Width="64" Height="30"
+                        Classes="PieButton"
+                        Content="Bottom"
+                        Command="{Binding SelectViewPresetCommand}"
+                        CommandParameter="Bottom"/>
+                    </Canvas>
+                </Canvas>
+            </Canvas>
+        </Grid>
+
         <!-- Slice errors / validation alerts render inline in the bottom status bar. -->
 
         <!-- N-key HUD — hidden until N; no always-visible tab on the viewport edge. -->

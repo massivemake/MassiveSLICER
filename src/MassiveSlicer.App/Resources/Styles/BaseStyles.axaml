@@ -973,6 +973,85 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- Floating: macOS-style overlay scrolling — the scrollbar floats over the
+         content's right edge instead of reserving layout space, so floating cards
+         keep their width when it appears. -->
+    <Style Selector="ScrollViewer.Floating">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid>
+                    <ScrollContentPresenter Name="PART_ContentPresenter"
+                                            Background="{TemplateBinding Background}"
+                                            Padding="{TemplateBinding Padding}"/>
+                    <ScrollBar Name="PART_VerticalScrollBar"
+                               Orientation="Vertical"
+                               HorizontalAlignment="Right"/>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar">
+        <Setter Property="Width" Value="7"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar:pointerover">
+        <Setter Property="Opacity" Value="0.9"/>
+    </Style>
+    <Style Selector="ScrollViewer.Floating ScrollBar /template/ Thumb">
+        <Setter Property="Background" Value="#66c8c8c8"/>
+        <Setter Property="CornerRadius" Value="3.5"/>
+        <Setter Property="MinHeight" Value="30"/>
+    </Style>
+    <Style Selector="ScrollViewer.Floating ScrollBar /template/ Thumb:pointerover">
+        <Setter Property="Background" Value="#99d8d8d8"/>
+    </Style>
+    <Style Selector="ScrollViewer.Floating ScrollBar /template/ RepeatButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+    </Style>
+
+    <!-- PieButton: Ctrl+Space view pie menu entries -->
+    <Style Selector="Button.PieButton">
+        <Setter Property="Background" Value="#E62e2e2e"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.PieButton:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Accent}"/>
+        <Setter Property="Foreground" Value="#111111"/>
+    </Style>
+
+    <!-- PatternTile: effector pattern-grid tile -->
+    <Style Selector="Button.PatternTile">
+        <Setter Property="Background" Value="#2e2e2e"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Margin" Value="2"/>
+        <Setter Property="Padding" Value="0,8"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+    </Style>
+    <Style Selector="Button.PatternTile:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+    </Style>
+    <Style Selector="Button.PatternTile.active">
+        <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+        <Setter Property="Background" Value="#1a2e1a"/>
+    </Style>
+
     <!-- StepCard: standalone rounded workflow-step card (MassiveCODE style) -->
     <Style Selector="Expander.StepCard">
         <Setter Property="HorizontalAlignment"        Value="Stretch"/>

@@ -1814,6 +1814,42 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnMeshCleanupRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
+
+    // ── View pie menu (Ctrl+Space) ──────────────────────────────────────────
+    private bool _isViewPieOpen;
+    /// <summary>True while the Ctrl+Space view pie menu is showing.</summary>
+    public bool IsViewPieOpen
+    {
+        get => _isViewPieOpen;
+        set { if (SetField(ref _isViewPieOpen, value)) NotifyRenderNeeded(); }
+    }
+
+    private double _viewPieX, _viewPieY;
+    /// <summary>Pie menu centre (overlay coordinates, set from the pointer position).</summary>
+    public double ViewPieX { get => _viewPieX; set => SetField(ref _viewPieX, value); }
+    public double ViewPieY { get => _viewPieY; set => SetField(ref _viewPieY, value); }
+
+    /// <summary>Applies a named camera preset (Top/Bottom/Left/Right/Front/Back/Iso/Frame).</summary>
+    internal Action<string>? OnViewPresetRequested { get; set; }
+
+    /// <summary>Pie menu selection: applies the preset and closes the pie.</summary>
+    public RelayCommand<string> SelectViewPresetCommand => _selectViewPresetCommand ??=
+        new RelayCommand<string>(name =>
+        {
+            IsViewPieOpen = false;
+            if (name is not null) OnViewPresetRequested?.Invoke(name);
+        });
+    private RelayCommand<string>? _selectViewPresetCommand;
+
+    /// <summary>Fits the whole scene in view (viewport top-right icon).</summary>
+    public RelayCommand FrameAllCommand => _frameAllCommand ??=
+        new RelayCommand(() => OnFrameAllRequested?.Invoke());
+    private RelayCommand? _frameAllCommand;
+
+    /// <summary>Dismisses the pie menu without selecting.</summary>
+    public RelayCommand CloseViewPieCommand => _closeViewPieCommand ??=
+        new RelayCommand(() => IsViewPieOpen = false);
+    private RelayCommand? _closeViewPieCommand;
     /// <summary>Callback (wired by MainWindowViewModel) to save the current camera view to the active cell.</summary>
     internal Action? OnSaveViewRequested    { get; set; }
     /// <summary>Callback set by the viewport code-behind when dev-mode toggles.</summary>

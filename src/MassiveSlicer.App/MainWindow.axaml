@@ -42,6 +42,7 @@
 
             <!-- Floating card columns — transparent hosts; each card ghosts individually -->
             <ScrollViewer x:Name="LeftPanelHost"
+                          Classes="Floating"
                           HorizontalAlignment="Left"
                           Width="300"
                           Margin="10,56,0,10"
@@ -52,6 +53,7 @@
             </ScrollViewer>
 
             <ScrollViewer x:Name="RightPanelHost"
+                          Classes="Floating"
                           HorizontalAlignment="Right"
                           Width="300"
                           Margin="0,56,10,10"

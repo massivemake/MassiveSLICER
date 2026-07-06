@@ -1,8 +1,13 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             xmlns:conv="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
              x:Class="MassiveSlicer.App.Views.RightPanelView"
              x:CompileBindings="False">
+
+    <UserControl.Resources>
+        <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
+    </UserControl.Resources>
 
     <Border Background="Transparent"
             BorderBrush="{DynamicResource Border1}"
@@ -442,8 +447,220 @@
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="0,0,0,6">
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75" Margin="8,4,8,4"
-                                       Text="Decorative geometry applied to the toolpath: wave effects on the walls and fill patterns."/>
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
+                                       Text="Decorative wall pattern applied to the toolpath when slicing."/>
+
+                            <!-- Pattern tiles (effector port) -->
+                            <UniformGrid Columns="4" Margin="8,0,8,4">
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Smooth}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Smooth">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-circle-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Smooth" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Sine}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Sine">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-sine-wave" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Sine" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Diamond}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Diamond">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-rhombus-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Diamond" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Polygon}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Polygon">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-hexagon-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Polygon" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Ripple}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Ripple">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-waves" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Ripple" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=HWave}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="HWave">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-wave" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="H-Wave" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=VWave}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="VWave">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-waveform" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="V-Wave" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Bumps}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Bumps">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-dots-grid" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Bumps" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Bubbles}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Bubbles">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-chart-bubble" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Bubbles" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Pleats}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Pleats">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-texture" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Pleats" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Voronoi}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Voronoi">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-web" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Voronoi" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Hexagon}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Hexagon">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-hexagon-multiple-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Hexagon" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Triangle}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Triangle">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-triangle-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Triangle" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Guilloche}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Guilloche">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-infinity" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Guilloché" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Hammered}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Hammered">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-blur" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Hammered" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Classes="PatternTile"
+                                        Classes.active="{Binding Additive.PatternType, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Sunflower}"
+                                        Command="{Binding Additive.SetPatternCommand}"
+                                        CommandParameter="Sunflower">
+                                    <StackPanel Spacing="4" HorizontalAlignment="Center">
+                                        <ia:Icon Value="mdi-flower-outline" FontSize="20" HorizontalAlignment="Center"/>
+                                        <TextBlock Text="Sunflower" FontSize="9" HorizontalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                            </UniformGrid>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Amplitude" FontSize="11" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <TextBlock Text="{Binding Additive.PatternAmplitude, StringFormat={}{0:0.0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock Text="mm" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+                            <Slider Margin="10,0,10,2" Minimum="0" Maximum="60" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                    Value="{Binding Additive.PatternAmplitude, Mode=TwoWay}"/>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Frequency" FontSize="11" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <TextBlock Text="{Binding Additive.PatternFrequency, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock Text="" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+                            <Slider Margin="10,0,10,2" Minimum="1" Maximum="120" TickFrequency="1" IsSnapToTickEnabled="True"
+                                    Value="{Binding Additive.PatternFrequency, Mode=TwoWay}"/>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Twist" FontSize="11" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <TextBlock Text="{Binding Additive.PatternTwist, StringFormat={}{0:0.0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock Text="°/mm" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+                            <Slider Margin="10,0,10,2" Minimum="-5" Maximum="5" TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                    Value="{Binding Additive.PatternTwist, Mode=TwoWay}"/>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Pattern offset" FontSize="11" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <TextBlock Text="{Binding Additive.PatternOffset, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
+                                    <TextBlock Text="°" FontSize="9" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+                            <Slider Margin="10,0,10,2" Minimum="0" Maximum="360" TickFrequency="1" IsSnapToTickEnabled="True"
+                                    Value="{Binding Additive.PatternOffset, Mode=TwoWay}"/>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,8,*">
+                                <StackPanel Grid.Column="0">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Text="Fade in" FontSize="11"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                            <TextBlock Text="{Binding Additive.PatternFadeIn, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold"/>
+                                            <TextBlock Text="mm" FontSize="9" Foreground="{DynamicResource TextMuted}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Slider Minimum="0" Maximum="1000" Value="{Binding Additive.PatternFadeIn, Mode=TwoWay}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="2">
+                                    <Grid ColumnDefinitions="*,Auto">
+                                        <TextBlock Text="Fade out" FontSize="11"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                            <TextBlock Text="{Binding Additive.PatternFadeOut, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold"/>
+                                            <TextBlock Text="mm" FontSize="9" Foreground="{DynamicResource TextMuted}"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <Slider Minimum="0" Maximum="1000" Value="{Binding Additive.PatternFadeOut, Mode=TwoWay}"/>
+                                </StackPanel>
+                            </Grid>
+
                             <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
 

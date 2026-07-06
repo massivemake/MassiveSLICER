@@ -195,6 +195,7 @@ public partial class ViewportView : UserControl
         PointerMoved        += OnPointerMoved;
         PointerReleased     += OnPointerReleased;
         PointerWheelChanged += OnPointerWheelChanged;
+        PointerMoved += (_, e) => _lastPointerPos = e.GetPosition(this);
         KeyDown             += OnKeyDown;
 
         Focusable = true;
@@ -327,6 +328,7 @@ public partial class ViewportView : UserControl
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnFrameAllRequested = FrameAll;
+            vm.OnViewPresetRequested = ApplyViewPreset;
             vm.GetCameraState = () =>
             {
                 var c = _renderer.Camera;
@@ -2334,6 +2336,20 @@ public partial class ViewportView : UserControl
             }
         }
 
+        if (e.Key == Key.Space && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (DataContext is ViewportViewModel pieVm)
+            {
+                // Overlay chrome is inset; convert view coords to overlay coords.
+                var overlayPos = this.TranslatePoint(_lastPointerPos, OverlayView) ?? _lastPointerPos;
+                pieVm.ViewPieX = overlayPos.X;
+                pieVm.ViewPieY = overlayPos.Y;
+                pieVm.IsViewPieOpen = true;
+                e.Handled = true;
+                return;
+            }
+        }
+
         switch (e.Key)
         {
             case Key.F:      FocusSelected();                          e.Handled = true; break;
@@ -2364,6 +2380,12 @@ public partial class ViewportView : UserControl
                 }
                 break;
             case Key.Escape:
+                if (DataContext is ViewportViewModel pieEscVm && pieEscVm.IsViewPieOpen)
+                {
+                    pieEscVm.IsViewPieOpen = false;
+                    e.Handled = true;
+                    break;
+                }
                 if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
                 {
                     escVm.IsLayFlatMode = false;
@@ -2553,6 +2575,14 @@ public partial class ViewportView : UserControl
             PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
             TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
             ApproachZ        = (float)s.ApproachZ,
+            PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
+                                   ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternAmplitude     = (float)s.PatternAmplitude,
+            PatternFrequency     = (float)s.PatternFrequency,
+            PatternTwistDegPerMm = (float)s.PatternTwist,
+            PatternOffsetDeg     = (float)s.PatternOffset,
+            PatternFadeInMm      = (float)s.PatternFadeIn,
+            PatternFadeOutMm     = (float)s.PatternFadeOut,
             TiltAngle        = (float)s.TiltAngle,
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
@@ -2689,6 +2719,7 @@ public partial class ViewportView : UserControl
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
+            tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
             SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
             Pct(80);
 
@@ -5647,6 +5678,26 @@ public partial class ViewportView : UserControl
             _renderer.Camera.Radius = Math.Max(radius, 50f);
         }
 
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private Point _lastPointerPos;
+
+    /// <summary>Applies a named camera preset (view pie menu / shortcuts).</summary>
+    private void ApplyViewPreset(string name)
+    {
+        var cam = _renderer.Camera;
+        switch (name)
+        {
+            case "Top":    cam.Elevation = 89.9f;  break;
+            case "Bottom": cam.Elevation = -89.9f; break;
+            case "Right":  cam.Azimuth = 0f;    cam.Elevation = 0f; break;
+            case "Back":   cam.Azimuth = 90f;   cam.Elevation = 0f; break;
+            case "Left":   cam.Azimuth = 180f;  cam.Elevation = 0f; break;
+            case "Front":  cam.Azimuth = 270f;  cam.Elevation = 0f; break;
+            case "Iso":    cam.Azimuth = 45f;   cam.Elevation = 30f; break;
+            case "Frame":  FrameAll(); return;
+        }
         GlCanvas.RequestNextFrameRendering();
     }
 

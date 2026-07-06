@@ -68,10 +68,8 @@
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center" Margin="0,0,12,0">
 
-                <Button Content="Frame All" Classes="ToolbarButton" Command="{Binding FrameAllCommand}"      Margin="0,0,4,0"/>
-                <Button Content="Top"       Classes="ToolbarButton" Command="{Binding TopViewCommand}"       Margin="0,0,4,0"/>
-                <Button Content="Front"     Classes="ToolbarButton" Command="{Binding FrontViewCommand}"     Margin="0,0,4,0"/>
-                <Button Content="Iso"       Classes="ToolbarButton" Command="{Binding IsometricViewCommand}" Margin="0,0,12,0"/>
+                <!-- Frame All lives as a viewport icon (top-right); view presets via the
+                     Ctrl+Space pie menu. -->
 
                 <Button Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
                     <ia:Icon Value="mdi-console" FontSize="14"/>
