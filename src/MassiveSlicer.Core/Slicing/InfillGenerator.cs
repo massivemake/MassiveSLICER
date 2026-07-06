@@ -22,13 +22,19 @@ public static class InfillGenerator
         float z,
         ToolpathLayer layer,
         float spacingMm,
-        float angleDeg)
+        float angleDeg,
+        Func<Vector2, Vector3>? project = null)
     {
         if (polygons.Count == 0 || spacingMm < 0.1f) return;
 
         float rad  = angleDeg * (MathF.PI / 180f);
         float cosN = MathF.Cos(-rad), sinN = MathF.Sin(-rad);
         float cosP = MathF.Cos( rad), sinP = MathF.Sin( rad);
+        Vector3 W(float x, float y)
+        {
+            float wx = cosP * x - sinP * y, wy = sinP * x + cosP * y;
+            return project?.Invoke(new Vector2(wx, wy)) ?? new Vector3(wx, wy, z);
+        }
 
         var rotPolys = new List<List<Vector2>>(polygons.Count);
         foreach (var poly in polygons)
@@ -103,8 +109,8 @@ public static class InfillGenerator
             float toX   = rev ? xa[best] : xb[best];
             float sy    = ys[best];
 
-            var worldFrom = Rot3(fromX, sy, cosP, sinP, z);
-            var worldTo   = Rot3(toX,   sy, cosP, sinP, z);
+            var worldFrom = W(fromX, sy);
+            var worldTo   = W(toX, sy);
 
             if (hasLast)
             {
@@ -137,13 +143,19 @@ public static class InfillGenerator
         ToolpathLayer layer,
         float spacingMm,
         float angleDeg,
-        bool isLastLayer = false)
+        bool isLastLayer = false,
+        Func<Vector2, Vector3>? project = null)
     {
         if (polygons.Count == 0 || spacingMm < 0.1f) return;
 
         float rad  = angleDeg * (MathF.PI / 180f);
         float cosN = MathF.Cos(-rad), sinN = MathF.Sin(-rad);
         float cosP = MathF.Cos( rad), sinP = MathF.Sin( rad);
+        Vector3 W(float x, float y)
+        {
+            float wx = cosP * x - sinP * y, wy = sinP * x + cosP * y;
+            return project?.Invoke(new Vector2(wx, wy)) ?? new Vector3(wx, wy, z);
+        }
 
         var rotPolys = new List<List<Vector2>>(polygons.Count);
         foreach (var poly in polygons)
@@ -214,15 +226,15 @@ public static class InfillGenerator
             float toX   = rev ? xa[best] : xb[best];
             float sy    = ys[best];
 
-            var worldFrom = Rot3(fromX, sy, cosP, sinP, z);
-            var worldTo   = Rot3(toX,   sy, cosP, sinP, z);
+            var worldFrom = W(fromX, sy);
+            var worldTo   = W(toX, sy);
 
             if (hasLast)
             {
                 float dx = fromX - lastScan.X, dy2 = sy - lastScan.Y;
                 if (dx * dx + dy2 * dy2 > 1e-4f)
                     EmitBoundaryWalk(chain, lastScan, new Vector2(fromX, sy),
-                                     lastPos, worldFrom, layer, cosP, sinP, z);
+                                     lastPos, worldFrom, layer, W);
             }
 
             layer.Moves.Add(new ToolpathMove(worldFrom, worldTo, MoveKind.Extrude));
@@ -232,7 +244,7 @@ public static class InfillGenerator
         }
 
         if (isLastLayer && hasLast)
-            EmitPerimeterClose(chain, lastScan, lastPos, layer, cosP, sinP, z);
+            EmitPerimeterClose(chain, lastScan, lastPos, layer, W);
     }
 
     // Walk the polygon boundary from fromScan to toScan (scan frame), emitting
@@ -242,7 +254,7 @@ public static class InfillGenerator
         BoundaryChain chain,
         Vector2 fromScan, Vector2 toScan,
         Vector3 fromWorld, Vector3 toWorld,
-        ToolpathLayer layer, float cosP, float sinP, float z)
+        ToolpathLayer layer, Func<float, float, Vector3> toWorld3)
     {
         var (piF, eF, _, arcF) = ClosestOnBoundary(chain, fromScan);
         var (piT, eT, _, arcT) = ClosestOnBoundary(chain, toScan);
@@ -264,7 +276,7 @@ public static class InfillGenerator
                 int v = (eF + 1) % pn;
                 for (int i = 0; i < steps; i++)
                 {
-                    var wp3 = Rot3(poly[v].X, poly[v].Y, cosP, sinP, z);
+                    var wp3 = toWorld3(poly[v].X, poly[v].Y);
                     layer.Moves.Add(new ToolpathMove(prev3, wp3, MoveKind.Extrude));
                     prev3 = wp3;
                     v = (v + 1) % pn;
@@ -276,7 +288,7 @@ public static class InfillGenerator
                 int v = eF;
                 for (int i = 0; i < steps; i++)
                 {
-                    var wp3 = Rot3(poly[v].X, poly[v].Y, cosP, sinP, z);
+                    var wp3 = toWorld3(poly[v].X, poly[v].Y);
                     layer.Moves.Add(new ToolpathMove(prev3, wp3, MoveKind.Extrude));
                     prev3 = wp3;
                     v = (v - 1 + pn) % pn;
@@ -294,7 +306,7 @@ public static class InfillGenerator
     private static void EmitPerimeterClose(
         BoundaryChain chain,
         Vector2 lastScan, Vector3 lastPos,
-        ToolpathLayer layer, float cosP, float sinP, float z)
+        ToolpathLayer layer, Func<float, float, Vector3> toWorld3)
     {
         // Outer polygon = largest absolute area
         int   outerPi = 0;
@@ -310,7 +322,7 @@ public static class InfillGenerator
         var (eF, ptF, _) = ClosestOnPoly(chain, outerPi, lastScan);
 
         // Walk from lastPos to ptF if not already there
-        var ptF3  = Rot3(ptF.X, ptF.Y, cosP, sinP, z);
+        var ptF3  = toWorld3(ptF.X, ptF.Y);
         var prev3 = lastPos;
         if (Vector3.DistanceSquared(prev3, ptF3) > 1e-4f)
         {
@@ -322,7 +334,7 @@ public static class InfillGenerator
         int v = (eF + 1) % n;
         for (int i = 0; i < n; i++)
         {
-            var wp3 = Rot3(poly[v].X, poly[v].Y, cosP, sinP, z);
+            var wp3 = toWorld3(poly[v].X, poly[v].Y);
             layer.Moves.Add(new ToolpathMove(prev3, wp3, MoveKind.Extrude));
             prev3 = wp3;
             v = (v + 1) % n;

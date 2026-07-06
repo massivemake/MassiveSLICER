@@ -51,19 +51,16 @@ public partial class MainWindow : Window
         // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
         vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
 
-        // -- Right panel column toggle -----------------------------------------
+        // -- Right panel toggle (floating card) --------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName != nameof(ToolbarViewModel.IsRightPanelVisible)) return;
-            bool visible = vm.Toolbar.IsRightPanelVisible;
-            WorkAreaGrid.ColumnDefinitions[3].Width = visible ? new GridLength(4)   : new GridLength(0);
-            WorkAreaGrid.ColumnDefinitions[4].Width = visible ? new GridLength(300)  : new GridLength(0);
+            RightPanelHost.IsVisible = vm.Toolbar.IsRightPanelVisible;
         };
 
         // Apply persisted panel visibility before first layout pass.
-        bool rightVisible = vm.Toolbar.IsRightPanelVisible;
-        WorkAreaGrid.ColumnDefinitions[3].Width = rightVisible ? new GridLength(4)   : new GridLength(0);
-        WorkAreaGrid.ColumnDefinitions[4].Width = rightVisible ? new GridLength(300)  : new GridLength(0);
+        RightPanelHost.IsVisible = vm.Toolbar.IsRightPanelVisible;
+
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
@@ -106,28 +103,17 @@ public partial class MainWindow : Window
             vm.LeftPanel.SelectedCellIndex = lfam2Idx >= 0 ? lfam2Idx : 0;
 
         // -- Model loading -----------------------------------------------------
-        vm.Toolbar.ModelLoadRequested += async (_, _) =>
+        vm.Toolbar.ModelLoadRequested += async (_, _) => await ShowModelImportPickerAsync(vm);
+
+        // Left-panel import dropzone: click opens the picker, dropped files import directly.
+        LeftPanelControl.ImportClickRequested += async () => await ShowModelImportPickerAsync(vm);
+        LeftPanelControl.ImportFilesDropped += paths =>
         {
-            var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+            foreach (var p in paths)
             {
-                Title          = "Open 3D Model",
-                AllowMultiple  = false,
-                FileTypeFilter = [
-                    new("3D Files") { Patterns = ["*.glb", "*.gltf", "*.stl", "*.obj", "*.3mf", "*.stp", "*.step"] },
-                    new("GL Transmission Format") { Patterns = ["*.glb", "*.gltf"] },
-                    new("STL Files") { Patterns = ["*.stl"] },
-                    new("STEP Files") { Patterns = ["*.stp", "*.step"] },
-                    new("OBJ Files") { Patterns = ["*.obj"] },
-                    new("3MF Files") { Patterns = ["*.3mf"] },
-                    new("All Files") { Patterns = ["*.*"] },
-                ],
-            });
-
-            if (files.Count == 0) return;
-            var path = files[0].TryGetLocalPath();
-            if (path is null) return;
-
-            await LoadAndAddNodeAsync(path, vm);
+                if (!vm.ImportModelFromPath(p))
+                    vm.Console.LogError($"[import] Failed to import '{p}'.");
+            }
         };
 
         vm.Viewport.OnModelReloadRequested = node => vm.ReloadOutlinerModel(node);
@@ -325,6 +311,30 @@ public partial class MainWindow : Window
         }, ct);
     }
 
+    private async Task ShowModelImportPickerAsync(MainWindowViewModel vm)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
+        {
+            Title          = "Open 3D Model",
+            AllowMultiple  = false,
+            FileTypeFilter = [
+                new("3D Files") { Patterns = ["*.glb", "*.gltf", "*.stl", "*.obj", "*.3mf", "*.stp", "*.step"] },
+                new("GL Transmission Format") { Patterns = ["*.glb", "*.gltf"] },
+                new("STL Files") { Patterns = ["*.stl"] },
+                new("STEP Files") { Patterns = ["*.stp", "*.step"] },
+                new("OBJ Files") { Patterns = ["*.obj"] },
+                new("3MF Files") { Patterns = ["*.3mf"] },
+                new("All Files") { Patterns = ["*.*"] },
+            ],
+        });
+
+        if (files.Count == 0) return;
+        var path = files[0].TryGetLocalPath();
+        if (path is null) return;
+
+        await LoadAndAddNodeAsync(path, vm);
+    }
+
     private Task LoadAndAddNodeAsync(string filePath, MainWindowViewModel vm)
     {
         if (!vm.ImportModelFromPath(filePath))
@@ -359,7 +369,8 @@ public partial class MainWindow : Window
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
             UpdateLayout();
-            return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface);
+            return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface,
+                [LeftPanelHost, RightPanelHost, ToolbarHost]);
         });
     }
 }

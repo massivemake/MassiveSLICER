@@ -51,6 +51,7 @@
     <!-- macOS Dock icon set at runtime (MacDockIcon) -->
     <None Include="..\..\assets\Icons\macos-app-icon.png" Link="macos-app-icon.png" CopyToOutputDirectory="PreserveNewest" />
     <AvaloniaResource Include="Assets\Workflow\**\*.*"/>
+    <AvaloniaResource Include="Assets\Fonts\**\*.otf"/>
   </ItemGroup>
 
   <!-- Bed-calibration KRL deployed to the KRC over SMB during AUTO-CALIBRATE. -->

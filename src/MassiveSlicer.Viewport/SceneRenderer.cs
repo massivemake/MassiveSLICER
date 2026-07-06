@@ -455,8 +455,27 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Backdrop blend over the shader background. 0 = shader only, 1 = full HDR.</summary>
     public float BackdropOpacity { get; set; } = 1f;
 
-    private static readonly Vector3 DarkShaderBackground  = new(0.027f, 0.035f, 0.059f);
+    /// <summary>
+    /// Dark flat-matte presentation for the toolpath line views: flat near-black
+    /// background, HDR backdrop suppressed — maximum contrast for toolpath lines
+    /// while cell geometry stays visible via the mesh shader mode.
+    /// </summary>
+    public bool DarkMattePresentation { get; set; }
+
+    private static readonly Vector3 DarkMatteBackground   = new(0.045f, 0.045f, 0.045f);   // ~#0b0b0b flat
+    private static readonly Vector3 DarkShaderBackground  = new(0.086f, 0.086f, 0.086f);   // #161616 — matches the MassiveMake theme
     private static readonly Vector3 ArcticShaderBackground = new(1f, 1f, 1f);
+
+    private Rendering.ToolpathColorMode _toolpathColorMode = Rendering.ToolpathColorMode.Normal;
+
+    /// <summary>Switches every toolpath's extrude-line colour mode. GL thread only; no-op if unchanged.</summary>
+    public void SetToolpathColorMode(Rendering.ToolpathColorMode mode)
+    {
+        if (_toolpathColorMode == mode) return;
+        _toolpathColorMode = mode;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetColorMode(mode);
+    }
 
     /// <summary>
     /// Updates toolpath line colours for all registered renderers. Must be called on the GL thread.
@@ -497,6 +516,13 @@ public sealed class SceneRenderer : IDisposable
     }
 
     private Vector3 _toolpathBeadColor = new(0.95f, 0.95f, 0.95f);
+
+    /// <summary>Opacity of the extrusion/travel toolpath lines (1 = opaque).</summary>
+    public float ToolpathLineOpacity { get; set; } = 1f;
+
+    /// <summary>Simulate-timeline progress (0–1) applied to every visible toolpath;
+    /// negative = off (normal selection-based scrubbing).</summary>
+    public float ToolpathSimProgress { get; set; } = -1f;
 
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
@@ -599,6 +625,9 @@ public sealed class SceneRenderer : IDisposable
     /// When set, draws a set of X/Y/Z axis lines at the TCP position in the overlay pass.
     /// </summary>
     public Matrix4? TcpFrameMatrix { get; set; }
+
+    /// <summary>Whether the TCP/flange/sensor frame axes are drawn (visibility toggle).</summary>
+    public bool ShowTcpFrame { get; set; } = true;
 
     /// <summary>
     /// When set, draws a set of X/Y/Z axis lines at the flange position in the overlay pass.
@@ -824,7 +853,9 @@ public sealed class SceneRenderer : IDisposable
 
         // -- Scene pass --------------------------------------------------------
         bool arcticPresentation = _shaderMode == ShaderMode.Arctic;
-        var shaderBg = arcticPresentation ? ArcticShaderBackground : DarkShaderBackground;
+        var shaderBg = DarkMattePresentation ? DarkMatteBackground
+                     : arcticPresentation    ? ArcticShaderBackground
+                     :                          DarkShaderBackground;
         GL.BindFramebuffer(FramebufferTarget.Framebuffer, _sceneFbo);
         GL.ClearColor(shaderBg.X, shaderBg.Y, shaderBg.Z, 1f);
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -925,12 +956,34 @@ public sealed class SceneRenderer : IDisposable
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
+            var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
+            int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
+            if (ToolpathSimProgress >= 0f)
+                scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
-                scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue);
+                scrubIndex: scrub,
+                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
         }
+
+        // Translucent helper geometry (effector range glow, …): depth-tested but not
+        // depth-written, after toolpaths so lines inside the volume stay visible.
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.DepthMask(false);
+        foreach (var n in SceneRoot.SelfAndDescendants())
+        {
+            if (!n.TranslucentPass) continue;
+            bool ancestorsVisible = true;
+            for (var a = n.Parent; a is not null; a = a.Parent)
+                if (!a.Visible) { ancestorsVisible = false; break; }
+            if (!ancestorsVisible) continue;
+            if (n.Mesh is { } glowMesh) glowMesh.RimGlow = 2.5f;
+            n.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
+        }
+        GL.DepthMask(true);
 
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
@@ -1045,7 +1098,8 @@ public sealed class SceneRenderer : IDisposable
         // -- Overlay pass ------------------------------------------------------
         // Nodes flagged Overlay=true and the TCP frame axes are drawn after the
         // composite with depth cleared so they always appear on top.
-        bool hasOverlay = TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null;
+        bool hasOverlay = ShowTcpFrame &&
+            (TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null);
         foreach (var child in SceneRoot.Children)
             if (child.Overlay) { hasOverlay = true; break; }
 
@@ -1058,12 +1112,15 @@ public sealed class SceneRenderer : IDisposable
                 if (!child.Overlay) continue;
                 child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
             }
-            if (TcpFrameMatrix          is { } tcpModel    && _tcpAxes    is not null)
-                _tcpAxes.Draw(tcpModel * mvp);
-            if (FlangeFrameMatrix       is { } flangeModel && _flangeAxes is not null)
-                _flangeAxes.Draw(flangeModel * mvp);
-            if (SensorOriginFrameMatrix is { } sensorModel && _sensorAxes is not null)
-                _sensorAxes.Draw(sensorModel * mvp);
+            if (ShowTcpFrame)
+            {
+                if (TcpFrameMatrix          is { } tcpModel    && _tcpAxes    is not null)
+                    _tcpAxes.Draw(tcpModel * mvp);
+                if (FlangeFrameMatrix       is { } flangeModel && _flangeAxes is not null)
+                    _flangeAxes.Draw(flangeModel * mvp);
+                if (SensorOriginFrameMatrix is { } sensorModel && _sensorAxes is not null)
+                    _sensorAxes.Draw(sensorModel * mvp);
+            }
             GL.Enable(EnableCap.CullFace);
         }
 
@@ -1577,11 +1634,11 @@ public sealed class SceneRenderer : IDisposable
 
     // -- Shader mode -----------------------------------------------------------
 
-    private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(1.00f, 0.55f, 0.30f, 1f);
+    private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(0.62f, 0.70f, 0.10f, 1f);   // lime-olive clay
     private static readonly OpenTK.Mathematics.Vector4 ArcticColor  = new(0.93f, 0.93f, 0.95f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MetalColor     = new(0.60f, 0.60f, 0.65f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 ChromeColor    = new(1.00f, 1.00f, 1.00f, 1f);
-    private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.07f, 0.07f, 0.07f, 1f);
+    private static readonly OpenTK.Mathematics.Vector4 MatteBlackColor = new(0.094f, 0.094f, 0.094f, 1f);   // #181818
     private static readonly OpenTK.Mathematics.Vector4 PurpleColor    = new(0.53f, 0.25f, 0.80f, 1f);
 
     private static bool InheritsLayerPreview(SceneNode n)
@@ -1599,6 +1656,13 @@ public sealed class SceneRenderer : IDisposable
         foreach (var n in root.SelfAndDescendants())
         {
             if (n.Mesh is not { } mesh) continue;
+            if (n.KeepOwnMaterial)
+            {
+                mesh.Exposure = _exposure;
+                mesh.IblGain  = _iblIntensity;
+                mesh.FloorZ   = BedZ;
+                continue;
+            }
             bool forceLayerPreview = InheritsLayerPreview(n);
             mesh.Exposure         = _exposure;
             mesh.IblGain          = _iblIntensity;
@@ -1716,7 +1780,7 @@ public sealed class SceneRenderer : IDisposable
                     mesh.NormalsMode      = false;
                     mesh.SuppressTextures = true;
                     mesh.Metallic         = 0f;
-                    mesh.RoughnessFactor  = 0.95f;
+                    mesh.RoughnessFactor  = 1f;
                     mesh.Color            = MatteBlackColor;
                     mesh.SpecularStrength = 0f;
                     mesh.Shininess        = 1f;

@@ -83,6 +83,10 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>Emissive colour factor, linear RGB.</summary>
     public Vector3 EmissiveFactor { get; set; }
 
+    /// <summary>Fresnel rim-glow strength (0 = off). Brightens silhouettes with the
+    /// emissive colour and fades the fill alpha — a cheap bloom-like halo.</summary>
+    public float RimGlow { get; set; }
+
     /// <summary>Tangent-space normal map XY scale.</summary>
     public float NormalScale { get; set; } = 1f;
 
@@ -190,6 +194,7 @@ public sealed class MeshRenderer : IDisposable
         uniform float     uMetallicFactor;
         uniform float     uRoughnessFactor;
         uniform vec3      uEmissiveFactor;
+        uniform float     uRimGlow;
         uniform float     uNormalScale;
         uniform float     uOcclusionStrength;
         uniform int       uAlphaMode;      // 0=opaque,1=mask,2=blend
@@ -442,6 +447,12 @@ public sealed class MeshRenderer : IDisposable
             }
 
             vec3 color = direct + ambient + emissive;
+            if (uRimGlow > 0.0) {
+                // Bloom-style halo: bright emissive rim at the silhouette, faint fill.
+                float rim = pow(1.0 - max(dot(Nm, V), 0.0), 2.2);
+                color += uEmissiveFactor * rim * uRimGlow;
+                alpha  = clamp(alpha * (0.25 + 0.75 * rim) + rim * 0.30, 0.0, 1.0);
+            }
             if (uLayerOverlay == 1)
                 color = mix(color, evalLayerPreview(vWorldPos, Nm), uLayerOverlayStrength);
             color *= uExposure;                      // user exposure (1 = neutral)
@@ -541,6 +552,7 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetFloat("uNormalScale",      NormalScale);
         _shader.SetFloat("uOcclusionStrength", OcclusionStrength);
         _shader.SetInt("uAlphaMode",          AlphaModeInt);
+        _shader.SetFloat("uRimGlow",          RimGlow);
         _shader.SetFloat("uAlphaCutoff",      AlphaCutoff);
         _shader.SetFloat("uExposure",         Exposure);
         _shader.SetFloat("uIblGain",          IblGain);

@@ -110,6 +110,17 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
+    // TCP keyframes: per-toolpath-node offset keys + the pristine pre-keyframe path.
+    private sealed class TcpKey
+    {
+        public int   Index;
+        public NVec3 Offset;
+        public int   InfluenceLeft;    // ease-in window, moves
+        public int   InfluenceRight;   // ease-out window, moves
+    }
+    private readonly Dictionary<SceneNode, List<TcpKey>> _tcpKeyframesByNode = new();
+    private readonly Dictionary<SceneNode, Toolpath>     _keyframeBaseByNode = new();
+    private int _selectedTcpKey = -1;
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
     // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
     private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
@@ -195,6 +206,7 @@ public partial class ViewportView : UserControl
         PointerMoved        += OnPointerMoved;
         PointerReleased     += OnPointerReleased;
         PointerWheelChanged += OnPointerWheelChanged;
+        PointerMoved += (_, e) => _lastPointerPos = e.GetPosition(this);
         KeyDown             += OnKeyDown;
 
         Focusable = true;
@@ -326,7 +338,16 @@ public partial class ViewportView : UserControl
             vm.OnExplodeRequested     = ExplodeSelected;
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
+            vm.OnSimScrubRequested = SimScrubIk;
+            vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
+            vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
+            vm.OnClearTcpKeyframesRequested = () => ClearTcpKeyframes(vm);
+            vm.OnKeyframeLaneClicked      = i => JumpToTcpKeyframe(vm, i);
+            vm.OnKeyframeInfluenceDragged = (i, left, px, commit) =>
+                DragTcpKeyframeInfluence(vm, i, left, px, commit);
             vm.OnFrameAllRequested = FrameAll;
+            WireRealtimeSlicing(vm);
+            vm.OnViewPresetRequested = ApplyViewPreset;
             vm.GetCameraState = () =>
             {
                 var c = _renderer.Camera;
@@ -839,6 +860,7 @@ public partial class ViewportView : UserControl
                 : int.MaxValue;
             _renderer.SetToolpathBeadColor(
                 new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
+            _renderer.SetToolpathColorMode(vm.ToolpathColorMode);
             _renderer.SetToolpathColors(
                 new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
                 new TkVector3(vm.ToolpathTravelColor.X,      vm.ToolpathTravelColor.Y,      vm.ToolpathTravelColor.Z),
@@ -848,6 +870,9 @@ public partial class ViewportView : UserControl
                 new TkVector3(vm.ToolpathRetractionColor.X,  vm.ToolpathRetractionColor.Y,  vm.ToolpathRetractionColor.Z));
             _renderer.GizmoEnabled   = vm.ActiveGizmoModeInternal != GizmoMode.None;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
+            // Per-view display profiles: the view pills own background darkness and
+            // shader mode (line views default to dark + MatteBlack, user-overridable).
+            _renderer.DarkMattePresentation = vm.DarkViewportBackground;
             _renderer.ShaderMode         = vm.ActiveShaderMode;
             _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
             bool layerPreview = vm.AdditiveSettings?.ShowLayerPreview ?? false;
@@ -876,6 +901,9 @@ public partial class ViewportView : UserControl
             }
             _renderer.BackdropBlur     = vm.BackdropBlur;
             _renderer.BackdropOpacity  = vm.BackdropOpacity;
+            _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
+            _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
+            _renderer.ToolpathSimProgress = vm.SimRenderProgress;
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {
@@ -904,6 +932,15 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _rawToolpathByNode.TryRemove(removing, out _);
+                if (ReferenceEquals(removing, _activeScrubNode) && DataContext is ViewportViewModel vmRm)
+                {
+                    _activeScrubNode = null;
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        vmRm.IsScrubSessionActive = false;
+                        vmRm.ResetScrubIndex(0, null);
+                    });
+                }
                 _toolpathMetaByNode.TryRemove(removing, out _);
                 _mergedByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
@@ -1047,8 +1084,22 @@ public partial class ViewportView : UserControl
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
                 UploadToolpathEntry(entry, addToScene: true);
-                _renderer.Select(entry.Node);
-                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+                // Keep the current selection (usually the model) — auto-selecting the
+                // toolpath would flip the sidebar to the Toolpath view mid-workflow.
+                var adoptNode = entry.Node;
+                var adoptTp   = entry.Toolpath;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    // Adopt the new toolpath as the live scrub session so the timeline
+                    // shows immediately without requiring a selection.
+                    if (DataContext is ViewportViewModel vmAdopt && _activeScrubNode is null)
+                    {
+                        _activeScrubNode = adoptNode;
+                        vmAdopt.ResetScrubIndex(adoptTp.Layers.Sum(l => l.Moves.Count), adoptTp);
+                        vmAdopt.IsScrubSessionActive = true;
+                    }
+                    UpdateFocusOverlay();
+                });
             }
 
             while (vm.PendingToolpathReplace.TryDequeue(out var entry))
@@ -1058,7 +1109,6 @@ public partial class ViewportView : UserControl
                 _singularityByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
-                _renderer.Select(entry.Node);
                 Dispatcher.UIThread.Post(UpdateFocusOverlay);
             }
 
@@ -2169,7 +2219,21 @@ public partial class ViewportView : UserControl
                 _renderer.ActiveDragAxis = GizmoAxis.None;
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (DataContext is ViewportViewModel vmGz2) SyncSelectionTransformDisplay(vmGz2);
+                if (DataContext is ViewportViewModel vmGz2)
+                {
+                    SyncSelectionTransformDisplay(vmGz2);
+                    if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
+                    {
+                        // Dragging the TCP mid-scrub = keyframe the offset at this moment
+                        // (no re-slice — the adjustment lives on the toolpath timeline).
+                        AddTcpKeyframeAtCurrentIndex(vmGz2);
+                    }
+                    else
+                    {
+                        // Moving a model or effector handle invalidates the slice.
+                        vmGz2.OnModelGeometryChanged?.Invoke();
+                    }
+                }
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
@@ -2334,6 +2398,20 @@ public partial class ViewportView : UserControl
             }
         }
 
+        if (e.Key == Key.Space && e.KeyModifiers.HasFlag(KeyModifiers.Control))
+        {
+            if (DataContext is ViewportViewModel pieVm)
+            {
+                // Overlay chrome is inset; convert view coords to overlay coords.
+                var overlayPos = this.TranslatePoint(_lastPointerPos, OverlayView) ?? _lastPointerPos;
+                pieVm.ViewPieX = overlayPos.X;
+                pieVm.ViewPieY = overlayPos.Y;
+                pieVm.IsViewPieOpen = true;
+                e.Handled = true;
+                return;
+            }
+        }
+
         switch (e.Key)
         {
             case Key.F:      FocusSelected();                          e.Handled = true; break;
@@ -2364,6 +2442,12 @@ public partial class ViewportView : UserControl
                 }
                 break;
             case Key.Escape:
+                if (DataContext is ViewportViewModel pieEscVm && pieEscVm.IsViewPieOpen)
+                {
+                    pieEscVm.IsViewPieOpen = false;
+                    e.Handled = true;
+                    break;
+                }
                 if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
                 {
                     escVm.IsLayFlatMode = false;
@@ -2553,6 +2637,14 @@ public partial class ViewportView : UserControl
             PrintSpeedMps    = (float)(s.PrintSpeed / 1000.0),
             TravelSpeed      = (float)(s.TravelSpeed / 1000.0),
             ApproachZ        = (float)s.ApproachZ,
+            PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
+                                   ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternAmplitude     = (float)s.PatternAmplitude,
+            PatternFrequency     = (float)s.PatternFrequency,
+            PatternTwistDegPerMm = (float)s.PatternTwist,
+            PatternOffsetDeg     = (float)s.PatternOffset,
+            PatternFadeInMm      = (float)s.PatternFadeIn,
+            PatternFadeOutMm     = (float)s.PatternFadeOut,
             TiltAngle        = (float)s.TiltAngle,
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
@@ -2689,6 +2781,7 @@ public partial class ViewportView : UserControl
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
+            tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
             SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
             Pct(80);
 
@@ -2889,10 +2982,22 @@ public partial class ViewportView : UserControl
 
         try
         {
-            var selectedNode = _renderer.SelectedNode;
-            if (vm.FindUserMeshOutlinerItem(selectedNode) is not { } sourceItem)
+            var sourceItem = vm.OwningModelItem(
+                                 vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                                 ?? vm.ResolveActivePrintObjectItem())
+                             ?? vm.EnumerateUserModelItems().FirstOrDefault();
+            if (sourceItem is null)
             {
                 SetSliceStatus(vm, "Slice failed: select a mesh to slice.", isError: true);
+                return;
+            }
+
+            // One evolving toolpath per model: if this model was already sliced,
+            // update it in place instead of adding another toolpath node.
+            if (sourceItem.Children.FirstOrDefault(c => c.IsToolpath) is { } existingToolpath)
+            {
+                vm.IsSlicing = false;   // hand off to the update path (it re-guards)
+                await RunUpdateSliceAsync(vm, (sourceItem, existingToolpath));
                 return;
             }
 
@@ -2927,6 +3032,7 @@ public partial class ViewportView : UserControl
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
+            ApplyEffectorSettings(vm, settings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
@@ -2963,7 +3069,9 @@ public partial class ViewportView : UserControl
 
             ApplyToolpathStats(vm, smoothedToolpath);
 
-            sourceItem.Visible = false;
+            // Visibility is governed by the view mode pills; slicing keeps the current
+            // mode (no auto-jump to Toolpath) so imports land in Body view.
+            vm.ApplyViewMode();
 
             _renderer.Select(null);
             UpdateFocusOverlay();
@@ -3083,6 +3191,15 @@ public partial class ViewportView : UserControl
         {
             add.IsAutoTiltRunning = false;
         }
+    }
+
+    /// <summary>Feeds the live-effector handles (world positions + range/strength) into the slice.</summary>
+    private static void ApplyEffectorSettings(ViewportViewModel vm, SliceSettings settings)
+    {
+        if (vm.AdditiveSettings is not { EffectorEnabled: true } add) return;
+        settings.EffectorPoints     = vm.GetActiveEffectorPositions();
+        settings.EffectorRadiusMm   = (float)add.EffectorRange;
+        settings.EffectorStrengthMm = (float)add.EffectorStrength;
     }
 
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
@@ -3363,10 +3480,108 @@ public partial class ViewportView : UserControl
         return v.LengthSquared() > 1e-12f ? NVec3.Normalize(v) : new NVec3(0, 0, 1);
     }
 
+    // ── Realtime slicing (effector-style) ──────────────────────────────────
+    // Any relevant parameter change re-slices the active model automatically,
+    // debounced; updates replace the existing toolpath node in place.
+
+    private DispatcherTimer? _realtimeSliceTimer;
+    private bool _realtimeSlicePending;   // a change arrived while realtime slicing was paused
+
+    private static readonly HashSet<string> RealtimeSliceProps =
+    [
+        nameof(AdditiveSettingsViewModel.LayerHeight),
+        nameof(AdditiveSettingsViewModel.FirstLayerHeight),
+        nameof(AdditiveSettingsViewModel.BeadWidth),
+        nameof(AdditiveSettingsViewModel.Method),
+        nameof(AdditiveSettingsViewModel.MethodDisplayName),
+        nameof(AdditiveSettingsViewModel.SlicingMode),
+        nameof(AdditiveSettingsViewModel.TiltAngle),
+        nameof(AdditiveSettingsViewModel.TiltAngleX),
+        nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight),
+        nameof(AdditiveSettingsViewModel.AdaptiveQuality),
+        nameof(AdditiveSettingsViewModel.MinLayerHeight),
+        nameof(AdditiveSettingsViewModel.DisableContourOffset),
+        nameof(AdditiveSettingsViewModel.InfillPattern),
+        nameof(AdditiveSettingsViewModel.InfillSpacingMm),
+        nameof(AdditiveSettingsViewModel.InfillAngleDeg),
+        nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.PatternAmplitude),
+        nameof(AdditiveSettingsViewModel.PatternFrequency),
+        nameof(AdditiveSettingsViewModel.PatternTwist),
+        nameof(AdditiveSettingsViewModel.PatternOffset),
+        nameof(AdditiveSettingsViewModel.PatternFadeIn),
+        nameof(AdditiveSettingsViewModel.PatternFadeOut),
+        nameof(AdditiveSettingsViewModel.EffectorEnabled),
+        nameof(AdditiveSettingsViewModel.EffectorRange),
+        nameof(AdditiveSettingsViewModel.EffectorStrength),
+        nameof(AdditiveSettingsViewModel.WaveEffect),
+        nameof(AdditiveSettingsViewModel.WaveAmplitude),
+        nameof(AdditiveSettingsViewModel.WaveWavelength),
+    ];
+
+    private void WireRealtimeSlicing(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is { } add)
+            add.PropertyChanged += (_, e) =>
+            {
+                if (e.PropertyName == nameof(AdditiveSettingsViewModel.EffectorRange))
+                    vm.UpdateEffectorRangeIndicators((float)add.EffectorRange);
+                if (e.PropertyName is { } name && RealtimeSliceProps.Contains(name))
+                    ScheduleRealtimeSlice(vm);
+            };
+        vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
+                && !vm.RealtimeSlicingPaused && _realtimeSlicePending)
+            {
+                _realtimeSlicePending = false;
+                ScheduleRealtimeSlice(vm);
+            }
+        };
+    }
+
+    private void ScheduleRealtimeSlice(ViewportViewModel vm)
+    {
+        if (vm.RealtimeSlicingPaused) { _realtimeSlicePending = true; return; }
+        if (_realtimeSliceTimer is null)
+        {
+            _realtimeSliceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            _realtimeSliceTimer.Tick += async (_, _) =>
+            {
+                if (DataContext is not ViewportViewModel tickVm) { _realtimeSliceTimer!.Stop(); return; }
+                if (tickVm.IsSlicing) return;   // keep ticking until the current run finishes
+                _realtimeSliceTimer!.Stop();
+                await RunRealtimeSliceAsync(tickVm);
+            };
+        }
+        _realtimeSliceTimer.Stop();
+        _realtimeSliceTimer.Start();
+    }
+
+    private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
+    {
+        var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
+                   ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (item is null) return;
+
+        var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+        if (toolpathChild is not null)
+            await RunUpdateSliceAsync(vm, (item, toolpathChild));
+        else
+            await RunSliceAsync(vm);
+    }
+
     private async Task RunUpdateSliceAsync(ViewportViewModel vm)
+        => await RunUpdateSliceAsync(vm, null);
+
+    private async Task RunUpdateSliceAsync(
+        ViewportViewModel vm,
+        (OutlinerItemViewModel parent, OutlinerItemViewModel toolpath)? explicitSource)
     {
         if (vm.IsSlicing) return;
-        if (FindResliceSource(vm) is not { } source) return;
+        var resolved = explicitSource ?? FindResliceSource(vm);
+        if (resolved is not { } source) return;
 
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
@@ -3385,6 +3600,7 @@ public partial class ViewportView : UserControl
 
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
+            ApplyEffectorSettings(vm, settings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
                 pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
@@ -3417,6 +3633,7 @@ public partial class ViewportView : UserControl
                     preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
             }
 
+            ClearTcpKeyframeState(toolpathNode, vm);
             vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
             {
                 Toolpath               = smoothedToolpath,
@@ -4105,6 +4322,10 @@ public partial class ViewportView : UserControl
         {
             node = _currentToolNode;
         }
+
+        // Locked outliner rows (robot, bed, locked toolheads) can't be selected.
+        if (node is not null && vm.IsNodeLockedInOutliner(node))
+            node = null;
 
         if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
             SyncScanSelectionToRenderer(vm);
@@ -4816,15 +5037,27 @@ public partial class ViewportView : UserControl
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
         if (isToolpath && selected is not null && _toolpathByNode.TryGetValue(selected, out var tp))
         {
+            // Re-selecting the same toolpath keeps the scrub position (keyframe workflow).
+            bool sameSession = ReferenceEquals(_activeScrubNode, selected)
+                               && ReferenceEquals(vm.ActiveScrubToolpath, tp);
             _activeScrubNode = selected;
-            vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+            if (!sameSession)
+                vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp);
+            vm.IsScrubSessionActive = true;
             ValidateToolpathAsync(selected, tp);
             if (vm.AdditiveSettings is { } ads)
                 ApplyToolpathStats(vm, tp, ads);
         }
+        else if (_activeScrubNode is { } keepNode && _toolpathByNode.ContainsKey(keepNode))
+        {
+            // Persistent timeline: deselecting (or clicking the TCP / another object)
+            // keeps the scrub session alive as long as the toolpath still exists.
+            vm.IsScrubSessionActive = true;
+        }
         else
         {
             _activeScrubNode = null;
+            vm.IsScrubSessionActive = false;
             vm.ResetScrubIndex(0, null);
             ClearToolpathStats(vm);
             vm.StatsReachability = "";
@@ -4834,6 +5067,212 @@ public partial class ViewportView : UserControl
         }
 
         SyncSelectionTransformDisplay(vm);
+    }
+
+    // -- TCP keyframes -----------------------------------------------------------
+
+    /// <summary>
+    /// Records (or updates) a TCP offset keyframe at the current scrub index: the delta
+    /// between where the user dragged the TCP and the nominal toolpath position there.
+    /// The offsets are eased over neighbouring moves and baked into the rendered path.
+    /// </summary>
+    private void AddTcpKeyframeAtCurrentIndex(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+
+        int index = Math.Clamp(vm.ToolpathScrubIndex, 0, cache.Length - 1);
+
+        // Nominal path position at this move (same transform chain as ScrubIkForNode).
+        var (pos, _) = cache[index];
+        NVec3 nominal;
+        if (_toolpathOriginByNode.TryGetValue(node, out var origin))
+        {
+            var wt = node.WorldTransform;
+            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+            nominal = new NVec3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+        }
+        else nominal = pos;
+
+        // Where the TCP actually is now (after the user's drag).
+        if (_renderer.TcpFrameMatrix is not { } tcpMat) return;
+        var tcpWorld = new NVec3(tcpMat.M41, tcpMat.M42, tcpMat.M43);
+        var offset   = tcpWorld - nominal;
+
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys))
+            _tcpKeyframesByNode[node] = keys = [];
+        if (!_keyframeBaseByNode.ContainsKey(node) && _toolpathByNode.TryGetValue(node, out var basePath))
+            _keyframeBaseByNode[node] = basePath;
+
+        int influence = Math.Max((int)vm.KeyframeSmoothing, 5);
+        var existing  = keys.Find(k => k.Index == index);
+        if (existing is not null)
+        {
+            existing.Offset = offset;
+        }
+        else
+        {
+            keys.Add(new TcpKey
+            {
+                Index = index, Offset = offset,
+                InfluenceLeft = influence, InfluenceRight = influence,
+            });
+            keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+        }
+        _selectedTcpKey = keys.FindIndex(k => k.Index == index);
+
+        ApplyTcpKeyframes(vm, node);
+    }
+
+    /// <summary>Removes all keyframes for the active toolpath and restores the pristine path.</summary>
+    private void ClearTcpKeyframes(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is not { } node) return;
+        _tcpKeyframesByNode.Remove(node);
+        if (_keyframeBaseByNode.Remove(node, out var basePath))
+            SwapScrubbedToolpath(vm, node, basePath);
+        vm.HasTcpKeyframes = false;
+        _selectedTcpKey = -1;
+        vm.SetScrubKeyframes([]);
+    }
+
+    /// <summary>Drops keyframe state without restoring (a fresh slice replaced the path).</summary>
+    private void ClearTcpKeyframeState(SceneNode node, ViewportViewModel vm)
+    {
+        _tcpKeyframesByNode.Remove(node);
+        _keyframeBaseByNode.Remove(node);
+        if (ReferenceEquals(node, _activeScrubNode))
+        {
+            vm.HasTcpKeyframes = false;
+            _selectedTcpKey = -1;
+            vm.SetScrubKeyframes([]);
+        }
+    }
+
+    /// <summary>Keyframe diamond clicked: select it and jump the scrubber to its moment.</summary>
+    private void JumpToTcpKeyframe(ViewportViewModel vm, int keyIdx)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (keyIdx < 0 || keyIdx >= keys.Count) return;
+        _selectedTcpKey = keyIdx;
+        vm.SetScrubKeyframes(
+            keys.Select(k => (k.Index, k.InfluenceLeft, k.InfluenceRight)).ToArray(),
+            keyIdx);
+        vm.ToolpathScrubIndex = keys[keyIdx].Index;   // drives the robot to this moment
+    }
+
+    /// <summary>Influence tick dragged: resize the key's ease window (bake on release).</summary>
+    private void DragTcpKeyframeInfluence(ViewportViewModel vm, int keyIdx, bool left, double px, bool commit)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (keyIdx < 0 || keyIdx >= keys.Count) return;
+
+        var k   = keys[keyIdx];
+        int idx = vm.ScrubIndexAtPixel(px);
+        if (left) k.InfluenceLeft  = Math.Max(k.Index - idx, 5);
+        else      k.InfluenceRight = Math.Max(idx - k.Index, 5);
+
+        _selectedTcpKey = keyIdx;
+        vm.SetScrubKeyframes(
+            keys.Select(x => (x.Index, x.InfluenceLeft, x.InfluenceRight)).ToArray(),
+            keyIdx);
+        if (commit)
+            ApplyTcpKeyframes(vm, node);   // heavy re-bake only on release
+    }
+
+    /// <summary>Re-bakes the eased keyframe offsets into the toolpath and re-poses the robot.</summary>
+    private void ApplyTcpKeyframes(ViewportViewModel vm, SceneNode node)
+    {
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return;
+        if (!_keyframeBaseByNode.TryGetValue(node, out var basePath)) return;
+
+        var modified = BuildOffsetToolpath(basePath, keys);
+        SwapScrubbedToolpath(vm, node, modified);
+
+        vm.HasTcpKeyframes = true;
+        vm.SetScrubKeyframes(
+            keys.Select(k => (k.Index, k.InfluenceLeft, k.InfluenceRight)).ToArray(),
+            _selectedTcpKey);
+
+        ScrubIkForNode(node, vm.ToolpathScrubIndex);
+    }
+
+    /// <summary>In-place toolpath swap that keeps the scrub position and node pose.</summary>
+    private void SwapScrubbedToolpath(ViewportViewModel vm, SceneNode node, Toolpath toolpath)
+    {
+        _toolpathByNode[node]    = toolpath;
+        _scrubCacheByNode[node]  = BuildScrubCache(toolpath);
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+
+        var preservedLocal = node.LocalTransform;
+        if (!_toolpathOriginByNode.TryGetValue(node, out var preservedOrigin))
+            preservedOrigin = new NVec3(preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+
+        vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath                = toolpath,
+            RawToolpath             = raw ?? toolpath,
+            Node                    = node,
+            BeadWidth               = (float)(vm.AdditiveSettings?.BeadWidth   ?? 6.0),
+            LayerHeight             = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0),
+            PreserveRelativePose    = true,
+            PreservedLocalTransform = preservedLocal,
+            PreservedOrigin         = preservedOrigin,
+        });
+        vm.ReplaceScrubToolpathInPlace(toolpath);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Clones <paramref name="src"/> with the keyframe offsets applied: each key
+    /// contributes a smoothstep bell over its own left/right influence windows; where
+    /// bells overlap the offsets blend by normalised weight, so adjacent keyframes
+    /// ease into each other and everything fades to zero outside the influence spans.
+    /// </summary>
+    private static Toolpath BuildOffsetToolpath(Toolpath src, List<TcpKey> keys)
+    {
+        NVec3 OffsetAt(double v)
+        {
+            double wsum = 0;
+            var    acc  = NVec3.Zero;
+            foreach (var k in keys)
+            {
+                double d    = v - k.Index;
+                double span = d < 0 ? Math.Max(k.InfluenceLeft, 1) : Math.Max(k.InfluenceRight, 1);
+                double t    = Math.Abs(d) / span;
+                if (t >= 1.0) continue;
+                double x = 1.0 - t;
+                double wgt = x * x * (3.0 - 2.0 * x);
+                acc  += k.Offset * (float)wgt;
+                wsum += wgt;
+            }
+            if (wsum <= 0) return NVec3.Zero;
+            return acc / (float)wsum * (float)Math.Min(wsum, 1.0);
+        }
+
+        var dst = new Toolpath();
+        int fi  = 0;
+        foreach (var layer in src.Layers)
+        {
+            var nl = new ToolpathLayer(layer.Index, layer.Z)
+            {
+                Height      = layer.Height,
+                PlaneNormal = layer.PlaneNormal,
+            };
+            nl.Contours.AddRange(layer.Contours);
+            foreach (var m in layer.Moves)
+            {
+                nl.Moves.Add(m with { From = m.From + OffsetAt(fi), To = m.To + OffsetAt(fi + 1) });
+                fi++;
+            }
+            dst.Layers.Add(nl);
+        }
+        return dst;
     }
 
     // -- Scrub IK --------------------------------------------------------------
@@ -4847,18 +5286,40 @@ public partial class ViewportView : UserControl
     /// </summary>
     private void ScrubIk(int index)
     {
+        if (_vm?.ActiveScrubToolpath is null || _activeScrubNode is null) return;
+        ScrubIkForNode(_activeScrubNode, index);
+    }
+
+    /// <summary>Simulate-timeline hook: drives the robot along the first visible
+    /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
+    private void SimScrubIk(double progress)
+    {
+        foreach (var (node, cache) in _scrubCacheByNode)
+        {
+            if (!node.Visible || cache.Length == 0) continue;
+            SimScrubResolveVisible(node, cache, progress);
+            return;
+        }
+    }
+
+    private void SimScrubResolveVisible(SceneNode node, (NVec3, NVec3)[] cache, double progress)
+    {
+        int index = (int)Math.Round(Math.Clamp(progress, 0.0, 1.0) * (cache.Length - 1));
+        ScrubIkForNode(node, index);
+    }
+
+    private void ScrubIkForNode(SceneNode scrubNode, int index)
+    {
         var vm       = _vm;
-        var toolpath = vm?.ActiveScrubToolpath;
         var solver   = _ikSolver;
         var robot    = vm?.Robot;
 
-        if (vm is null || toolpath is null || solver is null || robot is null) return;
+        if (vm is null || solver is null || robot is null) return;
 
         // Desync live feed so IK drives the robot instead of the C3Bridge stream.
         robot.Desync();
 
-        if (_activeScrubNode is null ||
-            !_scrubCacheByNode.TryGetValue(_activeScrubNode, out var scrubCache) ||
+        if (!_scrubCacheByNode.TryGetValue(scrubNode, out var scrubCache) ||
             scrubCache.Length == 0) return;
         var (pos, planeNormal) = scrubCache[Math.Clamp(index, 0, scrubCache.Length - 1)];
 
@@ -4866,7 +5327,7 @@ public partial class ViewportView : UserControl
         // Stored Toolpath positions are in the original sliced world space; the renderer
         // stores them as (pos − origin) and uses LocalTransform to put them back in world
         // space.  If the user has moved the node we need to apply that same transform here.
-        var node = _activeScrubNode;
+        var node = scrubNode;
         TkVector3 worldPos;
         TkVector3 worldNormal;
         if (node is not null && _toolpathOriginByNode.TryGetValue(node, out var origin))
@@ -5650,6 +6111,26 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    private Point _lastPointerPos;
+
+    /// <summary>Applies a named camera preset (view pie menu / shortcuts).</summary>
+    private void ApplyViewPreset(string name)
+    {
+        var cam = _renderer.Camera;
+        switch (name)
+        {
+            case "Top":    cam.Elevation = 89.9f;  break;
+            case "Bottom": cam.Elevation = -89.9f; break;
+            case "Right":  cam.Azimuth = 0f;    cam.Elevation = 0f; break;
+            case "Back":   cam.Azimuth = 90f;   cam.Elevation = 0f; break;
+            case "Left":   cam.Azimuth = 180f;  cam.Elevation = 0f; break;
+            case "Front":  cam.Azimuth = 270f;  cam.Elevation = 0f; break;
+            case "Iso":    cam.Azimuth = 45f;   cam.Elevation = 30f; break;
+            case "Frame":  FrameAll(); return;
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
     private void FrameAll()
     {
         var min = new Vector3(float.MaxValue);
@@ -6067,6 +6548,7 @@ public partial class ViewportView : UserControl
 
         var merged = BuildMergedToolpath(record);
         var src    = record.Sources[0];
+        ClearTcpKeyframeState(node, vm);
         vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
         {
             Toolpath      = merged,
@@ -6116,6 +6598,94 @@ public partial class ViewportView : UserControl
                wt.M21, wt.M22, wt.M23, wt.M24,
                wt.M31, wt.M32, wt.M33, wt.M34,
                wt.M41, wt.M42, wt.M43, wt.M44);
+
+    /// <summary>
+    /// Records the simulate-timeline sweep (0–100% over 6 s) as an MP4: steps the
+    /// timeline at 30 fps, reads back each GL frame as PNG, and pipes the sequence
+    /// into ffmpeg. The robot IK follow runs exactly as it does during live playback.
+    /// </summary>
+    private async Task ExportSimVideoAsync(ViewportViewModel vm)
+    {
+        if (vm.SimRecording) return;
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        if (topLevel is null) return;
+
+        string? ffmpeg = new[] { "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg" }
+            .FirstOrDefault(File.Exists);
+        var mvmLog = topLevel.DataContext as MainWindowViewModel;
+        if (ffmpeg is null)
+        {
+            mvmLog?.Console.Log("[simvideo] ffmpeg not found — install it (brew install ffmpeg) to export videos.");
+            SetSliceStatus(vm, "Video export needs ffmpeg (brew install ffmpeg).", isError: true);
+            return;
+        }
+
+        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title             = "Export Simulation Video",
+            DefaultExtension  = "mp4",
+            SuggestedFileName = "toolpath-simulation",
+            FileTypeChoices   = [new("MP4 Video") { Patterns = ["*.mp4"] }],
+        });
+        if (file is null) return;
+        var path = file.TryGetLocalPath();
+        if (path is null) return;
+        path = SavePathUtil.Normalize(path, "mp4");
+
+        const int fps = 30, seconds = 6, totalFrames = fps * seconds;
+        double restorePercent = vm.SimTimelinePercent;
+        vm.SimRecording = true;
+        SetSliceStatus(vm, "Recording simulation video…");
+
+        System.Diagnostics.Process? proc = null;
+        try
+        {
+            proc = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName  = ffmpeg,
+                Arguments = "-y -f image2pipe -framerate 30 -i pipe:0 " +
+                            "-c:v libx264 -pix_fmt yuv420p -crf 18 " +
+                            "-vf \"scale=trunc(iw/2)*2:trunc(ih/2)*2\" " +
+                            $"\"{path}\"",
+                RedirectStandardInput = true,
+                RedirectStandardError = true,
+                UseShellExecute       = false,
+            });
+            if (proc is null) throw new InvalidOperationException("could not start ffmpeg");
+            // Drain stderr so ffmpeg never blocks on a full pipe.
+            _ = proc.StandardError.ReadToEndAsync();
+
+            var stdin = proc.StandardInput.BaseStream;
+            for (int i = 0; i < totalFrames; i++)
+            {
+                vm.SimTimelinePercent = i * 100.0 / (totalFrames - 1);
+                await Task.Delay(12);                    // let the async IK land on the pose
+                GlCanvas.RequestNextFrameRendering();
+                var png = await GlCanvas.CaptureScreenshotPngAsync();
+                if (png is null) throw new InvalidOperationException($"frame {i} capture failed");
+                await stdin.WriteAsync(png);
+                if (i % fps == 0)
+                    SetSliceStatus(vm, $"Recording simulation video… {i * 100 / totalFrames}%");
+            }
+            stdin.Close();
+            await proc.WaitForExitAsync();
+            if (proc.ExitCode != 0) throw new InvalidOperationException($"ffmpeg exited with {proc.ExitCode}");
+
+            mvmLog?.Console.Log($"[simvideo] Simulation video → {path}");
+            SetSliceStatus(vm, $"Simulation video saved: {Path.GetFileName(path)}");
+        }
+        catch (Exception ex)
+        {
+            try { if (proc is { HasExited: false }) proc.Kill(); } catch { }
+            mvmLog?.Console.Log($"[simvideo] Export failed: {ex.Message}");
+            SetSliceStatus(vm, $"Video export failed: {ex.Message}", isError: true);
+        }
+        finally
+        {
+            vm.SimRecording = false;
+            vm.SimTimelinePercent = restorePercent;
+        }
+    }
 
     private async Task ExportScanPointCloudAsync(ViewportViewModel vm, SceneNode node)
     {

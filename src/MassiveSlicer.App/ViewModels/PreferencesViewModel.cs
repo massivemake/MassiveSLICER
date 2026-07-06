@@ -159,7 +159,7 @@ public sealed class PreferencesViewModel : ViewModelBase
         OrbitAroundSelection    = _prefs.OrbitAroundSelection;
         ActivePreset            = _prefs.ActivePreset;
         AntiAliasing            = _prefs.AntiAliasing;
-        ActiveTheme             = Enum.TryParse<AppTheme>(_prefs.ActiveTheme, out var t) ? t : AppTheme.Obsidian;
+        ActiveTheme             = Enum.TryParse<AppTheme>(_prefs.ActiveTheme, out var t) ? t : AppTheme.MassiveMake;
         ToolpathExtrudeColor    = HexToColor(_prefs.ToolpathExtrudeColor);
         ToolpathTravelColor     = HexToColor(_prefs.ToolpathTravelColor);
         ToolpathSeamColor       = HexToColor(_prefs.ToolpathSeamColor);

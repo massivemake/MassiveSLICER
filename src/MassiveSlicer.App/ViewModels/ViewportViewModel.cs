@@ -71,6 +71,15 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _showTcpFrame = true;
+
+    /// <summary>Whether the TCP X/Y/Z orientation axes are visible.</summary>
+    public bool ShowTcpFrame
+    {
+        get => _showTcpFrame;
+        set { if (SetField(ref _showTcpFrame, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showContactShadows = true;
 
     /// <summary>Soft ground-contact shadows beneath robot, rail, and print bed.</summary>
@@ -296,9 +305,18 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _toolpathExtrudeColor, value);
     }
 
+    private float _toolpathLineOpacity = 1f;
+
+    /// <summary>Opacity of the toolpath extrusion/travel lines (per-view profile setting).</summary>
+    public float ToolpathLineOpacity
+    {
+        get => _toolpathLineOpacity;
+        set { if (SetField(ref _toolpathLineOpacity, Math.Clamp(value, 0f, 1f))) NotifyRenderNeeded(); }
+    }
+
     // Live bead colour — applied every frame as a shader uniform, so changing it
     // recolours already-sliced beads instantly (no re-slice, no VBO rebuild).
-    private System.Numerics.Vector3 _beadColor = new(0.95f, 0.95f, 0.95f);
+    private System.Numerics.Vector3 _beadColor = new(0.655f, 0.906f, 0.05f);   // lime, matches Blender "3dp.001"
 
     public System.Numerics.Vector3 BeadColor
     {
@@ -1359,6 +1377,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 SliceCommand?.RaiseCanExecuteChanged();
                 RecenterCommand?.RaiseCanExecuteChanged();
+                ResetModelTransformUi();
             }
         }
     }
@@ -1412,6 +1431,7 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (SetField(ref _isToolpathSelected, value))
             {
+                OnPropertyChanged(nameof(ShowSimTimeline));
                 OnPropertyChanged(nameof(Lfam3WorkflowMargin));
                 ExportKrlCommand?.RaiseCanExecuteChanged();
                 SendToRobotCommand?.RaiseCanExecuteChanged();
@@ -1549,7 +1569,7 @@ public sealed class ViewportViewModel : ViewModelBase
                     OnPlaybackToggled?.Invoke(false);
                 }
                 // Drive IK when the user is actively scrubbing a toolpath.
-                if (_isToolpathSelected)
+                if (_isToolpathSelected || _isScrubSessionActive)
                     OnScrubIkRequested?.Invoke(value);
                 // Always repaint: the IK callback only repaints on a successful solve,
                 // so without this the viewport freezes when scrubbing through
@@ -1609,6 +1629,70 @@ public sealed class ViewportViewModel : ViewModelBase
     /// firing <see cref="OnScrubIkRequested"/>. Use this for programmatic selection
     /// changes so the robot is not driven automatically when a new toolpath is picked.
     /// </summary>
+    private bool _isScrubSessionActive;
+
+    /// <summary>True while a toolpath scrub session is live — stays true when the user
+    /// clicks the TCP to adjust a keyframe, so the timeline card never drops.</summary>
+    public bool IsScrubSessionActive
+    {
+        get => _isScrubSessionActive;
+        internal set
+        {
+            if (SetField(ref _isScrubSessionActive, value))
+            {
+                OnPropertyChanged(nameof(ShowSimTimeline));
+                OnPropertyChanged(nameof(ShowPlaybackTimeline));
+            }
+        }
+    }
+
+    // ── TCP keyframes (timeline-scoped TCP offsets, eased over move proximity) ──
+
+    private IReadOnlyList<double> _scrubKeyframeMarkers = [];
+    public IReadOnlyList<double> ScrubKeyframeMarkers
+    {
+        get => _scrubKeyframeMarkers;
+        internal set => SetField(ref _scrubKeyframeMarkers, value);
+    }
+
+    private bool _hasTcpKeyframes;
+    public bool HasTcpKeyframes
+    {
+        get => _hasTcpKeyframes;
+        internal set => SetField(ref _hasTcpKeyframes, value);
+    }
+
+    private double _keyframeSmoothing = 150;
+    /// <summary>Ease window in moves on each side of / between keyframes.</summary>
+    public double KeyframeSmoothing
+    {
+        get => _keyframeSmoothing;
+        set
+        {
+            if (SetField(ref _keyframeSmoothing, Math.Clamp(value, 5, 2000)))
+                OnTcpKeyframeSmoothingChanged?.Invoke();
+        }
+    }
+
+    internal Action? OnAddTcpKeyframeRequested { get; set; }
+    internal Action? OnClearTcpKeyframesRequested { get; set; }
+    internal Action? OnTcpKeyframeSmoothingChanged { get; set; }
+
+    public RelayCommand AddTcpKeyframeCommand => _addTcpKeyframeCommand ??=
+        new RelayCommand(() => OnAddTcpKeyframeRequested?.Invoke());
+    private RelayCommand? _addTcpKeyframeCommand;
+
+    public RelayCommand ClearTcpKeyframesCommand => _clearTcpKeyframesCommand ??=
+        new RelayCommand(() => OnClearTcpKeyframesRequested?.Invoke());
+    private RelayCommand? _clearTcpKeyframesCommand;
+
+    /// <summary>Swaps the scrubbed toolpath (same move count) without resetting the position.</summary>
+    internal void ReplaceScrubToolpathInPlace(Toolpath toolpath)
+    {
+        ActiveScrubToolpath = toolpath;
+        ExportKrlCommand?.RaiseCanExecuteChanged();
+    }
+
     internal void ResetScrubIndex(int max, Toolpath? toolpath)
     {
         if (_isPlaying)
@@ -1722,6 +1806,39 @@ public sealed class ViewportViewModel : ViewModelBase
         RecomputeScrubMarkers();
     }
 
+    private (int Index, int InfL, int InfR)[] _scrubKeyframes = [];
+    private int _selectedKeyframeIdx = -1;
+
+    /// <summary>Sets the TCP keyframes (move index + per-side influence in moves) shown
+    /// on the scrubber ticks and the interactive keyframe lane.</summary>
+    internal void SetScrubKeyframes((int Index, int InfL, int InfR)[] keys, int selectedIdx = -1)
+    {
+        _scrubKeyframes      = keys;
+        _selectedKeyframeIdx = selectedIdx;
+        RecomputeScrubMarkers();
+    }
+
+    private IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> _keyframeLaneItems = [];
+    public IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> KeyframeLaneItems
+    {
+        get => _keyframeLaneItems;
+        private set => SetField(ref _keyframeLaneItems, value);
+    }
+
+    /// <summary>Wired by the viewport code-behind: keyframe diamond clicked (jump + select).</summary>
+    internal Action<int>? OnKeyframeLaneClicked { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: influence tick dragged
+    /// (keyIdx, isLeft, lanePixelX, commit).</summary>
+    internal Action<int, bool, double, bool>? OnKeyframeInfluenceDragged { get; set; }
+
+    /// <summary>Converts a lane/track pixel X to a move index (clamped).</summary>
+    internal int ScrubIndexAtPixel(double x)
+    {
+        double denom = Math.Max(_scrubTrackPixelWidth - ScrubThumbWidth, 1.0);
+        return (int)Math.Round(Math.Clamp((x - ScrubThumbWidth / 2.0) / denom, 0.0, 1.0) * _toolpathScrubMax);
+    }
+
     private void RecomputeScrubMarkers()
     {
         int    max = _toolpathScrubMax;
@@ -1740,6 +1857,22 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
+
+        var kf   = new List<double>();
+        var lane = new List<MassiveSlicer.Controls.KeyframeLaneItem>();
+        double Px(double i) => max > 0 ? ScrubThumbWidth / 2.0 + i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+        for (int j = 0; j < _scrubKeyframes.Length; j++)
+        {
+            var k = _scrubKeyframes[j];
+            kf.Add(Px(k.Index));
+            lane.Add(new MassiveSlicer.Controls.KeyframeLaneItem(
+                j, Px(k.Index),
+                Px(Math.Max(k.Index - k.InfL, 0)),
+                Px(Math.Min(k.Index + k.InfR, Math.Max(max, 1))),
+                j == _selectedKeyframeIdx));
+        }
+        ScrubKeyframeMarkers = kf;
+        KeyframeLaneItems    = lane;
     }
 
     public RelayCommand FocusCommand                { get; }
@@ -1805,6 +1938,134 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Callback set by the viewport code-behind to drop the selection to the bed.</summary>
     internal Action? OnDropToPlateRequested { get; set; }
 
+    // ── Model quick-transform (MODEL step card) ─────────────────────────────
+    private double _modelScale = 1.0;
+    private Vector3? _modelPivot;   // bottom-centre pivot, cached per selection
+
+    /// <summary>Uniform scale multiplier for the selected model (relative to selection time).</summary>
+    public double ModelScale
+    {
+        get => _modelScale;
+        set
+        {
+            value = Math.Clamp(value, 0.05, 10.0);
+            double ratio = value / _modelScale;
+            if (!SetField(ref _modelScale, value)) return;
+            if (Math.Abs(ratio - 1.0) > 1e-9) ScaleSelectedModel((float)ratio);
+        }
+    }
+
+    private void ResetModelTransformUi()
+    {
+        _modelScale = 1.0;
+        _modelPivot = null;
+        OnPropertyChanged(nameof(ModelScale));
+    }
+
+    private SceneNode? SelectedUserMesh()
+        => HasMeshSelected ? GetSelectedSceneNode?.Invoke() : null;
+
+    private Vector3? ComputeWorldPivot(SceneNode node)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            var positions = n.Mesh?.PickingData?.Positions ?? (n.PendingMesh?.Positions);
+            if (positions is null) continue;
+            var w = n.WorldTransform;
+            foreach (var lp in positions)
+            {
+                var p = OpenTK.Mathematics.Vector3.TransformPosition(lp, w);
+                min = Vector3.ComponentMin(min, p);
+                max = Vector3.ComponentMax(max, p);
+            }
+        }
+        if (min.X > max.X) return null;
+        return new Vector3((min.X + max.X) * 0.5f, (min.Y + max.Y) * 0.5f, min.Z);
+    }
+
+    /// <summary>Full bounding-box centre (mid Z, unlike <see cref="ComputeWorldPivot"/>
+    /// whose Z is the base). Used to spawn effector handles inside the model.</summary>
+    private Vector3? ComputeWorldCenter(SceneNode node)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            var positions = n.Mesh?.PickingData?.Positions ?? (n.PendingMesh?.Positions);
+            if (positions is null) continue;
+            var w = n.WorldTransform;
+            foreach (var lp in positions)
+            {
+                var p = OpenTK.Mathematics.Vector3.TransformPosition(lp, w);
+                min = Vector3.ComponentMin(min, p);
+                max = Vector3.ComponentMax(max, p);
+            }
+        }
+        if (min.X > max.X) return null;
+        return (min + max) * 0.5f;
+    }
+
+    private void ApplyWorldTransformToSelected(Matrix4 worldOp, bool dropAfter)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        node.LocalTransform = node.WorldTransform * worldOp * parentWorld.Inverted();
+        if (dropAfter)
+        {
+            _modelPivot = null;
+            OnDropToPlateRequested?.Invoke();
+        }
+        NotifyRenderNeeded();
+        OnModelGeometryChanged?.Invoke();
+    }
+
+    private void ScaleSelectedModel(float ratio)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        _modelPivot ??= ComputeWorldPivot(node);
+        if (_modelPivot is not { } pivot) return;
+        var op = Matrix4.CreateTranslation(-pivot)
+               * Matrix4.CreateScale(ratio)
+               * Matrix4.CreateTranslation(pivot);
+        ApplyWorldTransformToSelected(op, dropAfter: false);
+    }
+
+    private void RotateSelectedModel(Vector3 axis)
+    {
+        var node = SelectedUserMesh();
+        if (node is null) return;
+        var pivot = ComputeWorldPivot(node);
+        if (pivot is not { } c) return;
+        var centre = new Vector3(c.X, c.Y, c.Z);
+        var op = Matrix4.CreateTranslation(-centre)
+               * Matrix4.CreateFromAxisAngle(axis, MathF.PI / 2f)
+               * Matrix4.CreateTranslation(centre);
+        ApplyWorldTransformToSelected(op, dropAfter: true);
+    }
+
+    /// <summary>Rotates the selected model 90° about world X, then drops it to the plate.</summary>
+    public RelayCommand RotateModelXCommand => _rotateModelXCommand ??=
+        new RelayCommand(() => RotateSelectedModel(Vector3.UnitX));
+    private RelayCommand? _rotateModelXCommand;
+
+    /// <summary>Rotates the selected model 90° about world Y, then drops it to the plate.</summary>
+    public RelayCommand RotateModelYCommand => _rotateModelYCommand ??=
+        new RelayCommand(() => RotateSelectedModel(Vector3.UnitY));
+    private RelayCommand? _rotateModelYCommand;
+
+    /// <summary>Removes the selected model from the scene.</summary>
+    public RelayCommand ClearModelCommand => _clearModelCommand ??=
+        new RelayCommand(() =>
+        {
+            var node = SelectedUserMesh();
+            if (node is not null) RequestDeleteNode(node);
+        });
+    private RelayCommand? _clearModelCommand;
+
     internal Action? OnRecenterRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to ungroup the selection.</summary>
     internal Action? OnUngroupRequested { get; set; }
@@ -1814,6 +2075,534 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnMeshCleanupRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
+
+    // ── View pie menu (Ctrl+Space) ──────────────────────────────────────────
+    private bool _isViewPieOpen;
+    /// <summary>True while the Ctrl+Space view pie menu is showing.</summary>
+    public bool IsViewPieOpen
+    {
+        get => _isViewPieOpen;
+        set { if (SetField(ref _isViewPieOpen, value)) NotifyRenderNeeded(); }
+    }
+
+    private double _viewPieX, _viewPieY;
+    /// <summary>Pie menu centre (overlay coordinates, set from the pointer position).</summary>
+    public double ViewPieX { get => _viewPieX; set => SetField(ref _viewPieX, value); }
+    public double ViewPieY { get => _viewPieY; set => SetField(ref _viewPieY, value); }
+
+    /// <summary>Applies a named camera preset (Top/Bottom/Left/Right/Front/Back/Iso/Frame).</summary>
+    internal Action<string>? OnViewPresetRequested { get; set; }
+
+    /// <summary>Pie menu selection: applies the preset and closes the pie.</summary>
+    public RelayCommand<string> SelectViewPresetCommand => _selectViewPresetCommand ??=
+        new RelayCommand<string>(name =>
+        {
+            IsViewPieOpen = false;
+            if (name is not null) OnViewPresetRequested?.Invoke(name);
+        });
+    private RelayCommand<string>? _selectViewPresetCommand;
+
+    // ── View mode (Body / Toolpath / Both) ─────────────────────────────────
+    private string _viewMode = "Body";
+
+    /// <summary>Viewport content mode: Body, Toolpath, Speed, RPM, Preview (mesh + paths).</summary>
+    public string ViewMode
+    {
+        get => _viewMode;
+        set
+        {
+            if (!SetField(ref _viewMode, value)) return;
+            ApplyViewMode();
+            ApplyViewDisplayProfile();
+            if (value != "Toolpath") StopSimTimeline();
+            OnPropertyChanged(nameof(IsToolpathViewActive));
+            OnPropertyChanged(nameof(ShowSimTimeline));
+            OnPropertyChanged(nameof(ShowPlaybackTimeline));
+        }
+    }
+
+    public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
+        new RelayCommand<string>(m => ViewMode = m ?? "Body");
+    private RelayCommand<string>? _setViewModeCommand;
+
+    // ── Simulate timeline (Toolpath view): sweep the whole path in 6 s ─────
+    private const double SimDurationSeconds = 6.0;
+    private double _simTimelinePercent = 100.0;
+    private bool   _simPlaying;
+    private long   _simLastTickMs;
+    private Avalonia.Threading.DispatcherTimer? _simTimer;
+
+    public bool IsToolpathViewActive => _viewMode == "Toolpath";
+
+    /// <summary>The simplified bar is the Toolpath view's timeline.</summary>
+    public bool ShowSimTimeline => IsToolpathViewActive;
+
+    /// <summary>The full playback/keyframe timeline lives on the Preview view only.</summary>
+    public bool ShowPlaybackTimeline => _isScrubSessionActive && _viewMode == "Preview";
+
+    /// <summary>Timeline position, 0–100 %. 100 = full toolpath drawn.</summary>
+    public double SimTimelinePercent
+    {
+        get => _simTimelinePercent;
+        set
+        {
+            if (SetField(ref _simTimelinePercent, Math.Clamp(value, 0.0, 100.0)))
+            {
+                OnPropertyChanged(nameof(SimTimelineLabel));
+                if (ShowSimTimeline)
+                    OnSimScrubRequested?.Invoke(_simTimelinePercent / 100.0);
+                NotifyRenderNeeded();
+            }
+        }
+    }
+
+    public string SimTimelineLabel => $"{_simTimelinePercent:0}%";
+
+    public bool SimPlaying
+    {
+        get => _simPlaying;
+        private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
+    }
+
+    /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
+    internal Action<double>? OnSimScrubRequested { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: record the 6 s simulation to a video.</summary>
+    internal Action? OnSimVideoExportRequested { get; set; }
+
+    private bool _simRecording;
+
+    /// <summary>True while the simulation video is being captured/encoded.</summary>
+    public bool SimRecording
+    {
+        get => _simRecording;
+        internal set => SetField(ref _simRecording, value);
+    }
+
+    public RelayCommand SimExportVideoCommand => _simExportVideoCommand ??= new RelayCommand(() =>
+    {
+        if (_simRecording) return;
+        StopSimTimeline();
+        OnSimVideoExportRequested?.Invoke();
+    });
+    private RelayCommand? _simExportVideoCommand;
+
+    /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
+    /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
+    internal float SimRenderProgress
+    {
+        get
+        {
+            if (_simRecording || ShowSimTimeline) return (float)(_simTimelinePercent / 100.0);
+            if (_viewMode == "Preview" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
+                return (float)_toolpathScrubIndex / _toolpathScrubMax;
+            return -1f;
+        }
+    }
+
+    public RelayCommand SimPlayPauseCommand => _simPlayPauseCommand ??= new RelayCommand(() =>
+    {
+        if (_simPlaying) { StopSimTimeline(); return; }
+        if (_simTimelinePercent >= 100.0) SimTimelinePercent = 0.0;
+        _simTimer ??= CreateSimTimer();
+        _simLastTickMs = Environment.TickCount64;
+        SimPlaying = true;
+        _simTimer.Start();
+    });
+    private RelayCommand? _simPlayPauseCommand;
+
+    public RelayCommand SimResetCommand => _simResetCommand ??= new RelayCommand(() =>
+    {
+        StopSimTimeline();
+        SimTimelinePercent = 0.0;
+    });
+    private RelayCommand? _simResetCommand;
+
+    private Avalonia.Threading.DispatcherTimer CreateSimTimer()
+    {
+        var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        t.Tick += (_, _) =>
+        {
+            long now = Environment.TickCount64;
+            double dt = (now - _simLastTickMs) / 1000.0;
+            _simLastTickMs = now;
+            SimTimelinePercent = _simTimelinePercent + dt / SimDurationSeconds * 100.0;
+            if (_simTimelinePercent >= 100.0) StopSimTimeline();
+        };
+        return t;
+    }
+
+    private void StopSimTimeline()
+    {
+        _simTimer?.Stop();
+        SimPlaying = false;
+    }
+
+    /// <summary>Extrude-line colour mode implied by the view mode (drained by the GL loop).</summary>
+    public MassiveSlicer.Viewport.Rendering.ToolpathColorMode ToolpathColorMode => _viewMode switch
+    {
+        "Speed" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Speed,
+        "RPM"   => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Rpm,
+        _       => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Normal,
+    };
+
+    /// <summary>Applies the view mode to every user model and its toolpath children.</summary>
+    internal void ApplyViewMode()
+    {
+        bool showBody = _viewMode == "Body";
+        bool showPath = _viewMode != "Body";
+
+        // Per-mode toolpath render presets (users can still override in VISIBILITY):
+        // Preview = printed-part look (bead surface only); Speed/RPM = clean gradient
+        // lines; Toolpath = classic extrusion + travel lines.
+        switch (_viewMode)
+        {
+            case "Preview":
+                ShowBead = true;  ShowExtrusionMoves = false; ShowTravelMoves = false; ShowSeam = false;
+                break;
+            case "Speed":
+            case "RPM":
+                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
+                break;
+            case "Toolpath":
+                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = true;
+                break;
+        }
+        foreach (var item in EnumerateUserModelItems().ToList())
+        {
+            if (item.Visible != showBody) item.Visible = showBody;
+            foreach (var child in item.Children)
+                if (child.IsToolpath && child.Visible != showPath)
+                    child.Visible = showPath;
+        }
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Raised whenever model geometry/placement changes (import, scale, rotate) —
+    /// drives the realtime re-slice.</summary>
+    internal Action? OnModelGeometryChanged { get; set; }
+
+    private bool _realtimeSlicingPaused;
+
+    /// <summary>Holds off realtime re-slicing while the user batches up changes;
+    /// releasing the pause runs one re-slice if anything changed meanwhile.</summary>
+    public bool RealtimeSlicingPaused
+    {
+        get => _realtimeSlicingPaused;
+        set => SetField(ref _realtimeSlicingPaused, value);
+    }
+
+    // ── Per-view display profiles ───────────────────────────────────────────
+    // Each view pill (Body/Toolpath/Speed/RPM/Preview) keeps its own viewport
+    // display settings; changing a tracked setting saves into the active view's
+    // profile, and switching views applies that view's profile.
+
+    /// <summary>Display settings remembered per view mode.</summary>
+    public sealed class ViewDisplayProfile
+    {
+        public bool ShowGrid { get; set; } = true;
+        public bool ShowAxes { get; set; } = true;
+        public bool ShowBedGrid { get; set; } = true;
+        public bool ShowContactShadows { get; set; } = true;
+        public bool ShowTcpFrame { get; set; } = true;
+        public bool CavityEnabled { get; set; }
+        public bool DarkBackground { get; set; }
+        public string ShaderMode { get; set; } = "Standard";
+        public float BackdropOpacity { get; set; } = 1f;
+        public float BackdropBlur { get; set; } = 2.5f;
+        public float ToolpathLineOpacity { get; set; } = 1f;
+    }
+
+    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
+    private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
+    private bool _applyingViewProfile;
+
+    private static Dictionary<string, ViewDisplayProfile> BuildDefaultProfiles()
+    {
+        var d = new Dictionary<string, ViewDisplayProfile>();
+        foreach (var m in ViewModeNames)
+        {
+            bool lineView = m is "Toolpath" or "Speed" or "RPM";
+            d[m] = lineView
+                ? new ViewDisplayProfile
+                {
+                    ShowGrid = false, ShowAxes = false, ShowBedGrid = false,
+                    ShowContactShadows = false, CavityEnabled = false,
+                    DarkBackground = true, ShaderMode = "MatteBlack",
+                    BackdropOpacity = 0.15f,
+                }
+                : new ViewDisplayProfile();
+        }
+        return d;
+    }
+
+    private bool _darkViewportBackground;
+    /// <summary>Flat near-black viewport background (per-view profile setting).</summary>
+    public bool DarkViewportBackground
+    {
+        get => _darkViewportBackground;
+        set { if (SetField(ref _darkViewportBackground, value)) NotifyRenderNeeded(); }
+    }
+
+    private static readonly HashSet<string> ProfileTrackedProps =
+    [
+        nameof(ShowGrid), nameof(ShowAxes), nameof(ShowBedGrid),
+        nameof(ShowContactShadows), nameof(ShowTcpFrame), nameof(CavityEnabled),
+        nameof(DarkViewportBackground), nameof(ActiveShaderMode),
+        nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
+    ];
+
+    /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
+    private void WireViewProfileTracking()
+    {
+        PropertyChanged += (_, e) =>
+        {
+            if (_applyingViewProfile || e.PropertyName is not { } name || !ProfileTrackedProps.Contains(name))
+                return;
+            if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+            prof.ShowGrid           = ShowGrid;
+            prof.ShowAxes           = ShowAxes;
+            prof.ShowBedGrid        = ShowBedGrid;
+            prof.ShowContactShadows = ShowContactShadows;
+            prof.ShowTcpFrame       = ShowTcpFrame;
+            prof.CavityEnabled      = CavityEnabled;
+            prof.DarkBackground     = DarkViewportBackground;
+            prof.ShaderMode         = ActiveShaderMode.ToString();
+            prof.BackdropOpacity    = BackdropOpacity;
+            prof.BackdropBlur       = BackdropBlur;
+            prof.ToolpathLineOpacity = ToolpathLineOpacity;
+        };
+    }
+
+    /// <summary>Applies the active view mode's display profile to the viewport.</summary>
+    internal void ApplyViewDisplayProfile()
+    {
+        if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+        _applyingViewProfile = true;
+        try
+        {
+            ShowGrid           = prof.ShowGrid;
+            ShowAxes           = prof.ShowAxes;
+            ShowBedGrid        = prof.ShowBedGrid;
+            ShowContactShadows = prof.ShowContactShadows;
+            ShowTcpFrame       = prof.ShowTcpFrame;
+            CavityEnabled      = prof.CavityEnabled;
+            DarkViewportBackground = prof.DarkBackground;
+            BackdropOpacity    = prof.BackdropOpacity;
+            BackdropBlur       = prof.BackdropBlur;
+            ToolpathLineOpacity = prof.ToolpathLineOpacity;
+            if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
+                ActiveShaderMode = sm;
+        }
+        finally { _applyingViewProfile = false; }
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Round-trips all profiles as JSON for app preferences.</summary>
+    public string SerializeViewProfiles()
+        => System.Text.Json.JsonSerializer.Serialize(_viewProfiles);
+
+    public void LoadViewProfiles(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) { ApplyViewDisplayProfile(); return; }
+        try
+        {
+            var loaded = System.Text.Json.JsonSerializer
+                .Deserialize<Dictionary<string, ViewDisplayProfile>>(json);
+            if (loaded is not null)
+                foreach (var (k, v) in loaded)
+                    if (_viewProfiles.ContainsKey(k)) _viewProfiles[k] = v;
+        }
+        catch { /* corrupt prefs — keep defaults */ }
+        ApplyViewDisplayProfile();
+    }
+
+    // ── Live effector handles (glowing draggable points, up to 3) ──────────
+    private readonly SceneNode?[] _effectorNodes = new SceneNode?[3];
+    private readonly OutlinerItemViewModel?[] _effectorItems = new OutlinerItemViewModel?[3];
+
+    public bool EffectorPoint1Active => _effectorNodes[0] is not null;
+    public bool EffectorPoint2Active => _effectorNodes[1] is not null;
+    public bool EffectorPoint3Active => _effectorNodes[2] is not null;
+
+    public RelayCommand<string> ToggleEffectorPointCommand => _toggleEffectorPointCommand ??=
+        new RelayCommand<string>(idxStr =>
+        {
+            if (!int.TryParse(idxStr, out int n) || n < 1 || n > 3) return;
+            int i = n - 1;
+            if (_effectorNodes[i] is { } existing)
+            {
+                RequestDeleteNode(existing);
+                _effectorNodes[i] = null;
+                _effectorItems[i] = null;
+            }
+            else
+            {
+                var node = BuildEffectorNode(n);
+                PendingNodes.Enqueue(node);
+                var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
+                {
+                    OutlinerItems.Remove(it);
+                    PendingRemoveNodes.Enqueue(it.Node);
+                    int slot = Array.IndexOf(_effectorNodes, it.Node);
+                    if (slot >= 0) { _effectorNodes[slot] = null; _effectorItems[slot] = null; NotifyEffectorPoints(); }
+                    NotifyRenderNeeded();
+                }, null, $"Effector {n}", canDelete: true)
+                { IsEffector = true };
+                OutlinerItems.Add(item);
+                _effectorNodes[i] = node;
+                _effectorItems[i] = item;
+            }
+            NotifyEffectorPoints();
+            OnModelGeometryChanged?.Invoke();
+        });
+    private RelayCommand<string>? _toggleEffectorPointCommand;
+
+    void NotifyEffectorPoints()
+    {
+        OnPropertyChanged(nameof(EffectorPoint1Active));
+        OnPropertyChanged(nameof(EffectorPoint2Active));
+        OnPropertyChanged(nameof(EffectorPoint3Active));
+    }
+
+    /// <summary>World positions of the active effector handles (for the slicer).</summary>
+    internal List<System.Numerics.Vector3> GetActiveEffectorPositions()
+    {
+        var list = new List<System.Numerics.Vector3>();
+        foreach (var node in _effectorNodes)
+        {
+            if (node is null) continue;
+            var w = node.WorldTransform;
+            list.Add(new System.Numerics.Vector3(w.M41, w.M42, w.M43));
+        }
+        return list;
+    }
+
+    private static (OpenTK.Mathematics.Vector3[] Pos, OpenTK.Mathematics.Vector3[] Nrm, uint[] Idx)
+        BuildSphereGeometry(float r, int seg = 18, int rings = 12)
+    {
+        var positions = new List<OpenTK.Mathematics.Vector3>();
+        var normals   = new List<OpenTK.Mathematics.Vector3>();
+        var indices   = new List<uint>();
+        for (int ri = 0; ri <= rings; ri++)
+        {
+            float v = ri / (float)rings * MathF.PI;
+            for (int si = 0; si <= seg; si++)
+            {
+                float u = si / (float)seg * 2f * MathF.PI;
+                var nrm = new OpenTK.Mathematics.Vector3(
+                    MathF.Sin(v) * MathF.Cos(u), MathF.Sin(v) * MathF.Sin(u), MathF.Cos(v));
+                positions.Add(nrm * r);
+                normals.Add(nrm);
+            }
+        }
+        for (int ri = 0; ri < rings; ri++)
+            for (int si = 0; si < seg; si++)
+            {
+                uint a = (uint)(ri * (seg + 1) + si);
+                uint b = (uint)(a + seg + 1);
+                indices.AddRange([a, b, a + 1, a + 1, b, b + 1]);
+            }
+        return (positions.ToArray(), normals.ToArray(), indices.ToArray());
+    }
+
+    private static readonly OpenTK.Mathematics.Vector3 EffectorLime = new(0.64f, 0.87f, 0.22f);
+
+    /// <summary>Glowing lime sphere handle, spawned near the active model (or bed centre).</summary>
+    private SceneNode BuildEffectorNode(int number)
+    {
+        var core = BuildSphereGeometry(40f);
+        var mesh = new MeshData(core.Pos, core.Nrm, core.Idx,
+            $"Effector {number}",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 1f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 1f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                // Self-lit so the handle reads as a luminous point in every shader/view.
+                EmissiveFactor  = EffectorLime * 1.1f,
+            });
+
+        // Spawn at the model's bounding-box centre (even when the body is hidden by a
+        // line view), else above the print bed's centre, else a bed-ish default.
+        var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
+        var model = ResolveActivePrintObjectItem() ?? EnumerateUserModelItems().FirstOrDefault();
+        if (model is not null && ComputeWorldCenter(model.Node) is { } centre)
+            spawn = centre;
+        else if (ComputeBedCenter() is { } bedCentre)
+            spawn = bedCentre;
+
+        var node = new SceneNode
+        {
+            Name            = $"Effector {number}",
+            PendingMesh     = mesh,
+            Selectable      = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateTranslation(spawn),
+        };
+
+        // Soft glow shell visualising the influence radius (Range slider, mm).
+        var shell = BuildSphereGeometry(1f, seg: 36, rings: 24);
+        var glowMesh = new MeshData(shell.Pos, shell.Nrm, shell.Idx,
+            $"Effector {number} Range",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.10f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.10f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                EmissiveFactor  = EffectorLime * 0.35f,
+                AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
+            });
+        float range = (float)(AdditiveSettings?.EffectorRange ?? 400.0);
+        node.AddChild(new SceneNode
+        {
+            Name            = $"Effector {number} Range",
+            PendingMesh     = glowMesh,
+            Selectable      = false,
+            PickIgnore      = true,
+            TranslucentPass = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f)),
+        });
+        return node;
+    }
+
+    /// <summary>Centre of the print bed, hovered 400 mm above its surface.</summary>
+    private OpenTK.Mathematics.Vector3? ComputeBedCenter()
+    {
+        var bedItem = _cellEnvOutlinerItems.FirstOrDefault(i => i.Name == "Print Bed");
+        if (bedItem?.Node is { } bed && ComputeWorldCenter(bed) is { } c)
+            return new OpenTK.Mathematics.Vector3(c.X, c.Y, c.Z + 400f);
+        return null;
+    }
+
+    /// <summary>Rescales every effector's glow shell to the current Range (mm).</summary>
+    internal void UpdateEffectorRangeIndicators(float rangeMm)
+    {
+        float scale = MathF.Max(rangeMm, 1f);
+        foreach (var node in _effectorNodes)
+        {
+            if (node is null) continue;
+            foreach (var child in node.Children)
+                if (child.TranslucentPass)
+                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(scale);
+        }
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Fits the whole scene in view (viewport top-right icon).</summary>
+    public RelayCommand FrameAllCommand => _frameAllCommand ??=
+        new RelayCommand(() => OnFrameAllRequested?.Invoke());
+    private RelayCommand? _frameAllCommand;
+
+    /// <summary>Dismisses the pie menu without selecting.</summary>
+    public RelayCommand CloseViewPieCommand => _closeViewPieCommand ??=
+        new RelayCommand(() => IsViewPieOpen = false);
+    private RelayCommand? _closeViewPieCommand;
     /// <summary>Callback (wired by MainWindowViewModel) to save the current camera view to the active cell.</summary>
     internal Action? OnSaveViewRequested    { get; set; }
     /// <summary>Callback set by the viewport code-behind when dev-mode toggles.</summary>
@@ -1832,6 +2621,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public ViewportViewModel()
     {
+        WireViewProfileTracking();
         LiveIo.ExpandedChanged += () =>
         {
             OnPropertyChanged(nameof(Lfam3WorkflowMargin));
@@ -2698,6 +3488,7 @@ public sealed class ViewportViewModel : ViewModelBase
         if (pivot is null) return;
         // The group itself isn't deletable; visibility toggling falls through to the pivot node.
         _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+        _rotaryGroupItem.IsLocked = true;
         OutlinerItems.Add(_rotaryGroupItem);
     }
 
@@ -2728,21 +3519,33 @@ public sealed class ViewportViewModel : ViewModelBase
                 toolName,
                 canDelete: false,
                 usesExclusiveVisibility: true);
+            item.IsLocked = true;
             _toolheadGroupItem.AddChild(item);
             _toolheadOutlinerItems.Add(item);
             _toolheadNames[item] = toolName;
         }
 
-        int insertAt = _robotGroupItem is not null
-            ? OutlinerItems.IndexOf(_robotGroupItem) + 1
-            : OutlinerItems.Count;
-        OutlinerItems.Insert(insertAt, _toolheadGroupItem);
+        if (_robotArmItem is not null)
+        {
+            // Chain: Robot Root -> Pedestal -> Robot Arm -> Toolheads.
+            _robotArmItem.AddChild(_toolheadGroupItem);
+        }
+        else
+        {
+            int insertAt = _robotGroupItem is not null
+                ? OutlinerItems.IndexOf(_robotGroupItem) + 1
+                : OutlinerItems.Count;
+            OutlinerItems.Insert(insertAt, _toolheadGroupItem);
+        }
     }
 
     void ClearMultiToolOutliner()
     {
         if (_toolheadGroupItem is not null)
+        {
             OutlinerItems.Remove(_toolheadGroupItem);
+            _robotArmItem?.RemoveChild(_toolheadGroupItem);
+        }
         _toolheadGroupItem = null;
         _toolheadOutlinerItems.Clear();
         _toolheadNames.Clear();
@@ -2774,13 +3577,16 @@ public sealed class ViewportViewModel : ViewModelBase
 
         foreach (var (node, displayName) in entries)
         {
-            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false)
+            { IsLocked = true };
             OutlinerItems.Add(item);
             _cellEnvOutlinerItems.Add(item);
         }
     }
 
     private OutlinerItemViewModel? _robotGroupItem;
+    private OutlinerItemViewModel? _robotPedestalItem;
+    private OutlinerItemViewModel? _robotArmItem;
 
     /// <summary>
     /// Exposes the robot as a selectable outliner group "Robot Root" with "Robot Pedestal" and
@@ -2791,15 +3597,26 @@ public sealed class ViewportViewModel : ViewModelBase
     internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
     {
         if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        _robotPedestalItem = null;
+        _robotArmItem      = null;
         if (root is null) return;
 
         _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root", canDelete: false);
+        _robotGroupItem.IsLocked = true;
+        _robotGroupItem.IsExpanded = false;
         OutlinerItems.Add(_robotGroupItem);
 
         if (pedestal is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false));
+        {
+            _robotPedestalItem = new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false) { IsLocked = true };
+            _robotGroupItem.AddChild(_robotPedestalItem);
+        }
         if (arm is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false));
+        {
+            // Chain: Root -> Pedestal -> Arm (arm nests under the pedestal when present).
+            _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
+            (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
+        }
     }
 
     /// <summary>
@@ -3028,7 +3845,8 @@ public sealed class ViewportViewModel : ViewModelBase
         if (GetSelectedSceneNode?.Invoke() is { } selected)
         {
             var selectedItem = FindUserMeshOutlinerItem(selected);
-            if (selectedItem is not null && !OutlinerModelOps.IsScanItem(selectedItem))
+            if (selectedItem is not null && !selectedItem.IsEffector
+                && !OutlinerModelOps.IsScanItem(selectedItem))
                 return selectedItem;
         }
 
@@ -3068,7 +3886,11 @@ public sealed class ViewportViewModel : ViewModelBase
     /// toolpath generation); otherwise it falls back to <see cref="AddUserNode"/>.
     /// Must be called on the UI thread.
     /// </summary>
-    public void AddImportNode(SceneNode node) => AddRotaryBedChildNode(node);
+    public void AddImportNode(SceneNode node)
+    {
+        AddRotaryBedChildNode(node);
+        OnModelGeometryChanged?.Invoke();
+    }
 
     private void AddRotaryBedChildNode(SceneNode node, OutlinerItemViewModel? adoptToolpathsFrom = null)
     {
@@ -3105,6 +3927,32 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Maps any outliner item to the user model that owns it: toolpath children resolve
+    /// to their parent model, model items return themselves.
+    /// </summary>
+    internal OutlinerItemViewModel? OwningModelItem(OutlinerItemViewModel? item)
+    {
+        if (item is null) return null;
+        if (!item.IsToolpath) return item;
+        return EnumerateUserModelItems().FirstOrDefault(m => m.Children.Contains(item));
+    }
+
+    /// <summary>True when the outliner row backing <paramref name="node"/> is locked.</summary>
+    internal bool IsNodeLockedInOutliner(SceneNode node)
+    {
+        bool Search(IEnumerable<OutlinerItemViewModel> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Node == node) return item.IsLocked;
+                if (Search(item.Children)) return true;
+            }
+            return false;
+        }
+        return Search(OutlinerItems);
+    }
+
     /// <summary>Yields outliner entries for user-imported print models (excludes scans).</summary>
     internal IEnumerable<OutlinerItemViewModel> EnumerateUserModelItems()
     {
@@ -3114,7 +3962,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 foreach (var child in item.Children)
                 {
-                    if (!OutlinerModelOps.IsScanItem(child))
+                    if (!OutlinerModelOps.IsScanItem(child) && !child.IsEffector)
                         yield return child;
                 }
                 continue;
@@ -3122,6 +3970,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (item == _robotGroupItem) continue;
             if (item == _toolheadGroupItem) continue;
             if (_cellEnvOutlinerItems.Contains(item)) continue;
+            if (item.IsEffector) continue;
             if (!OutlinerModelOps.IsScanItem(item))
                 yield return item;
         }
@@ -3501,6 +4350,7 @@ public sealed class ViewportViewModel : ViewModelBase
             PendingRemoveNodes.Enqueue(child.Node);
             NotifyRenderNeeded();
         }, () => OnNodeHidden?.Invoke(toolpathNode), modelFileOps: true);
+        item.IsToolpath = true;
 
         if (parentItem is not null)
             parentItem.AddChild(item);

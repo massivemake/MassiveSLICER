@@ -21,6 +21,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
+        SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
@@ -322,6 +323,91 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _passAngle;
         set => SetField(ref _passAngle, value);
     }
+
+    // ── Live effector ──────────────────────────────────────────────────────
+    private bool _effectorEnabled;
+    /// <summary>Master toggle for the live effector points.</summary>
+    public bool EffectorEnabled
+    {
+        get => _effectorEnabled;
+        set => SetField(ref _effectorEnabled, value);
+    }
+
+    private double _effectorRange = 400.0;
+    /// <summary>Effector influence radius (mm).</summary>
+    public double EffectorRange
+    {
+        get => _effectorRange;
+        set => SetField(ref _effectorRange, Math.Clamp(value, 10.0, 3000.0));
+    }
+
+    private double _effectorStrength = 30.0;
+    /// <summary>Amplitude boost at the effector centre (mm).</summary>
+    public double EffectorStrength
+    {
+        get => _effectorStrength;
+        set => SetField(ref _effectorStrength, Math.Clamp(value, 0.0, 200.0));
+    }
+
+    // ── Pattern & texture (effector port) ─────────────────────────────────
+    private string _patternType = "Smooth";
+    /// <summary>Selected decorative pattern name (matches Core PatternType).</summary>
+    public string PatternType
+    {
+        get => _patternType;
+        set => SetField(ref _patternType, value);
+    }
+
+    private double _patternAmplitude;
+    /// <summary>Pattern relief depth in mm (0 = off).</summary>
+    public double PatternAmplitude
+    {
+        get => _patternAmplitude;
+        set => SetField(ref _patternAmplitude, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _patternFrequency = 15.0;
+    /// <summary>Pattern repetitions around the part.</summary>
+    public double PatternFrequency
+    {
+        get => _patternFrequency;
+        set => SetField(ref _patternFrequency, Math.Clamp(value, 1.0, 120.0));
+    }
+
+    private double _patternTwist;
+    /// <summary>Pattern twist in degrees per mm of height.</summary>
+    public double PatternTwist
+    {
+        get => _patternTwist;
+        set => SetField(ref _patternTwist, Math.Clamp(value, -5.0, 5.0));
+    }
+
+    private double _patternOffset;
+    /// <summary>Pattern phase offset in degrees.</summary>
+    public double PatternOffset
+    {
+        get => _patternOffset;
+        set => SetField(ref _patternOffset, Math.Clamp(value, 0.0, 360.0));
+    }
+
+    private double _patternFadeIn;
+    /// <summary>Pattern ease-in from the bottom (mm).</summary>
+    public double PatternFadeIn
+    {
+        get => _patternFadeIn;
+        set => SetField(ref _patternFadeIn, Math.Clamp(value, 0.0, 2000.0));
+    }
+
+    private double _patternFadeOut;
+    /// <summary>Pattern ease-out to the top (mm).</summary>
+    public double PatternFadeOut
+    {
+        get => _patternFadeOut;
+        set => SetField(ref _patternFadeOut, Math.Clamp(value, 0.0, 2000.0));
+    }
+
+    /// <summary>Selects a pattern tile.</summary>
+    public RelayCommand<string> SetPatternCommand { get; private set; } = null!;
 
     private double _tiltAngle;
 

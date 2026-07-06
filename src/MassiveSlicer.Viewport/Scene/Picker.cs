@@ -33,6 +33,7 @@ public static class Picker
 
         foreach (var node in root.SelfAndDescendants())
         {
+            if (node.PickIgnore) continue;
             if (node.Mesh?.PickingData is not { } mesh) continue;
             if (FindSelectableRoot(node) is not { } selectable) continue;
             if (!acceptSelectable(selectable)) continue;
@@ -181,6 +182,7 @@ public static class Picker
 
         foreach (var node in root.SelfAndDescendants())
         {
+            if (node.PickIgnore) continue;
             if (node.Mesh?.PickingData is not { } mesh) continue;
             if (FindSelectableRoot(node) is not { } selectable) continue;
 

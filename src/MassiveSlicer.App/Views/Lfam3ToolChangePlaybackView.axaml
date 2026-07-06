@@ -50,11 +50,11 @@
 
         <StackPanel Orientation="Horizontal" Spacing="16">
             <StackPanel Orientation="Horizontal" Spacing="4">
-                <Border Width="14" Height="2" Background="#59FF0D" VerticalAlignment="Center" CornerRadius="1"/>
+                <Border Width="14" Height="2" Background="#59FF0D" VerticalAlignment="Center" CornerRadius="5"/>
                 <TextBlock Text="LIN" Classes="Lfam3SeqLegendLin" FontSize="9"/>
             </StackPanel>
             <StackPanel Orientation="Horizontal" Spacing="4">
-                <Border Width="14" Height="2" Background="#f59e0b" VerticalAlignment="Center" CornerRadius="1"/>
+                <Border Width="14" Height="2" Background="#f59e0b" VerticalAlignment="Center" CornerRadius="5"/>
                 <TextBlock Text="PTP" Classes="Lfam3SeqLegendPtp" FontSize="9"/>
             </StackPanel>
         </StackPanel>

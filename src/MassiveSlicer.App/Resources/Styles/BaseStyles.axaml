@@ -2,6 +2,68 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:ia="https://github.com/projektanker/icons.avalonia">
 
+    <!-- ── App typography: SF Pro (embedded) — inherits everywhere; icon controls
+         override with their own glyph font. ─────────────────────────────────── -->
+    <Style Selector=":is(TopLevel)">
+        <Setter Property="FontFamily" Value="avares://MassiveSlicer.App/Assets/Fonts#SF Pro Display"/>
+    </Style>
+
+    <!-- Progress bars: 5px rounded track + indicator -->
+    <Style Selector="ProgressBar">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ProgressBar /template/ Border">
+        <Setter Property="CornerRadius" Value="5"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+
+    <!-- Item highlights: rounded (5px floor) -->
+    <Style Selector="MenuItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="MenuItem /template/ Border">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ComboBoxItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ComboBoxItem /template/ ContentPresenter">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ListBoxItem">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ListBoxItem /template/ ContentPresenter">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+
+    <!-- Menu popups: rounded like the rest of the chrome -->
+    <Style Selector="MenuItem /template/ Popup Border">
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+    </Style>
+    <Style Selector="ContextMenu">
+        <Setter Property="CornerRadius" Value="8"/>
+    </Style>
+    <Style Selector="ContextMenu /template/ Border">
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="ClipToBounds" Value="True"/>
+    </Style>
+
+    <!-- Text inputs: 5px rounded corners app-wide -->
+    <Style Selector="TextBox">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="NumericUpDown">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+    <Style Selector="ComboBox">
+        <Setter Property="CornerRadius" Value="5"/>
+    </Style>
+
+
     <!-- ── TextBlock ──────────────────────────────────────────────────────── -->
     <Style Selector="TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
@@ -936,7 +998,7 @@
         <Setter Property="Template">
             <ControlTemplate>
                 <StackPanel>
-                    <ToggleButton Name="PART_toggle"
+                    <ToggleButton Name="HeaderToggle"
                                   IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
                                   HorizontalAlignment="Stretch"
                                   HorizontalContentAlignment="Stretch"
@@ -945,12 +1007,14 @@
                                   Padding="8,8,8,6"
                                   Cursor="Hand">
                         <Grid ColumnDefinitions="*,14">
-                            <TextBlock Grid.Column="0"
-                                       Text="{TemplateBinding Header}"
-                                       Foreground="{DynamicResource TextSecondary}"
-                                       FontSize="11"
-                                       FontWeight="SemiBold"
-                                       VerticalAlignment="Center"/>
+                            <!-- ContentPresenter so headers can be rich content (step badges),
+                                 while plain string headers keep the same text styling. -->
+                            <ContentPresenter Grid.Column="0"
+                                              Content="{TemplateBinding Header}"
+                                              Foreground="{DynamicResource TextSecondary}"
+                                              FontSize="11"
+                                              FontWeight="SemiBold"
+                                              VerticalAlignment="Center"/>
                             <TextBlock Name="Chevron"
                                        Grid.Column="1"
                                        Text="›"
@@ -966,11 +1030,218 @@
                                       Content="{TemplateBinding Content}"
                                       ContentTemplate="{TemplateBinding ContentTemplate}"
                                       HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
-                                      IsVisible="{Binding #PART_toggle.IsChecked}"/>
+                                      IsVisible="{Binding #HeaderToggle.IsChecked}"/>
                 </StackPanel>
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- Floating: macOS-style overlay scrolling — the scrollbar floats over the
+         content's right edge instead of reserving layout space, so floating cards
+         keep their width when it appears. Fully retemplated: rounded translucent
+         thumb, no track, no arrows. -->
+    <Style Selector="ScrollViewer.Floating">
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Grid>
+                    <ScrollContentPresenter Name="PART_ContentPresenter"
+                                            Background="{TemplateBinding Background}"
+                                            Padding="{TemplateBinding Padding}"/>
+                    <ScrollBar Name="PART_VerticalScrollBar"
+                               Orientation="Vertical"
+                               HorizontalAlignment="Right"/>
+                </Grid>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar">
+        <Setter Property="Width" Value="9"/>
+        <Setter Property="Margin" Value="0,4,0,4"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Opacity" Value="0.85"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="Transparent" Padding="1,2,0,2">
+                    <Track Minimum="{TemplateBinding Minimum}"
+                           Maximum="{TemplateBinding Maximum}"
+                           Value="{TemplateBinding Value, Mode=TwoWay}"
+                           ViewportSize="{TemplateBinding ViewportSize}"
+                           Orientation="Vertical"
+                           IsDirectionReversed="True">
+                        <Track.DecreaseButton>
+                            <RepeatButton Opacity="0" Focusable="False" MinWidth="0" MinHeight="0"
+                                          Padding="0" BorderThickness="0" Background="Transparent"/>
+                        </Track.DecreaseButton>
+                        <Track.IncreaseButton>
+                            <RepeatButton Opacity="0" Focusable="False" MinWidth="0" MinHeight="0"
+                                          Padding="0" BorderThickness="0" Background="Transparent"/>
+                        </Track.IncreaseButton>
+                        <Track.Thumb>
+                            <Thumb MinHeight="44">
+                                <Thumb.Template>
+                                    <ControlTemplate>
+                                        <Border Background="#4D000000" CornerRadius="4"/>
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                    </Track>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="ScrollViewer.Floating /template/ ScrollBar#PART_VerticalScrollBar:pointerover">
+        <Setter Property="Opacity" Value="1"/>
+    </Style>
+
+    <!-- ViewPill: viewport view-mode selector (Body / Toolpath / Speed / RPM / Preview) -->
+    <Style Selector="Button.ViewPill">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="4"/>
+        <Setter Property="Padding" Value="12,4"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+    </Style>
+    <Style Selector="Button.ViewPill:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+    </Style>
+    <Style Selector="Button.ViewPill.active">
+        <Setter Property="Background" Value="#33409640"/>
+        <Setter Property="Foreground" Value="{DynamicResource AccentHover}"/>
+    </Style>
+
+    <!-- ExportCta: green call-to-action in the top bar -->
+    <Style Selector="Button.ExportCta">
+        <Setter Property="Background" Value="{DynamicResource Accent}"/>
+        <Setter Property="Foreground" Value="#111111"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="Button.ExportCta:pointerover">
+        <Setter Property="Background" Value="{DynamicResource AccentHover}"/>
+    </Style>
+    <Style Selector="Button.ExportCta:disabled">
+        <Setter Property="Opacity" Value="0.4"/>
+    </Style>
+
+    <!-- RealtimePause: top-bar toggle that holds off realtime re-slicing.
+         Light green while live; amber while paused so the held state is obvious. -->
+    <Style Selector="ToggleButton.RealtimePause">
+        <Setter Property="Background" Value="#7ed87e"/>
+        <Setter Property="Foreground" Value="#242424"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="10,4"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause /template/ ContentPresenter">
+        <Setter Property="TextElement.Foreground" Value="#242424"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="#93e493"/>
+        <Setter Property="TextElement.Foreground" Value="#242424"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:checked /template/ ContentPresenter">
+        <Setter Property="Background" Value="#d99a2b"/>
+        <Setter Property="TextElement.Foreground" Value="#242424"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:checked:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="#e8ab3c"/>
+        <Setter Property="TextElement.Foreground" Value="#242424"/>
+    </Style>
+
+    <!-- PieButton: Ctrl+Space view pie menu entries -->
+    <Style Selector="Button.PieButton">
+        <Setter Property="Background" Value="#E62e2e2e"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="Button.PieButton:pointerover">
+        <Setter Property="Background" Value="{DynamicResource Accent}"/>
+        <Setter Property="Foreground" Value="#111111"/>
+    </Style>
+
+    <!-- PatternTile: effector pattern-grid tile -->
+    <Style Selector="Button.PatternTile">
+        <Setter Property="Background" Value="#2e2e2e"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Margin" Value="2"/>
+        <Setter Property="Padding" Value="0,8"/>
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextMuted}"/>
+    </Style>
+    <Style Selector="Button.PatternTile:pointerover">
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+    </Style>
+    <Style Selector="Button.PatternTile.active">
+        <Setter Property="Foreground" Value="{DynamicResource Accent}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+        <Setter Property="Background" Value="#1a2e1a"/>
+    </Style>
+
+    <!-- StepCard: standalone rounded workflow-step card (MassiveCODE style) -->
+    <Style Selector="Expander.StepCard">
+        <Setter Property="HorizontalAlignment"        Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Padding"                    Value="0"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="#E6333333"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Margin="0,0,0,9"
+                        ClipToBounds="True">
+                    <StackPanel>
+                        <ToggleButton Name="HeaderToggle"
+                                      IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch"
+                                      HorizontalContentAlignment="Stretch"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Padding="10,10"
+                                      Cursor="Hand">
+                            <Grid ColumnDefinitions="*,14">
+                                <ContentPresenter Grid.Column="0"
+                                                  Content="{TemplateBinding Header}"
+                                                  Foreground="{DynamicResource TextSecondary}"
+                                                  FontSize="11"
+                                                  FontWeight="SemiBold"
+                                                  VerticalAlignment="Center"/>
+                                <TextBlock Name="Chevron"
+                                           Grid.Column="1"
+                                           Text="›"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontSize="14"
+                                           VerticalAlignment="Center"
+                                           HorizontalAlignment="Center"
+                                           RenderTransformOrigin="50%,50%"/>
+                            </Grid>
+                        </ToggleButton>
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          IsVisible="{Binding #HeaderToggle.IsChecked}"/>
+                    </StackPanel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="Expander.StepCard /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>
+    </Style>
+    <Style Selector="Expander.StepCard[IsExpanded=False] /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="0"/></Setter>
+    </Style>
+
     <!-- Chevron: right (0°) when collapsed, down (90°) when expanded -->
     <Style Selector="Expander.SectionExpander /template/ TextBlock#Chevron">
         <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>
@@ -979,17 +1250,17 @@
         <Setter Property="RenderTransform"><RotateTransform Angle="0"/></Setter>
     </Style>
     <!-- Suppress ToggleButton default hover/checked/pressed backgrounds -->
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle /template/ Border">
         <Setter Property="Background"      Value="Transparent"/>
         <Setter Property="BorderThickness" Value="0"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pointerover /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:pointerover /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:checked /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:checked /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
-    <Style Selector="Expander.SectionExpander /template/ ToggleButton#PART_toggle:pressed /template/ Border">
+    <Style Selector="Expander.SectionExpander /template/ ToggleButton#HeaderToggle:pressed /template/ Border">
         <Setter Property="Background" Value="Transparent"/>
     </Style>
 

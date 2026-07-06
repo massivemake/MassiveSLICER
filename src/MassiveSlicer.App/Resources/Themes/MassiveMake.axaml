@@ -1,0 +1,40 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- MassiveMAKE brand theme — neutral grayscale surfaces with the brand green accent.
+         Palette matches MassiveCODE: surfaces #2b2b2b→#4a4a4a, borders #575757/#6c6c6c,
+         text #acacac/#7c7c7c, accent #40b840 (hover #58cc58). -->
+
+    <!-- Backgrounds — neutral gray, darkest to lightest -->
+    <SolidColorBrush x:Key="Bg0" Color="#1b1b1b"/>
+    <SolidColorBrush x:Key="Bg1" Color="#222222"/>
+    <SolidColorBrush x:Key="Bg2" Color="#2b2b2b"/>
+    <SolidColorBrush x:Key="Bg3" Color="#333333"/>
+    <SolidColorBrush x:Key="Bg4" Color="#3f3f3f"/>
+
+    <!-- Borders -->
+    <SolidColorBrush x:Key="Border0" Color="#171717"/>
+    <SolidColorBrush x:Key="Border1" Color="#454545"/>
+    <SolidColorBrush x:Key="Border2" Color="#575757"/>
+
+    <!-- Text -->
+    <SolidColorBrush x:Key="TextPrimary"   Color="#e8e8e8"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#acacac"/>
+    <SolidColorBrush x:Key="TextMuted"     Color="#7c7c7c"/>
+    <SolidColorBrush x:Key="TextDisabled"  Color="#4a4a4a"/>
+
+    <!-- Accent — MassiveMAKE green -->
+    <SolidColorBrush x:Key="Accent"      Color="#40b840"/>
+    <SolidColorBrush x:Key="AccentHover" Color="#58cc58"/>
+    <SolidColorBrush x:Key="AccentMuted" Color="#1f5c1f"/>
+
+    <!-- Semantic status colours -->
+    <SolidColorBrush x:Key="ColorSuccess" Color="#40b840"/>
+    <SolidColorBrush x:Key="ColorWarning" Color="#ffd600"/>
+    <SolidColorBrush x:Key="ColorError"   Color="#ff4d4d"/>
+    <SolidColorBrush x:Key="ColorInfo"    Color="#4dc4ff"/>
+
+    <!-- Viewport clear colour -->
+    <SolidColorBrush x:Key="ViewportBackground" Color="#161616"/>
+
+</ResourceDictionary>

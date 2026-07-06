@@ -32,7 +32,7 @@ public sealed class AppPreferences
     // ── Appearance ────────────────────────────────────────────────────────
 
     /// <summary>Active colour theme name (matches a Resources/Themes/*.axaml file).</summary>
-    public string ActiveTheme { get; set; } = "Obsidian";
+    public string ActiveTheme { get; set; } = "MassiveMake";
 
     /// <summary>Path of the backdrop image loaded at startup, or null for none.</summary>
     public string? DefaultBackdropPath { get; set; }
@@ -76,6 +76,9 @@ public sealed class AppPreferences
 
     /// <summary>Active viewport shader mode name (matches ShaderMode enum).</summary>
     public string ShaderMode { get; set; } = "Standard";
+
+    /// <summary>Per-view-mode display profiles (JSON: Body/Toolpath/Speed/RPM/Preview).</summary>
+    public string? ViewModeProfiles { get; set; }
 
     /// <summary>Whether mesh edges are drawn over the shaded surface.</summary>
     public bool ShowEdges { get; set; } = false;

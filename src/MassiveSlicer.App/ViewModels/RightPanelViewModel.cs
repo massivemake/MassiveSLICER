@@ -84,6 +84,22 @@ public sealed class RightPanelViewModel : ViewModelBase
         ShowToolpathCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Toolpath);
     }
 
+    private bool _stepModelExpanded;
+    /// <summary>Step 1 MODEL card expansion (auto-opened on import).</summary>
+    public bool StepModelExpanded
+    {
+        get => _stepModelExpanded;
+        set => SetField(ref _stepModelExpanded, value);
+    }
+
+    private bool _stepSliceExpanded = true;
+    /// <summary>Step 2 SLICE card expansion (auto-opened on import).</summary>
+    public bool StepSliceExpanded
+    {
+        get => _stepSliceExpanded;
+        set => SetField(ref _stepSliceExpanded, value);
+    }
+
     /// <summary>Settings for additive (print) slicing operations.</summary>
     public AdditiveSettingsViewModel Additive { get; } = new();
 
