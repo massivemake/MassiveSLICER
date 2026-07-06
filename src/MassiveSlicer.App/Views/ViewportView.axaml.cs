@@ -327,6 +327,7 @@ public partial class ViewportView : UserControl
             vm.OnExplodeRequested     = ExplodeSelected;
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
             vm.OnScrubIkRequested  = ScrubIk;
+            vm.OnSimScrubRequested = SimScrubIk;
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
@@ -5016,18 +5017,40 @@ public partial class ViewportView : UserControl
     /// </summary>
     private void ScrubIk(int index)
     {
+        if (_vm?.ActiveScrubToolpath is null || _activeScrubNode is null) return;
+        ScrubIkForNode(_activeScrubNode, index);
+    }
+
+    /// <summary>Simulate-timeline hook: drives the robot along the first visible
+    /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
+    private void SimScrubIk(double progress)
+    {
+        foreach (var (node, cache) in _scrubCacheByNode)
+        {
+            if (!node.Visible || cache.Length == 0) continue;
+            SimScrubResolveVisible(node, cache, progress);
+            return;
+        }
+    }
+
+    private void SimScrubResolveVisible(SceneNode node, (NVec3, NVec3)[] cache, double progress)
+    {
+        int index = (int)Math.Round(Math.Clamp(progress, 0.0, 1.0) * (cache.Length - 1));
+        ScrubIkForNode(node, index);
+    }
+
+    private void ScrubIkForNode(SceneNode scrubNode, int index)
+    {
         var vm       = _vm;
-        var toolpath = vm?.ActiveScrubToolpath;
         var solver   = _ikSolver;
         var robot    = vm?.Robot;
 
-        if (vm is null || toolpath is null || solver is null || robot is null) return;
+        if (vm is null || solver is null || robot is null) return;
 
         // Desync live feed so IK drives the robot instead of the C3Bridge stream.
         robot.Desync();
 
-        if (_activeScrubNode is null ||
-            !_scrubCacheByNode.TryGetValue(_activeScrubNode, out var scrubCache) ||
+        if (!_scrubCacheByNode.TryGetValue(scrubNode, out var scrubCache) ||
             scrubCache.Length == 0) return;
         var (pos, planeNormal) = scrubCache[Math.Clamp(index, 0, scrubCache.Length - 1)];
 
@@ -5035,7 +5058,7 @@ public partial class ViewportView : UserControl
         // Stored Toolpath positions are in the original sliced world space; the renderer
         // stores them as (pos − origin) and uses LocalTransform to put them back in world
         // space.  If the user has moved the node we need to apply that same transform here.
-        var node = _activeScrubNode;
+        var node = scrubNode;
         TkVector3 worldPos;
         TkVector3 worldNormal;
         if (node is not null && _toolpathOriginByNode.TryGetValue(node, out var origin))

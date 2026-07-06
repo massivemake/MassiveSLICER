@@ -2010,6 +2010,8 @@ public sealed class ViewportViewModel : ViewModelBase
             if (SetField(ref _simTimelinePercent, Math.Clamp(value, 0.0, 100.0)))
             {
                 OnPropertyChanged(nameof(SimTimelineLabel));
+                if (ShowSimTimeline)
+                    OnSimScrubRequested?.Invoke(_simTimelinePercent / 100.0);
                 NotifyRenderNeeded();
             }
         }
@@ -2022,6 +2024,9 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _simPlaying;
         private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
     }
+
+    /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
+    internal Action<double>? OnSimScrubRequested { get; set; }
 
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
