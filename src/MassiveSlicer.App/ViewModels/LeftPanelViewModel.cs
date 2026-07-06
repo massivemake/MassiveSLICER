@@ -29,9 +29,60 @@ public sealed class LeftPanelViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _selectedCellIndex, value)) return;
+            UpdateCellIcon();
             if ((uint)value < (uint)_cellPaths.Count)
                 OnCellSelected?.Invoke(_cellPaths[value]);
         }
+    }
+
+    private Avalonia.Media.Imaging.Bitmap? _selectedCellIcon;
+
+    /// <summary>Line-art icon for the active cell (assets/images/*<name>*.png), or null.</summary>
+    public Avalonia.Media.Imaging.Bitmap? SelectedCellIcon
+    {
+        get => _selectedCellIcon;
+        private set
+        {
+            var old = _selectedCellIcon;
+            if (!SetField(ref _selectedCellIcon, value)) return;
+            OnPropertyChanged(nameof(HasCellIcon));
+            old?.Dispose();
+        }
+    }
+
+    public bool HasCellIcon => _selectedCellIcon is not null;
+
+    /// <summary>Finds the newest PNG in assets/images whose name contains the cell name.</summary>
+    private void UpdateCellIcon()
+    {
+        Avalonia.Media.Imaging.Bitmap? bmp = null;
+        try
+        {
+            if ((uint)_selectedCellIndex < (uint)_cellPaths.Count
+                && _selectedCellIndex < CellNames.Count)
+            {
+                string name    = CellNames[_selectedCellIndex];
+                string cellDir = Path.GetDirectoryName(Path.GetFullPath(_cellPaths[_selectedCellIndex]))!;
+                string images  = Path.GetFullPath(Path.Combine(cellDir, "..", "..", "images"));
+                if (Directory.Exists(images) && name.Length > 0)
+                {
+                    string compact = name.Replace(" ", "");
+                    var match = Directory.EnumerateFiles(images, "*.png")
+                        .Where(f =>
+                        {
+                            var stem = Path.GetFileNameWithoutExtension(f);
+                            return stem.Contains(name, StringComparison.OrdinalIgnoreCase)
+                                || stem.Replace(" ", "").Contains(compact, StringComparison.OrdinalIgnoreCase);
+                        })
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .FirstOrDefault();
+                    if (match is not null)
+                        bmp = new Avalonia.Media.Imaging.Bitmap(match);
+                }
+            }
+        }
+        catch { /* missing/corrupt icon — just show nothing */ }
+        SelectedCellIcon = bmp;
     }
 
     /// <summary>
