@@ -973,6 +973,62 @@
             </ControlTemplate>
         </Setter>
     </Style>
+    <!-- StepCard: standalone rounded workflow-step card (MassiveCODE style) -->
+    <Style Selector="Expander.StepCard">
+        <Setter Property="HorizontalAlignment"        Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Padding"                    Value="0"/>
+        <Setter Property="Template">
+            <ControlTemplate>
+                <Border Background="#B33d3d3d"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Margin="8,4"
+                        ClipToBounds="True">
+                    <StackPanel>
+                        <ToggleButton Name="PART_toggle"
+                                      IsChecked="{TemplateBinding IsExpanded, Mode=TwoWay}"
+                                      HorizontalAlignment="Stretch"
+                                      HorizontalContentAlignment="Stretch"
+                                      Background="Transparent"
+                                      BorderThickness="0"
+                                      Padding="10,10"
+                                      Cursor="Hand">
+                            <Grid ColumnDefinitions="*,14">
+                                <ContentPresenter Grid.Column="0"
+                                                  Content="{TemplateBinding Header}"
+                                                  Foreground="{DynamicResource TextSecondary}"
+                                                  FontSize="11"
+                                                  FontWeight="SemiBold"
+                                                  VerticalAlignment="Center"/>
+                                <TextBlock Name="Chevron"
+                                           Grid.Column="1"
+                                           Text="›"
+                                           Foreground="{DynamicResource TextMuted}"
+                                           FontSize="14"
+                                           VerticalAlignment="Center"
+                                           HorizontalAlignment="Center"
+                                           RenderTransformOrigin="50%,50%"/>
+                            </Grid>
+                        </ToggleButton>
+                        <ContentPresenter Name="PART_ContentPresenter"
+                                          Content="{TemplateBinding Content}"
+                                          ContentTemplate="{TemplateBinding ContentTemplate}"
+                                          HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          IsVisible="{Binding #PART_toggle.IsChecked}"/>
+                    </StackPanel>
+                </Border>
+            </ControlTemplate>
+        </Setter>
+    </Style>
+    <Style Selector="Expander.StepCard /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>
+    </Style>
+    <Style Selector="Expander.StepCard[IsExpanded=False] /template/ TextBlock#Chevron">
+        <Setter Property="RenderTransform"><RotateTransform Angle="0"/></Setter>
+    </Style>
+
     <!-- Chevron: right (0°) when collapsed, down (90°) when expanded -->
     <Style Selector="Expander.SectionExpander /template/ TextBlock#Chevron">
         <Setter Property="RenderTransform"><RotateTransform Angle="90"/></Setter>

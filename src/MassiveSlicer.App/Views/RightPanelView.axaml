@@ -9,22 +9,13 @@
             BorderThickness="0">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="36"/>
+                <RowDefinition Height="0"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Tab bar -->
-            <Border Grid.Row="0"
-                    Background="{DynamicResource Bg3}"
-                    BorderBrush="{DynamicResource Border1}"
-                    BorderThickness="0,0,0,1">
-                <StackPanel Orientation="Horizontal">
-                    <Button Content="ADDITIVE"    Classes="TabButton" Classes.active="{Binding IsAdditiveTab}"    Command="{Binding ShowAdditiveCommand}"    IsVisible="{Binding ShowAdditiveTabButton}"/>
-                    <Button Content="SCAN"        Classes="TabButton" Classes.active="{Binding IsScanTab}"        Command="{Binding ShowScanCommand}"        IsVisible="{Binding ShowScanTabButton}"/>
-                    <Button Content="SUBTRACTIVE" Classes="TabButton" Classes.active="{Binding IsSubtractiveTab}" Command="{Binding ShowSubtractiveCommand}" IsVisible="{Binding ShowSubtractiveTabButton}"/>
-                    <Button Content="TOOLPATH"    Classes="TabButton" Classes.active="{Binding IsToolpathTab}"    Command="{Binding ShowToolpathCommand}"    IsVisible="{Binding ShowToolpathTabButton}"/>
-                </StackPanel>
-            </Border>
+            <!-- Tab bar removed: the workflow steps are the panel's top level.
+                 SCAN / SUBTRACTIVE / TOOLPATH grids still switch programmatically
+                 (step buttons, toolpath selection, LFAM 3 workflow gating). -->
 
             <!-- ADDITIVE tab -->
             <Grid Grid.Row="1" IsVisible="{Binding IsAdditiveTab}">
@@ -33,7 +24,7 @@
                 <StackPanel Margin="0,4,0,8">
 
                     <!-- 1 MODEL -->
-                    <Expander Classes="SectionExpander" IsExpanded="False">
+                    <Expander Classes="StepCard" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -41,7 +32,7 @@
                                                Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="MODEL" VerticalAlignment="Center"/>
+                                <TextBlock Text="MODEL" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,6" Spacing="6">
@@ -53,7 +44,7 @@
                     </Expander>
 
                     <!-- 2 SLICE -->
-                    <Expander Classes="SectionExpander" IsExpanded="True">
+                    <Expander Classes="StepCard" IsExpanded="True">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -61,7 +52,7 @@
                                                Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="SLICE" VerticalAlignment="Center"/>
+                                <TextBlock Text="SLICE" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="0,0,0,6">
@@ -642,7 +633,7 @@
                     </Expander>
 
                     <!-- 3 MATERIAL -->
-                    <Expander Classes="SectionExpander" IsExpanded="False">
+                    <Expander Classes="StepCard" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -650,7 +641,7 @@
                                                Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="MATERIAL" VerticalAlignment="Center"/>
+                                <TextBlock Text="MATERIAL" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="0,0,0,6">
@@ -694,7 +685,7 @@
                     </Expander>
 
                     <!-- 4 TOOLPATH -->
-                    <Expander Classes="SectionExpander" IsExpanded="False">
+                    <Expander Classes="StepCard" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -702,7 +693,7 @@
                                                Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="TOOLPATH" VerticalAlignment="Center"/>
+                                <TextBlock Text="TOOLPATH" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,6" Spacing="6">
@@ -716,7 +707,7 @@
                     </Expander>
 
                     <!-- 5 ROBOT -->
-                    <Expander Classes="SectionExpander" IsExpanded="False">
+                    <Expander Classes="StepCard" IsExpanded="False">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -724,7 +715,7 @@
                                                Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="ROBOT" VerticalAlignment="Center"/>
+                                <TextBlock Text="ROBOT" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="0,0,0,6">
@@ -762,6 +753,17 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- Other workflows (tab bar was removed; steps are the panel home) -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
+                        <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                        <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
+                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
+                                IsVisible="{Binding ShowScanTabButton}" Command="{Binding ShowScanCommand}"/>
+                        <Button Content="MILLING" FontSize="10" Padding="6,2" Background="Transparent"
+                                Foreground="{DynamicResource TextSecondary}" BorderThickness="0"
+                                IsVisible="{Binding ShowSubtractiveTabButton}" Command="{Binding ShowSubtractiveCommand}"/>
+                    </StackPanel>
+
                 </StackPanel>
                 </ScrollViewer>
             </Grid>
@@ -779,6 +781,7 @@
                         BorderBrush="{DynamicResource Border1}"
                         BorderThickness="0,0,0,1">
                     <StackPanel Orientation="Horizontal">
+                        <Button Content="&#8592; STEPS" Classes="TabButton" Command="{Binding ShowAdditiveCommand}"/>
                         <Button Content="CAPTURE"  Classes="TabButton" Classes.active="{Binding Scan.IsCaptureSubTab}"     Command="{Binding Scan.ShowCaptureCommand}"/>
                         <Button Content="SETTINGS" Classes="TabButton" Classes.active="{Binding Scan.IsCalibrationSubTab}" Command="{Binding Scan.ShowCalibrationCommand}"/>
                     </StackPanel>
@@ -1035,6 +1038,16 @@
                           Background="{DynamicResource Bg2}"
                           IsVisible="{Binding IsSubtractiveTab}">
                 <StackPanel Margin="0,8">
+                <Button Grid.Row="0"
+                        HorizontalAlignment="Left"
+                        Margin="8,6,8,2"
+                        Padding="8,4"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontSize="11"
+                        Foreground="{DynamicResource TextSecondary}"
+                        Content="&#8592;  Back to steps"
+                        Command="{Binding ShowAdditiveCommand}"/>
                     <TextBlock Text="MILLING" Classes="SectionHeader"/>
                     <TextBlock Text="HSD ES951 spindle finish — carve a relief into the printed blank."
                                Classes="LabelMuted" Margin="12,0,12,8" TextWrapping="Wrap"/>
@@ -1173,6 +1186,7 @@
 
             <!-- TOOLPATH tab -->
             <Grid Grid.Row="1" IsVisible="{Binding IsToolpathTab}">
+                <!-- Steps are the panel home; this grid opens from step 4 / toolpath selection -->
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
@@ -1181,6 +1195,16 @@
                           HorizontalScrollBarVisibility="Disabled"
                           Background="{DynamicResource Bg2}">
                 <StackPanel Margin="0,8">
+                <Button Grid.Row="0"
+                        HorizontalAlignment="Left"
+                        Margin="8,6,8,2"
+                        Padding="8,4"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        FontSize="11"
+                        Foreground="{DynamicResource TextSecondary}"
+                        Content="&#8592;  Back to steps"
+                        Command="{Binding ShowAdditiveCommand}"/>
                     <TextBlock Text="TOOLPATH" Classes="SectionHeader"/>
 
                     <!-- No toolpath selected -->
