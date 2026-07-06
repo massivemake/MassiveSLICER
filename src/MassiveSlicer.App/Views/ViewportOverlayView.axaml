@@ -384,206 +384,97 @@
             </Expander>
         </Border>
 
-        <!-- Transform toolbar — top-center (move / rotate / scale) -->
-        <Border
-                HorizontalAlignment="Center"
-                VerticalAlignment="Top"
-                Margin="8"
-                Background="{DynamicResource Bg2}"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="5"
-                Padding="4">
-            <StackPanel Orientation="Vertical" Spacing="4">
-                <!-- Gizmo mode buttons -->
-                <StackPanel Orientation="Horizontal">
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Move"   Padding="6,4" Margin="0,0,2,0"
+        <!-- Transform toolbar — top-center: icon tab above the axis-value row -->
+        <StackPanel HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Margin="0,8,0,0"
+                    ZIndex="14">
+
+            <!-- Icon tab (notch) -->
+            <Border HorizontalAlignment="Center"
+                    Background="#F2262626"
+                    BorderBrush="#3D3D3D"
+                    BorderThickness="1"
+                    CornerRadius="8"
+                    Padding="10,6">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Move" Padding="8,6"
                             Classes.active="{Binding IsMoveActive}"
                             Command="{Binding GizmoMoveCommand}">
-                        <ia:Icon Value="mdi-cursor-move" FontSize="14"/>
+                        <ia:Icon Value="mdi-cursor-move" FontSize="16"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="6,4" Margin="0,0,2,0"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Rotate" Padding="8,6"
                             Classes.active="{Binding IsRotateActive}"
                             Command="{Binding GizmoRotateCommand}">
-                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="14"/>
+                        <ia:Icon Value="mdi-rotate-3d-variant" FontSize="16"/>
                     </Button>
-                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale"  Padding="6,4" Margin="0,0,2,0"
+                    <Button Classes="ToolbarButton" ToolTip.Tip="Scale" Padding="8,6"
                             Classes.active="{Binding IsScaleActive}"
                             Command="{Binding GizmoScaleCommand}">
-                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
+                        <ia:Icon Value="mdi-arrow-expand-all" FontSize="16"/>
                     </Button>
-                    <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2,4,2"/>
-                    <Button Classes="ToolbarButton"
-                            Padding="6,4"
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
+                    <Button Classes="ToolbarButton" Padding="8,6"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
                             ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
-                        <ia:Icon Value="mdi-target-variant" FontSize="14"/>
+                        <ia:Icon Value="mdi-target-variant" FontSize="16"/>
                     </Button>
                 </StackPanel>
-                <!-- XYZ position inputs — visible when Move is active -->
-                <StackPanel Orientation="Horizontal" Spacing="4"
-                            IsVisible="{Binding IsMoveActive}">
-                    <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                </StackPanel>
-                <!-- ABC rotation inputs — visible when Rotate is active -->
-                <StackPanel Orientation="Horizontal" Spacing="4"
-                            IsVisible="{Binding IsRotateActive}">
-                    <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                    <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="SemiBold" Width="12"/>
-                    <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="80" FontSize="11"
-                                  Increment="1" AllowSpin="False" ShowButtonSpinner="False"
-                                  Padding="4,2" VerticalContentAlignment="Center"/>
-                </StackPanel>
-            </StackPanel>
-        </Border>
+            </Border>
 
-        <!-- Focus overlay — top-left, visible only when an object is selected -->
-        <Border IsVisible="{Binding HasSelection}"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Top"
-                Margin="0,8,8,8"
-                Background="{DynamicResource Bg2}"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="5"
-                Padding="4">
-            <StackPanel Orientation="Horizontal">
-                <!-- Transformation tools: place the object on the plate -->
-                <Button Classes="ToolbarButton"
-                        Classes.active="{Binding IsLayFlatMode}"
-                        Padding="6,4"
-                        Command="{Binding LayFlatCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
-                    <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding DropToPlateCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
-                    <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
-                </Button>
-
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
-
-                <!-- Other tools: camera + mesh structure -->
-                <Button Classes="ToolbarButton" Padding="6"
-                        Command="{Binding FrameAllCommand}"
-                        ToolTip.Tip="Frame All — fit the whole scene in view">
-                    <ia:Icon Value="mdi-fit-to-screen-outline" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Command="{Binding FocusCommand}"
-                        ToolTip.Tip="Focus camera on selected object (F)">
-                    <ia:Icon Value="mdi-image-filter-center-focus" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding UngroupCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Ungroup — split a grouped import into separate top-level objects (e.g. OBJ with multiple parts)">
-                    <ia:Icon Value="mdi-ungroup" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding ExplodeCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Explode — split disconnected mesh shells into separate objects. Use when Ungroup is not enough (e.g. multi-body STL)">
-                    <ia:Icon Value="mdi-scatter-plot" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding MeshCleanupCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Mesh Cleanup — repair common mesh problems (duplicate faces, welded vertices, degenerate polygons) before slicing">
-                    <ia:Icon Value="mdi-broom" FontSize="14"/>
-                </Button>
-
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
-
-                <!-- Material options: view channels + exposure/reflection adjust -->
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Material — view channels and render adjustments">
-                    <StackPanel Orientation="Horizontal" Spacing="3">
-                        <ia:Icon Value="mdi-palette" FontSize="14" VerticalAlignment="Center"/>
-                        <ia:Icon Value="mdi-chevron-down" FontSize="13" VerticalAlignment="Center"/>
+            <!-- Axis values -->
+                <Border Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="14,10"
+                        Margin="0,-4,0,0"
+                        IsVisible="{Binding IsMoveActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="14" Foreground="#E05555" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="14" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="14" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0"/>
                     </StackPanel>
-                    <Button.Flyout>
-                        <Flyout Placement="Bottom">
-                            <StackPanel Width="210" Spacing="3">
-                                <TextBlock Text="VIEW CHANNEL" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Final Render"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Standard}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Standard"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Base Color"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=BaseColor}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="BaseColor"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Metalness"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Metalness}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Metalness"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Roughness"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Roughness}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Roughness"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Normal"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=NormalMap}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="NormalMap"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="AO"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=AO}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="AO"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Emission"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Emission}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Emission"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="UV Checker"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=UvChecker}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="UvChecker"/>
-                                <Button Classes="ToolbarButton" HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="8,4" Content="Wireframe"
-                                        Classes.active="{Binding ActiveShaderMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Wireframe}"
-                                        Command="{Binding SetShaderModeCommand}" CommandParameter="Wireframe"
-                                        ToolTip.Tip="Flat-shaded polygonal mesh with wireframe overlay"/>
-
-                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,5"/>
-                                <TextBlock Text="ADJUST" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
-                                <TextBlock Text="Exposure" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
-                                <Slider Minimum="0.4" Maximum="2.5" Value="{Binding Exposure, Mode=TwoWay}"
-                                        ToolTip.Tip="Final-render exposure (pre-tonemap)"/>
-                                <TextBlock Text="Reflections" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
-                                <Slider Minimum="0" Maximum="3" Value="{Binding IblIntensity, Mode=TwoWay}"
-                                        ToolTip.Tip="Environment reflection / IBL gain"/>
-                            </StackPanel>
-                        </Flyout>
-                    </Button.Flyout>
-                </Button>
-            </StackPanel>
-        </Border>
+                </Border>
+                <Border Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="8"
+                        Padding="14,10"
+                        Margin="0,-4,0,0"
+                        IsVisible="{Binding IsRotateActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="14" Foreground="#E05555" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="14" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0,0,14,0"/>
+                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="14" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,6,0"/>
+                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="118" FontSize="14"
+                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="8,6" VerticalContentAlignment="Center" Margin="0"/>
+                    </StackPanel>
+                </Border>
+        </StackPanel>
 
         <!-- Toolpath stats — top-right, below the view pills -->
         <StackPanel HorizontalAlignment="Right"
