@@ -82,8 +82,9 @@ public static class AngledPlanarSlicer
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
             var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
 
+            bool isLastLayer = step + settings.LayerHeight >= tMax - 1e-4f;
             prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
-                seamOriginLocal, seamDirLocal, settings, prevTracks, layer);
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer);
 
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);
@@ -113,7 +114,8 @@ public static class AngledPlanarSlicer
         Vector2 seamOrigin2d, Vector2 seamDir2d,
         SliceSettings settings,
         List<ContourTrack> prevTracks,
-        ToolpathLayer layer)
+        ToolpathLayer layer,
+        bool isLastLayer = false)
     {
         // ── Stage 1: collect 3D intersection segments, project to plane-local 2D ─
         var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
@@ -208,6 +210,37 @@ public static class AngledPlanarSlicer
             }
         }
         if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        // ── Infill mode: replace shell contours with a continuous fill pattern.
+        // Contours are plane-local 2D; the projector lifts infill back onto the tilted plane.
+        if (!surfaceMode && settings.InfillPattern != InfillPattern.None)
+        {
+            float baseAngle = settings.InfillAngleDeg;
+            float infillAngle = settings.InfillPattern switch
+            {
+                InfillPattern.Grid          => baseAngle + (layer.Index % 2) * 90f,
+                InfillPattern.GhostMeshGrid => baseAngle + (layer.Index % 2) * 90f,
+                InfillPattern.Triangle      => baseAngle + (layer.Index % 3) * 60f,
+                _                           => baseAngle,
+            };
+            float infillSpacing = settings.InfillSpacingMm > 0f
+                ? settings.InfillSpacingMm
+                : settings.BeadWidth;
+            Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
+
+            int firstInfillMove = layer.Moves.Count;
+            if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                InfillGenerator.EmitGhostMesh(insetContours, planeD, layer, infillSpacing, infillAngle,
+                                              isLastLayer, Unproject);
+            else
+                InfillGenerator.Emit(insetContours, planeD, layer, infillSpacing, infillAngle, Unproject);
+
+            // Infill moves need the plane normal for tool orientation on tilted layers.
+            for (int i = firstInfillMove; i < layer.Moves.Count; i++)
+                layer.Moves[i] = layer.Moves[i] with { Normal = normal };
+
+            return new List<ContourTrack>();
+        }
 
         var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);
         EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour),
