@@ -619,6 +619,9 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public Matrix4? TcpFrameMatrix { get; set; }
 
+    /// <summary>Whether the TCP/flange/sensor frame axes are drawn (visibility toggle).</summary>
+    public bool ShowTcpFrame { get; set; } = true;
+
     /// <summary>
     /// When set, draws a set of X/Y/Z axis lines at the flange position in the overlay pass.
     /// </summary>
@@ -855,10 +858,7 @@ public sealed class SceneRenderer : IDisposable
             _contactShadows.ArcticPresentation = arcticPresentation;
 
         // Draw backdrop before any 3-D content, blended over the shader background.
-        float effectiveBackdropOpacity = DarkMattePresentation
-            ? MathF.Min(BackdropOpacity, 0.15f)
-            : BackdropOpacity;
-        if (_backdrop is not null && effectiveBackdropOpacity > 0f)
+        if (_backdrop is not null && BackdropOpacity > 0f)
         {
             // Strip camera translation from the view matrix before inverting.
             // The backdrop is at infinity -- only rotation and FOV matter.
@@ -871,7 +871,7 @@ public sealed class SceneRenderer : IDisposable
             GL.Disable(EnableCap.DepthTest);
             GL.Disable(EnableCap.CullFace);
             GL.DepthMask(false);
-            _backdrop.Draw(invVPRot, BackdropBlur, effectiveBackdropOpacity, shaderBg);
+            _backdrop.Draw(invVPRot, BackdropBlur, BackdropOpacity, shaderBg);
             GL.Enable(EnableCap.DepthTest);
             GL.Enable(EnableCap.CullFace);
             GL.DepthMask(true);
@@ -1069,7 +1069,8 @@ public sealed class SceneRenderer : IDisposable
         // -- Overlay pass ------------------------------------------------------
         // Nodes flagged Overlay=true and the TCP frame axes are drawn after the
         // composite with depth cleared so they always appear on top.
-        bool hasOverlay = TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null;
+        bool hasOverlay = ShowTcpFrame &&
+            (TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null);
         foreach (var child in SceneRoot.Children)
             if (child.Overlay) { hasOverlay = true; break; }
 
@@ -1082,12 +1083,15 @@ public sealed class SceneRenderer : IDisposable
                 if (!child.Overlay) continue;
                 child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
             }
-            if (TcpFrameMatrix          is { } tcpModel    && _tcpAxes    is not null)
-                _tcpAxes.Draw(tcpModel * mvp);
-            if (FlangeFrameMatrix       is { } flangeModel && _flangeAxes is not null)
-                _flangeAxes.Draw(flangeModel * mvp);
-            if (SensorOriginFrameMatrix is { } sensorModel && _sensorAxes is not null)
-                _sensorAxes.Draw(sensorModel * mvp);
+            if (ShowTcpFrame)
+            {
+                if (TcpFrameMatrix          is { } tcpModel    && _tcpAxes    is not null)
+                    _tcpAxes.Draw(tcpModel * mvp);
+                if (FlangeFrameMatrix       is { } flangeModel && _flangeAxes is not null)
+                    _flangeAxes.Draw(flangeModel * mvp);
+                if (SensorOriginFrameMatrix is { } sensorModel && _sensorAxes is not null)
+                    _sensorAxes.Draw(sensorModel * mvp);
+            }
             GL.Enable(EnableCap.CullFace);
         }
 

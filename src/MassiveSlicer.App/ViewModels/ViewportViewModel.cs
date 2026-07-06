@@ -71,6 +71,15 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _showTcpFrame = true;
+
+    /// <summary>Whether the TCP X/Y/Z orientation axes are visible.</summary>
+    public bool ShowTcpFrame
+    {
+        get => _showTcpFrame;
+        set { if (SetField(ref _showTcpFrame, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showContactShadows = true;
 
     /// <summary>Soft ground-contact shadows beneath robot, rail, and print bed.</summary>
@@ -2023,9 +2032,12 @@ public sealed class ViewportViewModel : ViewModelBase
         public bool ShowAxes { get; set; } = true;
         public bool ShowBedGrid { get; set; } = true;
         public bool ShowContactShadows { get; set; } = true;
+        public bool ShowTcpFrame { get; set; } = true;
         public bool CavityEnabled { get; set; }
         public bool DarkBackground { get; set; }
         public string ShaderMode { get; set; } = "Standard";
+        public float BackdropOpacity { get; set; } = 1f;
+        public float BackdropBlur { get; set; } = 2.5f;
     }
 
     private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
@@ -2044,6 +2056,7 @@ public sealed class ViewportViewModel : ViewModelBase
                     ShowGrid = false, ShowAxes = false, ShowBedGrid = false,
                     ShowContactShadows = false, CavityEnabled = false,
                     DarkBackground = true, ShaderMode = "MatteBlack",
+                    BackdropOpacity = 0.15f,
                 }
                 : new ViewDisplayProfile();
         }
@@ -2061,8 +2074,9 @@ public sealed class ViewportViewModel : ViewModelBase
     private static readonly HashSet<string> ProfileTrackedProps =
     [
         nameof(ShowGrid), nameof(ShowAxes), nameof(ShowBedGrid),
-        nameof(ShowContactShadows), nameof(CavityEnabled),
+        nameof(ShowContactShadows), nameof(ShowTcpFrame), nameof(CavityEnabled),
         nameof(DarkViewportBackground), nameof(ActiveShaderMode),
+        nameof(BackdropOpacity), nameof(BackdropBlur),
     ];
 
     /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
@@ -2077,9 +2091,12 @@ public sealed class ViewportViewModel : ViewModelBase
             prof.ShowAxes           = ShowAxes;
             prof.ShowBedGrid        = ShowBedGrid;
             prof.ShowContactShadows = ShowContactShadows;
+            prof.ShowTcpFrame       = ShowTcpFrame;
             prof.CavityEnabled      = CavityEnabled;
             prof.DarkBackground     = DarkViewportBackground;
             prof.ShaderMode         = ActiveShaderMode.ToString();
+            prof.BackdropOpacity    = BackdropOpacity;
+            prof.BackdropBlur       = BackdropBlur;
         };
     }
 
@@ -2094,8 +2111,11 @@ public sealed class ViewportViewModel : ViewModelBase
             ShowAxes           = prof.ShowAxes;
             ShowBedGrid        = prof.ShowBedGrid;
             ShowContactShadows = prof.ShowContactShadows;
+            ShowTcpFrame       = prof.ShowTcpFrame;
             CavityEnabled      = prof.CavityEnabled;
             DarkViewportBackground = prof.DarkBackground;
+            BackdropOpacity    = prof.BackdropOpacity;
+            BackdropBlur       = prof.BackdropBlur;
             if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
                 ActiveShaderMode = sm;
         }

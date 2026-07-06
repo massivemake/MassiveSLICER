@@ -1020,6 +1020,13 @@
                                        IsChecked="{Binding DataContext.Viewport.ShowBedGrid,
                                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
                         </Grid>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="TCP axes" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
+                            <CheckBox  Grid.Column="1" VerticalAlignment="Center"
+                                       IsChecked="{Binding DataContext.Viewport.ShowTcpFrame,
+                                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                        </Grid>
 
                     </StackPanel>
                 </ScrollViewer>
