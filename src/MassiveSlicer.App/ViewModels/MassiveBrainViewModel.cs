@@ -26,7 +26,7 @@ public sealed class MassiveBrainViewModel : ViewModelBase
     private bool   _enabled;
     private string _host = "localhost";
     private string _port = "4547";
-    private bool   _autoSlice;
+    private bool   _autoSlice = true;
     private double _unitScaleMm = 1000.0;   // wire format is metres (Plasticity convention).
     private string _status = "Server off.";
     private int    _clientCount;
