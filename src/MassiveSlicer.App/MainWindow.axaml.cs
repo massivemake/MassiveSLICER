@@ -80,6 +80,7 @@ public partial class MainWindow : Window
                 catch { name = Path.GetFileNameWithoutExtension(full); }
                 return (name, full);
             })
+            .OrderBy(c => c.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (cells.Count == 0)
