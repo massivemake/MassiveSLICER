@@ -53,9 +53,13 @@
                 <Style Selector="Border.GhostCard:pointerover">
                     <Setter Property="Opacity" Value="1"/>
                 </Style>
-                <!-- Keep the card solid while a control inside it has focus (e.g. an
-                     open ComboBox popup grabs the pointer, which would ghost the card). -->
+                <!-- Keep the card solid while a control inside it has focus, and while a
+                     dropdown owned by the card is open (popups live in a separate visual
+                     root, so :focus-within alone misses them — code-behind adds .pinned). -->
                 <Style Selector="Border.GhostCard:focus-within">
+                    <Setter Property="Opacity" Value="1"/>
+                </Style>
+                <Style Selector="Border.GhostCard.pinned">
                     <Setter Property="Opacity" Value="1"/>
                 </Style>
             </Grid.Styles>

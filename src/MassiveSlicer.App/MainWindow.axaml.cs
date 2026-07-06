@@ -61,6 +61,11 @@ public partial class MainWindow : Window
         // Apply persisted panel visibility before first layout pass.
         RightPanelCard.IsVisible = vm.Toolbar.IsRightPanelVisible;
 
+        // Ghosted cards must stay solid while a dropdown they own is open — the popup
+        // steals the pointer (and focus), which would otherwise fade the card mid-use.
+        SetupGhostPin(LeftPanelCard);
+        SetupGhostPin(RightPanelCard);
+
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
         vm.Viewport.OnDevCellReloadRequested = SwitchCell;
@@ -308,6 +313,30 @@ public partial class MainWindow : Window
                 }
             }
         }, ct);
+    }
+
+    /// <summary>
+    /// Keeps a ghosted sidebar card at full opacity while a ComboBox dropdown inside it is
+    /// open. When the pointer leaves the card (usually because the popup grabbed it), the
+    /// card gets a "pinned" style class until the open dropdown closes.
+    /// </summary>
+    private static void SetupGhostPin(Border card)
+    {
+        card.PointerExited += (_, _) =>
+        {
+            var openCombo = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(card)
+                .OfType<ComboBox>()
+                .FirstOrDefault(c => c.IsDropDownOpen);
+            if (openCombo is null || card.Classes.Contains("pinned")) return;
+
+            card.Classes.Add("pinned");
+            void OnClosed(object? s, EventArgs e)
+            {
+                openCombo.DropDownClosed -= OnClosed;
+                card.Classes.Remove("pinned");
+            }
+            openCombo.DropDownClosed += OnClosed;
+        };
     }
 
     private async Task ShowModelImportPickerAsync(MainWindowViewModel vm)
