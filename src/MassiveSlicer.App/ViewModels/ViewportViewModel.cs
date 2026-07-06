@@ -1806,13 +1806,37 @@ public sealed class ViewportViewModel : ViewModelBase
         RecomputeScrubMarkers();
     }
 
-    private int[] _scrubKeyframeIndices = [];
+    private (int Index, int InfL, int InfR)[] _scrubKeyframes = [];
+    private int _selectedKeyframeIdx = -1;
 
-    /// <summary>Sets the TCP keyframe move indices shown as lime ticks on the scrubber.</summary>
-    internal void SetScrubKeyframeIndices(int[] indices)
+    /// <summary>Sets the TCP keyframes (move index + per-side influence in moves) shown
+    /// on the scrubber ticks and the interactive keyframe lane.</summary>
+    internal void SetScrubKeyframes((int Index, int InfL, int InfR)[] keys, int selectedIdx = -1)
     {
-        _scrubKeyframeIndices = indices;
+        _scrubKeyframes      = keys;
+        _selectedKeyframeIdx = selectedIdx;
         RecomputeScrubMarkers();
+    }
+
+    private IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> _keyframeLaneItems = [];
+    public IReadOnlyList<MassiveSlicer.Controls.KeyframeLaneItem> KeyframeLaneItems
+    {
+        get => _keyframeLaneItems;
+        private set => SetField(ref _keyframeLaneItems, value);
+    }
+
+    /// <summary>Wired by the viewport code-behind: keyframe diamond clicked (jump + select).</summary>
+    internal Action<int>? OnKeyframeLaneClicked { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: influence tick dragged
+    /// (keyIdx, isLeft, lanePixelX, commit).</summary>
+    internal Action<int, bool, double, bool>? OnKeyframeInfluenceDragged { get; set; }
+
+    /// <summary>Converts a lane/track pixel X to a move index (clamped).</summary>
+    internal int ScrubIndexAtPixel(double x)
+    {
+        double denom = Math.Max(_scrubTrackPixelWidth - ScrubThumbWidth, 1.0);
+        return (int)Math.Round(Math.Clamp((x - ScrubThumbWidth / 2.0) / denom, 0.0, 1.0) * _toolpathScrubMax);
     }
 
     private void RecomputeScrubMarkers()
@@ -1834,10 +1858,21 @@ public sealed class ViewportViewModel : ViewModelBase
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
 
-        var kf = new List<double>();
-        foreach (int i in _scrubKeyframeIndices)
-            kf.Add(max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0);
+        var kf   = new List<double>();
+        var lane = new List<MassiveSlicer.Controls.KeyframeLaneItem>();
+        double Px(double i) => max > 0 ? ScrubThumbWidth / 2.0 + i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+        for (int j = 0; j < _scrubKeyframes.Length; j++)
+        {
+            var k = _scrubKeyframes[j];
+            kf.Add(Px(k.Index));
+            lane.Add(new MassiveSlicer.Controls.KeyframeLaneItem(
+                j, Px(k.Index),
+                Px(Math.Max(k.Index - k.InfL, 0)),
+                Px(Math.Min(k.Index + k.InfR, Math.Max(max, 1))),
+                j == _selectedKeyframeIdx));
+        }
         ScrubKeyframeMarkers = kf;
+        KeyframeLaneItems    = lane;
     }
 
     public RelayCommand FocusCommand                { get; }

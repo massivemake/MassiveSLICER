@@ -111,8 +111,16 @@ public partial class ViewportView : UserControl
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
     // TCP keyframes: per-toolpath-node offset keys + the pristine pre-keyframe path.
-    private readonly Dictionary<SceneNode, List<(int Index, NVec3 Offset)>>       _tcpKeyframesByNode   = new();
-    private readonly Dictionary<SceneNode, Toolpath>                              _keyframeBaseByNode   = new();
+    private sealed class TcpKey
+    {
+        public int   Index;
+        public NVec3 Offset;
+        public int   InfluenceLeft;    // ease-in window, moves
+        public int   InfluenceRight;   // ease-out window, moves
+    }
+    private readonly Dictionary<SceneNode, List<TcpKey>> _tcpKeyframesByNode = new();
+    private readonly Dictionary<SceneNode, Toolpath>     _keyframeBaseByNode = new();
+    private int _selectedTcpKey = -1;
     // Original centroid for each toolpath node. Used by ScrubIk to un-localise positions
     // before re-applying the node's current WorldTransform (which may have been moved by gizmo).
     private readonly ConcurrentDictionary<SceneNode, NVec3>                       _toolpathOriginByNode = new();
@@ -334,11 +342,9 @@ public partial class ViewportView : UserControl
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
             vm.OnClearTcpKeyframesRequested = () => ClearTcpKeyframes(vm);
-            vm.OnTcpKeyframeSmoothingChanged = () =>
-            {
-                if (_activeScrubNode is { } n && _tcpKeyframesByNode.ContainsKey(n))
-                    ApplyTcpKeyframes(vm, n);
-            };
+            vm.OnKeyframeLaneClicked      = i => JumpToTcpKeyframe(vm, i);
+            vm.OnKeyframeInfluenceDragged = (i, left, px, commit) =>
+                DragTcpKeyframeInfluence(vm, i, left, px, commit);
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
@@ -5101,9 +5107,22 @@ public partial class ViewportView : UserControl
         if (!_keyframeBaseByNode.ContainsKey(node) && _toolpathByNode.TryGetValue(node, out var basePath))
             _keyframeBaseByNode[node] = basePath;
 
-        keys.RemoveAll(k => k.Index == index);
-        keys.Add((index, offset));
-        keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+        int influence = Math.Max((int)vm.KeyframeSmoothing, 5);
+        var existing  = keys.Find(k => k.Index == index);
+        if (existing is not null)
+        {
+            existing.Offset = offset;
+        }
+        else
+        {
+            keys.Add(new TcpKey
+            {
+                Index = index, Offset = offset,
+                InfluenceLeft = influence, InfluenceRight = influence,
+            });
+            keys.Sort((a, b) => a.Index.CompareTo(b.Index));
+        }
+        _selectedTcpKey = keys.FindIndex(k => k.Index == index);
 
         ApplyTcpKeyframes(vm, node);
     }
@@ -5116,7 +5135,8 @@ public partial class ViewportView : UserControl
         if (_keyframeBaseByNode.Remove(node, out var basePath))
             SwapScrubbedToolpath(vm, node, basePath);
         vm.HasTcpKeyframes = false;
-        vm.SetScrubKeyframeIndices([]);
+        _selectedTcpKey = -1;
+        vm.SetScrubKeyframes([]);
     }
 
     /// <summary>Drops keyframe state without restoring (a fresh slice replaced the path).</summary>
@@ -5127,8 +5147,42 @@ public partial class ViewportView : UserControl
         if (ReferenceEquals(node, _activeScrubNode))
         {
             vm.HasTcpKeyframes = false;
-            vm.SetScrubKeyframeIndices([]);
+            _selectedTcpKey = -1;
+            vm.SetScrubKeyframes([]);
         }
+    }
+
+    /// <summary>Keyframe diamond clicked: select it and jump the scrubber to its moment.</summary>
+    private void JumpToTcpKeyframe(ViewportViewModel vm, int keyIdx)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (keyIdx < 0 || keyIdx >= keys.Count) return;
+        _selectedTcpKey = keyIdx;
+        vm.SetScrubKeyframes(
+            keys.Select(k => (k.Index, k.InfluenceLeft, k.InfluenceRight)).ToArray(),
+            keyIdx);
+        vm.ToolpathScrubIndex = keys[keyIdx].Index;   // drives the robot to this moment
+    }
+
+    /// <summary>Influence tick dragged: resize the key's ease window (bake on release).</summary>
+    private void DragTcpKeyframeInfluence(ViewportViewModel vm, int keyIdx, bool left, double px, bool commit)
+    {
+        if (_activeScrubNode is not { } node) return;
+        if (!_tcpKeyframesByNode.TryGetValue(node, out var keys)) return;
+        if (keyIdx < 0 || keyIdx >= keys.Count) return;
+
+        var k   = keys[keyIdx];
+        int idx = vm.ScrubIndexAtPixel(px);
+        if (left) k.InfluenceLeft  = Math.Max(k.Index - idx, 5);
+        else      k.InfluenceRight = Math.Max(idx - k.Index, 5);
+
+        _selectedTcpKey = keyIdx;
+        vm.SetScrubKeyframes(
+            keys.Select(x => (x.Index, x.InfluenceLeft, x.InfluenceRight)).ToArray(),
+            keyIdx);
+        if (commit)
+            ApplyTcpKeyframes(vm, node);   // heavy re-bake only on release
     }
 
     /// <summary>Re-bakes the eased keyframe offsets into the toolpath and re-poses the robot.</summary>
@@ -5137,11 +5191,13 @@ public partial class ViewportView : UserControl
         if (!_tcpKeyframesByNode.TryGetValue(node, out var keys) || keys.Count == 0) return;
         if (!_keyframeBaseByNode.TryGetValue(node, out var basePath)) return;
 
-        var modified = BuildOffsetToolpath(basePath, keys, vm.KeyframeSmoothing);
+        var modified = BuildOffsetToolpath(basePath, keys);
         SwapScrubbedToolpath(vm, node, modified);
 
         vm.HasTcpKeyframes = true;
-        vm.SetScrubKeyframeIndices(keys.Select(k => k.Index).ToArray());
+        vm.SetScrubKeyframes(
+            keys.Select(k => (k.Index, k.InfluenceLeft, k.InfluenceRight)).ToArray(),
+            _selectedTcpKey);
 
         ScrubIkForNode(node, vm.ToolpathScrubIndex);
     }
@@ -5173,47 +5229,30 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Clones <paramref name="src"/> with the keyframe offsets applied: each move vertex
-    /// shifts by the interpolated offset at its flat index. Between keyframes offsets
-    /// ease with smoothstep; before the first / after the last they ease to zero over
-    /// <paramref name="smoothingMoves"/> moves.
+    /// Clones <paramref name="src"/> with the keyframe offsets applied: each key
+    /// contributes a smoothstep bell over its own left/right influence windows; where
+    /// bells overlap the offsets blend by normalised weight, so adjacent keyframes
+    /// ease into each other and everything fades to zero outside the influence spans.
     /// </summary>
-    private static Toolpath BuildOffsetToolpath(
-        Toolpath src, List<(int Index, NVec3 Offset)> keys, double smoothingMoves)
+    private static Toolpath BuildOffsetToolpath(Toolpath src, List<TcpKey> keys)
     {
-        double w = Math.Max(smoothingMoves, 1.0);
-
         NVec3 OffsetAt(double v)
         {
-            if (keys.Count == 0) return NVec3.Zero;
-            var first = keys[0];
-            var last  = keys[^1];
-            if (v <= first.Index - w || v >= last.Index + w)
+            double wsum = 0;
+            var    acc  = NVec3.Zero;
+            foreach (var k in keys)
             {
-                if (v <= first.Index - w && keys.Count >= 1 && v < first.Index) return NVec3.Zero;
-                if (v >= last.Index + w) return NVec3.Zero;
+                double d    = v - k.Index;
+                double span = d < 0 ? Math.Max(k.InfluenceLeft, 1) : Math.Max(k.InfluenceRight, 1);
+                double t    = Math.Abs(d) / span;
+                if (t >= 1.0) continue;
+                double x = 1.0 - t;
+                double wgt = x * x * (3.0 - 2.0 * x);
+                acc  += k.Offset * (float)wgt;
+                wsum += wgt;
             }
-            if (v <= first.Index)
-            {
-                double t = Math.Clamp((v - (first.Index - w)) / w, 0, 1);
-                return first.Offset * Smooth(t);
-            }
-            if (v >= last.Index)
-            {
-                double t = Math.Clamp((v - last.Index) / w, 0, 1);
-                return last.Offset * (1f - Smooth(t));
-            }
-            for (int i = 0; i < keys.Count - 1; i++)
-            {
-                if (v < keys[i].Index || v > keys[i + 1].Index) continue;
-                double span = Math.Max(keys[i + 1].Index - keys[i].Index, 1);
-                double t    = (v - keys[i].Index) / span;
-                float  st   = Smooth(t);
-                return keys[i].Offset * (1f - st) + keys[i + 1].Offset * st;
-            }
-            return NVec3.Zero;
-
-            static float Smooth(double t) => (float)(t * t * (3.0 - 2.0 * t));
+            if (wsum <= 0) return NVec3.Zero;
+            return acc / (float)wsum * (float)Math.Min(wsum, 1.0);
         }
 
         var dst = new Toolpath();
