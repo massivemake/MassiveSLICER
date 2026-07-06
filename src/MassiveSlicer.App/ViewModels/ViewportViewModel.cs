@@ -2029,6 +2029,16 @@ public sealed class ViewportViewModel : ViewModelBase
     /// drives the realtime re-slice.</summary>
     internal Action? OnModelGeometryChanged { get; set; }
 
+    private bool _realtimeSlicingPaused;
+
+    /// <summary>Holds off realtime re-slicing while the user batches up changes;
+    /// releasing the pause runs one re-slice if anything changed meanwhile.</summary>
+    public bool RealtimeSlicingPaused
+    {
+        get => _realtimeSlicingPaused;
+        set => SetField(ref _realtimeSlicingPaused, value);
+    }
+
     // ── Per-view display profiles ───────────────────────────────────────────
     // Each view pill (Body/Toolpath/Speed/RPM/Preview) keeps its own viewport
     // display settings; changing a tracked setting saves into the active view's

@@ -3435,6 +3435,7 @@ public partial class ViewportView : UserControl
     // debounced; updates replace the existing toolpath node in place.
 
     private DispatcherTimer? _realtimeSliceTimer;
+    private bool _realtimeSlicePending;   // a change arrived while realtime slicing was paused
 
     private static readonly HashSet<string> RealtimeSliceProps =
     [
@@ -3477,10 +3478,20 @@ public partial class ViewportView : UserControl
                     ScheduleRealtimeSlice(vm);
             };
         vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+        vm.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
+                && !vm.RealtimeSlicingPaused && _realtimeSlicePending)
+            {
+                _realtimeSlicePending = false;
+                ScheduleRealtimeSlice(vm);
+            }
+        };
     }
 
     private void ScheduleRealtimeSlice(ViewportViewModel vm)
     {
+        if (vm.RealtimeSlicingPaused) { _realtimeSlicePending = true; return; }
         if (_realtimeSliceTimer is null)
         {
             _realtimeSliceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };

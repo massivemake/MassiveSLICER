@@ -1124,6 +1124,25 @@
         <Setter Property="Opacity" Value="0.4"/>
     </Style>
 
+    <!-- RealtimePause: top-bar toggle that holds off realtime re-slicing.
+         Neutral pill normally; amber while paused so the held state is obvious. -->
+    <Style Selector="ToggleButton.RealtimePause">
+        <Setter Property="Background" Value="#3f3f3f"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="CornerRadius" Value="6"/>
+        <Setter Property="Padding" Value="12,6"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="#4a4a4a"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:checked /template/ ContentPresenter">
+        <Setter Property="Background" Value="#d99a2b"/>
+        <Setter Property="TextElement.Foreground" Value="#111111"/>
+    </Style>
+    <Style Selector="ToggleButton.RealtimePause:checked:pointerover /template/ ContentPresenter">
+        <Setter Property="Background" Value="#e8ab3c"/>
+    </Style>
+
     <!-- PieButton: Ctrl+Space view pie menu entries -->
     <Style Selector="Button.PieButton">
         <Setter Property="Background" Value="#E62e2e2e"/>
