@@ -3048,12 +3048,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var toolpathName = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            var toolpathName = ToolpathNameFrom(sourceItem.Name);
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             var selectedPreset = vm.AdditiveSettings is { } asp
@@ -3614,12 +3609,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            toolpathNode.Name = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            toolpathNode.Name = ToolpathNameFrom(parentItem.Name);
 
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
@@ -5342,6 +5332,16 @@ public partial class ViewportView : UserControl
 
     /// <summary>Simulate-timeline hook: drives the robot along the first visible
     /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
+    /// <summary>Toolpath display name = the source mesh's name (file extension stripped),
+    /// so KRL export dialogs carry it straight through to the .src filename.</summary>
+    private static string ToolpathNameFrom(string meshName)
+    {
+        var n = meshName.Trim();
+        foreach (var ext in new[] { ".stl", ".obj", ".glb", ".gltf", ".3mf", ".ply", ".step", ".stp" })
+            if (n.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { n = n[..^ext.Length].TrimEnd(); break; }
+        return n.Length > 0 ? n : "Toolpath";
+    }
+
     private void SimScrubIk(double progress)
     {
         foreach (var (node, cache) in _scrubCacheByNode)

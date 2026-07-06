@@ -20,6 +20,10 @@ internal static class RobotKrlPaths
         var stem = SanitizeStem(baseName);
         if (string.IsNullOrWhiteSpace(stem))
             stem = "PrintJob";
+        // Names that already carry a date prefix (e.g. "2026_0706 - Floor Template V04")
+        // pass through untouched so the .src matches the mesh name exactly.
+        if (Regex.IsMatch(stem, @"^\d{4}_\d{2,4}\b"))
+            return stem;
         return $"{DateTime.Now:yyyy_MMdd} - {stem}";
     }
 
