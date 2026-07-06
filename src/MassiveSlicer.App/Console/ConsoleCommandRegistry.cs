@@ -116,6 +116,26 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "massivebrain",
+            Aliases = ["brain"],
+            Description = "MassiveBRAIN sync server: massivebrain on|off|status",
+            Execute = (ctx, args) =>
+            {
+                var brain = ctx.Main.Viewport.MassiveBrain;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "on":  brain.Enabled = true;  break;
+                    case "off": brain.Enabled = false; break;
+                    default:
+                        ctx.Log($"[massivebrain] {(brain.Enabled ? "enabled" : "disabled")} — {brain.Status} " +
+                                $"clients={brain.ClientCount} objects={brain.ObjectCount}");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "panel-settings",
             Aliases = ["panel"],
             Description = "Show the right-panel Settings tab",
