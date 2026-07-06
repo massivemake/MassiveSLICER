@@ -61,9 +61,6 @@ public partial class MainWindow : Window
         // Apply persisted panel visibility before first layout pass.
         RightPanelHost.IsVisible = vm.Toolbar.IsRightPanelVisible;
 
-        // Ghosted cards must stay solid while a dropdown they own is open — the popup
-        // steals the pointer (and focus), which would otherwise fade the card mid-use.
-        SetupGhostPin();
 
         // -- Cell selector -----------------------------------------------------
         vm.LeftPanel.OnCellSelected = SwitchCell;
@@ -314,45 +311,6 @@ public partial class MainWindow : Window
         }, ct);
     }
 
-    private static bool _ghostPinHooked;
-
-    /// <summary>
-    /// Keeps a ghosted sidebar card at full opacity while a ComboBox dropdown inside it is
-    /// open. Pins the card the moment the dropdown opens (a global IsDropDownOpen observer),
-    /// so the ghost fade never starts — reacting on pointer-exit instead caused a visible
-    /// fade-then-snap flicker because the popup steals the pointer first.
-    /// </summary>
-    private void SetupGhostPin()
-    {
-        if (_ghostPinHooked) return;
-        _ghostPinHooked = true;
-
-        ComboBox.IsDropDownOpenProperty.Changed.Subscribe(
-            new Avalonia.Reactive.AnonymousObserver<Avalonia.AvaloniaPropertyChangedEventArgs<bool>>(args =>
-            {
-                if (args.Sender is not ComboBox combo) return;
-                var owner = FindAncestorCard(combo);
-                if (owner is null) return;
-                if (combo.IsDropDownOpen)
-                    owner.Classes.Add("pinned");
-                else
-                    owner.Classes.Remove("pinned");
-            }));
-    }
-
-    /// <summary>Returns the ghosted floating card (StepCard expander) that contains <paramref name="control"/>, if any.</summary>
-    private static Expander? FindAncestorCard(Avalonia.Visual control)
-    {
-        Avalonia.Visual? cur = control;
-        while (cur is not null)
-        {
-            if (cur is Expander ex && ex.Classes.Contains("StepCard"))
-                return ex;
-            cur = Avalonia.VisualTree.VisualExtensions.GetVisualParent(cur);
-        }
-        return null;
-    }
-
     private async Task ShowModelImportPickerAsync(MainWindowViewModel vm)
     {
         var files = await StorageProvider.OpenFilePickerAsync(new Avalonia.Platform.Storage.FilePickerOpenOptions
@@ -410,35 +368,9 @@ public partial class MainWindow : Window
         var viewportPng = await Viewport.CaptureScreenshotAsync();
         return await Dispatcher.UIThread.InvokeAsync(() =>
         {
-            // Capture the ghosted floating cards at full opacity so screenshots show the
-            // chrome. Local Opacity values beat the StepCard style; transitions are
-            // suspended so the change is instant, then everything reverts to the style.
-            var ghostCards = Avalonia.VisualTree.VisualExtensions.GetVisualDescendants(this)
-                .OfType<Expander>()
-                .Where(x => x.Classes.Contains("StepCard"))
-                .Cast<Avalonia.Controls.Control>()
-                .ToArray();
-            var savedTransitions = new Avalonia.Animation.Transitions?[ghostCards.Length];
-            for (int i = 0; i < ghostCards.Length; i++)
-            {
-                savedTransitions[i] = ghostCards[i].Transitions;
-                ghostCards[i].Transitions = null;
-                ghostCards[i].Opacity = 1.0;
-            }
             UpdateLayout();
-            try
-            {
-                return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface,
-                    [LeftPanelHost, RightPanelHost, ToolbarHost]);
-            }
-            finally
-            {
-                for (int i = 0; i < ghostCards.Length; i++)
-                {
-                    ghostCards[i].ClearValue(Avalonia.Visual.OpacityProperty);
-                    ghostCards[i].Transitions = savedTransitions[i];
-                }
-            }
+            return AppScreenshotCapture.CapturePng(this, viewportPng, Viewport.ViewportSurface,
+                [LeftPanelHost, RightPanelHost, ToolbarHost]);
         });
     }
 }
