@@ -3285,6 +3285,17 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Maps any outliner item to the user model that owns it: toolpath children resolve
+    /// to their parent model, model items return themselves.
+    /// </summary>
+    internal OutlinerItemViewModel? OwningModelItem(OutlinerItemViewModel? item)
+    {
+        if (item is null) return null;
+        if (!item.IsToolpath) return item;
+        return EnumerateUserModelItems().FirstOrDefault(m => m.Children.Contains(item));
+    }
+
     /// <summary>Yields outliner entries for user-imported print models (excludes scans).</summary>
     internal IEnumerable<OutlinerItemViewModel> EnumerateUserModelItems()
     {

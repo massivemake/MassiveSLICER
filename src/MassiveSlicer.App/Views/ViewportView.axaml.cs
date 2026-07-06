@@ -2921,12 +2921,22 @@ public partial class ViewportView : UserControl
 
         try
         {
-            var sourceItem = vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
-                             ?? vm.ResolveActivePrintObjectItem()
+            var sourceItem = vm.OwningModelItem(
+                                 vm.FindUserMeshOutlinerItem(_renderer.SelectedNode)
+                                 ?? vm.ResolveActivePrintObjectItem())
                              ?? vm.EnumerateUserModelItems().FirstOrDefault();
             if (sourceItem is null)
             {
                 SetSliceStatus(vm, "Slice failed: select a mesh to slice.", isError: true);
+                return;
+            }
+
+            // One evolving toolpath per model: if this model was already sliced,
+            // update it in place instead of adding another toolpath node.
+            if (sourceItem.Children.FirstOrDefault(c => c.IsToolpath) is { } existingToolpath)
+            {
+                vm.IsSlicing = false;   // hand off to the update path (it re-guards)
+                await RunUpdateSliceAsync(vm, (sourceItem, existingToolpath));
                 return;
             }
 
@@ -3464,7 +3474,7 @@ public partial class ViewportView : UserControl
 
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
-        var item = vm.ResolveActivePrintObjectItem()
+        var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
                    ?? vm.EnumerateUserModelItems().FirstOrDefault();
         if (item is null) return;
 
