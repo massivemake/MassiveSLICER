@@ -461,11 +461,7 @@
                             </Grid>
                         </StackPanel>
                     </Expander>
-                    <Button Content="Generate Slice"
-                            Classes="PrimaryButton"
-                            HorizontalAlignment="Stretch"
-                            Margin="8,8,8,4"
-                            Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+                    <!-- Realtime slicing: no manual Generate button; the slice status text below reports progress. -->
                     <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SliceStatusMessage}"
                                Margin="8,0,8,6"
                                FontSize="10"
