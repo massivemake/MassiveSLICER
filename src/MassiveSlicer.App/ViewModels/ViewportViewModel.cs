@@ -1955,7 +1955,12 @@ public sealed class ViewportViewModel : ViewModelBase
     public string ViewMode
     {
         get => _viewMode;
-        set { if (SetField(ref _viewMode, value)) ApplyViewMode(); }
+        set
+        {
+            if (!SetField(ref _viewMode, value)) return;
+            ApplyViewMode();
+            ApplyViewDisplayProfile();
+        }
     }
 
     public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
@@ -2005,6 +2010,117 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Raised whenever model geometry/placement changes (import, scale, rotate) —
     /// drives the realtime re-slice.</summary>
     internal Action? OnModelGeometryChanged { get; set; }
+
+    // ── Per-view display profiles ───────────────────────────────────────────
+    // Each view pill (Body/Toolpath/Speed/RPM/Preview) keeps its own viewport
+    // display settings; changing a tracked setting saves into the active view's
+    // profile, and switching views applies that view's profile.
+
+    /// <summary>Display settings remembered per view mode.</summary>
+    public sealed class ViewDisplayProfile
+    {
+        public bool ShowGrid { get; set; } = true;
+        public bool ShowAxes { get; set; } = true;
+        public bool ShowBedGrid { get; set; } = true;
+        public bool ShowContactShadows { get; set; } = true;
+        public bool CavityEnabled { get; set; }
+        public bool DarkBackground { get; set; }
+        public string ShaderMode { get; set; } = "Standard";
+    }
+
+    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
+    private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
+    private bool _applyingViewProfile;
+
+    private static Dictionary<string, ViewDisplayProfile> BuildDefaultProfiles()
+    {
+        var d = new Dictionary<string, ViewDisplayProfile>();
+        foreach (var m in ViewModeNames)
+        {
+            bool lineView = m is "Toolpath" or "Speed" or "RPM";
+            d[m] = lineView
+                ? new ViewDisplayProfile
+                {
+                    ShowGrid = false, ShowAxes = false, ShowBedGrid = false,
+                    ShowContactShadows = false, CavityEnabled = false,
+                    DarkBackground = true, ShaderMode = "MatteBlack",
+                }
+                : new ViewDisplayProfile();
+        }
+        return d;
+    }
+
+    private bool _darkViewportBackground;
+    /// <summary>Flat near-black viewport background (per-view profile setting).</summary>
+    public bool DarkViewportBackground
+    {
+        get => _darkViewportBackground;
+        set { if (SetField(ref _darkViewportBackground, value)) NotifyRenderNeeded(); }
+    }
+
+    private static readonly HashSet<string> ProfileTrackedProps =
+    [
+        nameof(ShowGrid), nameof(ShowAxes), nameof(ShowBedGrid),
+        nameof(ShowContactShadows), nameof(CavityEnabled),
+        nameof(DarkViewportBackground), nameof(ActiveShaderMode),
+    ];
+
+    /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
+    private void WireViewProfileTracking()
+    {
+        PropertyChanged += (_, e) =>
+        {
+            if (_applyingViewProfile || e.PropertyName is not { } name || !ProfileTrackedProps.Contains(name))
+                return;
+            if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+            prof.ShowGrid           = ShowGrid;
+            prof.ShowAxes           = ShowAxes;
+            prof.ShowBedGrid        = ShowBedGrid;
+            prof.ShowContactShadows = ShowContactShadows;
+            prof.CavityEnabled      = CavityEnabled;
+            prof.DarkBackground     = DarkViewportBackground;
+            prof.ShaderMode         = ActiveShaderMode.ToString();
+        };
+    }
+
+    /// <summary>Applies the active view mode's display profile to the viewport.</summary>
+    internal void ApplyViewDisplayProfile()
+    {
+        if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+        _applyingViewProfile = true;
+        try
+        {
+            ShowGrid           = prof.ShowGrid;
+            ShowAxes           = prof.ShowAxes;
+            ShowBedGrid        = prof.ShowBedGrid;
+            ShowContactShadows = prof.ShowContactShadows;
+            CavityEnabled      = prof.CavityEnabled;
+            DarkViewportBackground = prof.DarkBackground;
+            if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
+                ActiveShaderMode = sm;
+        }
+        finally { _applyingViewProfile = false; }
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Round-trips all profiles as JSON for app preferences.</summary>
+    public string SerializeViewProfiles()
+        => System.Text.Json.JsonSerializer.Serialize(_viewProfiles);
+
+    public void LoadViewProfiles(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) { ApplyViewDisplayProfile(); return; }
+        try
+        {
+            var loaded = System.Text.Json.JsonSerializer
+                .Deserialize<Dictionary<string, ViewDisplayProfile>>(json);
+            if (loaded is not null)
+                foreach (var (k, v) in loaded)
+                    if (_viewProfiles.ContainsKey(k)) _viewProfiles[k] = v;
+        }
+        catch { /* corrupt prefs — keep defaults */ }
+        ApplyViewDisplayProfile();
+    }
 
     // ── Live effector handles (glowing draggable points, up to 3) ──────────
     private readonly SceneNode?[] _effectorNodes = new SceneNode?[3];
@@ -2140,6 +2256,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public ViewportViewModel()
     {
+        WireViewProfileTracking();
         LiveIo.ExpandedChanged += () =>
         {
             OnPropertyChanged(nameof(Lfam3WorkflowMargin));

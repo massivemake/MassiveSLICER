@@ -852,12 +852,10 @@ public partial class ViewportView : UserControl
                 new TkVector3(vm.ToolpathRetractionColor.X,  vm.ToolpathRetractionColor.Y,  vm.ToolpathRetractionColor.Z));
             _renderer.GizmoEnabled   = vm.ActiveGizmoModeInternal != GizmoMode.None;
             _renderer.GizmoMode      = vm.ActiveGizmoModeInternal;
-            // Dark flat-matte preset for the toolpath line views (Toolpath/Speed/RPM):
-            // flat black background, backdrop off, cell + meshes in matte black so the
-            // toolpath lines carry all the contrast. Body/Preview restore the user mode.
-            bool darkLineView = vm.ViewMode is "Toolpath" or "Speed" or "RPM";
-            _renderer.DarkMattePresentation = darkLineView;
-            _renderer.ShaderMode         = darkLineView ? ShaderMode.MatteBlack : vm.ActiveShaderMode;
+            // Per-view display profiles: the view pills own background darkness and
+            // shader mode (line views default to dark + MatteBlack, user-overridable).
+            _renderer.DarkMattePresentation = vm.DarkViewportBackground;
+            _renderer.ShaderMode         = vm.ActiveShaderMode;
             _renderer.LayerPreviewHeight = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0);
             bool layerPreview = vm.AdditiveSettings?.ShowLayerPreview ?? false;
             var layerTarget = layerPreview ? vm.ResolveActivePrintObjectItem()?.Node : null;

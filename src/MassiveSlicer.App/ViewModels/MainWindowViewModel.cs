@@ -2624,6 +2624,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Shader mode
         if (Enum.TryParse<ShaderMode>(p.ShaderMode, out var sm))
             vp.ActiveShaderMode = sm;
+        vp.LoadViewProfiles(p.ViewModeProfiles);
 
         // Backdrop
         if (p.DefaultBackdropPath is { } backdropPath)
@@ -2873,6 +2874,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         // Shader mode & backdrop
         p.ShaderMode          = vp.ActiveShaderMode.ToString();
+        p.ViewModeProfiles    = vp.SerializeViewProfiles();
         p.DefaultBackdropPath = vp.ActiveBackdropPath;
         p.DefaultBackdropBlur    = vp.BackdropBlur;
         p.DefaultBackdropOpacity = vp.BackdropOpacity;
