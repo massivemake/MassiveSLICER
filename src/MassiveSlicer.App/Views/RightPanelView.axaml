@@ -116,6 +116,46 @@
                         </Grid>
                     </StackPanel>
                 </StackPanel>
+                    <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="False">
+                        <StackPanel Margin="0,0,0,6">
+                            <Grid Margin="8,2,8,4">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <ComboBox Grid.Column="0"
+                                          HorizontalAlignment="Stretch"
+                                          Margin="0,0,4,0"
+                                          PlaceholderText="No preset selected"
+                                          ItemsSource="{Binding Additive.MaterialPresets}"
+                                          SelectedIndex="{Binding Additive.SelectedPresetIndex, Mode=TwoWay}">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Name}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1"
+                                        Classes="ToolbarButton"
+                                        Padding="8,2"
+                                        Margin="0,0,2,0"
+                                        Click="OnEditMaterialClicked"
+                                        IsEnabled="{Binding Additive.HasSelectedPreset}"
+                                        ToolTip.Tip="Edit selected material preset">
+                                    <ia:Icon Value="mdi-pencil" FontSize="14"/>
+                                </Button>
+                                <Button Grid.Column="2"
+                                        Classes="ToolbarButton"
+                                        Padding="8,2"
+                                        Click="OnAddMaterialClicked"
+                                        ToolTip.Tip="Add new material preset">
+                                    <ia:Icon Value="mdi-plus" FontSize="16"/>
+                                </Button>
+                            </Grid>
+                        </StackPanel>
+                    
+                    </Expander>
                     <Expander Classes="SectionExpander" Header="GEOMETRY" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
@@ -360,7 +400,51 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ResumeRampSteps}"/>
                             </Grid>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
+                    </Expander>                                                            <Expander Classes="SectionExpander" Header="STOCK FROM MAPS" IsExpanded="False" Margin="0,4,0,4">
+                        <StackPanel>
+                            <TextBlock Text="Print the displaced surface (low-poly mesh + the MILLING panel's detail map) plus an allowance, so the blank carries the detail for the mill."
+                                       Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
+                            <CheckBox Margin="8,0,8,4" Content="Print detailed stock (use PBR maps)" FontSize="11"
+                                      IsChecked="{Binding Additive.UseDisplacedStock, Mode=TwoWay}"/>
+                            <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding Additive.UseDisplacedStock}">
+                                <TextBlock Grid.Column="0" Text="Machining allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
+                            </Grid>
+                        </StackPanel>
+                    </Expander>
+                    <Button Content="Generate Slice"
+                            Classes="PrimaryButton"
+                            HorizontalAlignment="Stretch"
+                            Margin="8,8,8,4"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+                    <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SliceStatusMessage}"
+                               Margin="8,0,8,6"
+                               FontSize="10"
+                               TextWrapping="Wrap"
+                               Opacity="0.8"
+                               IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceStatus}"/>
+                        </StackPanel>
+                    </Expander>
+
+                                        
+
+                    <!-- 3 PATTERN AND TEXTURE -->
+                    <Expander Classes="StepCard" IsExpanded="False">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <TextBlock Text="3" FontSize="10" FontWeight="Bold"
+                                               Foreground="{DynamicResource AccentHover}"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="PATTERN AND TEXTURE" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="0,0,0,6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75" Margin="8,4,8,4"
+                                       Text="Decorative geometry applied to the toolpath: wave effects on the walls and fill patterns."/>
+                            <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
 
                             <!-- Adaptive layer height -->
@@ -566,7 +650,8 @@
                                 </StackPanel>
                             </StackPanel>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="FILL PATTERN" IsExpanded="False">
+                    </Expander>
+                            <Expander Classes="SectionExpander" Header="FILL PATTERN" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
 
                             <Grid Margin="8,2,8,4">
@@ -605,83 +690,8 @@
 
                             </StackPanel>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="STOCK FROM MAPS" IsExpanded="False" Margin="0,4,0,4">
-                        <StackPanel>
-                            <TextBlock Text="Print the displaced surface (low-poly mesh + the MILLING panel's detail map) plus an allowance, so the blank carries the detail for the mill."
-                                       Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
-                            <CheckBox Margin="8,0,8,4" Content="Print detailed stock (use PBR maps)" FontSize="11"
-                                      IsChecked="{Binding Additive.UseDisplacedStock, Mode=TwoWay}"/>
-                            <Grid Margin="8,0,8,4" ColumnDefinitions="*,80" IsEnabled="{Binding Additive.UseDisplacedStock}">
-                                <TextBlock Grid.Column="0" Text="Machining allowance (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.StockAllowanceMm, Mode=TwoWay}"
-                                               Minimum="0" Maximum="50" Increment="0.5" FormatString="F1" FontSize="11"/>
-                            </Grid>
-                        </StackPanel>
                     </Expander>
-                    <Button Content="Generate Slice"
-                            Classes="PrimaryButton"
-                            HorizontalAlignment="Stretch"
-                            Margin="8,8,8,4"
-                            Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
-                    <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SliceStatusMessage}"
-                               Margin="8,0,8,6"
-                               FontSize="10"
-                               TextWrapping="Wrap"
-                               Opacity="0.8"
-                               IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceStatus}"/>
                         </StackPanel>
-                    </Expander>
-
-                    <!-- 3 MATERIAL -->
-                    <Expander Classes="StepCard" IsExpanded="False">
-                        <Expander.Header>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
-                                    <TextBlock Text="3" FontSize="10" FontWeight="Bold"
-                                               Foreground="{DynamicResource AccentHover}"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                                <TextBlock Text="MATERIAL" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Expander.Header>
-                        <StackPanel Margin="0,0,0,6">
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <ComboBox Grid.Column="0"
-                                          HorizontalAlignment="Stretch"
-                                          Margin="0,0,4,0"
-                                          PlaceholderText="No preset selected"
-                                          ItemsSource="{Binding Additive.MaterialPresets}"
-                                          SelectedIndex="{Binding Additive.SelectedPresetIndex, Mode=TwoWay}">
-                                    <ComboBox.ItemTemplate>
-                                        <DataTemplate>
-                                            <TextBlock Text="{Binding Name}"/>
-                                        </DataTemplate>
-                                    </ComboBox.ItemTemplate>
-                                </ComboBox>
-                                <Button Grid.Column="1"
-                                        Classes="ToolbarButton"
-                                        Padding="8,2"
-                                        Margin="0,0,2,0"
-                                        Click="OnEditMaterialClicked"
-                                        IsEnabled="{Binding Additive.HasSelectedPreset}"
-                                        ToolTip.Tip="Edit selected material preset">
-                                    <ia:Icon Value="mdi-pencil" FontSize="14"/>
-                                </Button>
-                                <Button Grid.Column="2"
-                                        Classes="ToolbarButton"
-                                        Padding="8,2"
-                                        Click="OnAddMaterialClicked"
-                                        ToolTip.Tip="Add new material preset">
-                                    <ia:Icon Value="mdi-plus" FontSize="16"/>
-                                </Button>
-                            </Grid>
-                        </StackPanel>
-                    
                     </Expander>
 
                     <!-- 4 TOOLPATH -->
@@ -703,21 +713,7 @@
                                     HorizontalAlignment="Stretch"
                                     Command="{Binding ShowToolpathCommand}"
                                     ToolTip.Tip="Playback, statistics, seam editing, and export options for the selected toolpath."/>
-                        </StackPanel>
-                    </Expander>
-
-                    <!-- 5 ROBOT -->
-                    <Expander Classes="StepCard" IsExpanded="False">
-                        <Expander.Header>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
-                                    <TextBlock Text="5" FontSize="10" FontWeight="Bold"
-                                               Foreground="{DynamicResource AccentHover}"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                                <TextBlock Text="ROBOT" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Expander.Header>
+                        
                         <StackPanel Margin="0,0,0,6">
 
                         <StackPanel Margin="0,2,0,6">
@@ -751,7 +747,11 @@
                                 </StackPanel>
                             </Button>
                         </StackPanel>
+                    
+                        </StackPanel>
                     </Expander>
+
+                                        
 
                     <!-- Other workflows (tab bar was removed; steps are the panel home) -->
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
