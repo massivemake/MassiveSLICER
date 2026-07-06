@@ -978,6 +978,7 @@ public sealed class SceneRenderer : IDisposable
             for (var a = n.Parent; a is not null; a = a.Parent)
                 if (!a.Visible) { ancestorsVisible = false; break; }
             if (!ancestorsVisible) continue;
+            if (n.Mesh is { } glowMesh) glowMesh.RimGlow = 2.5f;
             n.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
         }
         GL.DepthMask(true);

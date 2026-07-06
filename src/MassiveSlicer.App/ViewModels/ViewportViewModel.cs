@@ -1636,7 +1636,11 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool IsScrubSessionActive
     {
         get => _isScrubSessionActive;
-        internal set => SetField(ref _isScrubSessionActive, value);
+        internal set
+        {
+            if (SetField(ref _isScrubSessionActive, value))
+                OnPropertyChanged(nameof(ShowSimTimeline));
+        }
     }
 
     // ── TCP keyframes (timeline-scoped TCP offsets, eased over move proximity) ──
@@ -2091,8 +2095,8 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public bool IsToolpathViewActive => _viewMode == "Toolpath";
 
-    /// <summary>The simplified bar hides when the full playback card (selected toolpath) is up.</summary>
-    public bool ShowSimTimeline => IsToolpathViewActive && !_isToolpathSelected;
+    /// <summary>The simplified bar hides whenever the full playback card is up.</summary>
+    public bool ShowSimTimeline => IsToolpathViewActive && !_isScrubSessionActive;
 
     /// <summary>Timeline position, 0–100 %. 100 = full toolpath drawn.</summary>
     public double SimTimelinePercent
@@ -2144,7 +2148,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
     internal float SimRenderProgress
-        => ShowSimTimeline ? (float)(_simTimelinePercent / 100.0) : -1f;
+        => ShowSimTimeline || _simRecording ? (float)(_simTimelinePercent / 100.0) : -1f;
 
     public RelayCommand SimPlayPauseCommand => _simPlayPauseCommand ??= new RelayCommand(() =>
     {
@@ -2471,10 +2475,14 @@ public sealed class ViewportViewModel : ViewModelBase
                 EmissiveFactor  = EffectorLime * 1.1f,
             });
 
-        // Spawn at the active model's bounding-box centre, else above the bed centre.
+        // Spawn at the model's bounding-box centre (even when the body is hidden by a
+        // line view), else above the print bed's centre, else a bed-ish default.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
-        if (ResolveActivePrintObjectItem() is { } model && ComputeWorldCenter(model.Node) is { } centre)
+        var model = ResolveActivePrintObjectItem() ?? EnumerateUserModelItems().FirstOrDefault();
+        if (model is not null && ComputeWorldCenter(model.Node) is { } centre)
             spawn = centre;
+        else if (ComputeBedCenter() is { } bedCentre)
+            spawn = bedCentre;
 
         var node = new SceneNode
         {
@@ -2511,6 +2519,15 @@ public sealed class ViewportViewModel : ViewModelBase
             LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f)),
         });
         return node;
+    }
+
+    /// <summary>Centre of the print bed, hovered 400 mm above its surface.</summary>
+    private OpenTK.Mathematics.Vector3? ComputeBedCenter()
+    {
+        var bedItem = _cellEnvOutlinerItems.FirstOrDefault(i => i.Name == "Print Bed");
+        if (bedItem?.Node is { } bed && ComputeWorldCenter(bed) is { } c)
+            return new OpenTK.Mathematics.Vector3(c.X, c.Y, c.Z + 400f);
+        return null;
     }
 
     /// <summary>Rescales every effector's glow shell to the current Range (mm).</summary>

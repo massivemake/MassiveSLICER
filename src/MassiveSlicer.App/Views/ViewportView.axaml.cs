@@ -926,6 +926,15 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _rawToolpathByNode.TryRemove(removing, out _);
+                if (ReferenceEquals(removing, _activeScrubNode) && DataContext is ViewportViewModel vmRm)
+                {
+                    _activeScrubNode = null;
+                    Dispatcher.UIThread.Post(() =>
+                    {
+                        vmRm.IsScrubSessionActive = false;
+                        vmRm.ResetScrubIndex(0, null);
+                    });
+                }
                 _toolpathMetaByNode.TryRemove(removing, out _);
                 _mergedByNode.TryRemove(removing, out _);
                 _toolpathOriginByNode.TryRemove(removing, out _);
@@ -1071,7 +1080,20 @@ public partial class ViewportView : UserControl
                 UploadToolpathEntry(entry, addToScene: true);
                 // Keep the current selection (usually the model) — auto-selecting the
                 // toolpath would flip the sidebar to the Toolpath view mid-workflow.
-                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+                var adoptNode = entry.Node;
+                var adoptTp   = entry.Toolpath;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    // Adopt the new toolpath as the live scrub session so the timeline
+                    // shows immediately without requiring a selection.
+                    if (DataContext is ViewportViewModel vmAdopt && _activeScrubNode is null)
+                    {
+                        _activeScrubNode = adoptNode;
+                        vmAdopt.ResetScrubIndex(adoptTp.Layers.Sum(l => l.Moves.Count), adoptTp);
+                        vmAdopt.IsScrubSessionActive = true;
+                    }
+                    UpdateFocusOverlay();
+                });
             }
 
             while (vm.PendingToolpathReplace.TryDequeue(out var entry))
@@ -5020,10 +5042,11 @@ public partial class ViewportView : UserControl
             if (vm.AdditiveSettings is { } ads)
                 ApplyToolpathStats(vm, tp, ads);
         }
-        else if (isToolNode && _activeScrubNode is not null && vm.ActiveScrubToolpath is not null)
+        else if (_activeScrubNode is { } keepNode && _toolpathByNode.ContainsKey(keepNode))
         {
-            // Clicking the TCP mid-scrub keeps the timeline session alive so the user
-            // can adjust the tool position at this moment (keyframing).
+            // Persistent timeline: deselecting (or clicking the TCP / another object)
+            // keeps the scrub session alive as long as the toolpath still exists.
+            vm.IsScrubSessionActive = true;
         }
         else
         {

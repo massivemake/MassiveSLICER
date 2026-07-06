@@ -902,8 +902,9 @@
                                              IsHitTestVisible="False"/>
                     </Grid>
 
-                    <!-- Move counter + analysing indicator -->
-                    <StackPanel Grid.Column="2" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="2">
+                    <!-- Move counter + analysing indicator + video export -->
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0,0,0" Spacing="6">
+                    <StackPanel VerticalAlignment="Center" Spacing="2">
                         <TextBlock IsVisible="{Binding IsValidating}"
                                    Text="Analysing…"
                                    Foreground="{DynamicResource TextSecondary}"
@@ -918,6 +919,13 @@
                                        FontSize="10"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
+                    </StackPanel>
+                    <Button Classes="ToolbarButton" Padding="6,4" VerticalAlignment="Center"
+                            Command="{Binding SimExportVideoCommand}"
+                            IsEnabled="{Binding !SimRecording}"
+                            ToolTip.Tip="Download a 6-second MP4 simulation of the viewport">
+                        <ia:Icon Value="mdi-download" FontSize="15"/>
+                    </Button>
                     </StackPanel>
 
                 </Grid>
