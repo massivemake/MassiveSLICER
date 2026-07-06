@@ -2751,9 +2751,12 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     void SyncRightPanelToViewportSelection()
     {
+        // Selecting a toolpath no longer swaps to the legacy Toolpath tab —
+        // the numbered workflow steps (Additive) stay up for all selections.
         if (Viewport.IsToolpathSelected)
         {
-            RightPanel.ActiveTab = RightPanelTab.Toolpath;
+            if (RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
             return;
         }
 
