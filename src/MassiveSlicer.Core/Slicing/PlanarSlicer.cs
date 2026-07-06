@@ -257,7 +257,8 @@ public static class PlanarSlicer
                     ? settings.InfillSpacingMm
                     : settings.BeadWidth;
                 if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
-                    InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer);
+                    InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer,
+                                                  insetStepMm: settings.BeadWidth);
                 else
                     InfillGenerator.Emit(fillPolys, z, layer, spacing, angle);
                 return new List<ContourTrack>();

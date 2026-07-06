@@ -239,7 +239,7 @@ public static class AngledPlanarSlicer
             int firstInfillMove = layer.Moves.Count;
             if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                 InfillGenerator.EmitGhostMesh(fillPolys, planeD, layer, infillSpacing, infillAngle,
-                                              isLastLayer, Unproject);
+                                              isLastLayer, Unproject, settings.BeadWidth);
             else
                 InfillGenerator.Emit(fillPolys, planeD, layer, infillSpacing, infillAngle, Unproject);
 
