@@ -455,7 +455,7 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Backdrop blend over the shader background. 0 = shader only, 1 = full HDR.</summary>
     public float BackdropOpacity { get; set; } = 1f;
 
-    private static readonly Vector3 DarkShaderBackground  = new(0.027f, 0.035f, 0.059f);
+    private static readonly Vector3 DarkShaderBackground  = new(0.086f, 0.086f, 0.086f);   // #161616 — matches the MassiveMake theme
     private static readonly Vector3 ArcticShaderBackground = new(1f, 1f, 1f);
 
     /// <summary>

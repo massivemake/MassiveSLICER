@@ -32,7 +32,7 @@ public sealed class AppPreferences
     // ── Appearance ────────────────────────────────────────────────────────
 
     /// <summary>Active colour theme name (matches a Resources/Themes/*.axaml file).</summary>
-    public string ActiveTheme { get; set; } = "Obsidian";
+    public string ActiveTheme { get; set; } = "MassiveMake";
 
     /// <summary>Path of the backdrop image loaded at startup, or null for none.</summary>
     public string? DefaultBackdropPath { get; set; }
