@@ -11,9 +11,9 @@
         <converters:BoolToEyeIconConverter x:Key="BoolToEyeIcon"/>
     </UserControl.Resources>
 
-    <Border Background="{DynamicResource Bg2}"
+    <Border Background="Transparent"
             BorderBrush="{DynamicResource Border1}"
-            BorderThickness="0,0,1,0">
+            BorderThickness="0">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="36"/>
@@ -37,7 +37,7 @@
 
             <!-- Robot cell selector -->
             <Border Grid.Row="1"
-                    Background="{DynamicResource Bg2}"
+                    Background="Transparent"
                     Padding="8,6"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1">
@@ -64,7 +64,7 @@
             <!-- Separator -->
             <!-- Import dropzone — click to browse, or drop model files -->
             <Border Grid.Row="2"
-                    Background="{DynamicResource Bg2}"
+                    Background="Transparent"
                     Padding="8,8"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,0,0,1">

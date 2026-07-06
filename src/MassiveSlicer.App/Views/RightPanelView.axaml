@@ -4,9 +4,9 @@
              x:Class="MassiveSlicer.App.Views.RightPanelView"
              x:CompileBindings="False">
 
-    <Border Background="{DynamicResource Bg2}"
+    <Border Background="Transparent"
             BorderBrush="{DynamicResource Border1}"
-            BorderThickness="1,0,0,0">
+            BorderThickness="0">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="36"/>

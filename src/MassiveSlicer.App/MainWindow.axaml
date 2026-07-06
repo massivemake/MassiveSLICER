@@ -63,7 +63,7 @@
                     Margin="10,56,0,10"
                     CornerRadius="8"
                     ClipToBounds="True"
-                    Background="{DynamicResource Bg2}"
+                    Background="#E02b2b2b"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     ZIndex="5">
@@ -78,7 +78,7 @@
                     Margin="0,56,10,10"
                     CornerRadius="8"
                     ClipToBounds="True"
-                    Background="{DynamicResource Bg2}"
+                    Background="#E02b2b2b"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
                     ZIndex="5">
