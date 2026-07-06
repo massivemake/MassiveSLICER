@@ -1598,7 +1598,7 @@ public sealed class SceneRenderer : IDisposable
 
     // -- Shader mode -----------------------------------------------------------
 
-    private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(1.00f, 0.55f, 0.30f, 1f);
+    private static readonly OpenTK.Mathematics.Vector4 ClayColor      = new(0.62f, 0.70f, 0.10f, 1f);   // lime-olive clay
     private static readonly OpenTK.Mathematics.Vector4 ArcticColor  = new(0.93f, 0.93f, 0.95f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 MetalColor     = new(0.60f, 0.60f, 0.65f, 1f);
     private static readonly OpenTK.Mathematics.Vector4 ChromeColor    = new(1.00f, 1.00f, 1.00f, 1f);
