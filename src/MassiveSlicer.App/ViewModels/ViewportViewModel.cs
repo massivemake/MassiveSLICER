@@ -1975,6 +1975,23 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         bool showBody = _viewMode is "Body" or "Preview";
         bool showPath = _viewMode != "Body";
+
+        // Per-mode toolpath render presets (users can still override in VISIBILITY):
+        // Preview = printed-part look (bead surface only); Speed/RPM = clean gradient
+        // lines; Toolpath = classic extrusion + travel lines.
+        switch (_viewMode)
+        {
+            case "Preview":
+                ShowBead = true;  ShowExtrusionMoves = false; ShowTravelMoves = false; ShowSeam = false;
+                break;
+            case "Speed":
+            case "RPM":
+                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
+                break;
+            case "Toolpath":
+                ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = true;
+                break;
+        }
         foreach (var item in EnumerateUserModelItems().ToList())
         {
             if (item.Visible != showBody) item.Visible = showBody;
