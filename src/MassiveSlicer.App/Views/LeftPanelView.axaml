@@ -668,9 +668,9 @@
                                     CommandParameter="Clay">
                                 <Button.Background>
                                     <RadialGradientBrush Center="38%,35%" GradientOrigin="38%,35%" RadiusX="70%" RadiusY="70%">
-                                        <GradientStop Color="#d4956a" Offset="0"/>
-                                        <GradientStop Color="#a0522d" Offset="0.55"/>
-                                        <GradientStop Color="#3d1a08" Offset="1"/>
+                                        <GradientStop Color="#c8d94a" Offset="0"/>
+                                        <GradientStop Color="#9eb31a" Offset="0.55"/>
+                                        <GradientStop Color="#3a4207" Offset="1"/>
                                     </RadialGradientBrush>
                                 </Button.Background>
                             </Button>

@@ -855,7 +855,10 @@ public sealed class SceneRenderer : IDisposable
             _contactShadows.ArcticPresentation = arcticPresentation;
 
         // Draw backdrop before any 3-D content, blended over the shader background.
-        if (_backdrop is not null && BackdropOpacity > 0f && !DarkMattePresentation)
+        float effectiveBackdropOpacity = DarkMattePresentation
+            ? MathF.Min(BackdropOpacity, 0.15f)
+            : BackdropOpacity;
+        if (_backdrop is not null && effectiveBackdropOpacity > 0f)
         {
             // Strip camera translation from the view matrix before inverting.
             // The backdrop is at infinity -- only rotation and FOV matter.
@@ -868,7 +871,7 @@ public sealed class SceneRenderer : IDisposable
             GL.Disable(EnableCap.DepthTest);
             GL.Disable(EnableCap.CullFace);
             GL.DepthMask(false);
-            _backdrop.Draw(invVPRot, BackdropBlur, BackdropOpacity, shaderBg);
+            _backdrop.Draw(invVPRot, BackdropBlur, effectiveBackdropOpacity, shaderBg);
             GL.Enable(EnableCap.DepthTest);
             GL.Enable(EnableCap.CullFace);
             GL.DepthMask(true);
