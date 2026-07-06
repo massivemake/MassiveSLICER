@@ -2899,6 +2899,7 @@ public sealed class ViewportViewModel : ViewModelBase
         if (pivot is null) return;
         // The group itself isn't deletable; visibility toggling falls through to the pivot node.
         _rotaryGroupItem = new OutlinerItemViewModel(pivot, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+        _rotaryGroupItem.IsLocked = true;
         OutlinerItems.Add(_rotaryGroupItem);
     }
 
@@ -2929,21 +2930,33 @@ public sealed class ViewportViewModel : ViewModelBase
                 toolName,
                 canDelete: false,
                 usesExclusiveVisibility: true);
+            item.IsLocked = true;
             _toolheadGroupItem.AddChild(item);
             _toolheadOutlinerItems.Add(item);
             _toolheadNames[item] = toolName;
         }
 
-        int insertAt = _robotGroupItem is not null
-            ? OutlinerItems.IndexOf(_robotGroupItem) + 1
-            : OutlinerItems.Count;
-        OutlinerItems.Insert(insertAt, _toolheadGroupItem);
+        if (_robotArmItem is not null)
+        {
+            // Chain: Robot Root -> Pedestal -> Robot Arm -> Toolheads.
+            _robotArmItem.AddChild(_toolheadGroupItem);
+        }
+        else
+        {
+            int insertAt = _robotGroupItem is not null
+                ? OutlinerItems.IndexOf(_robotGroupItem) + 1
+                : OutlinerItems.Count;
+            OutlinerItems.Insert(insertAt, _toolheadGroupItem);
+        }
     }
 
     void ClearMultiToolOutliner()
     {
         if (_toolheadGroupItem is not null)
+        {
             OutlinerItems.Remove(_toolheadGroupItem);
+            _robotArmItem?.RemoveChild(_toolheadGroupItem);
+        }
         _toolheadGroupItem = null;
         _toolheadOutlinerItems.Clear();
         _toolheadNames.Clear();
@@ -2975,13 +2988,16 @@ public sealed class ViewportViewModel : ViewModelBase
 
         foreach (var (node, displayName) in entries)
         {
-            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false);
+            var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false)
+            { IsLocked = true };
             OutlinerItems.Add(item);
             _cellEnvOutlinerItems.Add(item);
         }
     }
 
     private OutlinerItemViewModel? _robotGroupItem;
+    private OutlinerItemViewModel? _robotPedestalItem;
+    private OutlinerItemViewModel? _robotArmItem;
 
     /// <summary>
     /// Exposes the robot as a selectable outliner group "Robot Root" with "Robot Pedestal" and
@@ -2992,15 +3008,26 @@ public sealed class ViewportViewModel : ViewModelBase
     internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
     {
         if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        _robotPedestalItem = null;
+        _robotArmItem      = null;
         if (root is null) return;
 
         _robotGroupItem = new OutlinerItemViewModel(root, NotifyRenderNeeded, _ => { }, null, "Robot Root", canDelete: false);
+        _robotGroupItem.IsLocked = true;
+        _robotGroupItem.IsExpanded = false;
         OutlinerItems.Add(_robotGroupItem);
 
         if (pedestal is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false));
+        {
+            _robotPedestalItem = new OutlinerItemViewModel(pedestal, NotifyRenderNeeded, _ => { }, null, "Robot Pedestal", canDelete: false) { IsLocked = true };
+            _robotGroupItem.AddChild(_robotPedestalItem);
+        }
         if (arm is not null)
-            _robotGroupItem.AddChild(new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false));
+        {
+            // Chain: Root -> Pedestal -> Arm (arm nests under the pedestal when present).
+            _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
+            (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
+        }
     }
 
     /// <summary>
@@ -3319,6 +3346,21 @@ public sealed class ViewportViewModel : ViewModelBase
         if (item is null) return null;
         if (!item.IsToolpath) return item;
         return EnumerateUserModelItems().FirstOrDefault(m => m.Children.Contains(item));
+    }
+
+    /// <summary>True when the outliner row backing <paramref name="node"/> is locked.</summary>
+    internal bool IsNodeLockedInOutliner(SceneNode node)
+    {
+        bool Search(IEnumerable<OutlinerItemViewModel> items)
+        {
+            foreach (var item in items)
+            {
+                if (item.Node == node) return item.IsLocked;
+                if (Search(item.Children)) return true;
+            }
+            return false;
+        }
+        return Search(OutlinerItems);
     }
 
     /// <summary>Yields outliner entries for user-imported print models (excludes scans).</summary>

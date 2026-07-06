@@ -4235,6 +4235,10 @@ public partial class ViewportView : UserControl
             node = _currentToolNode;
         }
 
+        // Locked outliner rows (robot, bed, locked toolheads) can't be selected.
+        if (node is not null && vm.IsNodeLockedInOutliner(node))
+            node = null;
+
         if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
             SyncScanSelectionToRenderer(vm);
         else

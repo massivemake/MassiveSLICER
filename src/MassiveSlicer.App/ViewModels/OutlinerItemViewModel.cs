@@ -27,6 +27,44 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     /// <summary>True for toolpath entries (set by RegisterToolpathInOutliner).</summary>
     public bool IsToolpath { get; set; }
 
+    private bool _isLocked;
+    /// <summary>Locked rows can't be selected (outliner or viewport); toggled via the padlock.</summary>
+    public bool IsLocked
+    {
+        get => _isLocked;
+        set
+        {
+            if (_isLocked == value) return;
+            _isLocked = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(LockIcon));
+            OnPropertyChanged(nameof(NameOpacity));
+        }
+    }
+
+    public string LockIcon    => _isLocked ? "mdi-lock" : "mdi-lock-open-variant-outline";
+    public double NameOpacity => _isLocked ? 0.5 : 1.0;
+    public ICommand ToggleLockCommand { get; private set; } = null!;
+
+    private bool _isExpanded = true;
+    /// <summary>Whether this row's children are shown (chevron toggle).</summary>
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set
+        {
+            if (_isExpanded == value) return;
+            _isExpanded = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ExpandGlyph));
+            OnPropertyChanged(nameof(ShowChildren));
+        }
+    }
+
+    public string ExpandGlyph  => _isExpanded ? "mdi-chevron-down" : "mdi-chevron-right";
+    public bool   ShowChildren => HasChildren && _isExpanded;
+    public ICommand ToggleExpandCommand { get; private set; } = null!;
+
     public bool Visible
     {
         get => Node.Visible;
@@ -91,12 +129,14 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     {
         Children.Add(child);
         OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ShowChildren));
     }
 
     public void RemoveChild(OutlinerItemViewModel child)
     {
         Children.Remove(child);
         OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ShowChildren));
     }
 
     internal void RefreshModelCommands()
@@ -126,6 +166,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         UsesExclusiveVisibility   = usesExclusiveVisibility;
         DeleteCommand             = new RelayCommand(() => onDelete(this), () => canDelete);
         ToggleVisibleCommand = new RelayCommand(() => Visible = !Visible);
+        ToggleLockCommand    = new RelayCommand(() => IsLocked = !IsLocked);
+        ToggleExpandCommand  = new RelayCommand(() => IsExpanded = !IsExpanded);
         ReloadModelCommand   = new RelayCommand(
             () => onReloadModel?.Invoke(this),
             () => onReloadModel is not null && (canReloadModel?.Invoke(this) ?? false));
