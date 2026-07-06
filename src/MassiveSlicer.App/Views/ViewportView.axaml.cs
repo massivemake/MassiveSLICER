@@ -885,6 +885,7 @@ public partial class ViewportView : UserControl
             _renderer.BackdropOpacity  = vm.BackdropOpacity;
             _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
+            _renderer.ToolpathSimProgress = vm.SimRenderProgress;
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {

@@ -140,6 +140,9 @@ public sealed class ToolpathRenderer : IDisposable
     private NVec3    _origin;
     private bool[]?  _reachability;  // per flat-move index; null = all reachable
 
+    /// <summary>Total flat move count (scrub/simulation range).</summary>
+    public int TotalMoveCount => _totalMoveCount;
+
     // Prefix-sum arrays: cumulative[i] = total VBO vertices for the first i flat moves.
     // Index 0 = 0 (nothing drawn), index _totalMoveCount = full count.
     private int   _totalMoveCount;

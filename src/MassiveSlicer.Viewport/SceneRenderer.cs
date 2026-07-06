@@ -520,6 +520,10 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Opacity of the extrusion/travel toolpath lines (1 = opaque).</summary>
     public float ToolpathLineOpacity { get; set; } = 1f;
 
+    /// <summary>Simulate-timeline progress (0–1) applied to every visible toolpath;
+    /// negative = off (normal selection-based scrubbing).</summary>
+    public float ToolpathSimProgress { get; set; } = -1f;
+
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
@@ -953,11 +957,14 @@ public sealed class SceneRenderer : IDisposable
             var toolpathMvp = tpNode.LocalTransform * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
+            int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
+            if (ToolpathSimProgress >= 0f)
+                scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
-                scrubIndex: isSelected ? ToolpathActiveScrubIndex : int.MaxValue,
+                scrubIndex: scrub,
                 eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
         }
 

@@ -1431,6 +1431,7 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (SetField(ref _isToolpathSelected, value))
             {
+                OnPropertyChanged(nameof(ShowSimTimeline));
                 OnPropertyChanged(nameof(Lfam3WorkflowMargin));
                 ExportKrlCommand?.RaiseCanExecuteChanged();
                 SendToRobotCommand?.RaiseCanExecuteChanged();
@@ -1978,12 +1979,91 @@ public sealed class ViewportViewModel : ViewModelBase
             if (!SetField(ref _viewMode, value)) return;
             ApplyViewMode();
             ApplyViewDisplayProfile();
+            if (value != "Toolpath") StopSimTimeline();
+            OnPropertyChanged(nameof(IsToolpathViewActive));
+            OnPropertyChanged(nameof(ShowSimTimeline));
         }
     }
 
     public RelayCommand<string> SetViewModeCommand => _setViewModeCommand ??=
         new RelayCommand<string>(m => ViewMode = m ?? "Body");
     private RelayCommand<string>? _setViewModeCommand;
+
+    // ── Simulate timeline (Toolpath view): sweep the whole path in 6 s ─────
+    private const double SimDurationSeconds = 6.0;
+    private double _simTimelinePercent = 100.0;
+    private bool   _simPlaying;
+    private long   _simLastTickMs;
+    private Avalonia.Threading.DispatcherTimer? _simTimer;
+
+    public bool IsToolpathViewActive => _viewMode == "Toolpath";
+
+    /// <summary>The simplified bar hides when the full playback card (selected toolpath) is up.</summary>
+    public bool ShowSimTimeline => IsToolpathViewActive && !_isToolpathSelected;
+
+    /// <summary>Timeline position, 0–100 %. 100 = full toolpath drawn.</summary>
+    public double SimTimelinePercent
+    {
+        get => _simTimelinePercent;
+        set
+        {
+            if (SetField(ref _simTimelinePercent, Math.Clamp(value, 0.0, 100.0)))
+            {
+                OnPropertyChanged(nameof(SimTimelineLabel));
+                NotifyRenderNeeded();
+            }
+        }
+    }
+
+    public string SimTimelineLabel => $"{_simTimelinePercent:0}%";
+
+    public bool SimPlaying
+    {
+        get => _simPlaying;
+        private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
+    }
+
+    /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off.</summary>
+    internal float SimRenderProgress
+        => IsToolpathViewActive ? (float)(_simTimelinePercent / 100.0) : -1f;
+
+    public RelayCommand SimPlayPauseCommand => _simPlayPauseCommand ??= new RelayCommand(() =>
+    {
+        if (_simPlaying) { StopSimTimeline(); return; }
+        if (_simTimelinePercent >= 100.0) SimTimelinePercent = 0.0;
+        _simTimer ??= CreateSimTimer();
+        _simLastTickMs = Environment.TickCount64;
+        SimPlaying = true;
+        _simTimer.Start();
+    });
+    private RelayCommand? _simPlayPauseCommand;
+
+    public RelayCommand SimResetCommand => _simResetCommand ??= new RelayCommand(() =>
+    {
+        StopSimTimeline();
+        SimTimelinePercent = 0.0;
+    });
+    private RelayCommand? _simResetCommand;
+
+    private Avalonia.Threading.DispatcherTimer CreateSimTimer()
+    {
+        var t = new Avalonia.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(16) };
+        t.Tick += (_, _) =>
+        {
+            long now = Environment.TickCount64;
+            double dt = (now - _simLastTickMs) / 1000.0;
+            _simLastTickMs = now;
+            SimTimelinePercent = _simTimelinePercent + dt / SimDurationSeconds * 100.0;
+            if (_simTimelinePercent >= 100.0) StopSimTimeline();
+        };
+        return t;
+    }
+
+    private void StopSimTimeline()
+    {
+        _simTimer?.Stop();
+        SimPlaying = false;
+    }
 
     /// <summary>Extrude-line colour mode implied by the view mode (drained by the GL loop).</summary>
     public MassiveSlicer.Viewport.Rendering.ToolpathColorMode ToolpathColorMode => _viewMode switch

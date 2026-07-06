@@ -651,6 +651,43 @@
             </StackPanel>
         </Button>
 
+        <!-- Simulate timeline — bottom-center, Toolpath view (hidden when the
+             full playback card for a selected toolpath is showing) -->
+        <Border IsVisible="{Binding ShowSimTimeline}"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Bottom"
+                Margin="0,0,0,16"
+                Width="440"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="10,5"
+                ZIndex="24">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto">
+                <Button Grid.Column="0" Classes="ToolbarButton" Padding="6,4" Margin="0,0,2,0"
+                        Command="{Binding SimResetCommand}"
+                        ToolTip.Tip="Reset simulation to 0%">
+                    <ia:Icon Value="mdi-restore" FontSize="15"/>
+                </Button>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="6,4" Margin="0,0,8,0"
+                        Command="{Binding SimPlayPauseCommand}"
+                        ToolTip.Tip="Simulate the full toolpath (6 s)">
+                    <Panel>
+                        <ia:Icon Value="mdi-play"  FontSize="15" IsVisible="{Binding !SimPlaying}"/>
+                        <ia:Icon Value="mdi-pause" FontSize="15" IsVisible="{Binding SimPlaying}"/>
+                    </Panel>
+                </Button>
+                <Slider Grid.Column="2" Classes="ScrubSlider"
+                        Minimum="0" Maximum="100"
+                        VerticalAlignment="Center"
+                        Value="{Binding SimTimelinePercent, Mode=TwoWay}"/>
+                <TextBlock Grid.Column="3" Text="{Binding SimTimelineLabel}"
+                           Classes="Readout" FontSize="11" Width="38"
+                           TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
+            </Grid>
+        </Border>
+
         <!-- Horizontal timeline — bottom, visible when toolpath selected -->
         <Border IsVisible="{Binding IsToolpathSelected}"
                 HorizontalAlignment="Stretch"
