@@ -244,22 +244,45 @@ public static class PatternEffect
             if (FadeIn  > 0f) fade *= Math.Clamp(z / FadeIn, 0f, 1f);
             if (FadeOut > 0f) fade *= Math.Clamp((Height - z) / FadeOut, 0f, 1f);
             if (fade <= 0f) return 0f;
-            // Live effector: smoothstep bell either boosts the local amplitude
-            // (Amplify, OGcode model) or fades the pattern back to the plain wall
-            // (Erase — full suppression at the effector centre).
-            float bell = EffectorBell(p);
+            // Live effector. Amplify: smoothstep bell boosts the local amplitude
+            // (OGcode model). Erase: the pattern is simply not applied inside the
+            // influence area — the amplitude is zeroed before displacement through
+            // the inner region and blends back over the outer edge of the radius.
             float amp = EffectorMode == EffectorMode.Erase
-                ? Amplitude * (1f - bell)
-                : Amplitude + EffectorStrength * bell;
+                ? Amplitude * (1f - EffectorErase(p))
+                : Amplitude + EffectorStrength * EffectorBell(p);
             if (amp <= 0f) return 0f;
             return amp * fade * Value(theta + TwistRad * z - OffsetRad, z);
         }
 
         /// <summary>Max smoothstep falloff t²(3−2t) over all effector points; 0 outside radius.</summary>
+        /// <summary>
+        /// Erase suppression in [0,1]: 1 (pattern fully off) anywhere within the inner
+        /// 60% of the influence radius, smoothstep-blending to 0 across the outer band.
+        /// The bell curve used by Amplify only hits 1 exactly AT the point — an effector
+        /// hovering off the wall would never fully erase; this profile guarantees a
+        /// clean flat core with a seamless transition at the boundary.
+        /// </summary>
+        private float EffectorErase(Vector3 p)
+        {
+            if (Effectors.Count == 0) return 0f;
+            float best = 0f;
+            foreach (var e in Effectors)
+            {
+                float dist = Vector3.Distance(p, e);
+                if (dist >= EffectorRadius) continue;
+                float prox = 1f - dist / EffectorRadius;    // 1 at the point → 0 at the edge
+                float t = Math.Clamp(prox / 0.4f, 0f, 1f);  // saturates at 60% of the radius
+                float s = t * t * (3f - 2f * t);
+                if (s > best) best = s;
+            }
+            return best;
+        }
+
         private float EffectorBell(Vector3 p)
         {
             if (Effectors.Count == 0) return 0f;
-            if (EffectorMode == EffectorMode.Amplify && EffectorStrength <= 0f) return 0f;
+            if (EffectorStrength <= 0f) return 0f;
             float best = 0f;
             foreach (var e in Effectors)
             {

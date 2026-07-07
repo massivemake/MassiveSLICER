@@ -241,6 +241,14 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "effector",
+            Description = "Toggle live effector point 1-3 (spawns above bed centre)",
+            Usage = "effector <1|2|3>",
+            Execute = (ctx, args) => ctx.Main.Viewport.ToggleEffectorPointCommand.Execute(args.Trim()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewset",
             Description = "Debug: get/set a ViewportViewModel property by name",
             Usage = "viewset <property> [value]",
