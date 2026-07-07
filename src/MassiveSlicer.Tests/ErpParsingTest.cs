@@ -178,6 +178,25 @@ public class ErpParsingTest
     }
 
     [Fact]
+    public void RevisionFoldersCountUpFromExisting()
+    {
+        string dir = Directory.CreateTempSubdirectory("msl-rev").FullName;
+        try
+        {
+            Assert.EndsWith("Rev 1", MassiveSlicer.ViewModels.MainWindowViewModel.NextRevisionDir(dir));
+            Directory.CreateDirectory(Path.Combine(dir, "Rev 1"));
+            Directory.CreateDirectory(Path.Combine(dir, "Rev 3"));   // gap: user deleted Rev 2
+            Directory.CreateDirectory(Path.Combine(dir, "rev 7"));   // case-insensitive
+            Directory.CreateDirectory(Path.Combine(dir, "Revisions"));   // ignored
+            Assert.EndsWith("Rev 8", MassiveSlicer.ViewModels.MainWindowViewModel.NextRevisionDir(dir));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void RejectsRecordsWithoutId()
     {
         Assert.Null(ErpClient.ParseHit(Parse("""{ "title": "no id" }""")));

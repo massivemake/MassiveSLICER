@@ -1221,11 +1221,25 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
 
+        // The .src for this revision goes to the project's 3D Print Files/Rev N/ on
+        // the UNAS; the preview render lands beside it so each rev folder is complete.
+        var src = await ExportSrcToPrintFilesAsync();
+        if (src is { } s2)
+        {
+            if (ToUnasShareRelative(s2.Path) is { } krlRel)
+                files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(s2.Path).Length));
+        }
+        else
+        {
+            Console.Log("[erp] no active toolpath — registering without a .src file.");
+        }
+
         try
         {
             if (CaptureViewportPng is { } capture && await capture() is { Length: > 0 } png)
             {
-                string dir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
+                string dir = src?.RevFolder
+                    ?? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
                 System.IO.Directory.CreateDirectory(dir);
                 string previewPath = System.IO.Path.Combine(
                     dir, System.IO.Path.GetFileNameWithoutExtension(massPath) + " preview.png");
@@ -1258,27 +1272,18 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// file) and registers a slice rev flagged <c>sentToRobot</c> so the ERP knows
     /// the program is on the printer and ready to run.
     /// </summary>
-    internal async Task NotifyErpSentToRobotAsync(string srcTempPath, string fileName, string cellName, string host)
+    internal async Task NotifyErpSentToRobotAsync(string srcPath, string fileName, string cellName, string host)
     {
         var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
         string robotPath = $@"\\{host}\{fileName}";
 
+        // srcPath is the NAS copy under 3D Print Files/Rev N/ when the workspace is
+        // saved on the share; reference it directly.
+        if (ToUnasShareRelative(srcPath) is { } krlRel && System.IO.File.Exists(srcPath))
+            files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(srcPath).Length));
+
         if (AppPreferences.LastWorkspacePath is { Length: > 0 } massPath && System.IO.File.Exists(massPath))
         {
-            try
-            {
-                string dir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
-                System.IO.Directory.CreateDirectory(dir);
-                string unasCopy = System.IO.Path.Combine(dir, fileName);
-                System.IO.File.Copy(srcTempPath, unasCopy, overwrite: true);
-                if (ToUnasShareRelative(unasCopy) is { } krlRel)
-                    files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(unasCopy).Length));
-            }
-            catch (Exception ex)
-            {
-                Console.Log($"[erp] could not mirror {fileName} to the project folder: {ex.Message}");
-            }
-
             if (ToUnasShareRelative(massPath) is { } massRel)
                 files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
         }
@@ -1299,6 +1304,61 @@ public sealed class MainWindowViewModel : ViewModelBase
             ["robotPath"] = robotPath,
             ["at"]       = DateTime.UtcNow.ToString("o"),
         });
+    }
+
+    /// <summary>
+    /// Writes the active toolpath's .src into the project's
+    /// <c>3D Print Files/Rev N/</c> folder beside the saved .mass — one folder per
+    /// registered/sent revision, filename identical to the source geometry (the KRL
+    /// program name derives from it). Returns null when the workspace was never
+    /// saved or no toolpath is active.
+    /// </summary>
+    internal async Task<(string Path, string RevFolder)?> ExportSrcToPrintFilesAsync()
+    {
+        if (AppPreferences.LastWorkspacePath is not { Length: > 0 } massPath
+            || !System.IO.File.Exists(massPath)
+            || Viewport.ExportKrlToDirectory is not { } export)
+            return null;
+
+        string baseDir = System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(massPath)!, "3D Print Files");
+        string revDir = NextRevisionDir(baseDir);
+        System.IO.Directory.CreateDirectory(revDir);
+
+        string? path = null;
+        try
+        {
+            path = await export(revDir);
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[krl] .src export to {revDir} failed: {ex.Message}");
+        }
+
+        if (path is null)
+        {
+            try { System.IO.Directory.Delete(revDir); } catch { /* non-empty or gone */ }
+            return null;
+        }
+        Console.Log($"[krl] Saved {System.IO.Path.GetFileName(path)} to {revDir}");
+        return (path, revDir);
+    }
+
+    /// <summary>Next unused "Rev N" subfolder (Rev 1, Rev 2, …) under <paramref name="baseDir"/>.</summary>
+    internal static string NextRevisionDir(string baseDir)
+    {
+        int next = 1;
+        if (System.IO.Directory.Exists(baseDir))
+        {
+            foreach (var dir in System.IO.Directory.EnumerateDirectories(baseDir))
+            {
+                var name = System.IO.Path.GetFileName(dir);
+                if (name.StartsWith("Rev ", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(name[4..].Trim(), out int n) && n >= next)
+                    next = n + 1;
+            }
+        }
+        return System.IO.Path.Combine(baseDir, $"Rev {next}");
     }
 
     /// <summary>

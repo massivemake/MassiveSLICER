@@ -461,6 +461,11 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.</summary>
     public RobotSmbViewModel RobotSmb { get; } = new();
 
+    /// <summary>Writes the active toolpath's KRL program into the given directory
+    /// (named after the source geometry) and returns the written path, or null when
+    /// no toolpath is active. Wired by the viewport view.</summary>
+    internal Func<string, Task<string?>>? ExportKrlToDirectory { get; set; }
+
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
 
