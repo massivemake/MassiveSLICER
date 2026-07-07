@@ -403,7 +403,7 @@
         <!-- ERP project attachment — bottom-left dock (mirror of the Live I/O dock) -->
         <Border HorizontalAlignment="Left"
                 VerticalAlignment="Bottom"
-                Margin="8,8,8,8"
+                Margin="{Binding BottomDockMargin}"
                 Background="#E6303030"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
@@ -444,7 +444,7 @@
         <Border IsVisible="{Binding ShowStandaloneLiveIo}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
-                Margin="8,8,8,8"
+                Margin="{Binding BottomDockMargin}"
                 Background="#E6303030"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
@@ -475,7 +475,8 @@
             </StackPanel>
         </Border>
 
-        <local:Lfam3WorkflowTimelineView IsVisible="{Binding ShowLfam3ToolPicker}"
+        <local:Lfam3WorkflowTimelineView x:Name="Lfam3WorkflowBar"
+                                         IsVisible="{Binding ShowLfam3ToolPicker}"
                                          HorizontalAlignment="Stretch"
                                          VerticalAlignment="Bottom"
                                          Margin="{Binding Lfam3WorkflowMargin}"
@@ -974,7 +975,8 @@
 
         <!-- Simulate timeline — bottom-center, Toolpath view (hidden when the
              full playback card for a selected toolpath is showing) -->
-        <Border IsVisible="{Binding ShowSimTimeline}"
+        <Border x:Name="SimTimelineBar"
+                IsVisible="{Binding ShowSimTimeline}"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Bottom"
                 Margin="0,0,0,16"
@@ -1017,7 +1019,8 @@
 
         <!-- Horizontal timeline — Preview view only, while a scrub session is live
              (stays up when the TCP is selected for keyframe adjustments) -->
-        <Border IsVisible="{Binding ShowPlaybackTimeline}"
+        <Border x:Name="PlaybackTimelineBar"
+                IsVisible="{Binding ShowPlaybackTimeline}"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Margin="8"

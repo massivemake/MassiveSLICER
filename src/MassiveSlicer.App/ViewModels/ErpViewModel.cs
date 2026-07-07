@@ -335,8 +335,20 @@ public sealed class ErpViewModel : ViewModelBase
         NotifySectionVisibility();
     }
 
-    /// <summary>Workspace open: restore the persisted attachment (works offline).</summary>
-    public void RestoreAttachment(ErpAttachment? attachment) => Post(() => SetAttachment(attachment));
+    /// <summary>Workspace open: restore the persisted attachment (works offline).
+    /// When the workspace carries an attachment and the local prefs have ERP
+    /// credentials, connect automatically so the project link is live on open.</summary>
+    public void RestoreAttachment(ErpAttachment? attachment) => Post(() =>
+    {
+        SetAttachment(attachment);
+        if (attachment is not null
+            && ConnectionState == ErpConnectionState.Disconnected
+            && _baseUrl.Trim().Length > 0
+            && _apiToken.Trim().Length > 0)
+        {
+            _ = ConnectAsync();
+        }
+    });
 
     /// <summary>New workspace: no attachment.</summary>
     public void ClearAttachment() => Post(() => SetAttachment(null));

@@ -637,6 +637,15 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
     public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
 
+    private Avalonia.Thickness _bottomDockMargin = new(8, 8, 8, 8);
+    /// <summary>Margin for the bottom corner docks (ERP left, Live I/O right). The overlay
+    /// code-behind lifts them 16px above whichever bottom timeline bar is visible.</summary>
+    public Avalonia.Thickness BottomDockMargin
+    {
+        get => _bottomDockMargin;
+        set => SetField(ref _bottomDockMargin, value);
+    }
+
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
     public Avalonia.Thickness Lfam3WorkflowMargin
     {
