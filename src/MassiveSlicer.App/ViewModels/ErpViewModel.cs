@@ -376,6 +376,7 @@ public sealed class ErpViewModel : ViewModelBase
     private void SetAttachment(ErpAttachment? attachment)
     {
         _attachment = attachment;
+        ConvertedProjectId = null;   // any attachment change invalidates the re-attach offer
         if (attachment is not null && string.IsNullOrEmpty(attachment.ElementId)
             && _attachmentElementName.Trim().Length == 0)
         {
@@ -449,6 +450,10 @@ public sealed class ErpViewModel : ViewModelBase
             {
                 Status = FriendlyPostError("Element create", result.Error!);
                 _log?.Invoke($"[erp] element create failed: {result.Error.Kind} — {result.Error.Message}");
+                // ERP #961: leads can't own elements. When the lead was already
+                // converted, the 400 body carries the linked project's id — offer
+                // a one-click re-attach to that project.
+                ConvertedProjectId = ErpClient.ExtractLinkedProjectId(result.Error.Body);
                 return;
             }
             var el = result.Value!;
@@ -460,6 +465,56 @@ public sealed class ErpViewModel : ViewModelBase
             }
             Status = $"Element \"{el.Name}\" created and linked — save the workspace to keep it.";
             _log?.Invoke($"[erp] created element {el.Name} on {att.Type} {att.Number} and linked the workspace");
+        });
+    }
+
+    // -- Converted-lead re-attach ---------------------------------------------------
+
+    private string? _convertedProjectId;
+    /// <summary>Set from a lead element-create 400 whose body names the project the
+    /// lead was converted to; shows the "Attach to converted project" offer.</summary>
+    public string? ConvertedProjectId
+    {
+        get => _convertedProjectId;
+        private set
+        {
+            if (SetField(ref _convertedProjectId, value))
+                OnPropertyChanged(nameof(ShowReattachOffer));
+        }
+    }
+
+    public bool ShowReattachOffer => _convertedProjectId is { Length: > 0 } && IsConnected;
+
+    public RelayCommand ReattachToProjectCommand => _reattachToProjectCommand ??= new RelayCommand(
+        () => _ = ReattachToConvertedProjectAsync(),
+        () => !_busy && ShowReattachOffer);
+    private RelayCommand? _reattachToProjectCommand;
+
+    private async Task ReattachToConvertedProjectAsync()
+    {
+        var client = _client;
+        if (_convertedProjectId is not { Length: > 0 } projectId || client is null) return;
+
+        Status = "Resolving converted project…";
+        var result = await client.GetProjectAsync(projectId, CancellationToken.None);
+        Post(() =>
+        {
+            if (!result.Ok)
+            {
+                Status = $"Re-attach failed — {result.Error!.Message}";
+                _log?.Invoke($"[erp] re-attach failed: {result.Error.Kind} — {result.Error.Message}");
+                return;
+            }
+            var proj = result.Value!;
+            SetAttachment(new ErpAttachment
+            {
+                Type   = "project",
+                Id     = proj.Id,
+                Number = proj.Number,
+                Title  = proj.Title,
+            });
+            Status = $"Re-attached to project {proj.Number} — save the workspace to keep it.";
+            _log?.Invoke($"[erp] re-attached workspace to converted project {proj.Number} ({proj.Title})");
         });
     }
 
@@ -530,7 +585,7 @@ public sealed class ErpViewModel : ViewModelBase
     /// <summary>404 on a phase-2 POST means the ERP hasn't shipped that endpoint yet —
     /// say so instead of a bare status code.</summary>
     private static string FriendlyPostError(string action, ErpError error) =>
-        error.Message.Contains("404")
+        error.HttpStatus == 404
             ? $"{action} failed — the ERP doesn't have this endpoint yet (update the ERP server)."
             : $"{action} failed — {error.Message}";
 
@@ -554,9 +609,11 @@ public sealed class ErpViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowSearch));
         OnPropertyChanged(nameof(ShowAttachment));
         OnPropertyChanged(nameof(ShowAttachmentElementCreate));
+        OnPropertyChanged(nameof(ShowReattachOffer));
         OnPropertyChanged(nameof(CanSendSlice));
         CreateElementCommand.RaiseCanExecuteChanged();
         CreateAttachmentElementCommand.RaiseCanExecuteChanged();
+        ReattachToProjectCommand.RaiseCanExecuteChanged();
         SendSliceCommand.RaiseCanExecuteChanged();
     }
 

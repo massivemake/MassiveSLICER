@@ -154,6 +154,30 @@ public class ErpParsingTest
     }
 
     [Fact]
+    public void ErrorBodiesSurfaceTheServersMessage()
+    {
+        // ERP #961: human-readable errors shown verbatim.
+        Assert.Equal(
+            "Leads can't own elements — convert the lead to a project first.",
+            ErpClient.ExtractErrorMessage(
+                """{ "message": "Leads can't own elements — convert the lead to a project first." }""", 400));
+        Assert.Equal("Not found", ErpClient.ExtractErrorMessage("""{ "message": "Not found" }""", 404));
+        Assert.Equal("HTTP 500", ErpClient.ExtractErrorMessage("<html>oops</html>", 500));
+        Assert.Equal("HTTP 400", ErpClient.ExtractErrorMessage("", 400));
+    }
+
+    [Fact]
+    public void ConvertedLeadHintYieldsTheLinkedProjectId()
+    {
+        Assert.Equal("43", ErpClient.ExtractLinkedProjectId(
+            """{ "message": "Lead 26-173 was converted to project 25-120.", "projectId": 43 }"""));
+        Assert.Null(ErpClient.ExtractLinkedProjectId(
+            """{ "message": "Leads can't own elements." }"""));
+        Assert.Null(ErpClient.ExtractLinkedProjectId(null));
+        Assert.Null(ErpClient.ExtractLinkedProjectId("not json"));
+    }
+
+    [Fact]
     public void RejectsRecordsWithoutId()
     {
         Assert.Null(ErpClient.ParseHit(Parse("""{ "title": "no id" }""")));

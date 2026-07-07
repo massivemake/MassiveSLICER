@@ -137,6 +137,12 @@
                 </Grid>
             </StackPanel>
 
+            <!-- Lead was converted to a project — offer one-click re-attach -->
+            <Button Content="Attach to Converted Project" HorizontalAlignment="Stretch"
+                    IsVisible="{Binding ShowReattachOffer}"
+                    Command="{Binding ReattachToProjectCommand}"
+                    ToolTip.Tip="This lead was converted to a project on the ERP — re-attach the workspace to that project"/>
+
             <Button Content="Send Slice to ERP" HorizontalAlignment="Stretch"
                     Classes="ExportCta"
                     Command="{Binding SendSliceCommand}"

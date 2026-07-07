@@ -43,9 +43,12 @@ Response — 201, element wrapped or bare (both accepted):
 { "element": { "id": 41, "elementNumber": 1, "name": "2026_0706 - Curtain Wall For Print" } }
 ```
 
-**Open question for the ERP:** can leads own elements directly? If not, return a
-400 with a human-readable `error` and the slicer will surface it verbatim — or
-decide on lead→project conversion semantics.
+**Answered (ERP #961):** leads can't own elements — the ERP returns a 400 with a
+human-readable message the slicer surfaces verbatim. When the lead was already
+converted, the message names the project number and the body carries the linked
+project's id (`projectId`); the slicer parses it and offers a one-click
+"Attach to Converted Project" that resolves the project via the elements
+endpoint's envelope and re-attaches the workspace.
 
 ### 2. POST /elements/{id}/slices
 Register a slice revision. **Metadata only — no bytes are uploaded.** Heavy files
@@ -78,9 +81,8 @@ Request (real example from the verified flow):
   `.src`) is planned.
 - `files[].path` is **UNAS share-relative**: the slicer strips its local mount
   prefix `/Volumes/MassiveFILES/`, so paths start at `Projects/…`.
-  **Open question for the ERP:** confirm the root its UNAS API resolves against
-  matches this (i.e. the MassiveFILES share root). If it needs a different base,
-  say which and the slicer will adjust its prefix stripping.
+  **Answered (ERP #961):** confirmed — the UNAS path root is the MassiveFILES
+  share root; the slicer's `Projects/…` prefix-stripped paths are correct as-is.
 
 Response — 201; the ERP assigns the rev (slicer reads `rev|revision|revNumber`,
 `url|link` optional and used for a future deep-link):

@@ -178,6 +178,7 @@ public sealed class ConsoleCommandRegistry
                         break;
                     }
                     case "sendslice": erp.SendSliceCommand.Execute(null); break;
+                    case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
                     default:
                         ctx.Log($"[erp] state={erp.ConnectionState} status='{erp.Status}' results={erp.SearchResults.Count} " +
                                 $"elements={erp.Elements.Count} attached='{erp.ToggleLabel}'");
