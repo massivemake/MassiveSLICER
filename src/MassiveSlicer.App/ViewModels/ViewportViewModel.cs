@@ -613,6 +613,9 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public LiveIoMonitorViewModel LiveIo { get; } = new();
 
+    /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
+    public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
+
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
     public Avalonia.Thickness Lfam3WorkflowMargin
     {
@@ -917,6 +920,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
         KrlToolChangeSequenceParser.KrcRootOverride = ActiveCell?.KrcRoot;
         OnPropertyChanged(nameof(ShowLfam3ToolPicker));
+        OnPropertyChanged(nameof(ShowStandaloneLiveIo));
         if (ShowLfam3ToolPicker)
             IsLfam3WorkflowExpanded = true;
         else

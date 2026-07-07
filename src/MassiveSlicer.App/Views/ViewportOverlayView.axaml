@@ -404,6 +404,43 @@
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>
 
+        <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
+             Same LiveIo view model — the extruder/milling bridge config is set on
+             every cell swap, so the monitor works on any cell. -->
+        <Border IsVisible="{Binding ShowStandaloneLiveIo}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,8"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="620"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding LiveIo.IsExpanded}">
+                    <local:Lfam3LiveIoPanelView DataContext="{Binding LiveIo}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding LiveIo.IsExpanded}"
+                        Command="{Binding LiveIo.ToggleExpandedCommand}"
+                        HorizontalAlignment="Right"
+                        ToolTip.Tip="Live I/O monitor — extruder zones, KUKA I/O, bridge state">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding LiveIo.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
         <local:Lfam3WorkflowTimelineView IsVisible="{Binding ShowLfam3ToolPicker}"
                                          HorizontalAlignment="Stretch"
                                          VerticalAlignment="Bottom"
