@@ -71,6 +71,24 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _cavityShadeToolpaths = true;
+
+    /// <summary>Include toolpaths (lines + bead) in cavity shading.</summary>
+    public bool CavityShadeToolpaths
+    {
+        get => _cavityShadeToolpaths;
+        set { if (SetField(ref _cavityShadeToolpaths, value)) NotifyRenderNeeded(); }
+    }
+
+    private bool _cavityShadeImportedMeshes = true;
+
+    /// <summary>Include user-imported meshes in cavity shading (cell geometry always shades).</summary>
+    public bool CavityShadeImportedMeshes
+    {
+        get => _cavityShadeImportedMeshes;
+        set { if (SetField(ref _cavityShadeImportedMeshes, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showTcpFrame = true;
 
     /// <summary>Whether the TCP X/Y/Z orientation axes are visible.</summary>

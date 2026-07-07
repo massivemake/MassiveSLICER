@@ -190,6 +190,35 @@ public sealed class ToolpathRenderer : IDisposable
     private ToolpathColorMode _colorMode = ToolpathColorMode.Normal;
 
     /// <summary>Switches the extrude-line colour mode and rebuilds VBOs. GL thread only.</summary>
+    /// <summary>
+    /// Cavity exclusion: writes alpha-0 (mask-off) fragments over this toolpath's
+    /// pixels in the normal-prepass buffer so the composite skips cavity shading
+    /// there. Caller binds the normal FBO and sets Lequal/DepthMask(false).
+    /// </summary>
+    public void DrawCavityPunch(Matrix4 mvp, bool lines, bool bead)
+    {
+        if (_disposed) return;
+        _shader.Use();
+        _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetFloat("uOverride", 1f);
+        _shader.SetVector3("uOverrideColor", Vector3.Zero);
+        _shader.SetFloat("uOpacity", 0f);           // alpha 0 = cavity mask off
+
+        if (lines && _extrudeVao != 0 && _extrudeCount > 0)
+        {
+            GL.BindVertexArray(_extrudeVao);
+            GL.DrawArrays(PrimitiveType.Lines, 0, _extrudeCount);
+        }
+        if (bead && _beadVao != 0 && _beadCount > 0)
+        {
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_beadVao);
+            GL.DrawElements(PrimitiveType.Triangles, _beadCount, DrawElementsType.UnsignedInt, 0);
+            GL.Enable(EnableCap.CullFace);
+        }
+        GL.BindVertexArray(0);
+    }
+
     /// <summary>Diagnostics: the gradient mode this renderer's VBOs were built with.</summary>
     public ToolpathColorMode ColorMode => _colorMode;
 

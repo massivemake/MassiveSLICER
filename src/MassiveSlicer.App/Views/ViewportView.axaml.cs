@@ -857,7 +857,9 @@ public partial class ViewportView : UserControl
             _renderer.ContactShadowSize       = vm.ContactShadowSize;
             _renderer.ContactShadowDarkness   = vm.ContactShadowDarkness;
             _renderer.ContactShadowBlur       = vm.ContactShadowBlur;
-            _renderer.CavityEnabled           = vm.CavityEnabled;
+            _renderer.CavityEnabled              = vm.CavityEnabled;
+            _renderer.CavityShadeToolpaths       = vm.CavityShadeToolpaths;
+            _renderer.CavityShadeImportedMeshes  = vm.CavityShadeImportedMeshes;
             _renderer.CavityMode              = vm.CavityMode;
             _renderer.CavityScreenRidge       = vm.CavityScreenRidge;
             _renderer.CavityScreenValley      = vm.CavityScreenValley;
