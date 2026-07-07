@@ -446,7 +446,20 @@ public sealed class ViewportViewModel : ViewModelBase
     /// The active cell configuration. Set at startup after loading the cell JSON.
     /// The viewport render loop applies bed boundary settings on the GL thread.
     /// </summary>
-    public CellConfig? ActiveCell { get; set; }
+    public CellConfig? ActiveCell
+    {
+        get => _activeCell;
+        set
+        {
+            _activeCell = value;
+            if (value is not null)
+                RobotSmb.SetActiveCell(value.Name, value.BridgeIp);
+        }
+    }
+    private CellConfig? _activeCell;
+
+    /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.</summary>
+    public RobotSmbViewModel RobotSmb { get; } = new();
 
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }

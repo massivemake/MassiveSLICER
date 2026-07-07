@@ -156,9 +156,12 @@ public sealed class ErpClient : IDisposable
     }
 
     /// <summary>Registers a slice (stats + UNAS file references) against an element.
-    /// The ERP assigns and returns the rev number.</summary>
+    /// The ERP assigns and returns the rev number. <paramref name="extra"/> merges
+    /// additional top-level fields into the payload (e.g. a <c>sentToRobot</c> block
+    /// when the program was pushed to the controller).</summary>
     public async Task<ErpResult<ErpSliceReceipt>> RegisterSliceAsync(
-        string elementId, ErpSliceStats stats, IReadOnlyList<ErpSliceFile> files, CancellationToken ct)
+        string elementId, ErpSliceStats stats, IReadOnlyList<ErpSliceFile> files, CancellationToken ct,
+        IReadOnlyDictionary<string, object?>? extra = null)
     {
         var body = new Dictionary<string, object?>
         {
@@ -177,6 +180,9 @@ public sealed class ErpClient : IDisposable
                 ["bytes"] = f.Bytes,
             }).ToList(),
         };
+        if (extra is not null)
+            foreach (var (key, value) in extra)
+                body[key] = value;
         var r = await PostJsonAsync($"api/slicer/v1/elements/{Uri.EscapeDataString(elementId)}/slices", body, ct);
         if (r.Error is not null) return ErpResult<ErpSliceReceipt>.Fail(r.Error);
 

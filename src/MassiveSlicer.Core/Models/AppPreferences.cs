@@ -308,6 +308,10 @@ public sealed class AppPreferences
     /// scrubbed from workspace (.mass) settings snapshots.</summary>
     public string? ErpApiToken { get; set; }
 
+    /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.
+    /// Passwords are scrubbed from workspace (.mass) settings snapshots.</summary>
+    public List<RobotSmbConfig> RobotSmb { get; set; } = [];
+
     // ── UI layout state ───────────────────────────────────────────────────
 
     /// <summary>
@@ -316,4 +320,26 @@ public sealed class AppPreferences
     /// <c>PersistExpander</c> attached behaviour.
     /// </summary>
     public Dictionary<string, bool> ExpandedPanels { get; set; } = [];
+}
+
+/// <summary>
+/// SMB connection details for one robot cell's controller share (KRC "D drive").
+/// Keyed by the cell's display name. The password lives in local prefs.json only —
+/// WorkspaceService scrubs it from .mass settings snapshots.
+/// </summary>
+public sealed class RobotSmbConfig
+{
+    public string CellName { get; set; } = "";
+
+    /// <summary>Controller IP (defaults to the cell's bridge IP when first opened).</summary>
+    public string Host { get; set; } = "";
+
+    /// <summary>SMB share name on the controller, e.g. "d" or "D$".</summary>
+    public string Share { get; set; } = "d";
+
+    /// <summary>Folder inside the share to drop programs into (blank = share root).</summary>
+    public string Folder { get; set; } = "";
+
+    public string Username { get; set; } = "";
+    public string? Password { get; set; }
 }

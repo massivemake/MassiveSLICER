@@ -7093,33 +7093,37 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        var mvm = topLevel?.DataContext as MainWindowViewModel;
+
+        var cfg = vm.RobotSmb.ActiveConfig;
+        if (cfg is null || !vm.RobotSmb.IsConfigured)
+        {
+            mvm?.Console.LogError(
+                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+            return;
+        }
+
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
-        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
-        if (topLevel is null) return;
+        // Same filename as the imported geometry (toolpaths inherit the mesh name).
+        string fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
+        string tempPath = Path.Combine(Path.GetTempPath(), fileName);
 
-        var robotFolder = RobotKrlPaths.UncDFolder(cell);
-        var startFolder = await topLevel.StorageProvider.TryGetFolderFromPathAsync(robotFolder);
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, tempPath);
+        byte[] content = await File.ReadAllBytesAsync(tempPath);
 
-        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        mvm?.Console.Log($"[robot] Uploading {fileName} to \\\\{cfg.Host}\\{cfg.Share} ({cell.Name})…");
+        var (ok, message) = await Task.Run(() => RobotSmbUploader.Upload(cfg, fileName, content));
+        if (!ok)
         {
-            Title                  = $"Send to Robot — {cell.Name}",
-            DefaultExtension       = "src",
-            SuggestedFileName      = RobotKrlPaths.SuggestedFileName(node.Name),
-            SuggestedStartLocation = startFolder,
-            FileTypeChoices        = [new("KRL Source") { Patterns = ["*.src"] }],
-        });
-        if (file is null) return;
+            mvm?.Console.LogError($"[robot] Upload failed — {message}");
+            return;
+        }
+        mvm?.Console.Log($"[robot] Sent to {cell.Name}: {message}");
 
-        var path = file.TryGetLocalPath();
-        if (path is null) return;
-        path = SavePathUtil.Normalize(path, "src");
-
-        path = RobotKrlPaths.ToExtendedUncPath(path);
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
-
-        if (topLevel.DataContext is MainWindowViewModel mvm)
-            mvm.Console.Log($"[krl] Sent to {cell.Name} ({cell.BridgeIp}): {path}");
+        if (mvm is not null)
+            await mvm.NotifyErpSentToRobotAsync(tempPath, fileName, cell.Name, cfg.Host);
     }
 
     private async Task WriteKrlAsync(

@@ -189,6 +189,31 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "smb",
+            Description = "Robot SMB: smb host <ip> | share <s> | folder <f> | user <u> | pass <p> | test | send | status",
+            Execute = (ctx, args) =>
+            {
+                var smb = ctx.Main.Viewport.RobotSmb;
+                var parts = args.Trim().Split(' ', 2);
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "host":   smb.Host     = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] host = {smb.Host}"); break;
+                    case "share":  smb.Share    = parts.ElementAtOrDefault(1)?.Trim() ?? "d"; ctx.Log($"[smb] share = {smb.Share}"); break;
+                    case "folder": smb.Folder   = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] folder = {smb.Folder}"); break;
+                    case "user":   smb.Username = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] user = {smb.Username}"); break;
+                    case "pass":   smb.Password = parts.ElementAtOrDefault(1) ?? ""; ctx.Log("[smb] password set"); break;
+                    case "test":   smb.TestCommand.Execute(null); break;
+                    case "send":   ctx.Main.Viewport.SendToRobotCommand.Execute(null); break;
+                    default:
+                        ctx.Log($"[smb] cell='{smb.CellName}' host='{smb.Host}' share='{smb.Share}' folder='{smb.Folder}' " +
+                                $"user='{smb.Username}' configured={smb.IsConfigured} status='{smb.Status}'");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>
