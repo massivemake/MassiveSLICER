@@ -270,6 +270,56 @@
                                 HorizontalAlignment="Stretch"
                                 Margin="8,4,8,8"/>
 
+                        <!-- Per-cell SMB credentials for direct Export-to-Robot uploads -->
+                        <Expander Classes="SectionExpander" Header="ROBOT NETWORK" IsExpanded="False" Margin="0,4,0,0">
+                          <StackPanel>
+                            <TextBlock Text="SMB credentials for this cell's controller — Export to Robot writes the .src straight onto the robot's D drive. The password stays in local preferences only."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                       FontSize="11" Margin="8,2,8,6"/>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Robot IP" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="192.168.0.152"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Host,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Share" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="d"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Share,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Folder" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="(share root)"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Folder,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Username" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Username,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           PasswordChar="•"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Password,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Button Content="Test Connection"
+                                    Command="{Binding DataContext.Viewport.RobotSmb.TestCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    Classes="SecondaryButton" HorizontalAlignment="Stretch" Margin="8,6,8,2"/>
+                            <TextBlock Text="{Binding DataContext.Viewport.RobotSmb.Status,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       TextWrapping="Wrap" FontSize="10" Opacity="0.75" Margin="8,2,8,6"/>
+                          </StackPanel>
+                        </Expander>
+
                         <!-- All bed settings (manual adjust + calibration) grouped, collapsed by default. -->
                         <Expander Classes="SectionExpander" Header="BED SETTINGS" IsExpanded="False" Margin="0,4,0,0">
                           <StackPanel>

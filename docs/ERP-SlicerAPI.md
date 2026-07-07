@@ -90,6 +90,35 @@ Response — 201; the ERP assigns the rev (slicer reads `rev|revision|revNumber`
 { "rev": 3, "url": "https://lab.massivemake.com/projects/498/elements/41?rev=3" }
 ```
 
+## Sent-to-robot notification (slicer → ERP, shipped slicer-side)
+
+When "Export to Robot" uploads a program straight onto the cell controller's
+D drive (SMB), the slicer registers a slice rev on the linked element with an
+additional top-level `sentToRobot` block, and mirrors the same `.src` into the
+project's `slicer/` folder on the UNAS (referenced as a `files[]` entry with
+`"kind": "krl"`):
+
+```json
+{
+  "stats": { "...": "as above" },
+  "files": [
+    { "kind": "krl",       "path": "Projects/.../06-Production Documents/slicer/2026_0706 - ... .src", "bytes": 278396928 },
+    { "kind": "workspace", "path": "Projects/.../06-Production Documents/... .mass", "bytes": 313560625 }
+  ],
+  "sentToRobot": {
+    "cell": "LFAM 2",
+    "host": "192.168.0.152",
+    "file": "2026_0706 - Curtain Wall For Print.src",
+    "robotPath": "\\\\192.168.0.152\\2026_0706 - Curtain Wall For Print.src",
+    "at": "2026-07-07T18:20:00.000Z"
+  }
+}
+```
+
+The ERP can treat a rev carrying `sentToRobot` as "program is on the printer,
+ready to run" — e.g. set the slice status accordingly and show the cell name.
+Unknown fields are safe to ignore until that lands.
+
 ## Slicer-side state (already shipped)
 
 - `.mass` workspaces persist the attachment (`type/id/number/title/elementId?/

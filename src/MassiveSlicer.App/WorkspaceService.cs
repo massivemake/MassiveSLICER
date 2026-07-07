@@ -276,9 +276,12 @@ internal static class WorkspaceService
     {
         string json = System.Text.Json.JsonSerializer.Serialize(src);
         var clone = System.Text.Json.JsonSerializer.Deserialize<AppPreferences>(json) ?? new AppPreferences();
-        // .mass files travel across machines/NAS — the ERP bearer token stays in
-        // the local prefs.json only, never in workspace settings snapshots.
+        // .mass files travel across machines/NAS — the ERP bearer token and robot
+        // SMB passwords stay in the local prefs.json only, never in workspace
+        // settings snapshots.
         clone.ErpApiToken = null;
+        foreach (var smb in clone.RobotSmb)
+            smb.Password = null;
         return clone;
     }
 

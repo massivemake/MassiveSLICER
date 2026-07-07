@@ -90,14 +90,25 @@
                     </Panel>
                 </ToggleButton>
 
-                <Button Grid.Column="1" Classes="ExportCta" Padding="10,4"
-                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
-                        ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src)">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
-                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
-                    </StackPanel>
-                </Button>
+                <!-- Split export: main = SMB upload straight to the cell's controller,
+                     caret = classic save-.src-to-disk dialog -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1">
+                    <Button Classes="ExportCta" Padding="10,4"
+                            CornerRadius="4,0,0,4"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"
+                            ToolTip.Tip="Send the program to the selected cell's robot (D drive over SMB) and report it to the ERP">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="ExportCta" Padding="5,4"
+                            CornerRadius="0,4,4,0"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
+                            ToolTip.Tip="Download the KRL program (.src) to a file instead">
+                        <ia:Icon Value="mdi-chevron-down" FontSize="12" Foreground="#242424"/>
+                    </Button>
+                </StackPanel>
 
                 <Button Grid.Column="3" Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
                     <ia:Icon Value="mdi-console" FontSize="13"/>

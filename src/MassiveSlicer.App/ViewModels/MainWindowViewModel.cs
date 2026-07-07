@@ -84,6 +84,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Erp.Initialize(AppPreferences,
             () => PreferencesLoader.Save(AppPreferences),
             msg => Console.Log(msg));
+        Viewport.RobotSmb.Initialize(AppPreferences,
+            () => PreferencesLoader.Save(AppPreferences),
+            msg => Console.Log(msg));
         Viewport.Erp.GetDefaultElementName = () =>
             AppPreferences.LastWorkspacePath is { Length: > 0 } wp
                 ? System.IO.Path.GetFileNameWithoutExtension(wp)
@@ -1231,6 +1234,55 @@ public sealed class MainWindowViewModel : ViewModelBase
             LayerHeightMm: add.LayerHeight,
             BeadWidthMm:   add.BeadWidth);
         return (stats, files);
+    }
+
+    /// <summary>
+    /// After a successful Export-to-Robot SMB upload: mirrors the .src into the
+    /// project's <c>slicer/</c> folder on the UNAS (so the ERP can reach the same
+    /// file) and registers a slice rev flagged <c>sentToRobot</c> so the ERP knows
+    /// the program is on the printer and ready to run.
+    /// </summary>
+    internal async Task NotifyErpSentToRobotAsync(string srcTempPath, string fileName, string cellName, string host)
+    {
+        var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
+        string robotPath = $@"\\{host}\{fileName}";
+
+        if (AppPreferences.LastWorkspacePath is { Length: > 0 } massPath && System.IO.File.Exists(massPath))
+        {
+            try
+            {
+                string dir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
+                System.IO.Directory.CreateDirectory(dir);
+                string unasCopy = System.IO.Path.Combine(dir, fileName);
+                System.IO.File.Copy(srcTempPath, unasCopy, overwrite: true);
+                if (ToUnasShareRelative(unasCopy) is { } krlRel)
+                    files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(unasCopy).Length));
+            }
+            catch (Exception ex)
+            {
+                Console.Log($"[erp] could not mirror {fileName} to the project folder: {ex.Message}");
+            }
+
+            if (ToUnasShareRelative(massPath) is { } massRel)
+                files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
+        }
+
+        var add = RightPanel.Additive;
+        var stats = new MassiveSlicer.App.Erp.ErpSliceStats(
+            PrintTime:     Viewport.StatsTime is { Length: > 0 } t ? t : null,
+            Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
+            Material:      add.SelectedPreset?.Name,
+            LayerHeightMm: add.LayerHeight,
+            BeadWidthMm:   add.BeadWidth);
+
+        await Viewport.Erp.NotifySentToRobotAsync(stats, files, new Dictionary<string, object?>
+        {
+            ["cell"]     = cellName,
+            ["host"]     = host,
+            ["file"]     = fileName,
+            ["robotPath"] = robotPath,
+            ["at"]       = DateTime.UtcNow.ToString("o"),
+        });
     }
 
     /// <summary>

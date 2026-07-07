@@ -468,6 +468,37 @@ public sealed class ErpViewModel : ViewModelBase
         });
     }
 
+    /// <summary>Registers a slice rev flagged as sent-to-robot (Export to Robot succeeded).
+    /// No-ops with a console note when there's no connected element to notify.</summary>
+    public async Task NotifySentToRobotAsync(
+        ErpSliceStats stats, IReadOnlyList<ErpSliceFile> files,
+        IReadOnlyDictionary<string, object?> sentToRobot)
+    {
+        var att = _attachment;
+        var client = _client;
+        if (att?.ElementId is not { Length: > 0 } elementId || client is null || !IsConnected)
+        {
+            _log?.Invoke("[erp] program sent to robot, but no connected element is linked — not reported to the ERP.");
+            return;
+        }
+
+        var result = await client.RegisterSliceAsync(elementId, stats, files, CancellationToken.None,
+            new Dictionary<string, object?> { ["sentToRobot"] = sentToRobot });
+        Post(() =>
+        {
+            if (result.Ok)
+            {
+                Status = $"Rev {result.Value!.Rev} registered — sent to robot.";
+                _log?.Invoke($"[erp] rev {result.Value.Rev} registered on element {att.ElementName ?? elementId} ({att.Number}) as sent-to-robot");
+            }
+            else
+            {
+                Status = FriendlyPostError("Sent-to-robot report", result.Error!);
+                _log?.Invoke($"[erp] sent-to-robot report failed: {result.Error.Kind} — {result.Error.Message}");
+            }
+        });
+    }
+
     // -- Converted-lead re-attach ---------------------------------------------------
 
     private string? _convertedProjectId;
