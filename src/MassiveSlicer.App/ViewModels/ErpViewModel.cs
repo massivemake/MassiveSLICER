@@ -310,7 +310,7 @@ public sealed class ErpViewModel : ViewModelBase
         {
             if (!result.Ok)
             {
-                Status = $"Element create failed — {result.Error!.Message}";
+                Status = FriendlyPostError("Element create", result.Error!);
                 _log?.Invoke($"[erp] element create failed: {result.Error.Kind} — {result.Error.Message}");
                 return;
             }
@@ -447,7 +447,7 @@ public sealed class ErpViewModel : ViewModelBase
         {
             if (!result.Ok)
             {
-                Status = $"Element create failed — {result.Error!.Message}";
+                Status = FriendlyPostError("Element create", result.Error!);
                 _log?.Invoke($"[erp] element create failed: {result.Error.Kind} — {result.Error.Message}");
                 return;
             }
@@ -507,7 +507,7 @@ public sealed class ErpViewModel : ViewModelBase
                 }
                 else
                 {
-                    Status = $"Slice register failed — {result.Error!.Message}";
+                    Status = FriendlyPostError("Slice register", result.Error!);
                     _log?.Invoke($"[erp] slice register failed: {result.Error.Kind} — {result.Error.Message}");
                 }
             });
@@ -526,6 +526,13 @@ public sealed class ErpViewModel : ViewModelBase
             });
         }
     }
+
+    /// <summary>404 on a phase-2 POST means the ERP hasn't shipped that endpoint yet —
+    /// say so instead of a bare status code.</summary>
+    private static string FriendlyPostError(string action, ErpError error) =>
+        error.Message.Contains("404")
+            ? $"{action} failed — the ERP doesn't have this endpoint yet (update the ERP server)."
+            : $"{action} failed — {error.Message}";
 
     // -- Section visibility ------------------------------------------------------
 
