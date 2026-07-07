@@ -2639,6 +2639,33 @@ public sealed class ViewportViewModel : ViewModelBase
             KeepOwnMaterial = true,
             LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f)),
         });
+
+        // Inner shell marking the full-effect core (60% of the radius) — in Erase mode
+        // the wall must pass through this sphere to go completely flat; outside it only
+        // the blend band applies. Slightly stronger tint so it reads against the range.
+        var coreShell = BuildSphereGeometry(1f, seg: 36, rings: 24);
+        var coreMesh = new MeshData(coreShell.Pos, coreShell.Nrm, coreShell.Idx,
+            $"Effector {number} Core",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.16f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.16f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                EmissiveFactor  = EffectorLime * 0.5f,
+                AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
+            });
+        node.AddChild(new SceneNode
+        {
+            Name            = $"Effector {number} Core",
+            PendingMesh     = coreMesh,
+            Selectable      = false,
+            PickIgnore      = true,
+            TranslucentPass = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f) * EffectorCoreFraction),
+        });
         return node;
     }
 
@@ -2651,7 +2678,10 @@ public sealed class ViewportViewModel : ViewModelBase
         return null;
     }
 
-    /// <summary>Rescales every effector's glow shell to the current Range (mm).</summary>
+    /// <summary>Fraction of the influence radius with full effect (matches PatternEffect's erase core).</summary>
+    internal const float EffectorCoreFraction = 0.6f;
+
+    /// <summary>Rescales every effector's glow shells (range + core) to the current Range (mm).</summary>
     internal void UpdateEffectorRangeIndicators(float rangeMm)
     {
         float scale = MathF.Max(rangeMm, 1f);
@@ -2660,7 +2690,10 @@ public sealed class ViewportViewModel : ViewModelBase
             if (node is null) continue;
             foreach (var child in node.Children)
                 if (child.TranslucentPass)
-                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(scale);
+                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(
+                        child.Name.EndsWith("Core", StringComparison.Ordinal)
+                            ? scale * EffectorCoreFraction
+                            : scale);
         }
         NotifyRenderNeeded();
     }

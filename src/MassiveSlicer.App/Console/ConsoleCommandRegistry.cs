@@ -242,9 +242,20 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "effector",
-            Description = "Toggle live effector point 1-3 (spawns above bed centre)",
-            Usage = "effector <1|2|3>",
-            Execute = (ctx, args) => ctx.Main.Viewport.ToggleEffectorPointCommand.Execute(args.Trim()),
+            Description = "Toggle live effector point 1-3, or list active positions",
+            Usage = "effector <1|2|3|list>",
+            Execute = (ctx, args) =>
+            {
+                var arg = args.Trim();
+                if (arg is "1" or "2" or "3")
+                {
+                    ctx.Main.Viewport.ToggleEffectorPointCommand.Execute(arg);
+                    return;
+                }
+                var pts = ctx.Main.Viewport.GetActiveEffectorPositions();
+                ctx.Log($"[effector] {pts.Count} active: " +
+                        string.Join("  ", pts.Select(p => $"({p.X:0},{p.Y:0},{p.Z:0})")));
+            },
         });
 
         Register(new ConsoleCommandDefinition
