@@ -2123,6 +2123,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
+            OnPropertyChanged(nameof(ShowViewTags));
         }
     }
 
@@ -4407,6 +4408,20 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Wired by the viewport code-behind: PrintSpeedScale spread of the first toolpath (diagnostics).</summary>
     internal Func<string>? GetSpeedSpread { get; set; }
+
+    /// <summary>One floating value tag beside the toolpath in the Speed/RPM views.</summary>
+    public sealed record ViewTag(double X, double Y, string Text);
+
+    private IReadOnlyList<ViewTag> _viewTags = [];
+
+    /// <summary>Height-interval value tags (screen coords, overlay space).</summary>
+    public IReadOnlyList<ViewTag> ViewTags
+    {
+        get => _viewTags;
+        internal set => SetField(ref _viewTags, value);
+    }
+
+    public bool ShowViewTags => _viewMode is "Speed" or "RPM";
 
     /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
     internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
