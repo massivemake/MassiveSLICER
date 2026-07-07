@@ -214,6 +214,33 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "addset",
+            Description = "Debug: get/set an AdditiveSettings property by name",
+            Usage = "addset <property> [value]",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', 2);
+                var prop = typeof(ViewModels.AdditiveSettingsViewModel).GetProperty(parts[0]);
+                if (prop is null) { ctx.LogError($"[addset] no property '{parts[0]}'"); return; }
+                var add = ctx.Main.RightPanel.Additive;
+                if (parts.Length > 1 && prop.CanWrite)
+                {
+                    object value = prop.PropertyType switch
+                    {
+                        var t when t == typeof(double) => double.Parse(parts[1]),
+                        var t when t == typeof(float)  => float.Parse(parts[1]),
+                        var t when t == typeof(int)    => int.Parse(parts[1]),
+                        var t when t == typeof(bool)   => bool.Parse(parts[1]),
+                        _                              => parts[1],
+                    };
+                    prop.SetValue(add, value);
+                }
+                ctx.Log($"[addset] {parts[0]} = {prop.GetValue(add)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>
