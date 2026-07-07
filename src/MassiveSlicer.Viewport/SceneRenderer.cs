@@ -540,6 +540,11 @@ public sealed class SceneRenderer : IDisposable
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
 
+    /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
+    /// full selected appearance — colours, travels, seams — regardless of selection.
+    /// Body view keeps the dimmed unselected treatment.</summary>
+    public bool ToolpathFullAppearance { get; set; }
+
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
@@ -978,7 +983,7 @@ public sealed class SceneRenderer : IDisposable
             int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
-            entry.Renderer.Draw(toolpathMvp, selected: isSelected,
+            entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,

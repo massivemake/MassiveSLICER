@@ -918,6 +918,7 @@ public partial class ViewportView : UserControl
             _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
+            _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {
