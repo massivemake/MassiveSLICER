@@ -58,8 +58,8 @@ public sealed class ErpClient : IDisposable
     {
         var r = await GetJsonAsync("api/slicer/v1/search?q=", ct);
         if (r.Error is not null &&
-            !(r.Error.Kind == ErpErrorKind.BadResponse && r.Error.Message.Contains("400")))
-            return ErpResult<bool>.Fail(r.Error.Kind, r.Error.Message);
+            !(r.Error.Kind == ErpErrorKind.BadResponse && r.Error.HttpStatus == 400))
+            return ErpResult<bool>.Fail(r.Error);
         r.Value?.Dispose();
         return ErpResult<bool>.Success(true);
     }
@@ -68,7 +68,7 @@ public sealed class ErpClient : IDisposable
     public async Task<ErpResult<IReadOnlyList<ErpSearchHit>>> SearchAsync(string query, CancellationToken ct)
     {
         var r = await GetJsonAsync($"api/slicer/v1/search?q={Uri.EscapeDataString(query)}", ct);
-        if (r.Error is not null) return ErpResult<IReadOnlyList<ErpSearchHit>>.Fail(r.Error.Kind, r.Error.Message);
+        if (r.Error is not null) return ErpResult<IReadOnlyList<ErpSearchHit>>.Fail(r.Error);
 
         using var doc = r.Value!;
         try
@@ -89,7 +89,7 @@ public sealed class ErpClient : IDisposable
     public async Task<ErpResult<IReadOnlyList<ErpElement>>> GetProjectElementsAsync(string projectId, CancellationToken ct)
     {
         var r = await GetJsonAsync($"api/slicer/v1/projects/{Uri.EscapeDataString(projectId)}/elements", ct);
-        if (r.Error is not null) return ErpResult<IReadOnlyList<ErpElement>>.Fail(r.Error.Kind, r.Error.Message);
+        if (r.Error is not null) return ErpResult<IReadOnlyList<ErpElement>>.Fail(r.Error);
 
         using var doc = r.Value!;
         try
@@ -106,6 +106,36 @@ public sealed class ErpClient : IDisposable
         }
     }
 
+    /// <summary>Resolves a project by id via the elements endpoint's envelope
+    /// (<c>{project: {id, projectNumber, name}, elements: [...]}</c>) — used to
+    /// re-attach the workspace after a lead was converted to a project.</summary>
+    public async Task<ErpResult<ErpProjectInfo>> GetProjectAsync(string projectId, CancellationToken ct)
+    {
+        var r = await GetJsonAsync($"api/slicer/v1/projects/{Uri.EscapeDataString(projectId)}/elements", ct);
+        if (r.Error is not null) return ErpResult<ErpProjectInfo>.Fail(r.Error);
+
+        using var doc = r.Value!;
+        try
+        {
+            string number = "", title = "", id = projectId;
+            if (TryGetPropertyCi(doc.RootElement, "project", out var proj) && proj.ValueKind == JsonValueKind.Object)
+            {
+                id     = GetString(proj, "id", "projectId") ?? projectId;
+                number = GetString(proj, "projectNumber", "number", "no") ?? "";
+                title  = GetString(proj, "name", "title") ?? "";
+            }
+            var elements = new List<ErpElement>();
+            foreach (var el in EnumerateArray(doc.RootElement, "elements", "results", "items", "data"))
+                if (ParseElement(el) is { } parsed)
+                    elements.Add(parsed);
+            return ErpResult<ErpProjectInfo>.Success(new ErpProjectInfo(id, number, title, elements));
+        }
+        catch (Exception ex)
+        {
+            return ErpResult<ErpProjectInfo>.Fail(ErpErrorKind.BadResponse, $"unexpected response: {ex.Message}");
+        }
+    }
+
     /// <summary>Creates a new element under a project or lead and returns it parsed.</summary>
     public async Task<ErpResult<ErpElement>> CreateElementAsync(
         string parentType, string parentId, string name, string? description, CancellationToken ct)
@@ -113,7 +143,7 @@ public sealed class ErpClient : IDisposable
         string collection = parentType.Equals("lead", StringComparison.OrdinalIgnoreCase) ? "leads" : "projects";
         var body = new Dictionary<string, object?> { ["name"] = name, ["description"] = description };
         var r = await PostJsonAsync($"api/slicer/v1/{collection}/{Uri.EscapeDataString(parentId)}/elements", body, ct);
-        if (r.Error is not null) return ErpResult<ErpElement>.Fail(r.Error.Kind, r.Error.Message);
+        if (r.Error is not null) return ErpResult<ErpElement>.Fail(r.Error);
 
         using var doc = r.Value!;
         // Accept the element bare or wrapped in an "element" envelope.
@@ -148,7 +178,7 @@ public sealed class ErpClient : IDisposable
             }).ToList(),
         };
         var r = await PostJsonAsync($"api/slicer/v1/elements/{Uri.EscapeDataString(elementId)}/slices", body, ct);
-        if (r.Error is not null) return ErpResult<ErpSliceReceipt>.Fail(r.Error.Kind, r.Error.Message);
+        if (r.Error is not null) return ErpResult<ErpSliceReceipt>.Fail(r.Error);
 
         using var doc = r.Value!;
         int rev = GetInt(doc.RootElement, "rev", "revision", "revNumber") ?? 0;
@@ -186,7 +216,13 @@ public sealed class ErpClient : IDisposable
             if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return ErpResult<JsonDocument>.Fail(ErpErrorKind.Unauthorized, "token invalid or revoked");
             if (!resp.IsSuccessStatusCode)
-                return ErpResult<JsonDocument>.Fail(ErpErrorKind.BadResponse, $"HTTP {(int)resp.StatusCode}");
+            {
+                string body = "";
+                try { body = await resp.Content.ReadAsStringAsync(ct); } catch { /* body optional */ }
+                int status = (int)resp.StatusCode;
+                return ErpResult<JsonDocument>.Fail(new ErpError(
+                    ErpErrorKind.BadResponse, ExtractErrorMessage(body, status), status, body));
+            }
 
             var stream = await resp.Content.ReadAsStreamAsync(ct);
             var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
@@ -212,6 +248,36 @@ public sealed class ErpClient : IDisposable
         {
             return ErpResult<JsonDocument>.Fail(ErpErrorKind.Network, ex.Message);
         }
+    }
+
+    /// <summary>The ERP writes human-readable errors ("leads can't own elements —
+    /// convert to a project first"); show those verbatim, falling back to the code.</summary>
+    internal static string ExtractErrorMessage(string body, int status)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind == JsonValueKind.Object
+                && GetString(doc.RootElement, "message", "error", "detail") is { Length: > 0 } m)
+                return m;
+        }
+        catch { /* non-JSON body */ }
+        return $"HTTP {status}";
+    }
+
+    /// <summary>Extracts the converted-project id from a lead element-create 400 body
+    /// (ERP #961: the response includes the linked project's id so the slicer can
+    /// offer re-attach). Null when the body carries no such hint.</summary>
+    internal static string? ExtractLinkedProjectId(string? body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) return null;
+            return GetString(doc.RootElement, "projectId", "convertedProjectId", "linkedProjectId");
+        }
+        catch { return null; }
     }
 
     // -- Parsing (the ONLY place ERP field names live) -----------------------
