@@ -285,8 +285,10 @@ public sealed class AppPreferences
 
     // -- ERP connection (MassiveSLICER ↔ ERP API, /api/slicer/v1) -----------
 
-    /// <summary>Base URL of the ERP slicer API (e.g. https://erp.example.com). Empty = unconfigured.</summary>
-    public string ErpBaseUrl { get; set; } = "";
+    /// <summary>Base URL of the ERP slicer API. Defaults to the published production
+    /// ERP (same host the MCP integration targets); ErpClient tolerates the URL with
+    /// or without the /api/slicer/v1 suffix.</summary>
+    public string ErpBaseUrl { get; set; } = "https://lab.massivemake.com/api/slicer/v1";
 
     /// <summary>Bearer token for the ERP slicer API. Kept in local prefs only —
     /// scrubbed from workspace (.mass) settings snapshots.</summary>
