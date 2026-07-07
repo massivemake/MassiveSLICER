@@ -199,6 +199,9 @@ public sealed class SliceSettings
     /// </summary>
     public bool ZigZagSeam { get; init; } = false;
 
+    /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
+    public bool Spiralize { get; init; }
+
     // -- Wave gradient ------------------------------------------------------------
 
     /// <summary>When true, amplitude and wavelength are linearly interpolated per layer between

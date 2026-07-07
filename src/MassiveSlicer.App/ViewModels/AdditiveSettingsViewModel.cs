@@ -221,7 +221,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _disableContourOffset, value);
     }
 
-    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag"];
+    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag", "Spiral (vase)"];
 
     private string _seamMode = "Normal";
 

@@ -2659,6 +2659,7 @@ public partial class ViewportView : UserControl
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
             ZigZagSeam             = s.SeamMode == "Zig-zag",
+            Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
             WaveEffect    = s.WaveEffect switch
             {
                 "Sine"     => WaveEffectType.Sine,
@@ -2792,6 +2793,7 @@ public partial class ViewportView : UserControl
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
             tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
+            tp = MassiveSlicer.Core.Slicing.Effects.SpiralizeEffect.Apply(tp, settings);
             SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
             Pct(80);
 
@@ -3510,6 +3512,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.SeamMode),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
