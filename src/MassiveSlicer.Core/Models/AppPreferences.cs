@@ -178,6 +178,20 @@ public sealed class AppPreferences
     public double WaveGradientCenter { get; set; } = 0.5;
     public string WaveGradientCurve { get; set; } = "Linear";
 
+    /// <summary>Pattern &amp; Texture card: selected pattern tile (matches Core PatternType).</summary>
+    public string PatternType { get; set; } = "Smooth";
+
+    /// <summary>Pattern distribution: "Wavelength (mm)", "Even (path length)", or "Radial (angle)".</summary>
+    public string PatternMapping { get; set; } = "Wavelength (mm)";
+
+    public double PatternWavelengthMm { get; set; } = 60.0;
+    public double PatternAmplitude { get; set; }
+    public double PatternFrequency { get; set; } = 15.0;
+    public double PatternTwist { get; set; }
+    public double PatternOffset { get; set; }
+    public double PatternFadeIn { get; set; }
+    public double PatternFadeOut { get; set; }
+
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
 

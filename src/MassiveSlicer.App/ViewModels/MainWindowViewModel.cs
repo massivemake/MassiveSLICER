@@ -2546,6 +2546,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WaveWavelengthTop      = copy.WaveWavelengthTop;
         live.WaveGradientCenter     = copy.WaveGradientCenter;
         live.WaveGradientCurve      = copy.WaveGradientCurve;
+        live.PatternType            = copy.PatternType;
+        live.PatternMapping         = copy.PatternMapping;
+        live.PatternWavelengthMm    = copy.PatternWavelengthMm;
+        live.PatternAmplitude       = copy.PatternAmplitude;
+        live.PatternFrequency       = copy.PatternFrequency;
+        live.PatternTwist           = copy.PatternTwist;
+        live.PatternOffset          = copy.PatternOffset;
+        live.PatternFadeIn          = copy.PatternFadeIn;
+        live.PatternFadeOut         = copy.PatternFadeOut;
         live.SliceMethod            = copy.SliceMethod;
         live.SlicingMode            = copy.SlicingMode;
         live.PassAngle              = copy.PassAngle;
@@ -2679,7 +2688,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.AdaptiveQuality     = p.AdaptiveQuality;
         add.MinLayerHeight      = p.MinLayerHeight;
         add.DisableContourOffset = p.DisableContourOffset;
-        add.SeamMode = p.SeamMode is "Zig-zag" ? "Zig-zag" : "Normal";
+        add.SeamMode = add.SeamModeOptions.Contains(p.SeamMode) ? p.SeamMode : "Normal";
         add.OverhangOrientation = p.OverhangOrientation;
         add.MaxOverhangTiltDeg  = p.MaxOverhangTiltDeg;
         add.SmoothRotation                = p.SmoothRotation;
@@ -2715,6 +2724,16 @@ public sealed class MainWindowViewModel : ViewModelBase
             "Ease Out" => "Ease Out",
             _          => "Linear",
         };
+        add.PatternType         = p.PatternType;
+        add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
+            ? p.PatternMapping : "Wavelength (mm)";
+        add.PatternWavelengthMm = p.PatternWavelengthMm;
+        add.PatternAmplitude    = p.PatternAmplitude;
+        add.PatternFrequency    = p.PatternFrequency;
+        add.PatternTwist        = p.PatternTwist;
+        add.PatternOffset       = p.PatternOffset;
+        add.PatternFadeIn       = p.PatternFadeIn;
+        add.PatternFadeOut      = p.PatternFadeOut;
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
         add.SlicingMode   = p.SlicingMode is "Surface" ? "Surface" : "Normal";
@@ -2944,6 +2963,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WaveWavelengthTop    = add.WaveWavelengthTop;
         p.WaveGradientCenter   = add.WaveGradientCenter;
         p.WaveGradientCurve    = add.WaveGradientCurve;
+        p.PatternType          = add.PatternType;
+        p.PatternMapping       = add.PatternMapping;
+        p.PatternWavelengthMm  = add.PatternWavelengthMm;
+        p.PatternAmplitude     = add.PatternAmplitude;
+        p.PatternFrequency     = add.PatternFrequency;
+        p.PatternTwist         = add.PatternTwist;
+        p.PatternOffset        = add.PatternOffset;
+        p.PatternFadeIn        = add.PatternFadeIn;
+        p.PatternFadeOut       = add.PatternFadeOut;
         p.SliceMethod      = add.Method.ToString();
         p.SlicingMode      = add.SlicingMode;
         p.PassAngle        = add.PassAngle;
