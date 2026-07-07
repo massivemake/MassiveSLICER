@@ -92,6 +92,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 ? System.IO.Path.GetFileNameWithoutExtension(wp)
                 : null;
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
+        Viewport.Erp.WorkspaceLinked = () =>
+        {
+            if (!TrySaveCurrentWorkspace())
+                Console.Log("[workspace] linked to ERP but no project folder found — use Save As.");
+        };
 
         // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
@@ -2365,6 +2370,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             HideBusy();
             Console.Log($"[workspace] Failed to load '{path}'.");
+            if (System.IO.File.Exists(path + ".bak"))
+                Console.Log($"[workspace] A previous save exists at {System.IO.Path.GetFileName(path)}.bak — open it to recover.");
             return;
         }
 
@@ -2460,11 +2467,64 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     public bool TrySaveCurrentWorkspace()
     {
+        // ERP-linked workspaces know their home: the attached project's
+        // 06-Production Documents folder on the UNAS — no save dialog needed.
+        if (ResolveErpProjectDocsFolder() is { } docs)
+        {
+            string fileName = AppPreferences.LastWorkspacePath is { Length: > 0 } lp
+                ? System.IO.Path.GetFileName(lp)
+                : ErpDefaultWorkspaceFileName();
+            string target = System.IO.Path.Combine(docs, fileName);
+            if (!string.Equals(target, AppPreferences.LastWorkspacePath, StringComparison.Ordinal))
+                Console.Log($"[workspace] ERP-linked — saving to {target}");
+            _ = SaveWorkspaceAsync(target, guardStalePath: true);
+            return true;
+        }
+
         if (AppPreferences.LastWorkspacePath is not { Length: > 0 } path)
             return false;
 
         _ = SaveWorkspaceAsync(path, guardStalePath: true);
         return true;
+    }
+
+    /// <summary>The attached project/lead's "06-Production Documents" folder, found by
+    /// matching the attachment number against folder names under the UNAS projects
+    /// root (e.g. "26-173 - studio JEFRE llc - …"). Null when unattached, the share
+    /// is offline, or no folder starts with the number.</summary>
+    internal string? ResolveErpProjectDocsFolder()
+    {
+        var att = Viewport.Erp.Attachment;
+        if (att is null || string.IsNullOrWhiteSpace(att.Number)) return null;
+
+        try
+        {
+            string root = AppPreferences.UnasProjectsRoot;
+            if (!System.IO.Directory.Exists(root)) return null;
+            var match = System.IO.Directory.EnumerateDirectories(root).FirstOrDefault(d =>
+                System.IO.Path.GetFileName(d).StartsWith(att.Number, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                Console.Log($"[workspace] no project folder starting with '{att.Number}' under {root}.");
+                return null;
+            }
+            string docs = System.IO.Path.Combine(match, "06-Production Documents");
+            System.IO.Directory.CreateDirectory(docs);
+            return docs;
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[workspace] project folder lookup failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>"yyyy_MMdd - <first model>.mass" (their file convention) for the first
+    /// save of a fresh ERP-linked workspace.</summary>
+    private string ErpDefaultWorkspaceFileName()
+    {
+        var model = Viewport.EnumerateUserModelItems().FirstOrDefault();
+        return RobotKrlPaths.SuggestedFileName(model?.Node.Name) + ".mass";
     }
 
     private bool _workspaceSaveInProgress;

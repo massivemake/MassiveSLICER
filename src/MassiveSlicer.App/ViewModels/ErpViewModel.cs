@@ -44,6 +44,11 @@ public sealed class ErpViewModel : ViewModelBase
             _ = ConnectAsync();
     }
 
+    /// <summary>Fired after the user links the workspace (attach, element create,
+    /// converted-project re-attach) — NOT on workspace-open restore. MainWindowViewModel
+    /// hooks this to auto-save into the project's 06-Production Documents folder.</summary>
+    public Action? WorkspaceLinked { get; set; }
+
     /// <summary>Opens the app Preferences on the Connections section; wired by MainWindow.</summary>
     public Action? OpenPreferencesRequested { get; set; }
 
@@ -372,6 +377,7 @@ public sealed class ErpViewModel : ViewModelBase
         });
         _log?.Invoke($"[erp] attached workspace to {hit.Type} {hit.Number} ({hit.Title})"
                      + (_selectedElement is not null ? $", element {_selectedElement.Name}" : ""));
+        WorkspaceLinked?.Invoke();
     }
 
     public RelayCommand DetachCommand => _detachCommand ??= new RelayCommand(() =>
@@ -475,8 +481,9 @@ public sealed class ErpViewModel : ViewModelBase
                 att.ElementName = el.ElementNumber is { Length: > 0 } n ? $"Element {n}" : el.Name;
                 SetAttachment(att);
             }
-            Status = $"Element \"{el.Name}\" created and linked — save the workspace to keep it.";
+            Status = $"Element \"{el.Name}\" created and linked.";
             _log?.Invoke($"[erp] created element {el.Name} on {att.Type} {att.Number} and linked the workspace");
+            WorkspaceLinked?.Invoke();
         });
     }
 
@@ -556,8 +563,9 @@ public sealed class ErpViewModel : ViewModelBase
                 Number = proj.Number,
                 Title  = proj.Title,
             });
-            Status = $"Re-attached to project {proj.Number} — save the workspace to keep it.";
+            Status = $"Re-attached to project {proj.Number}.";
             _log?.Invoke($"[erp] re-attached workspace to converted project {proj.Number} ({proj.Title})");
+            WorkspaceLinked?.Invoke();
         });
     }
 

@@ -268,6 +268,13 @@
                                            Watermark="msl_…"
                                            Text="{Binding Erp.ApiToken, Mode=TwoWay}"/>
                             </Grid>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="Projects Root" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Watermark="/Volumes/MassiveFILES/Projects"
+                                           Text="{Binding UnasProjectsRoot, Mode=TwoWay}"
+                                           ToolTip.Tip="ERP-linked workspaces save straight into &lt;root&gt;/&lt;project number&gt; - …/06-Production Documents"/>
+                            </Grid>
                             <Grid Margin="0,0,0,4" ColumnDefinitions="90,*">
                                 <Button Grid.Column="1" Content="Connect Now" HorizontalAlignment="Left"
                                         Command="{Binding Erp.ConnectCommand}"/>

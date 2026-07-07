@@ -166,6 +166,7 @@ public sealed class PreferencesViewModel : ViewModelBase
         ToolpathUnselectedColor = HexToColor(_prefs.ToolpathUnselectedColor);
         ToolpathWipeColor       = HexToColor(_prefs.ToolpathWipeColor);
         ToolpathRetractionColor = HexToColor(_prefs.ToolpathRetractionColor);
+        UnasProjectsRoot        = _prefs.UnasProjectsRoot;
         _loading                = false;
     }
 
@@ -178,6 +179,15 @@ public sealed class PreferencesViewModel : ViewModelBase
     {
         get => _erp;
         set => SetField(ref _erp, value);
+    }
+
+    private string _unasProjectsRoot = "";
+    /// <summary>UNAS projects root — ERP-linked workspaces save into
+    /// "&lt;root&gt;/&lt;number&gt; - …/06-Production Documents" automatically.</summary>
+    public string UnasProjectsRoot
+    {
+        get => _unasProjectsRoot;
+        set { if (SetField(ref _unasProjectsRoot, value)) Commit(() => _prefs.UnasProjectsRoot = value.Trim()); }
     }
 
     /// <summary>Per-cell robot SMB rows, rebuilt each time the dialog opens.</summary>
