@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         if (DataContext is not MainWindowViewModel vm) return;
 
         vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
+        vm.CaptureViewportPng   = () => Viewport.CaptureScreenshotAsync();
 
         // Route GL host diagnostics to the in-app console (readable via the control bridge).
         MassiveSlicer.App.Views.GlHostControl.Diag = msg =>

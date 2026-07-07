@@ -280,6 +280,53 @@ public sealed class ErpViewModel : ViewModelBase
         });
     }
 
+    // -- Element creation ---------------------------------------------------------
+
+    /// <summary>Default name for a new element (workspace/model name); wired by MainWindowViewModel.</summary>
+    public Func<string?>? GetDefaultElementName { get; set; }
+
+    private string _newElementName = "";
+    public string NewElementName
+    {
+        get => _newElementName;
+        set { if (SetField(ref _newElementName, value)) CreateElementCommand.RaiseCanExecuteChanged(); }
+    }
+
+    public RelayCommand CreateElementCommand => _createElementCommand ??= new RelayCommand(
+        () => _ = CreateElementForSearchAsync(),
+        () => !_busy && IsConnected && _selectedResult is not null && _newElementName.Trim().Length > 0);
+    private RelayCommand? _createElementCommand;
+
+    private async Task CreateElementForSearchAsync()
+    {
+        var hit = _selectedResult;
+        var client = _client;
+        if (hit is null || client is null) return;
+
+        string name = _newElementName.Trim();
+        Status = $"Creating element on {hit.Number}…";
+        var result = await client.CreateElementAsync(hit.Type, hit.Id, name, null, CancellationToken.None);
+        Post(() =>
+        {
+            if (!result.Ok)
+            {
+                Status = $"Element create failed — {result.Error!.Message}";
+                _log?.Invoke($"[erp] element create failed: {result.Error.Kind} — {result.Error.Message}");
+                return;
+            }
+            var el = result.Value!;
+            if (ReferenceEquals(hit, _selectedResult))
+            {
+                Elements.Add(el);
+                OnPropertyChanged(nameof(HasElements));
+                SelectedElement = el;
+            }
+            NewElementName = "";
+            Status = $"Element \"{el.Name}\" created.";
+            _log?.Invoke($"[erp] created element {el.Name} on {hit.Type} {hit.Number}");
+        });
+    }
+
     // -- Attachment -------------------------------------------------------------
 
     private ErpAttachment? _attachment;
@@ -329,6 +376,11 @@ public sealed class ErpViewModel : ViewModelBase
     private void SetAttachment(ErpAttachment? attachment)
     {
         _attachment = attachment;
+        if (attachment is not null && string.IsNullOrEmpty(attachment.ElementId)
+            && _attachmentElementName.Trim().Length == 0)
+        {
+            AttachmentElementName = GetDefaultElementName?.Invoke() ?? "";
+        }
         OnPropertyChanged(nameof(Attachment));
         OnPropertyChanged(nameof(AttachmentSummary));
         OnPropertyChanged(nameof(ToggleLabel));
@@ -364,6 +416,117 @@ public sealed class ErpViewModel : ViewModelBase
         ElementName = _attachment.ElementName,
     };
 
+    // -- Attachment element creation ----------------------------------------------
+
+    /// <summary>The attached project/lead has no element yet — offer to create one.</summary>
+    public bool ShowAttachmentElementCreate =>
+        _attachment is not null && string.IsNullOrEmpty(_attachment.ElementId) && IsConnected;
+
+    private string _attachmentElementName = "";
+    public string AttachmentElementName
+    {
+        get => _attachmentElementName;
+        set { if (SetField(ref _attachmentElementName, value)) CreateAttachmentElementCommand.RaiseCanExecuteChanged(); }
+    }
+
+    public RelayCommand CreateAttachmentElementCommand => _createAttachmentElementCommand ??= new RelayCommand(
+        () => _ = CreateElementForAttachmentAsync(),
+        () => !_busy && ShowAttachmentElementCreate && _attachmentElementName.Trim().Length > 0);
+    private RelayCommand? _createAttachmentElementCommand;
+
+    private async Task CreateElementForAttachmentAsync()
+    {
+        var att = _attachment;
+        var client = _client;
+        if (att is null || client is null) return;
+
+        string name = _attachmentElementName.Trim();
+        Status = $"Creating element on {att.Number}…";
+        var result = await client.CreateElementAsync(att.Type, att.Id, name, null, CancellationToken.None);
+        Post(() =>
+        {
+            if (!result.Ok)
+            {
+                Status = $"Element create failed — {result.Error!.Message}";
+                _log?.Invoke($"[erp] element create failed: {result.Error.Kind} — {result.Error.Message}");
+                return;
+            }
+            var el = result.Value!;
+            if (ReferenceEquals(att, _attachment))
+            {
+                att.ElementId = el.Id;
+                att.ElementName = el.ElementNumber is { Length: > 0 } n ? $"Element {n}" : el.Name;
+                SetAttachment(att);
+            }
+            Status = $"Element \"{el.Name}\" created and linked — save the workspace to keep it.";
+            _log?.Invoke($"[erp] created element {el.Name} on {att.Type} {att.Number} and linked the workspace");
+        });
+    }
+
+    // -- Slice registration --------------------------------------------------------
+
+    /// <summary>Builds the slice payload (renders the preview PNG beside the .mass and
+    /// resolves UNAS share-relative paths). Wired by MainWindowViewModel; returns null
+    /// when the workspace has never been saved.</summary>
+    public Func<Task<(ErpSliceStats Stats, IReadOnlyList<ErpSliceFile> Files)?>>? BuildSlicePayloadAsync { get; set; }
+
+    public bool CanSendSlice => IsConnected && _attachment?.ElementId is { Length: > 0 } && !_busy;
+
+    public RelayCommand SendSliceCommand => _sendSliceCommand ??= new RelayCommand(
+        () => _ = SendSliceAsync(),
+        () => CanSendSlice && BuildSlicePayloadAsync is not null);
+    private RelayCommand? _sendSliceCommand;
+
+    private async Task SendSliceAsync()
+    {
+        var att = _attachment;
+        var client = _client;
+        var build = BuildSlicePayloadAsync;
+        if (att?.ElementId is not { Length: > 0 } elementId || client is null || build is null) return;
+
+        _busy = true;
+        SendSliceCommand.RaiseCanExecuteChanged();
+        try
+        {
+            Status = "Preparing slice package…";
+            var payload = await build();
+            if (payload is null)
+            {
+                Post(() => Status = "Nothing to send — save the workspace first.");
+                return;
+            }
+            Status = "Registering slice with ERP…";
+            var result = await client.RegisterSliceAsync(
+                elementId, payload.Value.Stats, payload.Value.Files, CancellationToken.None);
+            Post(() =>
+            {
+                if (result.Ok)
+                {
+                    Status = $"Slice registered as Rev {result.Value!.Rev}.";
+                    _log?.Invoke($"[erp] slice registered as rev {result.Value.Rev} on element {att.ElementName ?? elementId} ({att.Number})");
+                }
+                else
+                {
+                    Status = $"Slice register failed — {result.Error!.Message}";
+                    _log?.Invoke($"[erp] slice register failed: {result.Error.Kind} — {result.Error.Message}");
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            Post(() => Status = $"Slice send failed — {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+            Post(() =>
+            {
+                SendSliceCommand.RaiseCanExecuteChanged();
+                OnPropertyChanged(nameof(CanSendSlice));
+            });
+        }
+    }
+
     // -- Section visibility ------------------------------------------------------
 
     private bool _showSettingsRequested;
@@ -383,6 +546,11 @@ public sealed class ErpViewModel : ViewModelBase
         OnPropertyChanged(nameof(ShowSettings));
         OnPropertyChanged(nameof(ShowSearch));
         OnPropertyChanged(nameof(ShowAttachment));
+        OnPropertyChanged(nameof(ShowAttachmentElementCreate));
+        OnPropertyChanged(nameof(CanSendSlice));
+        CreateElementCommand.RaiseCanExecuteChanged();
+        CreateAttachmentElementCommand.RaiseCanExecuteChanged();
+        SendSliceCommand.RaiseCanExecuteChanged();
     }
 
     private static void Post(Action action)

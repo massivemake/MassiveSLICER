@@ -128,6 +128,32 @@ public class ErpParsingTest
         => Assert.Equal(expected, ErpClient.NormalizeBaseUrl(pasted));
 
     [Fact]
+    public void ParsesCreatedElementEnvelopeAndBare()
+    {
+        // Element create responses accepted wrapped or bare.
+        var wrapped = Parse("""{ "element": { "id": 101, "elementNumber": 1, "name": "Curtain Wall" } }""");
+        var root = wrapped;
+        Assert.True(root.TryGetProperty("element", out var inner));
+        Assert.Equal("101", ErpClient.ParseElement(inner)!.Id);
+
+        var bare = ErpClient.ParseElement(Parse("""{ "id": "9", "name": "Bare", "elementNumber": "2" }"""));
+        Assert.Equal("9", bare!.Id);
+    }
+
+    [Fact]
+    public void ShareRelativePathsStripTheVolumesMount()
+    {
+        Assert.Equal(
+            "Projects/26-173 - x/06-Production Documents/file.mass",
+            MassiveSlicer.ViewModels.MainWindowViewModel.ToUnasShareRelative(
+                "/Volumes/MassiveFILES/Projects/26-173 - x/06-Production Documents/file.mass"));
+        Assert.Null(MassiveSlicer.ViewModels.MainWindowViewModel.ToUnasShareRelative(
+            "/Users/thom/Desktop/local.mass"));
+        Assert.Null(MassiveSlicer.ViewModels.MainWindowViewModel.ToUnasShareRelative(
+            "/Volumes/OnlyShare"));
+    }
+
+    [Fact]
     public void RejectsRecordsWithoutId()
     {
         Assert.Null(ErpClient.ParseHit(Parse("""{ "title": "no id" }""")));

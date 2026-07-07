@@ -84,6 +84,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Erp.Initialize(AppPreferences,
             () => PreferencesLoader.Save(AppPreferences),
             msg => Console.Log(msg));
+        Viewport.Erp.GetDefaultElementName = () =>
+            AppPreferences.LastWorkspacePath is { Length: > 0 } wp
+                ? System.IO.Path.GetFileNameWithoutExtension(wp)
+                : null;
+        Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
 
         // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
@@ -1178,6 +1183,67 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     /// <summary>Captures the full app window as PNG bytes. Wired from <c>MainWindow</c> on load.</summary>
     internal Func<Task<byte[]?>>? CaptureAppScreenshot { get; set; }
+
+    /// <summary>Captures only the GL viewport (no UI chrome) as PNG bytes — used for the
+    /// ERP element preview. Wired from <c>MainWindow</c> on load.</summary>
+    internal Func<Task<byte[]?>>? CaptureViewportPng { get; set; }
+
+    /// <summary>
+    /// Builds the ERP slice registration payload: renders a viewport preview PNG into
+    /// <c>slicer/</c> beside the saved .mass, and references heavy files by UNAS
+    /// share-relative path (the ERP resolves them via its UNAS API — no bytes are
+    /// uploaded to the web server). Returns null when the workspace was never saved.
+    /// </summary>
+    internal async Task<(MassiveSlicer.App.Erp.ErpSliceStats Stats, IReadOnlyList<MassiveSlicer.App.Erp.ErpSliceFile> Files)?> BuildErpSlicePayloadAsync()
+    {
+        if (AppPreferences.LastWorkspacePath is not { Length: > 0 } massPath
+            || !System.IO.File.Exists(massPath))
+            return null;
+
+        var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
+
+        try
+        {
+            if (CaptureViewportPng is { } capture && await capture() is { Length: > 0 } png)
+            {
+                string dir = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
+                System.IO.Directory.CreateDirectory(dir);
+                string previewPath = System.IO.Path.Combine(
+                    dir, System.IO.Path.GetFileNameWithoutExtension(massPath) + " preview.png");
+                await System.IO.File.WriteAllBytesAsync(previewPath, png);
+                if (ToUnasShareRelative(previewPath) is { } previewRel)
+                    files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("preview", previewRel, png.Length));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[erp] preview render failed: {ex.Message}");
+        }
+
+        if (ToUnasShareRelative(massPath) is { } massRel)
+            files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
+
+        var add = RightPanel.Additive;
+        var stats = new MassiveSlicer.App.Erp.ErpSliceStats(
+            PrintTime:     Viewport.StatsTime is { Length: > 0 } t ? t : null,
+            Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
+            Material:      add.SelectedPreset?.Name,
+            LayerHeightMm: add.LayerHeight,
+            BeadWidthMm:   add.BeadWidth);
+        return (stats, files);
+    }
+
+    /// <summary>
+    /// <c>/Volumes/&lt;share&gt;/rest…</c> → <c>rest…</c> — the path the ERP's UNAS API
+    /// resolves against the same share. Null for local (non-mounted) paths.
+    /// </summary>
+    internal static string? ToUnasShareRelative(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length > 2 && parts[0] == "Volumes"
+            ? string.Join('/', parts.Skip(2))
+            : null;
+    }
 
     /// <summary>Saves a full-window PNG under <c>%LOCALAPPDATA%/MassiveSlicer/screenshots/</c> and returns the path.</summary>
     public async Task<string> SaveViewportScreenshotAsync()

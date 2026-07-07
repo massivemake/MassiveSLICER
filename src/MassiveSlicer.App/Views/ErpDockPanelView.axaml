@@ -91,6 +91,20 @@
                 </ListBox>
             </StackPanel>
 
+            <!-- New element on the selected project/lead -->
+            <StackPanel Spacing="4"
+                        IsVisible="{Binding SelectedResult, Converter={x:Static ObjectConverters.IsNotNull}}">
+                <TextBlock Text="NEW ELEMENT" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                <Grid ColumnDefinitions="*,6,Auto">
+                    <TextBox Grid.Column="0" Classes="PanelTextBox"
+                             Text="{Binding NewElementName, Mode=TwoWay}"
+                             Watermark="Element name…"/>
+                    <Button Grid.Column="2" Content="Create"
+                            Command="{Binding CreateElementCommand}"
+                            ToolTip.Tip="Create this element on the ERP and select it"/>
+                </Grid>
+            </StackPanel>
+
             <Button Content="Attach Workspace" HorizontalAlignment="Stretch"
                     Classes="ExportCta"
                     Command="{Binding AttachCommand}"/>
@@ -109,6 +123,25 @@
                     <TextBlock Text="{Binding AttachmentSummary}" FontSize="11" TextWrapping="Wrap"/>
                 </StackPanel>
             </Border>
+            <!-- The attached project/lead has no element yet — create + link one -->
+            <StackPanel Spacing="4" IsVisible="{Binding ShowAttachmentElementCreate}">
+                <TextBlock Text="NO ELEMENT LINKED — CREATE ONE" Classes="LabelMuted"
+                           FontSize="9" LetterSpacing="1"/>
+                <Grid ColumnDefinitions="*,6,Auto">
+                    <TextBox Grid.Column="0" Classes="PanelTextBox"
+                             Text="{Binding AttachmentElementName, Mode=TwoWay}"
+                             Watermark="Element name…"/>
+                    <Button Grid.Column="2" Content="Create"
+                            Command="{Binding CreateAttachmentElementCommand}"
+                            ToolTip.Tip="Create this element on the ERP and link the workspace to it"/>
+                </Grid>
+            </StackPanel>
+
+            <Button Content="Send Slice to ERP" HorizontalAlignment="Stretch"
+                    Classes="ExportCta"
+                    Command="{Binding SendSliceCommand}"
+                    ToolTip.Tip="Register this slice on the linked element — preview + stats; heavy files stay on the UNAS and are linked by path"/>
+
             <Grid ColumnDefinitions="*,6,*">
                 <Button Grid.Column="0" Content="Change" HorizontalAlignment="Stretch"
                         Command="{Binding ChangeCommand}"

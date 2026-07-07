@@ -135,7 +135,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | detach | status",
+            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
@@ -161,6 +161,23 @@ public sealed class ConsoleCommandRegistry
                         break;
                     }
                     case "detach":  erp.DetachCommand.Execute(null); break;
+                    case "newelem":
+                    {
+                        // Creates on the attached record when one is linked, else on the selected result.
+                        string name = parts.ElementAtOrDefault(1)?.Trim() ?? "";
+                        if (erp.ShowAttachmentElementCreate)
+                        {
+                            if (name.Length > 0) erp.AttachmentElementName = name;
+                            erp.CreateAttachmentElementCommand.Execute(null);
+                        }
+                        else
+                        {
+                            if (name.Length > 0) erp.NewElementName = name;
+                            erp.CreateElementCommand.Execute(null);
+                        }
+                        break;
+                    }
+                    case "sendslice": erp.SendSliceCommand.Execute(null); break;
                     default:
                         ctx.Log($"[erp] state={erp.ConnectionState} status='{erp.Status}' results={erp.SearchResults.Count} " +
                                 $"elements={erp.Elements.Count} attached='{erp.ToggleLabel}'");
