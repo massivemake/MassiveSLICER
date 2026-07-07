@@ -169,6 +169,27 @@ public sealed class PreferencesViewModel : ViewModelBase
         _loading                = false;
     }
 
+    // -- Connections ---------------------------------------------------------
+
+    /// <summary>Live ERP view model — URL/token edits write through it so the
+    /// client is invalidated and reconnect uses the new values. Set after startup.</summary>
+    private ErpViewModel? _erp;
+    public ErpViewModel? Erp
+    {
+        get => _erp;
+        set => SetField(ref _erp, value);
+    }
+
+    /// <summary>Per-cell robot SMB rows, rebuilt each time the dialog opens.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<RobotSmbRowViewModel> SmbRows { get; } = [];
+
+    public void RefreshSmbRows()
+    {
+        SmbRows.Clear();
+        foreach (var cfg in _prefs.RobotSmb.OrderBy(c => c.CellName, StringComparer.OrdinalIgnoreCase))
+            SmbRows.Add(new RobotSmbRowViewModel(cfg, () => PreferencesLoader.Save(_prefs)));
+    }
+
     // -- Private -----------------------------------------------------------
 
     private void Commit(Action writeToPrefs)

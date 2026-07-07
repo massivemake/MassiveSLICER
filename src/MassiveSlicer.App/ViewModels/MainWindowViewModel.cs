@@ -1184,6 +1184,22 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally { robot.ResumeStreaming(); }
     }
 
+    /// <summary>Seeds a RobotSmb prefs entry per discovered cell (host prefilled from the
+    /// cell's bridge IP) so Preferences → Connections always lists every cell.</summary>
+    public void EnsureRobotSmbEntries(IEnumerable<(string Name, string BridgeIp)> cells)
+    {
+        bool added = false;
+        foreach (var (name, ip) in cells)
+        {
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (AppPreferences.RobotSmb.Any(c => string.Equals(c.CellName, name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            AppPreferences.RobotSmb.Add(new RobotSmbConfig { CellName = name, Host = ip });
+            added = true;
+        }
+        if (added) PreferencesLoader.Save(AppPreferences);
+    }
+
     /// <summary>Captures the full app window as PNG bytes. Wired from <c>MainWindow</c> on load.</summary>
     internal Func<Task<byte[]?>>? CaptureAppScreenshot { get; set; }
 
