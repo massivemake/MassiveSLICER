@@ -1324,11 +1324,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             System.IO.Path.GetDirectoryName(massPath)!, "3D Print Files");
         string revDir = NextRevisionDir(baseDir);
         System.IO.Directory.CreateDirectory(revDir);
+        int rev = int.TryParse(System.IO.Path.GetFileName(revDir)[4..].Trim(), out int n2) ? n2 : 1;
 
         string? path = null;
         try
         {
-            path = await export(revDir);
+            path = await export(revDir, rev);
         }
         catch (Exception ex)
         {
