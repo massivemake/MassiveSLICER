@@ -748,6 +748,13 @@
 
                             <StackPanel IsVisible="{Binding Additive.EffectorEnabled}">
                                 <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Mode" FontSize="11" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" MinWidth="130" FontSize="11"
+                                              ItemsSource="{Binding Additive.EffectorModeOptions}"
+                                              SelectedItem="{Binding Additive.EffectorMode, Mode=TwoWay}"
+                                              ToolTip.Tip="Amplify boosts the pattern inside the influence area; Erase smooths the lines back to a plain wall"/>
+                                </Grid>
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
                                     <TextBlock Grid.Column="0" Text="Range" FontSize="11" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
                                         <TextBlock Text="{Binding Additive.EffectorRange, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -756,7 +763,8 @@
                                 </Grid>
                                 <Slider Margin="10,0,10,2" Minimum="10" Maximum="3000" TickFrequency="10" IsSnapToTickEnabled="True"
                                         Value="{Binding Additive.EffectorRange, Mode=TwoWay}"/>
-                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto"
+                                      IsVisible="{Binding Additive.IsEffectorAmplify}">
                                     <TextBlock Grid.Column="0" Text="Strength" FontSize="11" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
                                         <TextBlock Text="{Binding Additive.EffectorStrength, StringFormat={}{0:0.0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -764,6 +772,7 @@
                                     </StackPanel>
                                 </Grid>
                                 <Slider Margin="10,0,10,6" Minimum="0" Maximum="200" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                        IsVisible="{Binding Additive.IsEffectorAmplify}"
                                         Value="{Binding Additive.EffectorStrength, Mode=TwoWay}"/>
                             </StackPanel>
 
