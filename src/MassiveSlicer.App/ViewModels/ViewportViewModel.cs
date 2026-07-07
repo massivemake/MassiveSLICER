@@ -4405,6 +4405,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Wired by the viewport code-behind: current sequence-selection size (diagnostics).</summary>
     internal Func<int>? GetSequenceCount { get; set; }
 
+    /// <summary>Wired by the viewport code-behind: PrintSpeedScale spread of the first toolpath (diagnostics).</summary>
+    internal Func<string>? GetSpeedSpread { get; set; }
+
     /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
     internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
 

@@ -536,6 +536,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -594,6 +595,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);

@@ -306,6 +306,17 @@ public partial class ViewportView : UserControl
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
             vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
             vm.GetSequenceCount          = () => _renderer.SelectedToolpathCount;
+            vm.GetSpeedSpread = () =>
+            {
+                var kv = _toolpathByNode.FirstOrDefault();
+                if (kv.Value is null) return "no toolpath";
+                float min = float.MaxValue, max = float.MinValue; int n = 0;
+                foreach (var l in kv.Value.Layers)
+                    foreach (var m in l.Moves)
+                        if (m.Kind == MoveKind.Extrude)
+                        { min = Math.Min(min, m.PrintSpeedScale); max = Math.Max(max, m.PrintSpeedScale); n++; }
+                return $"moves={n} scale min={min:F3} max={max:F3}";
+            };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>

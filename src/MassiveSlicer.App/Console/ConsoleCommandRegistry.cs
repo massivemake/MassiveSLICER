@@ -134,6 +134,21 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "speedtest",
+            Description = "Debug: toggle adaptive speed inputs and report PrintSpeedScale spread",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var add = ctx.Main.RightPanel.Additive;
+                ctx.Log($"[speedtest] before: {v.GetSpeedSpread?.Invoke() ?? "n/a"} (enabled={add.LayerSpeedAdaptEnabled})");
+                add.LayerSpeedAdaptEnabled = true;
+                add.LayerSpeedMinMmS = Math.Abs(add.LayerSpeedMinMmS - 20.0) < 0.01 ? 21.0 : 20.0;
+                ctx.Log($"[speedtest] after:  {v.GetSpeedSpread?.Invoke() ?? "n/a"} (min={add.LayerSpeedMinMmS})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "massivebrain",
             Aliases = ["brain"],
             Description = "MassiveBRAIN sync server: massivebrain on|off|status",
