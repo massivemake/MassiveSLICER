@@ -469,6 +469,22 @@ public sealed class SceneRenderer : IDisposable
     private Rendering.ToolpathColorMode _toolpathColorMode = Rendering.ToolpathColorMode.Normal;
 
     /// <summary>Switches every toolpath's extrude-line colour mode. GL thread only; no-op if unchanged.</summary>
+    /// <summary>Diagnostics: describes a registered toolpath entry (colour mode + speed-scale spread).</summary>
+    public string DescribeToolpathEntry(SceneNode node)
+    {
+        if (!_toolpaths.TryGetValue(node, out var entry)) return "not registered";
+        float min = float.MaxValue, max = float.MinValue; int n = 0;
+        foreach (var l in entry.Data.Layers)
+            foreach (var m in l.Moves)
+                if (m.Kind == MassiveSlicer.Core.Models.MoveKind.Extrude)
+                {
+                    min = MathF.Min(min, m.PrintSpeedScale);
+                    max = MathF.Max(max, m.PrintSpeedScale);
+                    n++;
+                }
+        return $"sceneMode={_toolpathColorMode} rendererMode={entry.Renderer.ColorMode} moves={n} scale {min:F3}..{max:F3}";
+    }
+
     public void SetToolpathColorMode(Rendering.ToolpathColorMode mode)
     {
         if (_toolpathColorMode == mode) return;

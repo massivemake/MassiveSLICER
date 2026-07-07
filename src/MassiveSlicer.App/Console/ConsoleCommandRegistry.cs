@@ -134,6 +134,19 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "viewmode",
+            Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
+            Execute = (ctx, args) =>
+            {
+                var m = args.Trim();
+                if (m.Length == 0) { ctx.Log($"[viewmode] {ctx.Main.Viewport.ViewMode}"); return; }
+                ctx.Main.Viewport.ViewMode = m;
+                ctx.Log($"[viewmode] set to {ctx.Main.Viewport.ViewMode}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "speedtest",
             Description = "Debug: toggle adaptive speed inputs and report PrintSpeedScale spread",
             Execute = (ctx, _) =>

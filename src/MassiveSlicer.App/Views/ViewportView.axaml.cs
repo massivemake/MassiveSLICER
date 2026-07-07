@@ -315,7 +315,7 @@ public partial class ViewportView : UserControl
                     foreach (var m in l.Moves)
                         if (m.Kind == MoveKind.Extrude)
                         { min = Math.Min(min, m.PrintSpeedScale); max = Math.Max(max, m.PrintSpeedScale); n++; }
-                return $"moves={n} scale min={min:F3} max={max:F3}";
+                return $"moves={n} scale min={min:F3} max={max:F3} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
             };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);

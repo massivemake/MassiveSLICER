@@ -190,6 +190,9 @@ public sealed class ToolpathRenderer : IDisposable
     private ToolpathColorMode _colorMode = ToolpathColorMode.Normal;
 
     /// <summary>Switches the extrude-line colour mode and rebuilds VBOs. GL thread only.</summary>
+    /// <summary>Diagnostics: the gradient mode this renderer's VBOs were built with.</summary>
+    public ToolpathColorMode ColorMode => _colorMode;
+
     public void SetColorMode(ToolpathColorMode mode)
     {
         if (_colorMode == mode) return;
@@ -854,8 +857,13 @@ public sealed class ToolpathRenderer : IDisposable
         {
             if (showExtrusion && extCount > 0)
             {
-                _shader.SetFloat("uOverride", 1f);
-                _shader.SetVector3("uOverrideColor", _unselectedGray);
+                // Speed/RPM gradients ARE the information — never flatten them to the
+                // unselected override colour (the persistent timeline leaves toolpaths
+                // unselected, so the override was hiding the gradient entirely).
+                bool gradient = _colorMode != ToolpathColorMode.Normal;
+                _shader.SetFloat("uOverride", gradient ? 0f : 1f);
+                if (!gradient)
+                    _shader.SetVector3("uOverrideColor", _unselectedGray);
                 GL.BindVertexArray(_extrudeVao);
                 GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
             }
