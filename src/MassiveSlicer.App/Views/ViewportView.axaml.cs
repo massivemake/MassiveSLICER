@@ -301,7 +301,7 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
-            vm.ExportKrlToDirectory = dir => ExportKrlToDirectoryAsync(vm, dir);
+            vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
@@ -5914,39 +5914,64 @@ public partial class ViewportView : UserControl
     {
         int total = tp.Layers.Sum(l => l.Moves.Count);
         var result = new float[total];
-        if (total == 0) return result;
+        if (total == 0 || beadWidth <= 0f) return result;
 
-        // O(n×m) per-layer search — too slow for wave-expanded toolpaths.
-        // Skip and return all-zero (no overhang highlight) above threshold.
-        if (total > 600_000) return result;
-
-        List<(NVec3 from, NVec3 to)>? prevSegs = null;
+        // Spatial hash over the previous layer's cut segments (cell = bead width).
+        // Any segment outside the 3×3 neighbourhood is ≥ one bead away, which already
+        // clamps to score 1 — so the ring query is exact, and the whole pass is O(n).
+        // (The old per-layer pairwise search was O(n×m) and silently bailed above
+        // 600k moves, leaving wave-expanded toolpaths entirely white.)
+        float cell = MathF.Max(beadWidth, 0.5f);
+        Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>? prevGrid = null;
         int fi = 0;
         foreach (var layer in tp.Layers)
         {
-            var curSegs = new List<(NVec3, NVec3)>();
+            var curGrid = new Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>();
             foreach (var move in layer.Moves)
             {
                 if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
-                    if (prevSegs is { Count: > 0 })
+                    if (prevGrid is { Count: > 0 })
                     {
                         var mid = (move.From + move.To) * 0.5f;
+                        int cx = (int)MathF.Floor(mid.X / cell);
+                        int cy = (int)MathF.Floor(mid.Y / cell);
                         float minD = float.MaxValue;
-                        foreach (var (a, b) in prevSegs)
-                        {
-                            float d = SegDist2D(mid, a, b);
-                            if (d < minD) minD = d;
-                        }
-                        result[fi] = Math.Clamp(minD / beadWidth, 0f, 1f);
+                        for (int gx = cx - 1; gx <= cx + 1; gx++)
+                        for (int gy = cy - 1; gy <= cy + 1; gy++)
+                            if (prevGrid.TryGetValue((gx, gy), out var segs))
+                                foreach (var (a, b) in segs)
+                                {
+                                    float d = SegDist2D(mid, a, b);
+                                    if (d < minD) minD = d;
+                                }
+                        result[fi] = minD == float.MaxValue
+                            ? 1f
+                            : Math.Clamp(minD / beadWidth, 0f, 1f);
                     }
-                    curSegs.Add((move.From, move.To));
+                    InsertSegment(curGrid, move.From, move.To, cell);
                 }
                 fi++;
             }
-            prevSegs = curSegs;
+            prevGrid = curGrid;
         }
         return result;
+
+        static void InsertSegment(
+            Dictionary<(int, int), List<(NVec3 a, NVec3 b)>> grid, NVec3 a, NVec3 b, float cell)
+        {
+            int x0 = (int)MathF.Floor(MathF.Min(a.X, b.X) / cell);
+            int x1 = (int)MathF.Floor(MathF.Max(a.X, b.X) / cell);
+            int y0 = (int)MathF.Floor(MathF.Min(a.Y, b.Y) / cell);
+            int y1 = (int)MathF.Floor(MathF.Max(a.Y, b.Y) / cell);
+            for (int x = x0; x <= x1; x++)
+            for (int y = y0; y <= y1; y++)
+            {
+                if (!grid.TryGetValue((x, y), out var list))
+                    grid[(x, y)] = list = [];
+                list.Add((a, b));
+            }
+        }
 
         static float SegDist2D(NVec3 p, NVec3 a, NVec3 b)
         {
@@ -7087,7 +7112,7 @@ public partial class ViewportView : UserControl
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
     /// the source geometry; returns the path or null when no toolpath is active.</summary>
-    private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir)
+    private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir, int rev)
     {
         var toolpath = vm.ActiveScrubToolpath;
         var node     = _activeScrubNode;
@@ -7095,7 +7120,9 @@ public partial class ViewportView : UserControl
         var settings = vm.AdditiveSettings;
         if (toolpath is null || node is null || cell is null || settings is null) return null;
 
-        string path = Path.Combine(dir, RobotKrlPaths.SuggestedFileName(node.Name) + ".src");
+        // Rev in the filename (and therefore the KRL program name) so the operator
+        // can tell revisions apart on the controller, e.g. "… Rev04.src".
+        string path = Path.Combine(dir, $"{RobotKrlPaths.SuggestedFileName(node.Name)} Rev{rev:00}.src");
         await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
         return path;
     }
@@ -7122,20 +7149,21 @@ public partial class ViewportView : UserControl
 
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
-        // Same filename as the imported geometry (toolpaths inherit the mesh name).
-        string fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
-
-        // The NAS keeps a copy per revision (3D Print Files/Rev N/); temp fallback
-        // when the workspace has never been saved to the share.
+        // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
+        // receives the same Rev-numbered filename; temp fallback when the workspace
+        // has never been saved to the share.
         string srcPath;
+        string fileName;
         var nasSrc = mvm is not null ? await mvm.ExportSrcToPrintFilesAsync() : null;
         if (nasSrc is { } n)
         {
-            srcPath = n.Path;
+            srcPath  = n.Path;
+            fileName = Path.GetFileName(n.Path);
         }
         else
         {
-            srcPath = Path.Combine(Path.GetTempPath(), fileName);
+            fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
+            srcPath  = Path.Combine(Path.GetTempPath(), fileName);
             await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
         }
