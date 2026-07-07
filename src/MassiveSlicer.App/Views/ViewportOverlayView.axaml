@@ -441,7 +441,8 @@
         <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
              Same LiveIo view model — the extruder/milling bridge config is set on
              every cell swap, so the monitor works on any cell. -->
-        <Border IsVisible="{Binding ShowStandaloneLiveIo}"
+        <Border x:Name="LiveIoDock"
+                IsVisible="{Binding ShowStandaloneLiveIo}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
                 Margin="{Binding BottomDockMargin}"
@@ -482,30 +483,6 @@
                                          Margin="{Binding Lfam3WorkflowMargin}"
                                          ClipToBounds="False"
                                          ZIndex="26"/>
-
-        <!-- Data Visualization panel — bottom-left, above timeline -->
-        <Border IsVisible="{Binding IsToolpathSelected}"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Bottom"
-                Margin="8,8,8,78"
-                Background="{DynamicResource Bg2}"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="5">
-            <Expander Classes="SectionExpander"
-                      Header="DATA VISUALIZATION"
-                      IsExpanded="False">
-                <StackPanel Margin="8,6,8,8" Spacing="6">
-                    <CheckBox Content="Bead Overhang"
-                              IsChecked="{Binding ShowBeadOverhang}"
-                              FontSize="11"/>
-                    <CheckBox Content="Orientation Rate"
-                              IsChecked="{Binding ShowOrientationPreview}"
-                              FontSize="11"
-                              ToolTip.Tip="Colour by orientation change rate. Dark blue = 0°/mm (smooth) → cyan → green → yellow → orange → red → magenta → purple = 3°/mm+ (extreme slowdown)."/>
-                </StackPanel>
-            </Expander>
-        </Border>
 
         <!-- Transform toolbar — top-center: icon tab above the axis-value row -->
         <StackPanel HorizontalAlignment="Center"
@@ -1151,11 +1128,12 @@
             </StackPanel>
         </Border>
 
-        <!-- Bead overhang legend — bottom-right, visible when bead overhang active -->
+        <!-- Bead overhang legend — bottom-right, floats above the Live I/O dock,
+             timelines, and anything else parked in that corner -->
         <Border IsVisible="{Binding ShowBeadOverhang}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
-                Margin="8,8,8,78"
+                Margin="{Binding BottomRightLegendMargin}"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
