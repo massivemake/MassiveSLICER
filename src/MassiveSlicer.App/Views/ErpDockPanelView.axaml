@@ -23,16 +23,16 @@
         <!-- Connection settings -->
         <StackPanel Spacing="6" IsVisible="{Binding ShowSettings}">
             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7"
-                       Text="Connect to the ERP to attach this workspace to a Project or Lead. Generate an API token in ERP settings → Slicer API tokens."/>
+                       Text="Connect to the ERP to attach this workspace to a Project or Lead. Generate an API token in ERP Settings → Slicer Access."/>
             <StackPanel Spacing="2">
                 <TextBlock Text="ERP URL" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
                 <TextBox Classes="PanelTextBox" Text="{Binding BaseUrl}"
-                         Watermark="https://erp.example.com"/>
+                         Watermark="https://lab.massivemake.com/api/slicer/v1"/>
             </StackPanel>
             <StackPanel Spacing="2">
                 <TextBlock Text="API TOKEN" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
                 <TextBox Classes="PanelTextBox" Text="{Binding ApiToken}"
-                         PasswordChar="•" Watermark="paste token"/>
+                         PasswordChar="•" Watermark="msl_…"/>
             </StackPanel>
             <Button Content="Connect" HorizontalAlignment="Stretch"
                     Command="{Binding ConnectCommand}"/>
