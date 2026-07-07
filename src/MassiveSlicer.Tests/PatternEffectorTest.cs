@@ -75,6 +75,26 @@ public class PatternEffectorTest
     }
 
     [Fact]
+    public void TwoEffectorsEraseBothTheirAreas()
+    {
+        // Opposite sides of the cylinder — both regions must flatten independently.
+        var e1 = new Vector3(R - 100f, 0f, 60f);
+        var e2 = new Vector3(-(R - 100f), 0f, 60f);
+        var settings = Settings(EffectorMode.Erase, e1);
+        settings.EffectorPoints = [e1, e2];
+        var tp = PatternEffect.Apply(BuildCylinder(), settings);
+
+        float near1 = MaxRadialDeviation(tp, p => Vector3.Distance(p, e1) < 150f);
+        float near2 = MaxRadialDeviation(tp, p => Vector3.Distance(p, e2) < 150f);
+        float far   = MaxRadialDeviation(tp, p =>
+            Vector3.Distance(p, e1) > 360f && Vector3.Distance(p, e2) > 360f);
+
+        Assert.True(near1 < 0.5f, $"first effector area should be flat, saw {near1:F2} mm");
+        Assert.True(near2 < 0.5f, $"second effector area should be flat, saw {near2:F2} mm");
+        Assert.True(far > 8f, $"pattern should survive elsewhere, saw {far:F2} mm");
+    }
+
+    [Fact]
     public void AmplifyBoostsThePatternNearTheEffector()
     {
         var effector = new Vector3(R - 100f, 0f, 60f);
