@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:shapes="using:Avalonia.Controls.Shapes"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.Lfam3LiveIoPanelView"
              x:CompileBindings="False">
 
@@ -11,7 +12,7 @@
                     <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
                         <TextBlock Grid.Column="0"
                                    Text="{Binding KindLabel}"
-                                   Width="18"
+                                   Width="34"
                                    Classes="LabelMuted"
                                    FontSize="9"
                                    VerticalAlignment="Center"/>
@@ -96,11 +97,22 @@
                                 Classes.pending="{Binding !IsPhaseLive}"
                                 VerticalAlignment="Top">
                             <StackPanel Spacing="4">
-                                <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
-                                    <TextBlock Grid.Column="0"
-                                               Text="{Binding Title}"
-                                               Classes="Lfam3LiveIoSectionTitle"/>
+                                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,4">
+                                    <Button Grid.Column="0"
+                                            Background="Transparent"
+                                            BorderThickness="0"
+                                            Padding="2,0"
+                                            Margin="0,0,4,0"
+                                            Cursor="Hand"
+                                            Command="{Binding ToggleCollapsedCommand}"
+                                            ToolTip.Tip="Collapse / expand section">
+                                        <ia:Icon Value="{Binding CollapseIcon}" FontSize="14" Foreground="#40b840"/>
+                                    </Button>
                                     <TextBlock Grid.Column="1"
+                                               Text="{Binding Title}"
+                                               Classes="Lfam3LiveIoSectionTitle"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2"
                                                Text="{Binding StatusLine}"
                                                Classes="LabelMuted"
                                                FontSize="9"
@@ -108,6 +120,8 @@
                                                TextWrapping="Wrap"
                                                MaxWidth="120"/>
                                 </Grid>
+
+                                <StackPanel Spacing="4" IsVisible="{Binding IsBodyVisible}">
 
                                 <!-- Robot: Position | Inputs | Outputs -->
                                 <Grid ColumnDefinitions="Auto,10,*,10,*"
@@ -251,6 +265,7 @@
                                 <ItemsControl ItemsSource="{Binding Signals}"
                                               ItemTemplate="{StaticResource LiveIoSignalRowTemplate}"
                                               IsVisible="{Binding !UsesSplitIoLayout}"/>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </DataTemplate>

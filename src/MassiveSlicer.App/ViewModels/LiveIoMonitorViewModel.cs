@@ -70,6 +70,27 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
     public int PhaseNumber { get; init; }
     public bool IsPhaseLive { get; init; }
 
+    private bool _isCollapsed;
+
+    /// <summary>Collapses the section body to just its header row.</summary>
+    public bool IsCollapsed
+    {
+        get => _isCollapsed;
+        set
+        {
+            if (!SetField(ref _isCollapsed, value)) return;
+            OnPropertyChanged(nameof(IsBodyVisible));
+            OnPropertyChanged(nameof(CollapseIcon));
+        }
+    }
+
+    public bool IsBodyVisible => !_isCollapsed;
+    public string CollapseIcon => _isCollapsed ? "mdi-chevron-right" : "mdi-chevron-down";
+
+    public RelayCommand ToggleCollapsedCommand => _toggleCollapsedCommand ??=
+        new RelayCommand(() => IsCollapsed = !IsCollapsed);
+    private RelayCommand? _toggleCollapsedCommand;
+
     internal LiveIoSectionViewModel(string title)
     {
         Title = title;
@@ -123,14 +144,25 @@ public sealed class LiveIoSignalViewModel : ViewModelBase
     LiveIoMonitorViewModel _owner;
 
     public string Label => Config.Label;
-    public string KindLabel => Config.Kind switch
+
+    /// <summary>Kind + channel number parsed from the signal key, e.g. "$IN[6]" → "DI-06",
+    /// "DO_01_doorLock_cmd" → "DO-01". Keys without a number show the bare kind.</summary>
+    public string KindLabel
     {
-        LiveIoSignalKind.DigitalInput  => "DI",
-        LiveIoSignalKind.DigitalOutput => "DO",
-        LiveIoSignalKind.AnalogInput   => "AI",
-        LiveIoSignalKind.AnalogOutput  => "AO",
-        _                              => "—",
-    };
+        get
+        {
+            string kind = Config.Kind switch
+            {
+                LiveIoSignalKind.DigitalInput  => "DI",
+                LiveIoSignalKind.DigitalOutput => "DO",
+                LiveIoSignalKind.AnalogInput   => "AI",
+                LiveIoSignalKind.AnalogOutput  => "AO",
+                _                              => "—",
+            };
+            var m = System.Text.RegularExpressions.Regex.Match(Config.Key, @"\d+");
+            return m.Success ? $"{kind}-{int.Parse(m.Value):00}" : kind;
+        }
+    }
 
     public bool IsDigital => Config.Kind is LiveIoSignalKind.DigitalInput or LiveIoSignalKind.DigitalOutput;
     public bool IsWritable => Config.Writable && Config.Source is
