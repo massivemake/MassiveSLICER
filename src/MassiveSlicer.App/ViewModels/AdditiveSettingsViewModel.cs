@@ -221,7 +221,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _disableContourOffset, value);
     }
 
-    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag"];
+    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag", "Spiral (vase)"];
 
     private string _seamMode = "Normal";
 
@@ -356,6 +356,31 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _patternType;
         set => SetField(ref _patternType, value);
+    }
+
+    public string[] PatternMappingOptions { get; } =
+        ["Wavelength (mm)", "Even (path length)", "Radial (angle)"];
+
+    private string _patternMapping = "Wavelength (mm)";
+    /// <summary>How the pattern wraps the part: fixed mm wavelength, even per-loop, or polar angle.</summary>
+    public string PatternMapping
+    {
+        get => _patternMapping;
+        set
+        {
+            if (SetField(ref _patternMapping, value))
+                OnPropertyChanged(nameof(ShowPatternWavelength));
+        }
+    }
+
+    public bool ShowPatternWavelength => _patternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase);
+
+    private double _patternWavelengthMm = 60.0;
+    /// <summary>Cycle size in mm for wavelength mapping.</summary>
+    public double PatternWavelengthMm
+    {
+        get => _patternWavelengthMm;
+        set => SetField(ref _patternWavelengthMm, Math.Clamp(value, 2.0, 2000.0));
     }
 
     private double _patternAmplitude;
@@ -721,7 +746,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         }
     }
 
-    public bool ShowInfillControls => InfillPattern != "None" && !SurfaceModeActive;
+    public bool ShowInfillControls => InfillPattern != "None";
 
     private double _infillSpacingMm = 0.0;
 

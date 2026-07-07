@@ -19,6 +19,16 @@
             <TextBlock Text="ROBOT CELL" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
+                    <!-- Active cell illustration (assets/images), watermark-style -->
+                    <Border IsVisible="{Binding HasCellIcon}"
+                            Height="120"
+                            Margin="0,0,0,6"
+                            CornerRadius="5"
+                            ClipToBounds="True">
+                        <Image Source="{Binding SelectedCellIcon}"
+                               Stretch="Uniform"
+                               Opacity="0.30"/>
+                    </Border>
                     <ComboBox ItemsSource="{Binding CellNames}"
                               SelectedIndex="{Binding SelectedCellIndex, Mode=TwoWay}"
                               HorizontalAlignment="Stretch"
@@ -66,13 +76,25 @@
     </Expander>
     <Expander Classes="StepCard" IsExpanded="True">
         <Expander.Header>
-            <TextBlock Text="OUTLINER" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="OUTLINER" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+                <ToggleButton Grid.Column="2"
+                              IsChecked="{Binding FilterToolpathsOnly, Mode=TwoWay}"
+                              Padding="5,2" Margin="0,0,6,0" CornerRadius="5"
+                              Background="Transparent"
+                              ToolTip.Tip="Show toolpaths only — a flat list where shift+click range-selects across all toolpaths">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <ia:Icon Value="mdi-filter-variant" FontSize="12"/>
+                        <TextBlock Text="Toolpaths" FontSize="9" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
+            </Grid>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
 <ScrollViewer MaxHeight="420"                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               Background="Transparent">
-                    <ItemsControl ItemsSource="{Binding OutlinerItems}" Padding="0">
+                    <ItemsControl ItemsSource="{Binding VisibleOutlinerRows}" Padding="0">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <views:OutlinerItemView Margin="6,0,0,0"/>

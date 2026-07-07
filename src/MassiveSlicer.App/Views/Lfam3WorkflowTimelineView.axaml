@@ -78,7 +78,7 @@
                                 ToolTip.Tip="{Binding PrePrintScanToggleTip}"
                                 VerticalAlignment="Center"
                                 HorizontalAlignment="Center">
-                            <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="13" Foreground="#59FF0D"/>
+                            <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="13" Foreground="#40b840"/>
                         </Button>
 
                         <Border Grid.Column="0"
@@ -160,7 +160,7 @@
                                 ToolTip.Tip="{Binding PrePrintScanToggleTip}"
                                 VerticalAlignment="Center"
                                 HorizontalAlignment="Center">
-                            <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="13" Foreground="#59FF0D"/>
+                            <ia:Icon Value="{Binding PrePrintScanToggleIcon}" FontSize="13" Foreground="#40b840"/>
                         </Button>
 
                         <Border Grid.Column="0"
@@ -268,7 +268,7 @@
                         Classes="Lfam3WorkflowHeaderBtn"
                         Command="{Binding ToggleLfam3WorkflowCommand}"
                         ToolTip.Tip="{Binding Lfam3WorkflowMinimizeTip}">
-                    <ia:Icon Value="{Binding Lfam3WorkflowMinimizeIcon}" FontSize="14" Foreground="#59FF0D"/>
+                    <ia:Icon Value="{Binding Lfam3WorkflowMinimizeIcon}" FontSize="14" Foreground="#40b840"/>
                 </Button>
                 <StackPanel Grid.Column="1"
                             Orientation="Horizontal"
@@ -286,11 +286,11 @@
                         IsVisible="{Binding IsLfam3WorkflowExpanded}"
                         ToolTip.Tip="Live I/O monitor">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#59FF0D"/>
+                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
                         <TextBlock Text="{Binding LiveIo.ToggleLabel}"
                                    FontSize="10"
                                    FontWeight="SemiBold"
-                                   Foreground="#59FF0D"
+                                   Foreground="#40b840"
                                    LetterSpacing="0.6"/>
                     </StackPanel>
                 </Button>

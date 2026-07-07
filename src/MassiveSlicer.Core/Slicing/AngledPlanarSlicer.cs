@@ -213,8 +213,16 @@ public static class AngledPlanarSlicer
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Contours are plane-local 2D; the projector lifts infill back onto the tilted plane.
-        if (!surfaceMode && settings.InfillPattern != InfillPattern.None)
+        if (settings.InfillPattern != InfillPattern.None)
         {
+            // Surface mode fills across closed boundary chains only (1 mm closure
+            // threshold, same as ChainByProximity); open chains keep their paths.
+            var fillPolys = surfaceMode
+                ? insetContours.Where(c => c.Count >= 3
+                    && Vector2.DistanceSquared(c[0], c[^1]) <= 1.0f).ToList()
+                : insetContours;
+            if (fillPolys.Count > 0)
+            {
             float baseAngle = settings.InfillAngleDeg;
             float infillAngle = settings.InfillPattern switch
             {
@@ -230,16 +238,17 @@ public static class AngledPlanarSlicer
 
             int firstInfillMove = layer.Moves.Count;
             if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
-                InfillGenerator.EmitGhostMesh(insetContours, planeD, layer, infillSpacing, infillAngle,
-                                              isLastLayer, Unproject);
+                InfillGenerator.EmitGhostMesh(fillPolys, planeD, layer, infillSpacing, infillAngle,
+                                              isLastLayer, Unproject, settings.BeadWidth);
             else
-                InfillGenerator.Emit(insetContours, planeD, layer, infillSpacing, infillAngle, Unproject);
+                InfillGenerator.Emit(fillPolys, planeD, layer, infillSpacing, infillAngle, Unproject);
 
             // Infill moves need the plane normal for tool orientation on tilted layers.
             for (int i = firstInfillMove; i < layer.Moves.Count; i++)
                 layer.Moves[i] = layer.Moves[i] with { Normal = normal };
 
             return new List<ContourTrack>();
+            }
         }
 
         var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);

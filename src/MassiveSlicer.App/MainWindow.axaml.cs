@@ -50,6 +50,8 @@ public partial class MainWindow : Window
 
         // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
         vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+        vm.Viewport.MassiveBrain.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+        vm.Viewport.MassiveBrain.Enabled = true;   // sync server on by default (localhost:4547)
 
         // -- Right panel toggle (floating card) --------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
@@ -80,6 +82,7 @@ public partial class MainWindow : Window
                 catch { name = Path.GetFileNameWithoutExtension(full); }
                 return (name, full);
             })
+            .OrderBy(c => c.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         if (cells.Count == 0)

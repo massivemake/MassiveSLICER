@@ -469,6 +469,22 @@ public sealed class SceneRenderer : IDisposable
     private Rendering.ToolpathColorMode _toolpathColorMode = Rendering.ToolpathColorMode.Normal;
 
     /// <summary>Switches every toolpath's extrude-line colour mode. GL thread only; no-op if unchanged.</summary>
+    /// <summary>Diagnostics: describes a registered toolpath entry (colour mode + speed-scale spread).</summary>
+    public string DescribeToolpathEntry(SceneNode node)
+    {
+        if (!_toolpaths.TryGetValue(node, out var entry)) return "not registered";
+        float min = float.MaxValue, max = float.MinValue; int n = 0;
+        foreach (var l in entry.Data.Layers)
+            foreach (var m in l.Moves)
+                if (m.Kind == MassiveSlicer.Core.Models.MoveKind.Extrude)
+                {
+                    min = MathF.Min(min, m.PrintSpeedScale);
+                    max = MathF.Max(max, m.PrintSpeedScale);
+                    n++;
+                }
+        return $"sceneMode={_toolpathColorMode} rendererMode={entry.Renderer.ColorMode} moves={n} scale {min:F3}..{max:F3}";
+    }
+
     public void SetToolpathColorMode(Rendering.ToolpathColorMode mode)
     {
         if (_toolpathColorMode == mode) return;
@@ -524,6 +540,11 @@ public sealed class SceneRenderer : IDisposable
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
 
+    /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
+    /// full selected appearance — colours, travels, seams — regardless of selection.
+    /// Body view keeps the dimmed unselected treatment.</summary>
+    public bool ToolpathFullAppearance { get; set; }
+
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
@@ -536,6 +557,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -594,6 +616,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -960,7 +983,7 @@ public sealed class SceneRenderer : IDisposable
             int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
-            entry.Renderer.Draw(toolpathMvp, selected: isSelected,
+            entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
@@ -1255,8 +1278,14 @@ public sealed class SceneRenderer : IDisposable
     public void SetScanSelection(IReadOnlyList<SceneNode> scans, SceneNode? primary = null)
     {
         _selectedScanOrder.Clear();
-        _selectedToolpaths.Clear();
-        _selectedToolpathOrder.Clear();
+        // Only an ACTUAL scan multi-select displaces the toolpath sequence selection.
+        // Empty syncs (routine scan-selection clears fired by every outliner update)
+        // must not wipe a shift+click toolpath sequence in progress.
+        if (scans.Count > 0 || primary is not null)
+        {
+            _selectedToolpaths.Clear();
+            _selectedToolpathOrder.Clear();
+        }
         foreach (var scan in scans)
         {
             if (scan is null) continue;

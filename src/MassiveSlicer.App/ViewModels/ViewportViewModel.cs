@@ -376,6 +376,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Plasticity live-bridge state, surfaced as a collapsible section in the N-key HUD.</summary>
     public PlasticityViewModel Plasticity { get; } = new();
 
+    /// <summary>MassiveBRAIN sync server (Blender/Rhino push bridge), below Plasticity in the N-key HUD.</summary>
+    public MassiveBrainViewModel MassiveBrain { get; } = new();
+
     /// <summary>
     /// Scene nodes queued for addition to the scene graph. The producer enqueues after
     /// CPU-side loading; the render loop dequeues on the GL thread, uploads PendingMesh
@@ -1642,6 +1645,8 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowSimTimeline));
                 OnPropertyChanged(nameof(ShowPlaybackTimeline));
+                ExportKrlCommand?.RaiseCanExecuteChanged();
+                SendToRobotCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -2163,6 +2168,10 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _simPlaying;
         private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
     }
+
+    /// <summary>Raised when the user selects the toolhead/TCP in the viewport
+    /// (rising edge only) — used to guide attention to the orientation settings.</summary>
+    internal Action? OnToolheadSelected { get; set; }
 
     /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
     internal Action<double>? OnSimScrubRequested { get; set; }
@@ -2693,11 +2702,11 @@ public sealed class ViewportViewModel : ViewModelBase
 
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null);
 
         SendToRobotCommand = new RelayCommand(
             execute:    () => _ = OnSendToRobotRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null && ActiveCell is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null && ActiveCell is not null);
 
         MergeToolpathsCommand = new RelayCommand(
             execute:    () => OnMergeToolpathsRequested?.Invoke(),
@@ -4365,6 +4374,88 @@ public sealed class ViewportViewModel : ViewModelBase
     /// removes it from the outliner, and queues the root for GL disposal.
     /// Must be called on the UI thread.
     /// </summary>
+    /// <summary>Snapshot of an outliner row's position for delete-undo.</summary>
+    internal (OutlinerItemViewModel Item, OutlinerItemViewModel? Parent, int Index)? CaptureOutlinerContext(SceneNode node)
+    {
+        if (FindOutlinerItem(node) is not { } item) return null;
+        var parent = FindParentOutlinerItem(item);
+        int index  = parent is null ? OutlinerItems.IndexOf(item) : parent.Children.IndexOf(item);
+        return (item, parent, Math.Max(index, 0));
+    }
+
+    /// <summary>Re-inserts a previously deleted outliner row at its old position (delete-undo).</summary>
+    internal void RestoreOutlinerItem(OutlinerItemViewModel item, OutlinerItemViewModel? parent, int index)
+    {
+        if (parent is null)
+        {
+            if (!OutlinerItems.Contains(item))
+                OutlinerItems.Insert(Math.Clamp(index, 0, OutlinerItems.Count), item);
+        }
+        else if (!parent.Children.Contains(item))
+        {
+            parent.InsertChild(item, index);
+        }
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Wired by the viewport code-behind: shift+click sequence toggle.</summary>
+    internal Action<SceneNode>? OnSequenceToggleRequested { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: current sequence-selection size (diagnostics).</summary>
+    internal Func<int>? GetSequenceCount { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: PrintSpeedScale spread of the first toolpath (diagnostics).</summary>
+    internal Func<string>? GetSpeedSpread { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
+    internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
+
+    /// <summary>Outliner shift+click: extends the print-sequence selection from the
+    /// current anchor through the clicked row (models resolve to their toolpath child).</summary>
+    internal bool TryToggleToolpathSequenceSelection(OutlinerItemViewModel item)
+    {
+        bool sequenceable = item.IsToolpath || IsUserModelItem(item)
+            || (item.IsToolpath is false && OwningModelItem(item) is not null);
+        if (!sequenceable || OnSequenceRangeRequested is null) return false;
+        OnSequenceRangeRequested.Invoke(item);
+        return true;
+    }
+
+    /// <summary>Top-level user model rows in outliner order (sequence range selection).</summary>
+    internal List<OutlinerItemViewModel> GetUserModelItems() => EnumerateUserModelItems().ToList();
+
+    /// <summary>Highlights outliner rows whose toolpath is in the sequence selection.</summary>
+    internal void SyncSequenceRowHighlights(IReadOnlyList<SceneNode> selectedToolpaths)
+    {
+        bool multi = selectedToolpaths.Count >= 2;
+        foreach (var model in EnumerateUserModelItems())
+        {
+            bool anyChild = false;
+            foreach (var child in model.Children)
+            {
+                if (!child.IsToolpath) continue;
+                bool on = multi && selectedToolpaths.Contains(child.Node);
+                child.IsSequenceSelected = on;
+                anyChild |= on;
+            }
+            model.IsSequenceSelected = anyChild;
+        }
+    }
+
+    /// <summary>True when the row is a user-imported print model (context-menu gating).</summary>
+    internal bool IsUserModelItem(OutlinerItemViewModel item)
+        => EnumerateUserModelItems().Contains(item);
+
+    /// <summary>Explicitly (re)creates the toolpath for a model — recovery path after the
+    /// realtime toolpath was deleted; slicing re-adopts it into the live sync loop.</summary>
+    internal void RequestCreateToolpath(OutlinerItemViewModel item)
+    {
+        ForceSelectNode?.Invoke(item.Node);
+        if (SliceCommand.CanExecute(null))
+            SliceCommand.Execute(null);
+    }
+
     public void RequestDeleteNode(SceneNode node)
     {
         if (FindOutlinerItem(node) is not { } item) return;

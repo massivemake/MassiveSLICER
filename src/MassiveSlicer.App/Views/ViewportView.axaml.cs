@@ -303,6 +303,20 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
+            vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
+            vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
+            vm.GetSequenceCount          = () => _renderer.SelectedToolpathCount;
+            vm.GetSpeedSpread = () =>
+            {
+                var kv = _toolpathByNode.FirstOrDefault();
+                if (kv.Value is null) return "no toolpath";
+                float min = float.MaxValue, max = float.MinValue; int n = 0;
+                foreach (var l in kv.Value.Layers)
+                    foreach (var m in l.Moves)
+                        if (m.Kind == MoveKind.Extrude)
+                        { min = Math.Min(min, m.PrintSpeedScale); max = Math.Max(max, m.PrintSpeedScale); n++; }
+                return $"moves={n} scale min={min:F3} max={max:F3} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
+            };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>
@@ -904,6 +918,7 @@ public partial class ViewportView : UserControl
             _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
+            _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {
@@ -2308,8 +2323,9 @@ public partial class ViewportView : UserControl
                     var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
                     var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
-                        _renderer.ToggleToolpathSelection(picked);
+                    if (shiftHeld && picked is not null
+                        && ResolveSequenceToolpath(pickVm, picked) is not null)
+                        ToggleSequenceSelection(pickVm, picked);
                     else
                         RequestSceneSelection(pickVm, picked);
                 }
@@ -2414,6 +2430,9 @@ public partial class ViewportView : UserControl
 
         switch (e.Key)
         {
+            case Key.X when e.KeyModifiers == KeyModifiers.None:
+                if (TryDeleteSelectedWithUndo()) e.Handled = true;
+                break;
             case Key.F:      FocusSelected();                          e.Handled = true; break;
             case Key.G:
                 SetGizmoMode(GizmoMode.None);
@@ -2639,6 +2658,12 @@ public partial class ViewportView : UserControl
             ApproachZ        = (float)s.ApproachZ,
             PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
+                                   ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
+                                   : s.PatternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase)
+                                       ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength
+                                       : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
+            PatternWavelengthMm  = (float)s.PatternWavelengthMm,
             PatternAmplitude     = (float)s.PatternAmplitude,
             PatternFrequency     = (float)s.PatternFrequency,
             PatternTwistDegPerMm = (float)s.PatternTwist,
@@ -2649,6 +2674,7 @@ public partial class ViewportView : UserControl
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
             ZigZagSeam             = s.SeamMode == "Zig-zag",
+            Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
             WaveEffect    = s.WaveEffect switch
             {
                 "Sine"     => WaveEffectType.Sine,
@@ -2782,6 +2808,7 @@ public partial class ViewportView : UserControl
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
             tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
+            tp = MassiveSlicer.Core.Slicing.Effects.SpiralizeEffect.Apply(tp, settings);
             SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
             Pct(80);
 
@@ -3045,12 +3072,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var toolpathName = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            var toolpathName = ToolpathNameFrom(sourceItem.Name);
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             var selectedPreset = vm.AdditiveSettings is { } asp
@@ -3505,6 +3527,9 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.SeamMode),
+        nameof(AdditiveSettingsViewModel.PatternMapping),
+        nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
         nameof(AdditiveSettingsViewModel.PatternTwist),
@@ -3611,12 +3636,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            toolpathNode.Name = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            toolpathNode.Name = ToolpathNameFrom(parentItem.Name);
 
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
@@ -4986,6 +5006,7 @@ public partial class ViewportView : UserControl
     }
 
     private SceneNode? _lastOutlinerSyncedNode;
+    private bool _wasToolNodeSelected;
 
     private void UpdateFocusOverlay()
     {
@@ -5004,6 +5025,7 @@ public partial class ViewportView : UserControl
         bool isDevNode        = vm.IsDevMode && IsDevNode(selected);
         bool multiToolpath    = _renderer.SelectedToolpathCount >= 2;
         vm.CanMergeToolpaths  = multiToolpath;
+        vm.SyncSequenceRowHighlights(_renderer.SelectedToolpaths);
         vm.IsToolpathSelected = isToolpath && !multiToolpath;
         bool isMerged = isToolpath && selected is not null && _mergedByNode.ContainsKey(selected);
         vm.IsMergedToolpathSelected = isMerged;
@@ -5032,6 +5054,9 @@ public partial class ViewportView : UserControl
             vm.Robot?.Desync();
             SetGizmoMode(GizmoMode.Translate);
         }
+        if (isToolNode && !_wasToolNodeSelected)
+            vm.OnToolheadSelected?.Invoke();
+        _wasToolNodeSelected = isToolNode;
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
@@ -5224,7 +5249,8 @@ public partial class ViewportView : UserControl
             PreservedLocalTransform = preservedLocal,
             PreservedOrigin         = preservedOrigin,
         });
-        vm.ReplaceScrubToolpathInPlace(toolpath);
+        if (ReferenceEquals(node, _activeScrubNode))
+            vm.ReplaceScrubToolpathInPlace(toolpath);
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -5275,6 +5301,49 @@ public partial class ViewportView : UserControl
         return dst;
     }
 
+    /// <summary>
+    /// X-key delete: removes the selected user mesh or toolpath without confirmation
+    /// and pushes a <see cref="NodeDeleteAction"/> so Cmd/Ctrl+Z restores it (outliner
+    /// row, meshes re-uploaded from retained CPU data, toolpaths rebuilt from snapshots).
+    /// </summary>
+    private bool TryDeleteSelectedWithUndo()
+    {
+        if (DataContext is not ViewportViewModel vm) return false;
+        var selected = _renderer.SelectedNode;
+        if (selected is null) return false;
+
+        bool isToolpath = _renderer.IsToolpathNode(selected);
+        var  node       = selected;
+        if (!isToolpath)
+        {
+            // Only user imports — never the robot/toolhead/bed/dev objects; effectors
+            // have their own toggle lifecycle (pattern panel buttons).
+            var userItem = vm.FindUserMeshOutlinerItem(selected);
+            if (userItem is null || userItem.IsEffector) return false;
+            if (IsToolNodeSelected() || IsDevNode(selected)) return false;
+            node = userItem.Node;
+        }
+
+        if (vm.CaptureOutlinerContext(node) is not { } ctx) return false;
+
+        // Snapshot every toolpath being deleted so undo can rebuild the renderers.
+        var restores = new List<NodeDeleteAction.ToolpathRestore>();
+        void Capture(SceneNode n)
+        {
+            if (GetToolpathSnapshot(n) is not { } snap) return;
+            _toolpathOriginByNode.TryGetValue(n, out var origin);
+            restores.Add(new NodeDeleteAction.ToolpathRestore(n, snap, n.LocalTransform, origin));
+        }
+        if (isToolpath) Capture(node);
+        else
+            foreach (var child in ctx.Item.Children)
+                if (child.IsToolpath) Capture(child.Node);
+
+        vm.RequestDeleteNode(node);
+        vm.UndoRedo?.Push(new NodeDeleteAction(vm, ctx.Item, ctx.Parent, ctx.Index, node, isToolpath, restores));
+        return true;
+    }
+
     // -- Scrub IK --------------------------------------------------------------
 
     /// <summary>
@@ -5292,6 +5361,16 @@ public partial class ViewportView : UserControl
 
     /// <summary>Simulate-timeline hook: drives the robot along the first visible
     /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
+    /// <summary>Toolpath display name = the source mesh's name (file extension stripped),
+    /// so KRL export dialogs carry it straight through to the .src filename.</summary>
+    private static string ToolpathNameFrom(string meshName)
+    {
+        var n = meshName.Trim();
+        foreach (var ext in new[] { ".stl", ".obj", ".glb", ".gltf", ".3mf", ".ply", ".step", ".stp" })
+            if (n.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { n = n[..^ext.Length].TrimEnd(); break; }
+        return n.Length > 0 ? n : "Toolpath";
+    }
+
     private void SimScrubIk(double progress)
     {
         foreach (var (node, cache) in _scrubCacheByNode)
@@ -5714,8 +5793,9 @@ public partial class ViewportView : UserControl
         foreach (var (node, raw) in _rawToolpathByNode)
         {
             var smoothed = RebuildProcessedToolpath(raw, s);
-            _toolpathByNode[node]   = smoothed;
-            _scrubCacheByNode[node] = BuildScrubCache(smoothed);
+            // Swap in place AND re-upload — the Speed/RPM gradients are baked into the
+            // line VBOs at upload, so without a replace the view keeps stale colours.
+            SwapScrubbedToolpath(vm, node, smoothed);
             _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
         }
 
@@ -6463,6 +6543,77 @@ public partial class ViewportView : UserControl
 
         System.Console.WriteLine(
             $"[scan-merge] {label}: {result.PointCount:N0} points, {result.TriangleCount:N0} triangles");
+    }
+
+    /// <summary>Toolpath node used for sequence selection: the node itself when it is a
+    /// toolpath, else the picked model's toolpath child (shift+click on a mesh).</summary>
+    private SceneNode? ResolveSequenceToolpath(ViewportViewModel vm, SceneNode picked)
+    {
+        if (_renderer.IsToolpathNode(picked)) return picked;
+        var item = vm.FindUserMeshOutlinerItem(picked);
+        return item?.Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+    }
+
+    /// <summary>
+    /// Shift+click sequence toggle (viewport pick or outliner row). Selection order
+    /// defines the print order; when starting from a plain single selection, that
+    /// object's toolpath is added first so "select A, shift+click B" yields A → B.
+    /// </summary>
+    private void ToggleSequenceSelection(ViewportViewModel vm, SceneNode picked)
+    {
+        var tp = ResolveSequenceToolpath(vm, picked);
+        if (tp is null) return;
+
+        if (_renderer.SelectedToolpathCount == 0 && _renderer.SelectedNode is { } cur)
+        {
+            var curTp = ResolveSequenceToolpath(vm, cur);
+            if (curTp is not null && curTp != tp)
+                _renderer.ToggleToolpathSelection(curTp);
+        }
+        _renderer.ToggleToolpathSelection(tp);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Outliner shift+click: standard range extension — selects every user model's
+    /// toolpath from the anchor (current selection / first sequence member) through
+    /// the clicked row, in outliner order. No anchor falls back to a single toggle.
+    /// </summary>
+    private void SequenceRangeSelect(ViewportViewModel vm, OutlinerItemViewModel clicked)
+    {
+        var clickedModel = clicked.IsToolpath ? vm.OwningModelItem(clicked) : clicked;
+        if (clickedModel is null) return;
+
+        var models = vm.GetUserModelItems();
+        int target = models.IndexOf(clickedModel);
+        if (target < 0) return;
+
+        OutlinerItemViewModel? anchorModel = null;
+        if (_renderer.SelectedToolpathCount > 0 &&
+            vm.FindOutlinerItem(_renderer.SelectedToolpaths[0]) is { } firstItem)
+            anchorModel = vm.OwningModelItem(firstItem);
+        else if (_renderer.SelectedNode is { } cur
+                 && vm.FindUserMeshOutlinerItem(cur) is { } curItem)
+            anchorModel = curItem.IsToolpath ? vm.OwningModelItem(curItem) : curItem;
+
+        int a = anchorModel is not null ? models.IndexOf(anchorModel) : -1;
+        if (a < 0)
+        {
+            ToggleSequenceSelection(vm, clickedModel.Node);
+            return;
+        }
+
+        int step = target >= a ? 1 : -1;
+        for (int i = a; i != target + step; i += step)
+        {
+            var tp = models[i].Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+            if (tp is null) continue;
+            if (!_renderer.SelectedToolpaths.Contains(tp))
+                _renderer.ToggleToolpathSelection(tp);
+        }
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
     }
 
     private void MergeToolpaths(ViewportViewModel vm)

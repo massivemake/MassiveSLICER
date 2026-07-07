@@ -29,7 +29,7 @@
                      the green/grey line terminates cleanly at the circle perimeter instead of
                      showing through the semi-transparent node fill. -->
                 <shapes:Ellipse Width="54" Height="54"
-                                Fill="#0A0E14"
+                                Fill="#262626"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"/>
                 <shapes:Ellipse Classes="Lfam3WorkflowGlow"
@@ -40,11 +40,11 @@
                                 Classes.pending="{Binding IsStepPending, ElementName=Root}"/>
                 <ia:Icon Classes="Lfam3WorkflowPhaseIcon"
                          Value="{Binding PhaseIcon, ElementName=Root}"
-                         Foreground="#59FF0D"
+                         Foreground="#40b840"
                          IsVisible="{Binding !IsStepPending, ElementName=Root}"/>
                 <ia:Icon Classes="Lfam3WorkflowPhaseIcon"
                          Value="{Binding PhaseIcon, ElementName=Root}"
-                         Foreground="#6b7280"
+                         Foreground="#acacac"
                          Opacity="0.55"
                          IsVisible="{Binding IsStepPending, ElementName=Root}"/>
             </Grid>

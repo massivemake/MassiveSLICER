@@ -19,6 +19,8 @@
         <KeyBinding Gesture="Ctrl+Z" Command="{Binding Toolbar.UndoCommand}"/>
         <KeyBinding Gesture="Ctrl+Y" Command="{Binding Toolbar.RedoCommand}"/>
         <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding Toolbar.RedoCommand}"/>
+        <KeyBinding Gesture="Meta+Z" Command="{Binding Toolbar.UndoCommand}"/>
+        <KeyBinding Gesture="Meta+Shift+Z" Command="{Binding Toolbar.RedoCommand}"/>
     </Window.KeyBindings>
 
     <!--

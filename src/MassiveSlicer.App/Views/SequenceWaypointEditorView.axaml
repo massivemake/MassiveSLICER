@@ -22,7 +22,7 @@
                                Foreground="#f3f4f6"/>
                     <TextBlock Text="{Binding Subtitle}"
                                FontSize="11"
-                               Foreground="#9ca3af"
+                               Foreground="#acacac"
                                TextWrapping="Wrap"/>
                 </StackPanel>
                 <Button Grid.Column="1"
@@ -31,7 +31,7 @@
                         ToolTip.Tip="Close"
                         Width="28" Height="28"
                         Padding="0">
-                    <ia:Icon Value="mdi-close" FontSize="14" Foreground="#9ca3af"/>
+                    <ia:Icon Value="mdi-close" FontSize="14" Foreground="#acacac"/>
                 </Button>
             </Grid>
 
@@ -104,12 +104,12 @@
             <TextBlock Text="{Binding Note}"
                        IsVisible="{Binding HasNote}"
                        FontSize="10"
-                       Foreground="#9ca3af"
+                       Foreground="#acacac"
                        TextWrapping="Wrap"/>
             <TextBlock Text="{Binding StatusMessage}"
                        IsVisible="{Binding HasStatusMessage}"
                        FontSize="10"
-                       Foreground="#59FF0D"
+                       Foreground="#40b840"
                        TextWrapping="Wrap"/>
 
             <Grid ColumnDefinitions="*,*" ColumnSpacing="8">

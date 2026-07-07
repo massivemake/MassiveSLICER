@@ -204,7 +204,9 @@ public sealed class ContactShadowRenderer : IDisposable
 
     private void DrawGroundDecal(ContactShadowBuilder.ShadowProjection proj, Matrix4 viewProj)
     {
-        float z = proj.FloorZ;
+        // 1 mm above the contact plane: clears z-fighting with the bed without the
+        // aggressive polygon offset that let the decal beat thin geometry above it.
+        float z = proj.FloorZ + 1.0f;
         Span<float> verts = stackalloc float[]
         {
             proj.MinX, proj.MinY, z, 0f, 0f,
@@ -223,9 +225,6 @@ public sealed class ContactShadowRenderer : IDisposable
         GL.DepthMask(false);
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.DstColor, BlendingFactor.Zero);
-        GL.Enable(EnableCap.PolygonOffsetFill);
-        GL.PolygonOffset(-3f, -3f);
-
         ComputeShadowAppearance(out float blurLod, out float uvScale, out float darken, out float strength);
 
         _decalShader.Use();
@@ -244,7 +243,6 @@ public sealed class ContactShadowRenderer : IDisposable
         GL.BindVertexArray(0);
 
         GL.BindTexture(TextureTarget.Texture2D, 0);
-        GL.Disable(EnableCap.PolygonOffsetFill);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.DepthMask(true);
     }

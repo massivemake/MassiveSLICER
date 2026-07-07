@@ -78,7 +78,7 @@
         <StackPanel Spacing="6">
             <TextBlock Text="{Binding Phase1Hint}"
                        FontSize="9"
-                       Foreground="#59FF0D"
+                       Foreground="#40b840"
                        Margin="2,0"
                        TextWrapping="Wrap"/>
 
@@ -120,7 +120,7 @@
                                                            Text="POSITION"
                                                            FontSize="9"
                                                            FontWeight="SemiBold"
-                                                           Foreground="#59FF0D"
+                                                           Foreground="#40b840"
                                                            LetterSpacing="0.8"
                                                            VerticalAlignment="Center"/>
                                                 <Border Grid.Column="1"
@@ -129,7 +129,7 @@
                                                     <TextBlock Text="LIVE"
                                                                FontSize="7"
                                                                FontWeight="Bold"
-                                                               Foreground="#59FF0D"
+                                                               Foreground="#40b840"
                                                                LetterSpacing="0.5"/>
                                                 </Border>
                                             </Grid>
@@ -202,7 +202,7 @@
                                         <TextBlock Text="INPUTS"
                                                    FontSize="9"
                                                    FontWeight="SemiBold"
-                                                   Foreground="#59FF0D"
+                                                   Foreground="#40b840"
                                                    LetterSpacing="0.8"
                                                    Margin="0,0,0,2"/>
                                         <ItemsControl ItemsSource="{Binding InputSignals}"
@@ -213,7 +213,7 @@
                                         <TextBlock Text="OUTPUTS"
                                                    FontSize="9"
                                                    FontWeight="SemiBold"
-                                                   Foreground="#59FF0D"
+                                                   Foreground="#40b840"
                                                    LetterSpacing="0.8"
                                                    Margin="0,0,0,2"/>
                                         <ItemsControl ItemsSource="{Binding OutputSignals}"
@@ -228,7 +228,7 @@
                                         <TextBlock Text="INPUTS"
                                                    FontSize="9"
                                                    FontWeight="SemiBold"
-                                                   Foreground="#59FF0D"
+                                                   Foreground="#40b840"
                                                    LetterSpacing="0.8"
                                                    Margin="0,0,0,2"/>
                                         <ItemsControl ItemsSource="{Binding InputSignals}"
@@ -239,7 +239,7 @@
                                         <TextBlock Text="OUTPUTS"
                                                    FontSize="9"
                                                    FontWeight="SemiBold"
-                                                   Foreground="#59FF0D"
+                                                   Foreground="#40b840"
                                                    LetterSpacing="0.8"
                                                    Margin="0,0,0,2"/>
                                         <ItemsControl ItemsSource="{Binding OutputSignals}"

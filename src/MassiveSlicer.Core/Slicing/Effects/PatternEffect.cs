@@ -3,6 +3,21 @@ using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing.Effects;
 
+/// <summary>How the pattern coordinate wraps around the part.</summary>
+public enum PatternMappingMode
+{
+    /// <summary>Distance along the printed contour — cycles are evenly spaced in mm
+    /// along the whole path regardless of shape.</summary>
+    ArcLength,
+    /// <summary>Polar angle around the part centre (classic OGcode cylindrical wrap) —
+    /// stretches where the wall is far from centre, compresses where it is close.</summary>
+    Radial,
+    /// <summary>Fixed physical wavelength in mm along the path, phase-anchored at the
+    /// seam — identical cycle size on every layer; the fractional remainder lands at
+    /// the seam line instead of smearing into diagonal bands.</summary>
+    Wavelength,
+}
+
 /// <summary>Decorative wall patterns (ported from the MassiveCODE effector project).</summary>
 public enum PatternType
 {
@@ -65,12 +80,26 @@ public static class PatternEffect
         ctx.CellMm = MathF.Max(2f, TwoPi * ctx.Radius / ctx.Frequency);
         if (ctx.Type == PatternType.Sunflower) ctx.BuildSunflower();
 
+        bool arcMode = settings.PatternMapping != PatternMappingMode.Radial;
+        bool wavelengthMode = settings.PatternMapping == PatternMappingMode.Wavelength;
+        float wavelength = MathF.Max(2f, settings.PatternWavelengthMm);
+        if (wavelengthMode)
+            ctx.CellMm = wavelength;   // square texture cells: z cell = path cell
+
         var result = new Toolpath();
         foreach (var layer in toolpath.Layers)
         {
             var newLayer = new ToolpathLayer(layer.Index, layer.Z) { PlaneNormal = layer.PlaneNormal };
-            foreach (var move in layer.Moves)
+
+            // Arc-length mode: pre-walk the layer's contour chains so each sample knows
+            // its distance along the loop. u = 2π·(distance − anchor)/total gives evenly
+            // spaced cycles; the anchor (vertex nearest world +X from the part centre)
+            // keeps the phase aligned layer over layer even as seams wander.
+            ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx) : null;
+
+            for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
+                var move = layer.Moves[mi];
                 if (move.Kind != MoveKind.Extrude || move.IsLayerStitch)
                 {
                     newLayer.Moves.Add(move);
@@ -80,9 +109,15 @@ public static class PatternEffect
                 float len = Vector3.Distance(move.From, move.To);
                 if (len < 1e-4f) { newLayer.Moves.Add(move); continue; }
 
-                // Sample finely enough for the pattern's angular detail.
-                float arcPerCycle = TwoPi * ctx.Radius / ctx.Frequency;
-                float spacing  = Math.Clamp(arcPerCycle / 12f, 1.0f, 6f);
+                var chain = chainOf?[mi];
+
+                // Sample finely enough for the pattern's detail along the path.
+                float pathPerCycle = wavelengthMode
+                    ? wavelength
+                    : arcMode && chain is { Total: > 1f }
+                        ? chain.Total / ctx.Frequency
+                        : TwoPi * ctx.Radius / ctx.Frequency;
+                float spacing  = Math.Clamp(pathPerCycle / 12f, 1.0f, 6f);
                 int   segments = Math.Clamp((int)MathF.Ceiling(len / spacing), 1, 2000);
 
                 var tangent = Vector3.Normalize(move.To - move.From);
@@ -93,7 +128,25 @@ public static class PatternEffect
                 Vector3 Displaced(float t)
                 {
                     var pt = Vector3.Lerp(move.From, move.To, t);
-                    return pt + perp * ctx.Displacement(pt);
+                    float? loopTheta = null;
+                    if (chain is { Total: > 1f })
+                    {
+                        if (wavelengthMode)
+                        {
+                            // Constant mm wavelength, phase 0 at the chain start (the seam):
+                            // theta advances 2π per Frequency·λ of path, so P(θ·f) completes
+                            // one cycle every λ mm for every pattern family.
+                            float dist = chain.CumStart + t * len;
+                            loopTheta = TwoPi * dist / (ctx.Frequency * wavelength);
+                        }
+                        else
+                        {
+                            float dist = chain.CumStart + t * len - chain.Anchor;
+                            dist -= MathF.Floor(dist / chain.Total) * chain.Total;
+                            loopTheta = TwoPi * dist / chain.Total;
+                        }
+                    }
+                    return pt + perp * ctx.Displacement(pt, loopTheta);
                 }
 
                 for (int seg = 0; seg < segments; seg++)
@@ -113,6 +166,61 @@ public static class PatternEffect
         return result;
     }
 
+    /// <summary>Per-move chain data for arc-length mapping.</summary>
+    private sealed class ChainInfo
+    {
+        public float CumStart;   // path distance at this move's From
+        public float Total;      // full chain length
+        public float Anchor;     // path distance of the vertex nearest world +X
+    }
+
+    /// <summary>
+    /// Segments a layer's moves into contiguous extrude chains and computes, per move,
+    /// its cumulative start distance, the chain total, and the phase anchor.
+    /// </summary>
+    private static ChainInfo[] BuildChains(ToolpathLayer layer, PatternContext ctx)
+    {
+        var infos = new ChainInfo[layer.Moves.Count];
+        int i = 0;
+        while (i < layer.Moves.Count)
+        {
+            var m = layer.Moves[i];
+            if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) { i++; continue; }
+
+            // Collect the contiguous chain starting here.
+            int start = i;
+            var cum = new List<float> { 0f };
+            float total = 0f;
+            float bestAngle = float.MaxValue, anchor = 0f;
+
+            void ConsiderAnchor(Vector3 p, float distAlong)
+            {
+                float ang = MathF.Abs(MathF.Atan2(p.Y - ctx.Cy, p.X - ctx.Cx));
+                if (ang < bestAngle) { bestAngle = ang; anchor = distAlong; }
+            }
+
+            ConsiderAnchor(m.From, 0f);
+            int j = i;
+            var prevTo = m.From;
+            while (j < layer.Moves.Count)
+            {
+                var mv = layer.Moves[j];
+                if (mv.Kind != MoveKind.Extrude || mv.IsLayerStitch) break;
+                if (Vector3.DistanceSquared(mv.From, prevTo) > 1.0f) break;   // path jump ends the chain
+                total += Vector3.Distance(mv.From, mv.To);
+                cum.Add(total);
+                ConsiderAnchor(mv.To, total);
+                prevTo = mv.To;
+                j++;
+            }
+
+            for (int k = start; k < j; k++)
+                infos[k] = new ChainInfo { CumStart = cum[k - start], Total = total, Anchor = anchor };
+            i = Math.Max(j, i + 1);
+        }
+        return infos;
+    }
+
     // ── Pattern evaluation ──────────────────────────────────────────────────
 
     private sealed class PatternContext
@@ -125,10 +233,10 @@ public static class PatternEffect
         private (float theta, float z)[] _sunflower = [];
         private float _sunBumpR;
 
-        public float Displacement(Vector3 p)
+        public float Displacement(Vector3 p, float? loopTheta = null)
         {
             float z = p.Z - ZMin;
-            float theta = MathF.Atan2(p.Y - Cy, p.X - Cx);
+            float theta = loopTheta ?? MathF.Atan2(p.Y - Cy, p.X - Cx);
             float fade = 1f;
             if (FadeIn  > 0f) fade *= Math.Clamp(z / FadeIn, 0f, 1f);
             if (FadeOut > 0f) fade *= Math.Clamp((Height - z) / FadeOut, 0f, 1f);

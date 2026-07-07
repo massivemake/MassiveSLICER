@@ -211,6 +211,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         Toolbar.FrameAllRequested       += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
         Toolbar.NewWorkspaceRequested   += (_, _) => NewWorkspace();
         Viewport.OnSaveViewRequested    = SaveCurrentView;
+        Viewport.OnToolheadSelected     = () =>
+        {
+            if (RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
+            RightPanel.FlashToolheadOrientation();
+        };
 
         Console.Attach(this, new ConsoleCommandContext
         {

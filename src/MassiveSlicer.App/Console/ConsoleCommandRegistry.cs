@@ -116,6 +116,72 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "seqtest",
+            Description = "Debug: select first toolpath, range-extend to last",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var models = v.GetUserModelItems()
+                    .Where(m => m.Children.Any(c => c.IsToolpath)).ToList();
+                if (models.Count < 2) { ctx.Log($"[seqtest] need 2+ sliced models, have {models.Count}"); return; }
+                var firstTp = models[0].Children.First(c => c.IsToolpath);
+                v.ForceSelectNode?.Invoke(firstTp.Node);
+                var lastTp = models[^1].Children.First(c => c.IsToolpath);
+                bool ok = v.TryToggleToolpathSequenceSelection(lastTp);
+                ctx.Log($"[seqtest] toggled={ok} selected={v.GetSequenceCount?.Invoke() ?? -1} of {models.Count}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "viewmode",
+            Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
+            Execute = (ctx, args) =>
+            {
+                var m = args.Trim();
+                if (m.Length == 0) { ctx.Log($"[viewmode] {ctx.Main.Viewport.ViewMode}"); return; }
+                ctx.Main.Viewport.ViewMode = m;
+                ctx.Log($"[viewmode] set to {ctx.Main.Viewport.ViewMode}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "speedtest",
+            Description = "Debug: toggle adaptive speed inputs and report PrintSpeedScale spread",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var add = ctx.Main.RightPanel.Additive;
+                ctx.Log($"[speedtest] before: {v.GetSpeedSpread?.Invoke() ?? "n/a"} (enabled={add.LayerSpeedAdaptEnabled})");
+                add.LayerSpeedAdaptEnabled = true;
+                add.LayerSpeedMinMmS = Math.Abs(add.LayerSpeedMinMmS - 20.0) < 0.01 ? 21.0 : 20.0;
+                ctx.Log($"[speedtest] after:  {v.GetSpeedSpread?.Invoke() ?? "n/a"} (min={add.LayerSpeedMinMmS})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "massivebrain",
+            Aliases = ["brain"],
+            Description = "MassiveBRAIN sync server: massivebrain on|off|status",
+            Execute = (ctx, args) =>
+            {
+                var brain = ctx.Main.Viewport.MassiveBrain;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "on":  brain.Enabled = true;  break;
+                    case "off": brain.Enabled = false; break;
+                    default:
+                        ctx.Log($"[massivebrain] {(brain.Enabled ? "enabled" : "disabled")} — {brain.Status} " +
+                                $"clients={brain.ClientCount} objects={brain.ObjectCount}");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "panel-settings",
             Aliases = ["panel"],
             Description = "Show the right-panel Settings tab",

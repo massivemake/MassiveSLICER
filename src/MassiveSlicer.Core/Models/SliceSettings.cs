@@ -87,6 +87,10 @@ public sealed class SliceSettings
     // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
     /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
     public Slicing.Effects.PatternType PatternType { get; init; } = Slicing.Effects.PatternType.Smooth;
+
+    /// <summary>How the pattern wraps the part: evenly by path distance, or by polar angle.</summary>
+    public MassiveSlicer.Core.Slicing.Effects.PatternMappingMode PatternMapping { get; init; }
+        = MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength;
     /// <summary>Pattern relief depth in mm (0 disables).</summary>
     public float PatternAmplitude { get; init; } = 0f;
     /// <summary>Pattern repetitions around the part.</summary>
@@ -194,6 +198,12 @@ public sealed class SliceSettings
     /// Has no effect on closed contours.
     /// </summary>
     public bool ZigZagSeam { get; init; } = false;
+
+    /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
+    public bool Spiralize { get; init; }
+
+    /// <summary>Cycle size in mm for <see cref="MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength"/> mapping.</summary>
+    public float PatternWavelengthMm { get; init; } = 60f;
 
     // -- Wave gradient ------------------------------------------------------------
 

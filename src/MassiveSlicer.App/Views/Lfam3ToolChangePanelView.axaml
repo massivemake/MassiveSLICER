@@ -12,7 +12,7 @@
         <TextBlock Text="{Binding ToolHeader}"
                    FontSize="10"
                    FontWeight="Bold"
-                   Foreground="#e8eaef"
+                   Foreground="#e8e8e8"
                    LetterSpacing="1.2"/>
 
         <!-- Pick + run caret | Deposit + run caret -->
@@ -56,7 +56,7 @@
                         ToolTip.Tip="Play / pause simulation"
                         Width="30" Height="30"
                         Padding="0">
-                    <ia:Icon Value="{Binding PlaybackToggleIcon}" FontSize="14" Foreground="#e8eaef"/>
+                    <ia:Icon Value="{Binding PlaybackToggleIcon}" FontSize="14" Foreground="#e8e8e8"/>
                 </Button>
                 <Slider Grid.Column="1"
                         Minimum="0"
@@ -68,7 +68,7 @@
 
             <TextBlock Text="{Binding StepText}"
                        FontSize="11"
-                       Foreground="#e8eaef"
+                       Foreground="#e8e8e8"
                        TextWrapping="Wrap"/>
 
             <StackPanel Orientation="Horizontal" Spacing="16">
@@ -84,7 +84,7 @@
 
             <TextBlock Text="Click a waypoint marker to inspect / edit its pose"
                        FontSize="10"
-                       Foreground="#6b7280"
+                       Foreground="#acacac"
                        FontStyle="Italic"/>
         </StackPanel>
 
