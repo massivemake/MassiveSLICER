@@ -2646,6 +2646,9 @@ public partial class ViewportView : UserControl
             ApproachZ        = (float)s.ApproachZ,
             PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
+                                   ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
+                                   : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
             PatternAmplitude     = (float)s.PatternAmplitude,
             PatternFrequency     = (float)s.PatternFrequency,
             PatternTwistDegPerMm = (float)s.PatternTwist,
@@ -3507,6 +3510,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
         nameof(AdditiveSettingsViewModel.PatternTwist),

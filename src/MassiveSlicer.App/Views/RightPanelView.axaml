@@ -637,6 +637,14 @@
                                 </Button>
                             </UniformGrid>
 
+                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Distribution" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Even: cycles spaced uniformly by distance along the printed path. Radial: classic angular wrap around the part centre (stretches on non-circular shapes)."/>
+                                <ComboBox Grid.Column="1" MinWidth="150"
+                                          ItemsSource="{Binding Additive.PatternMappingOptions}"
+                                          SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
+                            </Grid>
+
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Amplitude" FontSize="11" VerticalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">

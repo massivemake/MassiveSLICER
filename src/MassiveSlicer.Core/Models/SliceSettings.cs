@@ -87,6 +87,10 @@ public sealed class SliceSettings
     // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
     /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
     public Slicing.Effects.PatternType PatternType { get; init; } = Slicing.Effects.PatternType.Smooth;
+
+    /// <summary>How the pattern wraps the part: evenly by path distance, or by polar angle.</summary>
+    public MassiveSlicer.Core.Slicing.Effects.PatternMappingMode PatternMapping { get; init; }
+        = MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength;
     /// <summary>Pattern relief depth in mm (0 disables).</summary>
     public float PatternAmplitude { get; init; } = 0f;
     /// <summary>Pattern repetitions around the part.</summary>

@@ -358,6 +358,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _patternType, value);
     }
 
+    public string[] PatternMappingOptions { get; } = ["Even (path length)", "Radial (angle)"];
+
+    private string _patternMapping = "Even (path length)";
+    /// <summary>How the pattern wraps the part: even spacing by path distance, or polar angle.</summary>
+    public string PatternMapping
+    {
+        get => _patternMapping;
+        set => SetField(ref _patternMapping, value);
+    }
+
     private double _patternAmplitude;
     /// <summary>Pattern relief depth in mm (0 = off).</summary>
     public double PatternAmplitude
