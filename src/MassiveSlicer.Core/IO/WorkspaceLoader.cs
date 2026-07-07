@@ -126,6 +126,12 @@ public static class WorkspaceLoader
                 JsonSerializer.Serialize(fs, doc, SaveOptions);
                 fs.Flush(flushToDisk: true);
             }
+            // Keep one backup generation. Atomic rename protects against truncation,
+            // but macOS smbfs can still drop cached pages mid-file if the process dies
+            // before write-back completes (observed: 64K-aligned zero runs on the NAS).
+            // The .bak survives such an event one save behind.
+            if (File.Exists(path))
+                File.Move(path, path + ".bak", overwrite: true);
             File.Move(tmp, path, overwrite: true);
         }
         catch

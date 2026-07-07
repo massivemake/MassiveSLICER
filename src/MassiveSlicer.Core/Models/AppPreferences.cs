@@ -319,6 +319,10 @@ public sealed class AppPreferences
     /// Passwords are scrubbed from workspace (.mass) settings snapshots.</summary>
     public List<RobotSmbConfig> RobotSmb { get; set; } = [];
 
+    /// <summary>Root of the project folders on the UNAS share. ERP-linked workspaces
+    /// save into "&lt;root&gt;/&lt;number&gt; - …/06-Production Documents" automatically.</summary>
+    public string UnasProjectsRoot { get; set; } = "/Volumes/MassiveFILES/Projects";
+
     // ── UI layout state ───────────────────────────────────────────────────
 
     /// <summary>
