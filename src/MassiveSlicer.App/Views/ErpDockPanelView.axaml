@@ -13,28 +13,19 @@
                        VerticalAlignment="Center"/>
             <Button Grid.Column="1"
                     Background="Transparent" BorderThickness="0" Padding="4,2"
-                    Command="{Binding OpenSettingsCommand}"
-                    IsVisible="{Binding IsConnected}"
-                    ToolTip.Tip="Connection settings">
+                    Command="{Binding OpenPreferencesCommand}"
+                    ToolTip.Tip="Connection settings (Preferences → Connections)">
                 <ia:Icon Value="mdi-cog-outline" FontSize="12" Foreground="{DynamicResource TextMuted}"/>
             </Button>
         </Grid>
 
-        <!-- Connection settings -->
+        <!-- Not connected: credentials live in Preferences → Connections -->
         <StackPanel Spacing="6" IsVisible="{Binding ShowSettings}">
             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7"
-                       Text="Connect to the ERP to attach this workspace to a Project or Lead. Generate an API token in ERP Settings → Slicer Access."/>
-            <StackPanel Spacing="2">
-                <TextBlock Text="ERP URL" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
-                <TextBox Classes="PanelTextBox" Text="{Binding BaseUrl}"
-                         Watermark="https://lab.massivemake.com/api/slicer/v1"/>
-            </StackPanel>
-            <StackPanel Spacing="2">
-                <TextBlock Text="API TOKEN" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
-                <TextBox Classes="PanelTextBox" Text="{Binding ApiToken}"
-                         PasswordChar="•" Watermark="msl_…"/>
-            </StackPanel>
-            <Button Content="Connect" HorizontalAlignment="Stretch"
+                       Text="The ERP URL and API token are set in Preferences → Connections and connect automatically at launch. Generate a token in ERP Settings → Slicer Access."/>
+            <Button Content="Open Preferences…" HorizontalAlignment="Stretch"
+                    Command="{Binding OpenPreferencesCommand}"/>
+            <Button Content="Retry Connect" HorizontalAlignment="Stretch"
                     Command="{Binding ConnectCommand}"/>
         </StackPanel>
 

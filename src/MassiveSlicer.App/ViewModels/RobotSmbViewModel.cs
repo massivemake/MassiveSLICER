@@ -158,3 +158,85 @@ public sealed class RobotSmbViewModel : ViewModelBase
         else Dispatcher.UIThread.Post(action);
     }
 }
+
+/// <summary>
+/// One cell's SMB config row in Preferences → Connections. Same write-through
+/// semantics as <see cref="RobotSmbViewModel"/> but bound to a fixed config.
+/// </summary>
+public sealed class RobotSmbRowViewModel : ViewModelBase
+{
+    private readonly RobotSmbConfig _cfg;
+    private readonly Action _save;
+    private bool _testing;
+
+    public RobotSmbRowViewModel(RobotSmbConfig cfg, Action save)
+    {
+        _cfg = cfg;
+        _save = save;
+    }
+
+    public string CellName => _cfg.CellName;
+
+    public string Host
+    {
+        get => _cfg.Host;
+        set { if (_cfg.Host != value) { _cfg.Host = value.Trim(); _save(); Refresh(); } }
+    }
+
+    public string Share
+    {
+        get => _cfg.Share;
+        set { if (_cfg.Share != value) { _cfg.Share = value.Trim(); _save(); } }
+    }
+
+    public string Folder
+    {
+        get => _cfg.Folder;
+        set { if (_cfg.Folder != value) { _cfg.Folder = value.Trim(); _save(); } }
+    }
+
+    public string Username
+    {
+        get => _cfg.Username;
+        set { if (_cfg.Username != value) { _cfg.Username = value.Trim(); _save(); Refresh(); } }
+    }
+
+    public string Password
+    {
+        get => _cfg.Password ?? "";
+        set { if ((_cfg.Password ?? "") != value) { _cfg.Password = value; _save(); } }
+    }
+
+    private string _status = "";
+    public string Status
+    {
+        get => _status;
+        private set => SetField(ref _status, value);
+    }
+
+    public RelayCommand TestCommand => _testCommand ??= new RelayCommand(
+        () => _ = TestAsync(),
+        () => !_testing && _cfg.Host.Trim().Length > 0 && _cfg.Username.Trim().Length > 0);
+    private RelayCommand? _testCommand;
+
+    private async Task TestAsync()
+    {
+        _testing = true;
+        TestCommand.RaiseCanExecuteChanged();
+        Status = $"Testing \\\\{_cfg.Host}\\{_cfg.Share}…";
+        try
+        {
+            var (ok, message) = await Task.Run(() => RobotSmbUploader.Test(_cfg));
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                Status = ok ? message : $"Failed — {message}");
+        }
+        finally
+        {
+            _testing = false;
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
+                TestCommand.RaiseCanExecuteChanged());
+        }
+    }
+
+    private void Refresh() => TestCommand.RaiseCanExecuteChanged();
+}

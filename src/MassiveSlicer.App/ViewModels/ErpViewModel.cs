@@ -37,7 +37,19 @@ public sealed class ErpViewModel : ViewModelBase
         _apiToken  = prefs.ErpApiToken ?? "";
         OnPropertyChanged(nameof(BaseUrl));
         OnPropertyChanged(nameof(ApiToken));
+
+        // Connect automatically at launch when credentials are configured
+        // (URL + token live in Preferences → Connections).
+        if (_baseUrl.Trim().Length > 0 && _apiToken.Trim().Length > 0)
+            _ = ConnectAsync();
     }
+
+    /// <summary>Opens the app Preferences on the Connections section; wired by MainWindow.</summary>
+    public Action? OpenPreferencesRequested { get; set; }
+
+    public RelayCommand OpenPreferencesCommand => _openPreferencesCommand ??=
+        new RelayCommand(() => OpenPreferencesRequested?.Invoke());
+    private RelayCommand? _openPreferencesCommand;
 
     // -- Dock chrome ---------------------------------------------------------
 
