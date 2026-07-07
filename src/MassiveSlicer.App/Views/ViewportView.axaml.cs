@@ -301,6 +301,7 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.ExportKrlToDirectory = dir => ExportKrlToDirectoryAsync(vm, dir);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
@@ -7084,6 +7085,21 @@ public partial class ViewportView : UserControl
         await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
     }
 
+    /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
+    /// the source geometry; returns the path or null when no toolpath is active.</summary>
+    private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || node is null || cell is null || settings is null) return null;
+
+        string path = Path.Combine(dir, RobotKrlPaths.SuggestedFileName(node.Name) + ".src");
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+        return path;
+    }
+
     private async Task SendToRobotAsync(ViewportViewModel vm)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -7108,10 +7124,22 @@ public partial class ViewportView : UserControl
 
         // Same filename as the imported geometry (toolpaths inherit the mesh name).
         string fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
-        string tempPath = Path.Combine(Path.GetTempPath(), fileName);
 
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, tempPath);
-        byte[] content = await File.ReadAllBytesAsync(tempPath);
+        // The NAS keeps a copy per revision (3D Print Files/Rev N/); temp fallback
+        // when the workspace has never been saved to the share.
+        string srcPath;
+        var nasSrc = mvm is not null ? await mvm.ExportSrcToPrintFilesAsync() : null;
+        if (nasSrc is { } n)
+        {
+            srcPath = n.Path;
+        }
+        else
+        {
+            srcPath = Path.Combine(Path.GetTempPath(), fileName);
+            await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
+            mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
+        }
+        byte[] content = await File.ReadAllBytesAsync(srcPath);
 
         mvm?.Console.Log($"[robot] Uploading {fileName} to \\\\{cfg.Host}\\{cfg.Share} ({cell.Name})…");
         var (ok, message) = await Task.Run(() => RobotSmbUploader.Upload(cfg, fileName, content));
@@ -7123,7 +7151,7 @@ public partial class ViewportView : UserControl
         mvm?.Console.Log($"[robot] Sent to {cell.Name}: {message}");
 
         if (mvm is not null)
-            await mvm.NotifyErpSentToRobotAsync(tempPath, fileName, cell.Name, cfg.Host);
+            await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
     }
 
     private async Task WriteKrlAsync(
