@@ -21,7 +21,8 @@ public partial class ViewportOverlayView : UserControl
 
         // Keep the bottom corner docks (ERP / Live I/O) 16px above whichever
         // timeline bar is showing; heights vary (keyframe lane, workflow bar).
-        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar, Lfam3WorkflowBar })
+        // Bottom-right legends stack above the Live I/O dock in turn.
+        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar, Lfam3WorkflowBar, LiveIoDock })
             bar.PropertyChanged += (_, e) =>
             {
                 if (e.Property == BoundsProperty || e.Property == IsVisibleProperty)
@@ -40,6 +41,12 @@ public partial class ViewportOverlayView : UserControl
                 lift = Math.Max(lift, bar.Margin.Bottom + bar.Bounds.Height + 16);
 
         vm.BottomDockMargin = new Avalonia.Thickness(8, 8, 8, lift);
+
+        // Legends sit above the Live I/O dock (whose margin is the lift just computed).
+        double legendLift = lift;
+        if (LiveIoDock.IsVisible && LiveIoDock.Bounds.Height > 0)
+            legendLift = lift + LiveIoDock.Bounds.Height + 8;
+        vm.BottomRightLegendMargin = new Avalonia.Thickness(8, 8, 8, legendLift);
     }
 
     private void OnGoToValidationIssue(object? sender, Avalonia.Interactivity.RoutedEventArgs e)

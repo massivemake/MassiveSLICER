@@ -664,6 +664,15 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _bottomDockMargin, value);
     }
 
+    private Avalonia.Thickness _bottomRightLegendMargin = new(8, 8, 8, 8);
+    /// <summary>Margin for bottom-right legends (bead overhang) — code-behind stacks them
+    /// above the Live I/O dock, which itself floats above the timeline bars.</summary>
+    public Avalonia.Thickness BottomRightLegendMargin
+    {
+        get => _bottomRightLegendMargin;
+        set => SetField(ref _bottomRightLegendMargin, value);
+    }
+
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
     public Avalonia.Thickness Lfam3WorkflowMargin
     {
