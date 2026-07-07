@@ -5237,7 +5237,8 @@ public partial class ViewportView : UserControl
             PreservedLocalTransform = preservedLocal,
             PreservedOrigin         = preservedOrigin,
         });
-        vm.ReplaceScrubToolpathInPlace(toolpath);
+        if (ReferenceEquals(node, _activeScrubNode))
+            vm.ReplaceScrubToolpathInPlace(toolpath);
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -5780,8 +5781,9 @@ public partial class ViewportView : UserControl
         foreach (var (node, raw) in _rawToolpathByNode)
         {
             var smoothed = RebuildProcessedToolpath(raw, s);
-            _toolpathByNode[node]   = smoothed;
-            _scrubCacheByNode[node] = BuildScrubCache(smoothed);
+            // Swap in place AND re-upload — the Speed/RPM gradients are baked into the
+            // line VBOs at upload, so without a replace the view keeps stale colours.
+            SwapScrubbedToolpath(vm, node, smoothed);
             _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
         }
 
