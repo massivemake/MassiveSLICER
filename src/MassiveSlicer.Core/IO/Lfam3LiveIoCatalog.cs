@@ -31,6 +31,8 @@ public static class Lfam3LiveIoCatalog
         new("Flange detached",     "$IN[7]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
 
         // Digital outputs — writable via C3Bridge Message #1
+        new("Output 1",            "$OUT[1]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Output 3",            "$OUT[3]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
         new("Air / cooling",       "$OUT[5]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
         new("Print enable",        "$OUT[7]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
         new("MIO request",         "$OUT[9]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),

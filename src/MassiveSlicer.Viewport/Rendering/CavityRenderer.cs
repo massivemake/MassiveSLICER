@@ -30,11 +30,12 @@ public sealed class CavityRenderer : IDisposable
     private static readonly string NormalFragSrc = """
         #version 330 core
         in vec3 vNormal;
+        uniform float uMaskAlpha;      // 1 = cavity applies here, 0 = excluded category
         out vec4 fragColor;
         void main() {
             vec3 n = vNormal;
             if (!gl_FrontFacing) n = -n;
-            fragColor = vec4(n * 0.5 + 0.5, 1.0);
+            fragColor = vec4(n * 0.5 + 0.5, uMaskAlpha);
         }
         """;
 
@@ -49,6 +50,10 @@ public sealed class CavityRenderer : IDisposable
 
     /// <summary>World-space sampling radius in mm (Blender Distance).</summary>
     public float WorldDistance { get; set; } = 5f;
+
+    /// <summary>When false, user-imported meshes are excluded from cavity shading
+    /// (cell geometry — bed, robot — always shades).</summary>
+    public bool ShadeUserMeshes { get; set; } = true;
 
     public bool NeedsNormalPrepass => Enabled;
 
@@ -76,15 +81,16 @@ public sealed class CavityRenderer : IDisposable
         foreach (var child in sceneRoot.Children)
         {
             if (child.Overlay) continue;
-            DrawNormalSubtree(child, mvp);
+            DrawNormalSubtree(child, mvp, userContent: false);
         }
 
         GL.DepthMask(true);
     }
 
-    private void DrawNormalSubtree(SceneNode node, Matrix4 parentMvp)
+    private void DrawNormalSubtree(SceneNode node, Matrix4 parentMvp, bool userContent)
     {
-        if (!node.Visible) return;
+        if (!node.Visible || node.TranslucentPass) return;
+        userContent |= node.Selectable;
 
         if (node.Mesh is not null)
         {
@@ -95,11 +101,12 @@ public sealed class CavityRenderer : IDisposable
             _normalShader.SetMatrix4("uMVP", ref nodeMvp);
             _normalShader.SetMatrix4("uModel", ref model);
             _normalShader.SetMatrix3("uNormalMat", ref normalMat);
+            _normalShader.SetFloat("uMaskAlpha", userContent && !ShadeUserMeshes ? 0f : 1f);
             node.Mesh.DrawRaw();
         }
 
         foreach (var child in node.Children)
-            DrawNormalSubtree(child, parentMvp);
+            DrawNormalSubtree(child, parentMvp, userContent);
     }
 
     public void BindCompositeUniforms(Shader composite, int viewportWidth, int viewportHeight)

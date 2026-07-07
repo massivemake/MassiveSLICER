@@ -10,6 +10,32 @@ namespace MassiveSlicer.App;
 /// <summary>Builds and restores <see cref="WorkspaceDocument"/> from live application state.</summary>
 internal static class WorkspaceService
 {
+    /// <summary>
+    /// True when the .mass file at <paramref name="path"/> exists and holds at least one
+    /// model entry. Used to stop an empty scene from silently overwriting a real workspace
+    /// via a stale LastWorkspacePath. Unreadable/corrupt files return false (overwriting
+    /// them loses nothing recoverable).
+    /// </summary>
+    public static bool FileHasModels(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return false;
+            using var stream = File.OpenRead(path);
+            using var doc = System.Text.Json.JsonDocument.Parse(stream);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+                if (prop.Name.Equals("Models", StringComparison.OrdinalIgnoreCase))
+                    return prop.Value.ValueKind == System.Text.Json.JsonValueKind.Array
+                           && prop.Value.GetArrayLength() > 0;
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+
     /// <summary>Captures workspace state on the UI thread (clones toolpaths; no JSON serialization yet).</summary>
     public static WorkspaceCaptureState Capture(
         ViewModels.ViewportViewModel viewport,
@@ -23,6 +49,7 @@ internal static class WorkspaceService
             Camera         = viewport.GetCameraState?.Invoke(),
             RightPanelTab  = rightPanel.ActiveTab.ToString(),
             Settings       = ClonePreferences(prefs),
+            Erp            = viewport.Erp.CurrentAttachment,
         };
 
         var state = new WorkspaceCaptureState { Document = doc };
@@ -248,7 +275,11 @@ internal static class WorkspaceService
     private static AppPreferences ClonePreferences(AppPreferences src)
     {
         string json = System.Text.Json.JsonSerializer.Serialize(src);
-        return System.Text.Json.JsonSerializer.Deserialize<AppPreferences>(json) ?? new AppPreferences();
+        var clone = System.Text.Json.JsonSerializer.Deserialize<AppPreferences>(json) ?? new AppPreferences();
+        // .mass files travel across machines/NAS — the ERP bearer token stays in
+        // the local prefs.json only, never in workspace settings snapshots.
+        clone.ErpApiToken = null;
+        return clone;
     }
 
     private static float[] ToArray(Matrix4 m) =>

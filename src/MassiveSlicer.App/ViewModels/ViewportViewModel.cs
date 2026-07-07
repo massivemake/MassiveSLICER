@@ -71,6 +71,24 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _cavityShadeToolpaths = true;
+
+    /// <summary>Include toolpaths (lines + bead) in cavity shading.</summary>
+    public bool CavityShadeToolpaths
+    {
+        get => _cavityShadeToolpaths;
+        set { if (SetField(ref _cavityShadeToolpaths, value)) NotifyRenderNeeded(); }
+    }
+
+    private bool _cavityShadeImportedMeshes = true;
+
+    /// <summary>Include user-imported meshes in cavity shading (cell geometry always shades).</summary>
+    public bool CavityShadeImportedMeshes
+    {
+        get => _cavityShadeImportedMeshes;
+        set { if (SetField(ref _cavityShadeImportedMeshes, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showTcpFrame = true;
 
     /// <summary>Whether the TCP X/Y/Z orientation axes are visible.</summary>
@@ -379,6 +397,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>MassiveBRAIN sync server (Blender/Rhino push bridge), below Plasticity in the N-key HUD.</summary>
     public MassiveBrainViewModel MassiveBrain { get; } = new();
 
+    /// <summary>ERP project-attachment dock (bottom-left of the viewport).</summary>
+    public ErpViewModel Erp { get; } = new();
+
     /// <summary>
     /// Scene nodes queued for addition to the scene graph. The producer enqueues after
     /// CPU-side loading; the render loop dequeues on the GL thread, uploads PendingMesh
@@ -612,6 +633,9 @@ public sealed class ViewportViewModel : ViewModelBase
     public string MillParamLine2 => IsMillStepActive ? "Spindle · mounted" : "Spindle · on dock";
 
     public LiveIoMonitorViewModel LiveIo { get; } = new();
+
+    /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
+    public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
 
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
     public Avalonia.Thickness Lfam3WorkflowMargin
@@ -917,6 +941,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
         KrlToolChangeSequenceParser.KrcRootOverride = ActiveCell?.KrcRoot;
         OnPropertyChanged(nameof(ShowLfam3ToolPicker));
+        OnPropertyChanged(nameof(ShowStandaloneLiveIo));
         if (ShowLfam3ToolPicker)
             IsLfam3WorkflowExpanded = true;
         else
@@ -2123,6 +2148,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
+            OnPropertyChanged(nameof(ShowViewTags));
         }
     }
 
@@ -4407,6 +4433,20 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Wired by the viewport code-behind: PrintSpeedScale spread of the first toolpath (diagnostics).</summary>
     internal Func<string>? GetSpeedSpread { get; set; }
+
+    /// <summary>One floating value tag beside the toolpath in the Speed/RPM views.</summary>
+    public sealed record ViewTag(double X, double Y, string Text);
+
+    private IReadOnlyList<ViewTag> _viewTags = [];
+
+    /// <summary>Height-interval value tags (screen coords, overlay space).</summary>
+    public IReadOnlyList<ViewTag> ViewTags
+    {
+        get => _viewTags;
+        internal set => SetField(ref _viewTags, value);
+    }
+
+    public bool ShowViewTags => _viewMode is "Speed" or "RPM";
 
     /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
     internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }

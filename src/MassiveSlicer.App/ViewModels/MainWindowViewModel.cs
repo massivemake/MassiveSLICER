@@ -81,6 +81,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         // can read joint angles for FK without a cross-tree binding.
         Viewport.Robot = RightPanel.Settings.Robot;
         Viewport.LiveIo.AttachRobot(RightPanel.Settings.Robot);
+        Viewport.Erp.Initialize(AppPreferences,
+            () => PreferencesLoader.Save(AppPreferences),
+            msg => Console.Log(msg));
 
         // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
@@ -1945,6 +1948,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void NewWorkspace()
     {
         Viewport.ClearUserScene();
+        Viewport.Erp.ClearAttachment();
         UndoRedo.Clear();
         AppPreferences.LastWorkspacePath = null;
         PreferencesLoader.Save(AppPreferences);
@@ -2264,7 +2268,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (AppPreferences.LastWorkspacePath is not { Length: > 0 } path)
             return false;
 
-        SaveWorkspace(path);
+        _ = SaveWorkspaceAsync(path, guardStalePath: true);
         return true;
     }
 
@@ -2273,8 +2277,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Saves all outliner models, camera, cell, and settings to <paramref name="path"/>.
     /// Toolpath serialization runs off the UI thread so large slices do not freeze the app.
+    /// <paramref name="guardStalePath"/> is set by implicit Save (which targets the
+    /// remembered LastWorkspacePath): it refuses to overwrite a file that has models when
+    /// the current scene is empty. Explicit Save As paths skip the guard.
     /// </summary>
-    public async Task SaveWorkspaceAsync(string path)
+    public async Task SaveWorkspaceAsync(string path, bool guardStalePath = false)
     {
         if (_workspaceSaveInProgress)
         {
@@ -2294,6 +2301,17 @@ public sealed class MainWindowViewModel : ViewModelBase
             var capture = WorkspaceService.Capture(Viewport, RightPanel, AppPreferences, path);
             int toolpathCount = capture.ToolpathEntries.Count;
             int modelCount    = capture.Document.Models.Count;
+
+            // A stale LastWorkspacePath plus an empty scene must never clobber a real
+            // workspace file (models are unrecoverable without NAS snapshots).
+            if (guardStalePath && modelCount == 0 &&
+                await Task.Run(() => WorkspaceService.FileHasModels(path)))
+            {
+                Console.LogError(
+                    $"[workspace] Refusing to save: the scene is empty but {System.IO.Path.GetFileName(path)} " +
+                    "contains models. Use Save As to overwrite it intentionally.");
+                return;
+            }
 
             await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
 
@@ -2349,6 +2367,8 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
             RightPanel.ActiveTab = tab;
+
+        Viewport.Erp.RestoreAttachment(doc.Erp);
 
         int restoredCount = WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
         Viewport.FlattenScansToBedGroup();

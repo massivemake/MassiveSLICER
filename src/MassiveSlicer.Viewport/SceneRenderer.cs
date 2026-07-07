@@ -197,6 +197,7 @@ public sealed class SceneRenderer : IDisposable
         vec3 applyCavity(vec3 color, vec2 uv, vec2 texel) {
             float depth = texture(uDepth, uv).r;
             if (depth > 0.9999) return color;
+            if (texture(uNormal, uv).a < 0.5) return color;   // category excluded
 
             vec3 cNorm;
             if (!readNormal(uv, depth, cNorm)) return color;
@@ -404,6 +405,12 @@ public sealed class SceneRenderer : IDisposable
     public float CavityScreenValley { get; set; } = 1f;
     public float CavityWorldRidge   { get; set; } = 1f;
     public float CavityWorldValley  { get; set; } = 1f;
+
+    /// <summary>Include toolpath pixels (lines + bead) in cavity shading.</summary>
+    public bool CavityShadeToolpaths { get; set; } = true;
+
+    /// <summary>Include user-imported meshes in cavity shading (cell always shades).</summary>
+    public bool CavityShadeImportedMeshes { get; set; } = true;
     public float CavityWorldDistance { get; set; } = 5f;
 
     public bool ShowExtrusionMoves { get; set; } = true;
@@ -1021,7 +1028,26 @@ public sealed class SceneRenderer : IDisposable
             _cavity.WorldRidge       = CavityWorldRidge;
             _cavity.WorldValley      = CavityWorldValley;
             _cavity.WorldDistance    = CavityWorldDistance;
+            _cavity.ShadeUserMeshes  = CavityShadeImportedMeshes;
             _cavity.RenderNormalPrepass(SceneRoot, mvp, _normalFbo);
+
+            // Excluded toolpaths punch mask-off holes over their pixels so cavity
+            // from surfaces behind them can't bleed through the line work.
+            if (!CavityShadeToolpaths)
+            {
+                GL.DepthFunc(DepthFunction.Lequal);
+                GL.DepthMask(false);
+                foreach (var (tpNode, entry) in _toolpaths)
+                {
+                    if (!tpNode.Visible) continue;
+                    var tpMvp = tpNode.LocalTransform * mvp;
+                    entry.Renderer.DrawCavityPunch(tpMvp,
+                        lines: ShowExtrusionMoves || ShowTravelMoves,
+                        bead: ShowBead);
+                }
+                GL.DepthMask(true);
+                GL.DepthFunc(DepthFunction.Less);
+            }
         }
 
         // -- Selection mask pass -----------------------------------------------

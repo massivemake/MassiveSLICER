@@ -305,6 +305,7 @@ public partial class ViewportView : UserControl
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
             vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
             vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
+            StartViewTagTimer(vm);
             vm.GetSequenceCount          = () => _renderer.SelectedToolpathCount;
             vm.GetSpeedSpread = () =>
             {
@@ -315,7 +316,7 @@ public partial class ViewportView : UserControl
                     foreach (var m in l.Moves)
                         if (m.Kind == MoveKind.Extrude)
                         { min = Math.Min(min, m.PrintSpeedScale); max = Math.Max(max, m.PrintSpeedScale); n++; }
-                return $"moves={n} scale min={min:F3} max={max:F3} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
+                return $"moves={n} scale min={min:F3} max={max:F3} tags={vm.ViewTags.Count} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
             };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
@@ -856,7 +857,9 @@ public partial class ViewportView : UserControl
             _renderer.ContactShadowSize       = vm.ContactShadowSize;
             _renderer.ContactShadowDarkness   = vm.ContactShadowDarkness;
             _renderer.ContactShadowBlur       = vm.ContactShadowBlur;
-            _renderer.CavityEnabled           = vm.CavityEnabled;
+            _renderer.CavityEnabled              = vm.CavityEnabled;
+            _renderer.CavityShadeToolpaths       = vm.CavityShadeToolpaths;
+            _renderer.CavityShadeImportedMeshes  = vm.CavityShadeImportedMeshes;
             _renderer.CavityMode              = vm.CavityMode;
             _renderer.CavityScreenRidge       = vm.CavityScreenRidge;
             _renderer.CavityScreenValley      = vm.CavityScreenValley;
@@ -5092,6 +5095,100 @@ public partial class ViewportView : UserControl
         }
 
         SyncSelectionTransformDisplay(vm);
+    }
+
+    // -- Speed/RPM value tags ------------------------------------------------------
+
+    private const float ViewTagBandMm = 152.4f;   // 6 inches
+    private DispatcherTimer? _viewTagTimer;
+    private Toolpath? _viewTagCachedToolpath;
+    private readonly List<(NVec3 Local, float Scale)> _viewTagBands = [];
+
+    private void StartViewTagTimer(ViewportViewModel vm)
+    {
+        _viewTagTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _viewTagTimer.Tick += (_, _) => UpdateViewTags(vm);
+        _viewTagTimer.Start();
+    }
+
+    /// <summary>Projects one value tag per 6" of height beside the toolpath: layer speed
+    /// (Speed view) or extrusion RPM % with the material flow rate (RPM view).</summary>
+    private void UpdateViewTags(ViewportViewModel vm)
+    {
+        if (vm.ViewMode is not ("Speed" or "RPM"))
+        {
+            if (vm.ViewTags.Count > 0) vm.ViewTags = [];
+            return;
+        }
+
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            if (vm.ViewTags.Count > 0) vm.ViewTags = [];
+            return;
+        }
+        var (node, toolpath) = (pair.Key, pair.Value);
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        // Rebuild band samples when the toolpath changes: one sample per height band,
+        // at the band layer's +X-most extrude endpoint (origin-relative local space).
+        if (!ReferenceEquals(_viewTagCachedToolpath, toolpath))
+        {
+            _viewTagCachedToolpath = toolpath;
+            _viewTagBands.Clear();
+            if (toolpath.Layers.Count > 0)
+            {
+                float nextBand = toolpath.Layers[0].Z;
+                foreach (var layer in toolpath.Layers)
+                {
+                    if (layer.Z < nextBand) continue;
+                    NVec3 best = default; bool found = false; float scale = 1f;
+                    int stride = Math.Max(1, layer.Moves.Count / 400);
+                    for (int i = 0; i < layer.Moves.Count; i += stride)
+                    {
+                        var m = layer.Moves[i];
+                        if (m.Kind != MoveKind.Extrude) continue;
+                        if (!found || m.To.X > best.X) { best = m.To; found = true; scale = m.PrintSpeedScale; }
+                    }
+                    if (found)
+                    {
+                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z), scale));
+                        nextBand += ViewTagBandMm;
+                    }
+                }
+            }
+        }
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 10 || vpH < 10) return;
+
+        bool  speedView = vm.ViewMode == "Speed";
+        float baseSpeed = (float)(vm.AdditiveSettings?.PrintSpeed ?? 100.0);
+        float rpmBase   = vm.AdditiveSettings?.GetEffectiveExtrusionSpeedPercent() ?? 100f;
+        float flow      = (float)(vm.AdditiveSettings?.SelectedPreset?.FlowRateFor(
+                              vm.AdditiveSettings?.ActiveExtruderIsHf ?? false) ?? 0.463);
+
+        var wt   = node.WorldTransform;
+        var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
+        foreach (var (local, scale) in _viewTagBands)
+        {
+            var world = new TkVector3(
+                local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
+                local.X * wt.M12 + local.Y * wt.M22 + local.Z * wt.M32 + wt.M42,
+                local.X * wt.M13 + local.Y * wt.M23 + local.Z * wt.M33 + wt.M43);
+            var p = _renderer.ProjectToScreen(world, vpW, vpH);
+            if (float.IsNaN(p.X) || p.X < -50 || p.X > vpW + 50 || p.Y < -20 || p.Y > vpH + 20)
+                continue;
+
+            var overlayPt = this.TranslatePoint(new Point(p.X + 14, p.Y - 9), OverlayView)
+                            ?? new Point(p.X + 14, p.Y - 9);
+            string text = speedView
+                ? $"{baseSpeed * scale:0} mm/s"
+                : $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})";
+            tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
+        }
+        vm.ViewTags = tags;
     }
 
     // -- TCP keyframes -----------------------------------------------------------

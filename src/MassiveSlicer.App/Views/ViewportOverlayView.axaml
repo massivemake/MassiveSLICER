@@ -400,9 +400,80 @@
             </Border>
         </StackPanel>
 
+        <!-- ERP project attachment — bottom-left dock (mirror of the Live I/O dock) -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,8"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="480"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding Erp.IsExpanded}">
+                    <local:ErpDockPanelView DataContext="{Binding Erp}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding Erp.IsExpanded}"
+                        Command="{Binding Erp.ToggleExpandedCommand}"
+                        HorizontalAlignment="Left"
+                        ToolTip.Tip="ERP project attachment — link this workspace to a Project/Lead">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding Erp.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding Erp.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
         <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>
+
+        <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
+             Same LiveIo view model — the extruder/milling bridge config is set on
+             every cell swap, so the monitor works on any cell. -->
+        <Border IsVisible="{Binding ShowStandaloneLiveIo}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,8"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="620"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding LiveIo.IsExpanded}">
+                    <local:Lfam3LiveIoPanelView DataContext="{Binding LiveIo}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding LiveIo.IsExpanded}"
+                        Command="{Binding LiveIo.ToggleExpandedCommand}"
+                        HorizontalAlignment="Right"
+                        ToolTip.Tip="Live I/O monitor — extruder zones, KUKA I/O, bridge state">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding LiveIo.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
 
         <local:Lfam3WorkflowTimelineView IsVisible="{Binding ShowLfam3ToolPicker}"
                                          HorizontalAlignment="Stretch"
@@ -870,6 +941,36 @@
                 <TextBlock Text="Create Toolpath Sequence" FontSize="11" VerticalAlignment="Center"/>
             </StackPanel>
         </Button>
+
+        <!-- Speed/RPM value tags — projected beside the toolpath every 6 inches of height -->
+        <ItemsControl IsVisible="{Binding ShowViewTags}"
+                      ItemsSource="{Binding ViewTags}"
+                      IsHitTestVisible="False"
+                      ZIndex="18">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Canvas/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:ViewportViewModel+ViewTag">
+                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                    <Setter Property="Canvas.Top"  Value="{Binding Y}"/>
+                </Style>
+            </ItemsControl.Styles>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ViewportViewModel+ViewTag">
+                    <Border Background="#D0262626"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            CornerRadius="5"
+                            Padding="6,2">
+                        <TextBlock Text="{Binding Text}" FontSize="10"
+                                   Foreground="{DynamicResource TextPrimary}"/>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
 
         <!-- Simulate timeline — bottom-center, Toolpath view (hidden when the
              full playback card for a selected toolpath is showing) -->

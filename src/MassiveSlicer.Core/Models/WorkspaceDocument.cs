@@ -22,6 +22,28 @@ public sealed class WorkspaceDocument
 
     /// <summary>Snapshot of user settings at save time.</summary>
     public AppPreferences Settings { get; set; } = new();
+
+    /// <summary>ERP project/lead this workspace is attached to, or null.</summary>
+    public ErpAttachment? Erp { get; set; }
+}
+
+/// <summary>Reference to the ERP Project/Lead (and optional element) a workspace belongs to.</summary>
+public sealed class ErpAttachment
+{
+    /// <summary>"project" or "lead".</summary>
+    public string Type { get; set; } = "project";
+
+    /// <summary>ERP record id.</summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>Project number, e.g. "25-114".</summary>
+    public string Number { get; set; } = "";
+
+    public string Title { get; set; } = "";
+
+    public string? ElementId { get; set; }
+
+    public string? ElementName { get; set; }
 }
 
 /// <summary>One outliner root model entry.</summary>

@@ -956,6 +956,14 @@
                                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
                             </StackPanel>
                         </Grid>
+                        <CheckBox Content="Shade toolpaths" FontSize="11" Margin="0,0,0,2"
+                                  IsChecked="{Binding DataContext.Viewport.CavityShadeToolpaths,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                  ToolTip.Tip="Apply cavity shading over toolpath lines and the bead surface. Off = toolpaths stay clean while the cell keeps its shading."/>
+                        <CheckBox Content="Shade imported meshes" FontSize="11" Margin="0,0,0,4"
+                                  IsChecked="{Binding DataContext.Viewport.CavityShadeImportedMeshes,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                  ToolTip.Tip="Apply cavity shading on imported models. Cell geometry (print bed, robot) always shades."/>
                         <TextBlock Text="World Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
                         <Grid Margin="0,0,0,2">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
