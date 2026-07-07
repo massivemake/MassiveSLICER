@@ -751,8 +751,12 @@
                          ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock FontSize="11"
-                                       Text="{Binding StringFormat='Point {0:F0}, {1:F0}, {2:F0}'}"/>
+                            <TextBlock FontSize="11">
+                                <Run Text="Point"/>
+                                <Run Text="{Binding X, StringFormat={}{0:F0}}"/><Run Text=","/>
+                                <Run Text="{Binding Y, StringFormat={}{0:F0}}"/><Run Text=","/>
+                                <Run Text="{Binding Z, StringFormat={}{0:F0}}"/>
+                            </TextBlock>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
