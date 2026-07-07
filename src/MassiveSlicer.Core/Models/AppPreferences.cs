@@ -192,6 +192,13 @@ public sealed class AppPreferences
     public double PatternFadeIn { get; set; }
     public double PatternFadeOut { get; set; }
 
+    /// <summary>KRL export: ±°C adjustment applied to all zones ("" = no change).</summary>
+    public string TemperatureOffset { get; set; } = "";
+
+    /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
+    public string ExtrusionSpeedOffset { get; set; } = "";
+
+
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
 
