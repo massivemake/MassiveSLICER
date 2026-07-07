@@ -1,0 +1,123 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
+             x:Class="MassiveSlicer.App.Views.ErpDockPanelView"
+             x:CompileBindings="False">
+
+    <!-- DataContext = ErpViewModel -->
+    <StackPanel Spacing="8" Width="300">
+
+        <Grid ColumnDefinitions="*,Auto">
+            <TextBlock Grid.Column="0" Text="PROJECT ATTACHMENT"
+                       Classes="LabelMuted" FontSize="10" LetterSpacing="1"
+                       VerticalAlignment="Center"/>
+            <Button Grid.Column="1"
+                    Background="Transparent" BorderThickness="0" Padding="4,2"
+                    Command="{Binding OpenSettingsCommand}"
+                    IsVisible="{Binding IsConnected}"
+                    ToolTip.Tip="Connection settings">
+                <ia:Icon Value="mdi-cog-outline" FontSize="12" Foreground="{DynamicResource TextMuted}"/>
+            </Button>
+        </Grid>
+
+        <!-- Connection settings -->
+        <StackPanel Spacing="6" IsVisible="{Binding ShowSettings}">
+            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7"
+                       Text="Connect to the ERP to attach this workspace to a Project or Lead. Generate an API token in ERP settings → Slicer API tokens."/>
+            <StackPanel Spacing="2">
+                <TextBlock Text="ERP URL" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                <TextBox Classes="PanelTextBox" Text="{Binding BaseUrl}"
+                         Watermark="https://erp.example.com"/>
+            </StackPanel>
+            <StackPanel Spacing="2">
+                <TextBlock Text="API TOKEN" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                <TextBox Classes="PanelTextBox" Text="{Binding ApiToken}"
+                         PasswordChar="•" Watermark="paste token"/>
+            </StackPanel>
+            <Button Content="Connect" HorizontalAlignment="Stretch"
+                    Command="{Binding ConnectCommand}"/>
+        </StackPanel>
+
+        <!-- Search + attach -->
+        <StackPanel Spacing="6" IsVisible="{Binding ShowSearch}">
+            <TextBox Classes="PanelTextBox"
+                     Text="{Binding SearchText, Mode=TwoWay}"
+                     Watermark="Search project # or title…"/>
+            <ListBox ItemsSource="{Binding SearchResults}"
+                     SelectedItem="{Binding SelectedResult, Mode=TwoWay}"
+                     MaxHeight="180"
+                     Background="Transparent" BorderThickness="0" Padding="0"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,2">
+                            <TextBlock Grid.Column="0" Text="{Binding Number}"
+                                       FontSize="11" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource Accent}"
+                                       Margin="0,0,8,0" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Text="{Binding Title}" FontSize="11"
+                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="2" Text="{Binding Type}" FontSize="9"
+                                       Foreground="{DynamicResource TextMuted}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <StackPanel Spacing="2" IsVisible="{Binding HasElements}">
+                <TextBlock Text="ELEMENT (optional)" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                <ListBox ItemsSource="{Binding Elements}"
+                         SelectedItem="{Binding SelectedElement, Mode=TwoWay}"
+                         MaxHeight="120"
+                         Background="Transparent" BorderThickness="0" Padding="0"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid ColumnDefinitions="Auto,*,Auto" Margin="4,1">
+                                <TextBlock Grid.Column="0" Text="{Binding ElementNumber}"
+                                           FontSize="10" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource Accent}"
+                                           Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="10"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                <TextBlock Grid.Column="2"
+                                           Text="{Binding RevisionCount, StringFormat=Rev {0}}"
+                                           FontSize="9" Foreground="{DynamicResource TextMuted}"
+                                           Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </StackPanel>
+
+            <Button Content="Attach Workspace" HorizontalAlignment="Stretch"
+                    Classes="ExportCta"
+                    Command="{Binding AttachCommand}"/>
+        </StackPanel>
+
+        <!-- Attached -->
+        <StackPanel Spacing="6" IsVisible="{Binding ShowAttachment}">
+            <Border Background="#3f3f3f" CornerRadius="5" Padding="8,6">
+                <StackPanel Spacing="2">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="mdi-link-variant" FontSize="12" Foreground="#40b840"
+                                 VerticalAlignment="Center"/>
+                        <TextBlock Text="Attached" FontSize="10" FontWeight="SemiBold"
+                                   Foreground="#40b840" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock Text="{Binding AttachmentSummary}" FontSize="11" TextWrapping="Wrap"/>
+                </StackPanel>
+            </Border>
+            <Grid ColumnDefinitions="*,6,*">
+                <Button Grid.Column="0" Content="Change" HorizontalAlignment="Stretch"
+                        Command="{Binding ChangeCommand}"
+                        ToolTip.Tip="Pick a different project/lead"/>
+                <Button Grid.Column="2" Content="Detach" HorizontalAlignment="Stretch"
+                        Command="{Binding DetachCommand}"/>
+            </Grid>
+        </StackPanel>
+
+        <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="10" Opacity="0.7"/>
+    </StackPanel>
+</UserControl>

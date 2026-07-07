@@ -397,6 +397,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>MassiveBRAIN sync server (Blender/Rhino push bridge), below Plasticity in the N-key HUD.</summary>
     public MassiveBrainViewModel MassiveBrain { get; } = new();
 
+    /// <summary>ERP project-attachment dock (bottom-left of the viewport).</summary>
+    public ErpViewModel Erp { get; } = new();
+
     /// <summary>
     /// Scene nodes queued for addition to the scene graph. The producer enqueues after
     /// CPU-side loading; the render loop dequeues on the GL thread, uploads PendingMesh

@@ -400,6 +400,40 @@
             </Border>
         </StackPanel>
 
+        <!-- ERP project attachment — bottom-left dock (mirror of the Live I/O dock) -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="8,8,8,8"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="480"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding Erp.IsExpanded}">
+                    <local:ErpDockPanelView DataContext="{Binding Erp}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding Erp.IsExpanded}"
+                        Command="{Binding Erp.ToggleExpandedCommand}"
+                        HorizontalAlignment="Left"
+                        ToolTip.Tip="ERP project attachment — link this workspace to a Project/Lead">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding Erp.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding Erp.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
         <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>

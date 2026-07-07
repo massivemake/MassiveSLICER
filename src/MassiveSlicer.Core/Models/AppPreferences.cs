@@ -283,6 +283,15 @@ public sealed class AppPreferences
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }
 
+    // -- ERP connection (MassiveSLICER ↔ ERP API, /api/slicer/v1) -----------
+
+    /// <summary>Base URL of the ERP slicer API (e.g. https://erp.example.com). Empty = unconfigured.</summary>
+    public string ErpBaseUrl { get; set; } = "";
+
+    /// <summary>Bearer token for the ERP slicer API. Kept in local prefs only —
+    /// scrubbed from workspace (.mass) settings snapshots.</summary>
+    public string? ErpApiToken { get; set; }
+
     // ── UI layout state ───────────────────────────────────────────────────
 
     /// <summary>

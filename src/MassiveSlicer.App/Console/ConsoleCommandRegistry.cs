@@ -134,6 +134,43 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "erp",
+            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | detach | status",
+            Execute = (ctx, args) =>
+            {
+                var erp = ctx.Main.Viewport.Erp;
+                var parts = args.Trim().Split(' ', 2);
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "url":     erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
+                    case "token":   erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
+                    case "connect": erp.ConnectCommand.Execute(null); break;
+                    case "search":  erp.SearchText = parts.ElementAtOrDefault(1) ?? ""; break;
+                    case "attach":
+                    {
+                        var idx = (parts.ElementAtOrDefault(1) ?? "0").Split(' ');
+                        if (int.TryParse(idx[0], out int i) && i >= 0 && i < erp.SearchResults.Count)
+                        {
+                            erp.SelectedResult = erp.SearchResults[i];
+                            if (idx.Length > 1 && int.TryParse(idx[1], out int e)
+                                && e >= 0 && e < erp.Elements.Count)
+                                erp.SelectedElement = erp.Elements[e];
+                            erp.AttachCommand.Execute(null);
+                        }
+                        else ctx.Log($"[erp] no result at index (have {erp.SearchResults.Count})");
+                        break;
+                    }
+                    case "detach":  erp.DetachCommand.Execute(null); break;
+                    default:
+                        ctx.Log($"[erp] state={erp.ConnectionState} status='{erp.Status}' results={erp.SearchResults.Count} " +
+                                $"elements={erp.Elements.Count} attached='{erp.ToggleLabel}'");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>
