@@ -3226,6 +3226,9 @@ public partial class ViewportView : UserControl
         settings.EffectorPoints     = vm.GetActiveEffectorPositions();
         settings.EffectorRadiusMm   = (float)add.EffectorRange;
         settings.EffectorStrengthMm = (float)add.EffectorStrength;
+        settings.EffectorMode       = add.IsEffectorAmplify
+            ? MassiveSlicer.Core.Models.EffectorMode.Amplify
+            : MassiveSlicer.Core.Models.EffectorMode.Erase;
     }
 
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
@@ -3543,6 +3546,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.EffectorEnabled),
         nameof(AdditiveSettingsViewModel.EffectorRange),
         nameof(AdditiveSettingsViewModel.EffectorStrength),
+        nameof(AdditiveSettingsViewModel.EffectorMode),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),

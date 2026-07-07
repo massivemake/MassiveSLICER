@@ -333,6 +333,23 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _effectorEnabled, value);
     }
 
+    public string[] EffectorModeOptions { get; } = ["Amplify", "Erase (smooth)"];
+
+    private string _effectorMode = "Amplify";
+    /// <summary>What the effector does in its influence area: boost the pattern
+    /// amplitude, or erase it back to a plain wall.</summary>
+    public string EffectorMode
+    {
+        get => _effectorMode;
+        set
+        {
+            if (SetField(ref _effectorMode, value))
+                OnPropertyChanged(nameof(IsEffectorAmplify));
+        }
+    }
+
+    public bool IsEffectorAmplify => !_effectorMode.StartsWith("Erase", StringComparison.OrdinalIgnoreCase);
+
     private double _effectorRange = 400.0;
     /// <summary>Effector influence radius (mm).</summary>
     public double EffectorRange

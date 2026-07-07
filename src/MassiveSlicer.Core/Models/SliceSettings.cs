@@ -81,8 +81,10 @@ public sealed class SliceSettings
     public IReadOnlyList<System.Numerics.Vector3> EffectorPoints { get; set; } = [];
     /// <summary>Effector influence radius (mm).</summary>
     public float EffectorRadiusMm { get; set; } = 400f;
-    /// <summary>Amplitude boost at an effector's centre (mm).</summary>
+    /// <summary>Amplitude boost at an effector's centre (mm). Amplify mode only.</summary>
     public float EffectorStrengthMm { get; set; } = 30f;
+    /// <summary>What the effector does inside its influence bell.</summary>
+    public EffectorMode EffectorMode { get; set; } = EffectorMode.Amplify;
 
     // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
     /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
@@ -319,4 +321,14 @@ public sealed class SliceSettings
     /// Lower values keep the toolhead more vertical for body clearance on curved paths.
     /// </summary>
     public float OrientationFollowStrength { get; init; } = 1f;
+}
+
+/// <summary>Live effector behaviour inside the influence radius.</summary>
+public enum EffectorMode
+{
+    /// <summary>Boost the local pattern amplitude (smoothstep bell × strength).</summary>
+    Amplify,
+    /// <summary>Suppress the pattern toward zero — smooths the lines back to the
+    /// plain wall inside the influence area (full erase at the centre).</summary>
+    Erase,
 }
