@@ -106,15 +106,83 @@ public sealed class ErpClient : IDisposable
         }
     }
 
+    /// <summary>Creates a new element under a project or lead and returns it parsed.</summary>
+    public async Task<ErpResult<ErpElement>> CreateElementAsync(
+        string parentType, string parentId, string name, string? description, CancellationToken ct)
+    {
+        string collection = parentType.Equals("lead", StringComparison.OrdinalIgnoreCase) ? "leads" : "projects";
+        var body = new Dictionary<string, object?> { ["name"] = name, ["description"] = description };
+        var r = await PostJsonAsync($"api/slicer/v1/{collection}/{Uri.EscapeDataString(parentId)}/elements", body, ct);
+        if (r.Error is not null) return ErpResult<ErpElement>.Fail(r.Error.Kind, r.Error.Message);
+
+        using var doc = r.Value!;
+        // Accept the element bare or wrapped in an "element" envelope.
+        var root = doc.RootElement;
+        if (TryGetPropertyCi(root, "element", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object)
+            root = wrapped;
+        return ParseElement(root) is { } el
+            ? ErpResult<ErpElement>.Success(el)
+            : ErpResult<ErpElement>.Fail(ErpErrorKind.BadResponse, "created element missing from response");
+    }
+
+    /// <summary>Registers a slice (stats + UNAS file references) against an element.
+    /// The ERP assigns and returns the rev number.</summary>
+    public async Task<ErpResult<ErpSliceReceipt>> RegisterSliceAsync(
+        string elementId, ErpSliceStats stats, IReadOnlyList<ErpSliceFile> files, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["stats"] = new Dictionary<string, object?>
+            {
+                ["printTime"]     = stats.PrintTime,
+                ["weight"]        = stats.Weight,
+                ["material"]      = stats.Material,
+                ["layerHeightMm"] = stats.LayerHeightMm,
+                ["beadWidthMm"]   = stats.BeadWidthMm,
+            },
+            ["files"] = files.Select(f => new Dictionary<string, object?>
+            {
+                ["kind"]  = f.Kind,
+                ["path"]  = f.Path,
+                ["bytes"] = f.Bytes,
+            }).ToList(),
+        };
+        var r = await PostJsonAsync($"api/slicer/v1/elements/{Uri.EscapeDataString(elementId)}/slices", body, ct);
+        if (r.Error is not null) return ErpResult<ErpSliceReceipt>.Fail(r.Error.Kind, r.Error.Message);
+
+        using var doc = r.Value!;
+        int rev = GetInt(doc.RootElement, "rev", "revision", "revNumber") ?? 0;
+        return ErpResult<ErpSliceReceipt>.Success(
+            new ErpSliceReceipt(rev, GetString(doc.RootElement, "url", "link")));
+    }
+
     public void Dispose() => _http.Dispose();
 
     // -- Transport ---------------------------------------------------------
 
-    private async Task<ErpResult<JsonDocument>> GetJsonAsync(string relative, CancellationToken ct)
+    private Task<ErpResult<JsonDocument>> GetJsonAsync(string relative, CancellationToken ct)
+        => SendJsonAsync(() => _http.GetAsync(relative, ct), ct);
+
+    private Task<ErpResult<JsonDocument>> PostJsonAsync(string relative, object body, CancellationToken ct)
+        => SendJsonAsync(() =>
+        {
+            var content = new StringContent(
+                JsonSerializer.Serialize(body, PostOptions),
+                System.Text.Encoding.UTF8, "application/json");
+            return _http.PostAsync(relative, content, ct);
+        }, ct);
+
+    private static readonly JsonSerializerOptions PostOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private static async Task<ErpResult<JsonDocument>> SendJsonAsync(
+        Func<Task<HttpResponseMessage>> send, CancellationToken ct)
     {
         try
         {
-            using var resp = await _http.GetAsync(relative, ct);
+            using var resp = await send();
             if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
                 return ErpResult<JsonDocument>.Fail(ErpErrorKind.Unauthorized, "token invalid or revoked");
             if (!resp.IsSuccessStatusCode)
