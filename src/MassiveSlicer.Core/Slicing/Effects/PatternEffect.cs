@@ -12,6 +12,10 @@ public enum PatternMappingMode
     /// <summary>Polar angle around the part centre (classic OGcode cylindrical wrap) —
     /// stretches where the wall is far from centre, compresses where it is close.</summary>
     Radial,
+    /// <summary>Fixed physical wavelength in mm along the path, phase-anchored at the
+    /// seam — identical cycle size on every layer; the fractional remainder lands at
+    /// the seam line instead of smearing into diagonal bands.</summary>
+    Wavelength,
 }
 
 /// <summary>Decorative wall patterns (ported from the MassiveCODE effector project).</summary>
@@ -76,7 +80,11 @@ public static class PatternEffect
         ctx.CellMm = MathF.Max(2f, TwoPi * ctx.Radius / ctx.Frequency);
         if (ctx.Type == PatternType.Sunflower) ctx.BuildSunflower();
 
-        bool arcMode = settings.PatternMapping == PatternMappingMode.ArcLength;
+        bool arcMode = settings.PatternMapping != PatternMappingMode.Radial;
+        bool wavelengthMode = settings.PatternMapping == PatternMappingMode.Wavelength;
+        float wavelength = MathF.Max(2f, settings.PatternWavelengthMm);
+        if (wavelengthMode)
+            ctx.CellMm = wavelength;   // square texture cells: z cell = path cell
 
         var result = new Toolpath();
         foreach (var layer in toolpath.Layers)
@@ -104,9 +112,11 @@ public static class PatternEffect
                 var chain = chainOf?[mi];
 
                 // Sample finely enough for the pattern's detail along the path.
-                float pathPerCycle = arcMode && chain is { Total: > 1f }
-                    ? chain.Total / ctx.Frequency
-                    : TwoPi * ctx.Radius / ctx.Frequency;
+                float pathPerCycle = wavelengthMode
+                    ? wavelength
+                    : arcMode && chain is { Total: > 1f }
+                        ? chain.Total / ctx.Frequency
+                        : TwoPi * ctx.Radius / ctx.Frequency;
                 float spacing  = Math.Clamp(pathPerCycle / 12f, 1.0f, 6f);
                 int   segments = Math.Clamp((int)MathF.Ceiling(len / spacing), 1, 2000);
 
@@ -121,9 +131,20 @@ public static class PatternEffect
                     float? loopTheta = null;
                     if (chain is { Total: > 1f })
                     {
-                        float dist = chain.CumStart + t * len - chain.Anchor;
-                        dist -= MathF.Floor(dist / chain.Total) * chain.Total;
-                        loopTheta = TwoPi * dist / chain.Total;
+                        if (wavelengthMode)
+                        {
+                            // Constant mm wavelength, phase 0 at the chain start (the seam):
+                            // theta advances 2π per Frequency·λ of path, so P(θ·f) completes
+                            // one cycle every λ mm for every pattern family.
+                            float dist = chain.CumStart + t * len;
+                            loopTheta = TwoPi * dist / (ctx.Frequency * wavelength);
+                        }
+                        else
+                        {
+                            float dist = chain.CumStart + t * len - chain.Anchor;
+                            dist -= MathF.Floor(dist / chain.Total) * chain.Total;
+                            loopTheta = TwoPi * dist / chain.Total;
+                        }
                     }
                     return pt + perp * ctx.Displacement(pt, loopTheta);
                 }

@@ -2648,7 +2648,10 @@ public partial class ViewportView : UserControl
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
             PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
                                    ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
-                                   : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
+                                   : s.PatternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase)
+                                       ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength
+                                       : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
+            PatternWavelengthMm  = (float)s.PatternWavelengthMm,
             PatternAmplitude     = (float)s.PatternAmplitude,
             PatternFrequency     = (float)s.PatternFrequency,
             PatternTwistDegPerMm = (float)s.PatternTwist,
@@ -3514,6 +3517,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
         nameof(AdditiveSettingsViewModel.PatternMapping),
+        nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
         nameof(AdditiveSettingsViewModel.PatternTwist),

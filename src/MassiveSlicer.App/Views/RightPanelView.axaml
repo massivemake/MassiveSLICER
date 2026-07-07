@@ -645,6 +645,14 @@
                                           SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
                             </Grid>
 
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,80"
+                                  IsVisible="{Binding Additive.ShowPatternWavelength}">
+                                <TextBlock Grid.Column="0" Text="Wavelength (mm)" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Physical size of one pattern cycle along the path — identical on every layer. The leftover fraction of a cycle lands at the seam."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Text="{Binding Additive.PatternWavelengthMm, Mode=TwoWay}"/>
+                            </Grid>
+
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Amplitude" FontSize="11" VerticalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">

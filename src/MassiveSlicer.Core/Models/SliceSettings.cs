@@ -202,6 +202,9 @@ public sealed class SliceSettings
     /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
     public bool Spiralize { get; init; }
 
+    /// <summary>Cycle size in mm for <see cref="MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength"/> mapping.</summary>
+    public float PatternWavelengthMm { get; init; } = 60f;
+
     // -- Wave gradient ------------------------------------------------------------
 
     /// <summary>When true, amplitude and wavelength are linearly interpolated per layer between
