@@ -92,6 +92,22 @@ public sealed class MainWindowViewModel : ViewModelBase
                 ? System.IO.Path.GetFileNameWithoutExtension(wp)
                 : null;
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
+        Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
+        Toolbar.OpenRecentRequested += (_, recentPath) =>
+        {
+            if (System.IO.File.Exists(recentPath))
+            {
+                OpenWorkspace(recentPath);
+            }
+            else
+            {
+                Console.LogError($"[workspace] '{recentPath}' no longer exists — removed from Open Recent.");
+                AppPreferences.RecentWorkspaces.RemoveAll(r =>
+                    string.Equals(r, recentPath, StringComparison.OrdinalIgnoreCase));
+                PreferencesLoader.Save(AppPreferences);
+                Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
+            }
+        };
         Viewport.Erp.WorkspaceLinked = () =>
         {
             if (!TrySaveCurrentWorkspace())
@@ -2488,6 +2504,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         return true;
     }
 
+    /// <summary>Front-inserts into File → Open Recent (deduped, capped at 10).</summary>
+    private void RecordRecentWorkspace(string path)
+    {
+        var list = AppPreferences.RecentWorkspaces;
+        list.RemoveAll(r => string.Equals(r, path, StringComparison.OrdinalIgnoreCase));
+        list.Insert(0, path);
+        if (list.Count > 10)
+            list.RemoveRange(10, list.Count - 10);
+        Toolbar.SetRecentWorkspaces(list);
+    }
+
     /// <summary>The attached project/lead's "06-Production Documents" folder, found by
     /// matching the attachment number against folder names under the UNAS projects
     /// root (e.g. "26-173 - studio JEFRE llc - …"). Null when unattached, the share
@@ -2571,6 +2598,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
 
             AppPreferences.LastWorkspacePath = path;
+            RecordRecentWorkspace(path);
             PreferencesLoader.Save(AppPreferences);
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
@@ -2632,6 +2660,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Viewport.ApplyCameraState?.Invoke(camera);
 
         AppPreferences.LastWorkspacePath = workspacePath;
+        RecordRecentWorkspace(workspacePath);
         StatusBar.FileStatus = Path.GetFileName(workspacePath);
         SyncKrlFrameIndicesToActiveTab();
         PreferencesLoader.Save(AppPreferences);

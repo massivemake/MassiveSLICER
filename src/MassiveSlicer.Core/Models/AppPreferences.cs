@@ -304,6 +304,9 @@ public sealed class AppPreferences
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }
 
+    /// <summary>Most-recently opened/saved workspaces, newest first (File → Open Recent).</summary>
+    public List<string> RecentWorkspaces { get; set; } = [];
+
     // -- ERP connection (MassiveSLICER ↔ ERP API, /api/slicer/v1) -----------
 
     /// <summary>Base URL of the ERP slicer API. Defaults to the published production
