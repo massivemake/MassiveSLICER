@@ -597,7 +597,10 @@ public sealed class ToolpathRenderer : IDisposable
             List<NVec3>? pts = null; List<int>? flats = null;
             foreach (var move in layer.Moves)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                // Wipes are extrude-kind but deposit a ramping-down dribble, not a
+                // bead — rendering them as solid geometry grows full-width prongs
+                // past every contour end in the printed-part preview.
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind) && !move.IsWipe)
                 {
                     if (pts is null)
                     {
