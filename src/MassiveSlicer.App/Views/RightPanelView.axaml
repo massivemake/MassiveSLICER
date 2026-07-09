@@ -1203,6 +1203,16 @@
                                                    FormatString="F0" FontSize="11"/>
                                 </Grid>
                             </StackPanel>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                            <Button Content="Simulate Thermomechanical"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Command="{Binding Additive.SimulateThermalCommand}"
+                                    ToolTip.Tip="Analytical interlayer-cooling simulation: predicts the temperature each layer lands on, derives the safe layer-time window between sag and bonding limits, and sets the Adaptive Speed low/high values. View the result with the Thermal view pill."/>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                       IsVisible="{Binding Additive.HasThermalSummary}"
+                                       Text="{Binding Additive.ThermalSummary}"/>
                         </StackPanel>
                     </Border>
                     </Expander>

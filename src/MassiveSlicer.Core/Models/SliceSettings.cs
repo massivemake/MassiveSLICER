@@ -282,6 +282,20 @@ public sealed class SliceSettings
     /// (material added outside the part — cut away after printing).</summary>
     public bool LightningExteriorOverhangs { get; init; } = false;
 
+    // ── Thermomechanical simulation (analytical interlayer cooling) ──────────
+
+    /// <summary>Melt temperature at deposition (°C) — hottest extruder zone.</summary>
+    public float ThermalDepositTempC { get; init; } = 230f;
+
+    /// <summary>Glass-transition (bonding-relevant) temperature of the material (°C).</summary>
+    public float ThermalGlassTransitionC { get; init; } = 105f;
+
+    /// <summary>Ambient / build-environment temperature (°C).</summary>
+    public float ThermalAmbientTempC { get; init; } = 30f;
+
+    /// <summary>Material density (g/cm³) for the thermal mass.</summary>
+    public float ThermalDensityGmCc { get; init; } = 1.05f;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>

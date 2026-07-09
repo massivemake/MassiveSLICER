@@ -670,6 +670,7 @@ public partial class ViewportView : UserControl
                     RebuildToolpathsFromRaw(additive);
             };
 
+            additive.OnSimulateThermalRequested = () => RunThermalSimulation(vm, additive);
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
             UpdateSeamGuideMarkers(vm);
             GlCanvas.RequestNextFrameRendering();
@@ -2758,6 +2759,9 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            ThermalDepositTempC        = (float)Math.Max(s.Temperature1, Math.Max(s.Temperature2, s.Temperature3)),
+            ThermalGlassTransitionC    = ThermalSimulator.GlassTransitionC(s.SelectedPreset?.MaterialType),
+            ThermalDensityGmCc         = (float)(s.SelectedPreset?.MaterialDensity ?? 1.05),
             SeamGuidePoints = s.BuildSeamGuideList(),
             CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
             CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
@@ -2854,6 +2858,8 @@ public partial class ViewportView : UserControl
 
             var smoothed = OrientationSmoother.Apply(toSmooth, settings);
             SliceLogger.Step("OrientationSmoother done");
+
+            ThermalSimulator.StampLayerTemps(smoothed, settings);
             Pct(100);
 
             return (smoothed, raw);
@@ -2870,7 +2876,9 @@ public partial class ViewportView : UserControl
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
         OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
-        return OrientationSmoother.Apply(toSmooth, settings);
+        var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+        ThermalSimulator.StampLayerTemps(smoothed, settings);
+        return smoothed;
     }
 
     private ToolpathSnapshot? GetToolpathSnapshot(SceneNode node)
@@ -3801,6 +3809,44 @@ public partial class ViewportView : UserControl
         "Black"   => new(0.15f, 0.15f, 0.15f),
         _         => new(0.95f, 0.95f, 0.95f),  // Other / no preset → white
     };
+
+    /// <summary>
+    /// Runs the analytical thermomechanical screen on the visible toolpath, fills the
+    /// Adaptive Speed low/high values from the safe layer-time window, and stamps the
+    /// per-layer interlayer temperatures for the Thermal view.
+    /// </summary>
+    private void RunThermalSimulation(ViewportViewModel vm, AdditiveSettingsViewModel s)
+    {
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            s.ThermalSummary = "Slice a model first — the simulation runs on the toolpath.";
+            return;
+        }
+
+        var settings = BuildSliceSettings(s);
+        var result = ThermalSimulator.Simulate(pair.Value, settings);
+
+        var sb = new System.Text.StringBuilder();
+        if (result.RecommendedMaxMmS > 0f)
+        {
+            // Setting these re-processes the toolpath, which re-stamps layer temps.
+            s.LayerSpeedBasisDisplay = "Cut length";
+            s.LayerSpeedMinMmS = Math.Round(result.RecommendedMinMmS, 1);
+            s.LayerSpeedMaxMmS = Math.Round(result.RecommendedMaxMmS, 1);
+            s.LayerSpeedAdaptEnabled = true;
+
+            sb.Append($"Deposit {result.DepositTempC:0}°C, cooling τ {result.TimeConstantS:0} s. ");
+            sb.Append($"Safe layer time {result.MinLayerTimeS:0}–{result.MaxLayerTimeS:0} s ");
+            sb.Append($"(sag ≤{result.SagTempC:0}°C, bond ≥{result.BondTempC:0}°C); ");
+            sb.Append($"targeting {result.TargetLayerTimeS:0} s → interface ≈{result.PredictedInterfaceTempC:0}°C. ");
+            sb.Append($"Speeds set to {result.RecommendedMinMmS:0.#}–{result.RecommendedMaxMmS:0.#} mm/s.");
+        }
+        foreach (var w in result.Warnings)
+            sb.Append($"\n⚠ {w}");
+        sb.Append("\nAnalytical lumped-capacitance model — verify on the part.");
+        s.ThermalSummary = sb.ToString();
+    }
 
     private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
         Toolpath toolpath, AdditiveSettingsViewModel s)
@@ -5129,7 +5175,7 @@ public partial class ViewportView : UserControl
     private const float ViewTagBandMm = 152.4f;   // 6 inches
     private DispatcherTimer? _viewTagTimer;
     private Toolpath? _viewTagCachedToolpath;
-    private readonly List<(NVec3 Local, float Scale)> _viewTagBands = [];
+    private readonly List<(NVec3 Local, float Scale, float TempC)> _viewTagBands = [];
 
     private void StartViewTagTimer(ViewportViewModel vm)
     {
@@ -5142,7 +5188,7 @@ public partial class ViewportView : UserControl
     /// (Speed view) or extrusion RPM % with the material flow rate (RPM view).</summary>
     private void UpdateViewTags(ViewportViewModel vm)
     {
-        if (vm.ViewMode is not ("Speed" or "RPM"))
+        if (vm.ViewMode is not ("Speed" or "RPM" or "Thermal"))
         {
             if (vm.ViewTags.Count > 0) vm.ViewTags = [];
             return;
@@ -5179,7 +5225,8 @@ public partial class ViewportView : UserControl
                     }
                     if (found)
                     {
-                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z), scale));
+                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
+                                           scale, layer.ThermalTempC));
                         nextBand += ViewTagBandMm;
                     }
                 }
@@ -5190,7 +5237,6 @@ public partial class ViewportView : UserControl
         float vpH = (float)GlCanvas.Bounds.Height;
         if (vpW < 10 || vpH < 10) return;
 
-        bool  speedView = vm.ViewMode == "Speed";
         float baseSpeed = (float)(vm.AdditiveSettings?.PrintSpeed ?? 100.0);
         float rpmBase   = vm.AdditiveSettings?.GetEffectiveExtrusionSpeedPercent() ?? 100f;
         float flow      = (float)(vm.AdditiveSettings?.SelectedPreset?.FlowRateFor(
@@ -5198,7 +5244,7 @@ public partial class ViewportView : UserControl
 
         var wt   = node.WorldTransform;
         var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
-        foreach (var (local, scale) in _viewTagBands)
+        foreach (var (local, scale, tempC) in _viewTagBands)
         {
             var world = new TkVector3(
                 local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
@@ -5210,9 +5256,12 @@ public partial class ViewportView : UserControl
 
             var overlayPt = this.TranslatePoint(new Point(p.X + 14, p.Y - 9), OverlayView)
                             ?? new Point(p.X + 14, p.Y - 9);
-            string text = speedView
-                ? $"{baseSpeed * scale:0} mm/s"
-                : $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})";
+            string text = vm.ViewMode switch
+            {
+                "Speed"   => $"{baseSpeed * scale:0} mm/s",
+                "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
+                _         => $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})",
+            };
             tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
         }
         vm.ViewTags = tags;
