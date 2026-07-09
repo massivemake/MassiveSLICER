@@ -36,6 +36,12 @@ public static class LightningPlanner
 
         float MaxStep(int i) => MathF.Min(MathF.Max(layerHeights[i], 0.1f) * tanA, 0.5f * bead);
 
+        int nextTreeId = 0;
+        // Trees whose anchor lost its footing mid-descent (boundary swept away, e.g.
+        // an angled-slicing notch) — removed from EVERY layer after the build so no
+        // layer keeps a finger whose support column ends in mid-air below it.
+        var orphaned = new HashSet<int>();
+
         var regions = new PathsD[n];
         for (int i = 0; i < n; i++)
             regions[i] = ToPathsD(fillPolysPerLayer[i]);
@@ -77,7 +83,16 @@ public static class LightningPlanner
                 RetractLeafTips(t, t.External ? stepAboveExternal : stepAbove);
                 if (t.Branches.Count == 0) continue;
 
-                t.Anchor = ClosestOnRegionBoundary(t.External ? region : anchorPaths, t.Anchor);
+                var reAnchor = ClosestOnRegionBoundary(t.External ? region : anchorPaths, t.Anchor);
+                if (Vector2.Distance(reAnchor, t.Anchor) > MathF.Max(4f * bead, 3f * stepAbove))
+                {
+                    // Nearest boundary is far away — the wall under this tree is gone
+                    // (angled sweep, notch). Teleporting the anchor would print the
+                    // finger over air, so retire the whole lineage instead.
+                    orphaned.Add(t.Id);
+                    continue;
+                }
+                t.Anchor = reAnchor;
                 if (!t.External)
                     ClampInside(t, region, core, MaxStep(i));
                 if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
@@ -163,7 +178,7 @@ public static class LightningPlanner
                 }
                 else
                 {
-                    var t = new LightningTree { Anchor = anchor, External = external };
+                    var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
                     t.Branches.Add(new LightningBranch([anchor, tip]));
                     layerPlan.Trees.Add(t);
                 }
@@ -182,6 +197,10 @@ public static class LightningPlanner
                     Straighten(b.Centerline, budget, core);
             }
         }
+
+        if (orphaned.Count > 0)
+            foreach (var lp in plan.Layers)
+                lp.Trees.RemoveAll(t => orphaned.Contains(t.Id));
 
         return plan;
     }

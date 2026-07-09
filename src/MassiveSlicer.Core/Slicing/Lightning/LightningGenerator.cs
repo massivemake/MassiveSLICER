@@ -38,8 +38,13 @@ public static class LightningGenerator
         {
             foreach (var tree in plan.Trees)
             {
+                // A guard dropped this lineage at a lower layer — its support column
+                // is gone, so printing the inherited finger here would leave it in
+                // mid-air. (Emission runs bottom-up.)
+                if (plan.DroppedTrees.Contains(tree.Id)) continue;
+
                 var slit = BuildTreeSlit(tree, region, beadWidth, tipLoopRadius);
-                if (slit.Count == 0) continue;
+                if (slit.Count == 0) continue;   // newborn stub, too small this layer — not a drop
 
                 PathsD candidate;
                 if (tree.External)
@@ -49,20 +54,20 @@ public static class LightningGenerator
                     candidate = Clipper.Union(result, slit, FillRule.NonZero);
                     candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
                     // Guard: a fin bridging to another island would merge outers
-                    // (changes topology unexpectedly) — drop that fin.
-                    if (CountOuters(candidate) < outerCount) continue;
+                    // (changes topology unexpectedly) — drop that lineage.
+                    if (CountOuters(candidate) < outerCount) { plan.DroppedTrees.Add(tree.Id); continue; }
                 }
                 else
                 {
                     candidate = Clipper.Difference(result, slit, FillRule.NonZero);
                     candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
                     // Guard: a slit that cuts clean across a neck would split the region
-                    // into extra islands (adding travels) — drop that tree instead.
-                    if (CountOuters(candidate) > outerCount) continue;
+                    // into extra islands (adding travels) — drop that lineage.
+                    if (CountOuters(candidate) > outerCount) { plan.DroppedTrees.Add(tree.Id); continue; }
                 }
 
                 // Guard: degenerate output (region consumed).
-                if (candidate.Count == 0) continue;
+                if (candidate.Count == 0) { plan.DroppedTrees.Add(tree.Id); continue; }
 
                 result = candidate;
             }
@@ -143,6 +148,8 @@ public static class LightningGenerator
             if (plan is null || plan.Trees.Count == 0) return false;
             var mid = (a2 + b2) * 0.5f;
             foreach (var tree in plan.Trees)
+            {
+                if (plan.DroppedTrees.Contains(tree.Id)) continue;
                 foreach (var branch in tree.Branches)
                 {
                     var line = branch.Centerline;
@@ -156,6 +163,7 @@ public static class LightningGenerator
                             return true;
                     }
                 }
+            }
             return false;
         }
 
