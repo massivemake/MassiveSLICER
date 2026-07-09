@@ -31,11 +31,21 @@ public static class LightningGenerator
         var region = LightningPlanner.ToPathsD(fillPolys);
         if (region.Count == 0) return;
 
+
         int outerCount = CountOuters(region);
         var result = region;
 
         if (plan is not null && plan.Trees.Count > 0)
         {
+            // Thin band just inside the region boundary. A healthy slit crosses it
+            // exactly once (its mouth); a second crossing means the slit is punching
+            // through a nearby thin wall (e.g. a narrow inlet channel) — the neck
+            // guard can't see that because the walls stay connected around the
+            // channel end, but the wall gets eaten. Those lineages are dropped.
+            var boundaryBand = Clipper.Difference(
+                region,
+                Clipper.InflatePaths(region, -beadWidth * 0.6, JoinType.Miter, EndType.Polygon, 3.0),
+                FillRule.NonZero);
             foreach (var tree in plan.Trees)
             {
                 // A guard dropped this lineage at a lower layer — its support column
@@ -45,6 +55,14 @@ public static class LightningGenerator
 
                 var slit = BuildTreeSlit(tree, region, beadWidth, tipLoopRadius);
                 if (slit.Count == 0) continue;   // newborn stub, too small this layer — not a drop
+
+                // Bite guard (slit body only — tip discs may legitimately graze the
+                // band when the loop radius exceeds the core inset).
+                var body = tipLoopRadius > 0f
+                    ? BuildTreeSlit(tree, region, beadWidth, 0f)
+                    : slit;
+                var bite = Clipper.Intersect(boundaryBand, body, FillRule.NonZero);
+                if (CountOuters(bite) > 1) { plan.DroppedTrees.Add(tree.Id); continue; }
 
                 PathsD candidate;
                 if (tree.External)
