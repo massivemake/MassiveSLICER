@@ -133,6 +133,34 @@ public static class LightningGenerator
             DumpPaths(dumpDir, z, ("RESULT", result.Select(path =>
                 string.Join(";", path.Select(pt => $"{pt.x:0.##},{pt.y:0.##}")))));
 
+        // Single-bead walls (e.g. interior partitions modelled at exactly one bead
+        // thick) collapse to near-zero area under the half-bead inset and vanish from
+        // the region — but they are real printable geometry that shells mode draws.
+        // Recover them as standalone loops, deduped against their double-shell twins
+        // and against curves the region already covers.
+        var walls = new PathsD();
+        foreach (var poly in fillPolys)
+        {
+            if (poly.Count < 3) continue;
+            var path = new PathD(poly.Count);
+            foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
+            double a = Math.Abs(Clipper.Area(path));
+            double perim = 0;
+            for (int i = 0; i < path.Count; i++)
+            {
+                var p0 = path[i];
+                var p1 = path[(i + 1) % path.Count];
+                perim += Math.Sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+            }
+            if (perim < beadWidth) continue;                       // speck
+            if (a >= perim * beadWidth * 0.25) continue;           // has real area → in region
+            bool covered = result.Any(r => LightningPlanner.LiesOnCurve(path, r, beadWidth * 0.6))
+                        || walls.Any(w => LightningPlanner.LiesOnCurve(path, w, 0.3));
+            if (!covered) walls.Add(path);
+        }
+        if (walls.Count > 0)
+            result.AddRange(walls);
+
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
     }
 

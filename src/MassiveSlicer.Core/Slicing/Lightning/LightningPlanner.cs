@@ -50,12 +50,25 @@ public static class LightningPlanner
         {
             var layerPlan = plan.Layers[i];
             var region    = regions[i];
-            if (region.Count == 0) continue;
+            if (region.Count == 0)
+            {
+                // Nothing on this plane at all — every tree above is dangling in air.
+                foreach (var t in plan.Layers[i + 1].Trees)
+                    orphaned.Add(t.Id);
+                continue;
+            }
 
             // Region shrunk by one bead — finger nodes must stay at least a bead
             // inside so the slit walls never poke through the perimeter.
             var core = Clipper.InflatePaths(region, -bead, JoinType.Miter, EndType.Polygon, 3.0);
-            if (core.Count == 0) continue;
+            if (core.Count == 0)
+            {
+                // Too thin to host fingers on this plane — the columns above have no
+                // continuation here, so silently skipping would leave them floating.
+                foreach (var t in plan.Layers[i + 1].Trees)
+                    orphaned.Add(t.Id);
+                continue;
+            }
 
             // Fingers may only ROOT on allowed boundary classes: interior boundaries
             // (holes / inner walls — notch hidden inside the part) and/or the outer
@@ -80,24 +93,47 @@ public static class LightningPlanner
             foreach (var above in plan.Layers[i + 1].Trees)
             {
                 var t = above.Clone();
-                RetractLeafTips(t, t.External ? stepAboveExternal : stepAbove);
-                if (t.Branches.Count == 0) continue;
 
+                // Dangling check FIRST — before natural retraction-death can hide it.
+                // A tree that tapers out on this layer is only safe when its anchor
+                // wall continues below; if the whole island vanished (newborn patch,
+                // angled sweep, notch), everything above is floating — retire the
+                // lineage instead of teleporting or silently tapering in mid-air.
                 var reAnchor = ClosestOnRegionBoundary(t.External ? region : anchorPaths, t.Anchor);
                 if (Vector2.Distance(reAnchor, t.Anchor) > MathF.Max(4f * bead, 3f * stepAbove))
                 {
-                    // Nearest boundary is far away — the wall under this tree is gone
-                    // (angled sweep, notch). Teleporting the anchor would print the
-                    // finger over air, so retire the whole lineage instead.
                     orphaned.Add(t.Id);
                     continue;
                 }
+
+                RetractLeafTips(t, t.External ? stepAboveExternal : stepAbove);
+                if (t.Branches.Count == 0) continue;
+
                 t.Anchor = reAnchor;
                 if (!t.External)
                     ClampInside(t, region, core, MaxStep(i));
                 if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
                 {
                     t.Branches[0].Centerline[0] = t.Anchor;
+
+                    // As the region morphs (ring closing into a cap), a re-anchored
+                    // trunk can swing across a hole — unrealizable as a slit and
+                    // unstable layer-to-layer. Retire such lineages.
+                    bool crossesVoid = false;
+                    if (!t.External)
+                        foreach (var b in t.Branches)
+                        {
+                            for (int k = 1; k < b.Centerline.Count && !crossesVoid; k++)
+                                crossesVoid = !SegmentInsideRegion(
+                                    region, b.Centerline[k - 1], b.Centerline[k], bead);
+                            if (crossesVoid) break;
+                        }
+                    if (crossesVoid)
+                    {
+                        orphaned.Add(t.Id);
+                        continue;
+                    }
+
                     layerPlan.Trees.Add(t);
                 }
             }
@@ -155,6 +191,9 @@ public static class LightningPlanner
 
                         var anchor = ClosestOnRegionBoundary(external ? region : anchorPaths, tip);
                         if (Vector2.Distance(anchor, tip) < bead) continue;   // wall covers it
+                        // Reject fingers whose centerline would cross a void (a chord
+                        // over a ring's hole) — the slit can't realize them.
+                        if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
 
                 // Merge: root on the nearest existing centerline when that is closer
                 // than the boundary (child branch), else start a new tree.
@@ -372,27 +411,37 @@ public static class LightningPlanner
         // NonZero union of such pairs fills hollow interiors and swallows inner walls
         // (fuselage bug, 2026-07-09), so: (1) drop near-coincident duplicate contours,
         // (2) re-orient the survivors by nesting parity, (3) union.
-        var kept = new List<PathD>();
-        var keptArea = new List<double>();
-        var keptCentroid = new List<PointD>();
+        // Twin test: a contour whose every vertex lies ON an already-kept contour's
+        // curve (within the coincidence tolerance) is the duplicate shell's copy —
+        // regardless of how its chain was split, reversed, or re-stitched. Largest
+        // first, so a full twin absorbs the split pieces of its counterpart.
+        const double twinTol = 0.15;
+        var candidates = new List<PathD>();
         foreach (var poly in polys)
         {
             if (poly.Count < 3) continue;
             var path = new PathD(poly.Count);
             foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
+            candidates.Add(path);
+        }
+        candidates.Sort((x, y) => Math.Abs(Clipper.Area(y)).CompareTo(Math.Abs(Clipper.Area(x))));
 
-            double area = Math.Abs(Clipper.Area(path));
-
-            var c = PathCentroid(path);
+        var kept = new List<PathD>();
+        var keptBounds = new List<RectD>();
+        foreach (var path in candidates)
+        {
+            var b = Clipper.GetBounds(new PathsD { path });
             bool dup = false;
             for (int i = 0; i < kept.Count && !dup; i++)
-                dup = Math.Abs(keptArea[i] - area) < Math.Max(1.0, area * 0.002)
-                      && Sq(keptCentroid[i].x - c.x) + Sq(keptCentroid[i].y - c.y) < 1.0;
+            {
+                if (b.left < keptBounds[i].left - twinTol * 4 || b.right > keptBounds[i].right + twinTol * 4
+                    || b.top < keptBounds[i].top - twinTol * 4 || b.bottom > keptBounds[i].bottom + twinTol * 4)
+                    continue;
+                dup = LiesOnCurve(path, kept[i], twinTol);
+            }
             if (dup) continue;
-
             kept.Add(path);
-            keptArea.Add(area);
-            keptCentroid.Add(c);
+            keptBounds.Add(b);
         }
 
         // Parity (EvenOdd) union: winding-agnostic, so corrupted contour orientations
@@ -415,6 +464,48 @@ public static class LightningPlanner
         return region;
     }
 
+
+    /// <summary>True when the whole segment stays inside the region (or within a
+    /// bead of its boundary) — a finger centerline that strays farther is crossing a
+    /// void (e.g. chord across a ring's hole) and cannot be realized as a slit.</summary>
+    internal static bool SegmentInsideRegion(PathsD region, Vector2 a, Vector2 b, float bead)
+    {
+        float len = Vector2.Distance(a, b);
+        int steps = Math.Max(2, (int)(len / MathF.Max(bead, 0.5f)) + 1);
+        for (int i = 0; i <= steps; i++)
+        {
+            var pt = Vector2.Lerp(a, b, i / (float)steps);
+            if (InsideRegion(region, pt)) continue;
+            if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > bead * 0.6f)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>True when every vertex of <paramref name="path"/> lies within
+    /// <paramref name="tol"/> of <paramref name="curve"/>'s polyline.</summary>
+    internal static bool LiesOnCurve(PathD path, PathD curve, double tol)
+    {
+        double tol2 = tol * tol;
+        foreach (var v in path)
+        {
+            double best = double.MaxValue;
+            for (int i = 0; i < curve.Count; i++)
+            {
+                var a = curve[i];
+                var b = curve[(i + 1) % curve.Count];
+                double abx = b.x - a.x, aby = b.y - a.y;
+                double len2 = abx * abx + aby * aby;
+                double t = len2 < 1e-12 ? 0 : Math.Clamp(((v.x - a.x) * abx + (v.y - a.y) * aby) / len2, 0, 1);
+                double dx = v.x - (a.x + abx * t), dy = v.y - (a.y + aby * t);
+                double d2 = dx * dx + dy * dy;
+                if (d2 < best) best = d2;
+                if (best < tol2) break;
+            }
+            if (best >= tol2) return false;
+        }
+        return true;
+    }
 
     private static double Sq(double v) => v * v;
 
