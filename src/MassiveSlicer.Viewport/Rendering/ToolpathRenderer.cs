@@ -137,6 +137,7 @@ public sealed class ToolpathRenderer : IDisposable
         public required int[]   SegFirstFlat; // m: first flat move index covered by segment j
         public required int[]   SegLastFlat;  // m: last  flat move index covered by segment j
         public required float   Hh;           // half layer height
+        public required NVec3   Up;           // layer plane normal — beads stack along it (angled prints)
     }
     private List<BeadContour> _beadPlan = [];
     private Toolpath _toolpath;
@@ -569,9 +570,9 @@ public sealed class ToolpathRenderer : IDisposable
 
     // Side normals: blend of adjacent face normals only (no fwd component).
     // Identical on both sides of a junction, eliminating shading seams.
-    private static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r) => (
-        NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
-        NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
+    private static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r, NVec3 up) => (
+        NVec3.Normalize(-r - up), NVec3.Normalize( r - up),
+        NVec3.Normalize(-r + up), NVec3.Normalize( r + up));
 
     /// <summary>
     /// Builds the shared bead plan: contours of chord-error-decimated polyline points.
@@ -581,12 +582,18 @@ public sealed class ToolpathRenderer : IDisposable
     private void BuildBeadPlan(Toolpath toolpath, float layerHeight)
     {
         // Collect raw contours: positions + flat move indices of consecutive cut runs.
-        var raw = new List<(List<NVec3> pts, List<int> flats, float hh)>();
+        var raw = new List<(List<NVec3> pts, List<int> flats, float hh, NVec3 up)>();
         int flatIdx = 0;
         foreach (var layer in toolpath.Layers)
         {
             float lh  = layer.Height > 0f ? layer.Height : layerHeight;
             float lhh = lh * 0.5f;
+            // Beads stack along the slicing-plane normal, not world Z — on angled
+            // prints the cross-section must tilt with the layers or the preview
+            // renders overlapping parallelogram-sheared beads.
+            var layerUp = layer.PlaneNormal.LengthSquared() > 1e-6f
+                ? NVec3.Normalize(layer.PlaneNormal)
+                : NVec3.UnitZ;
             List<NVec3>? pts = null; List<int>? flats = null;
             foreach (var move in layer.Moves)
             {
@@ -595,7 +602,7 @@ public sealed class ToolpathRenderer : IDisposable
                     if (pts is null)
                     {
                         pts = [move.From]; flats = [];
-                        raw.Add((pts, flats, lhh));
+                        raw.Add((pts, flats, lhh, layerUp));
                     }
                     pts.Add(move.To);
                     flats!.Add(flatIdx);
@@ -611,7 +618,7 @@ public sealed class ToolpathRenderer : IDisposable
         {
             _beadPlan = [];
             long totalSegs = 0;
-            foreach (var (pts, flats, hh) in raw)
+            foreach (var (pts, flats, hh, contourUp) in raw)
             {
                 var keep = DecimatePolyline(pts, eps);
                 int m = keep.Count - 1;
@@ -628,7 +635,7 @@ public sealed class ToolpathRenderer : IDisposable
 
                 // Blended cross-section right vectors (same construction as before).
                 var rights = new NVec3[m];
-                var up = NVec3.UnitZ;
+                var up = contourUp;
                 for (int j = 0; j < m; j++)
                 {
                     var d = cPts[j + 1] - cPts[j];
@@ -644,7 +651,7 @@ public sealed class ToolpathRenderer : IDisposable
                 for (int j = 1; j < m; j++) csR[j] = NVec3.Normalize(rights[j - 1] + rights[j]);
                 csR[m] = rights[m - 1];
 
-                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh });
+                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh, Up = contourUp });
                 totalSegs += m;
             }
             if (totalSegs <= MaxBeadSegments || attempt >= 4) break;
@@ -712,7 +719,6 @@ public sealed class ToolpathRenderer : IDisposable
         }
 
         float hw = beadWidth * 0.5f;
-        var   up = NVec3.UnitZ;
 
         int sections = 0, segs = 0;
         foreach (var c in _beadPlan) { sections += c.Pts.Length; segs += c.Pts.Length - 1; }
@@ -728,12 +734,13 @@ public sealed class ToolpathRenderer : IDisposable
         {
             int   m  = c.Pts.Length;   // cross-sections in this contour (segments + 1)
             float hh = c.Hh;
+            var   up = c.Up;
 
             for (int s = 0; s < m; s++)
             {
                 var r  = c.CsR[s];
                 var pt = c.Pts[s];
-                var (nLb, nRb, nLt, nRt) = SideNormals(r);
+                var (nLb, nRb, nLt, nRt) = SideNormals(r, up);
                 // corner order: 0=lb, 1=rb, 2=lt, 3=rt
                 EmitCorner(verts, ref vi, pt - r*hw - up*hh, nLb);
                 EmitCorner(verts, ref vi, pt + r*hw - up*hh, nRb);
@@ -853,7 +860,6 @@ public sealed class ToolpathRenderer : IDisposable
         if (sections == 0) return [];
 
         float hw = _beadWidth * 0.5f;
-        var   up = NVec3.UnitZ;
         var   verts = new float[sections * 4 * 6];
         int   vi = 0;
 
@@ -866,6 +872,7 @@ public sealed class ToolpathRenderer : IDisposable
         foreach (var c in _beadPlan)
         {
             int m = c.Pts.Length;
+            var up = c.Up;
             for (int s = 0; s < m; s++)
             {
                 // Section s is coloured by the segment it starts (last section reuses
