@@ -325,6 +325,51 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void DoubleShelledMeshKeepsHollowInteriorAndInnerWalls()
+    {
+        // Real-world CAD exports often duplicate every surface, so each contour slices
+        // twice — and the duplicate pair confuses nesting-depth orientation (both copies
+        // end up wound the same way). A raw NonZero union then fills the hollow interior
+        // and swallows inner walls (fuselage bug). ToPathsD must dedupe coincident
+        // contours and re-orient survivors by nesting parity.
+        static List<Vector2> Square(float half, float off, bool ccw)
+        {
+            List<Vector2> pts =
+                [new(-half + off, -half), new(half + off, -half), new(half + off, half), new(-half + off, half)];
+            if (!ccw) pts.Reverse();
+            return pts;
+        }
+
+        // Outer 200×200 and inner hole 120×120, each duplicated with a 0.05 mm offset,
+        // ALL wound clockwise (the corrupted orientation observed on the fuselage).
+        List<List<Vector2>> polys =
+        [
+            Square(100f, 0f, ccw: false),
+            Square(100f, 0.05f, ccw: false),
+            Square(60f, 0f, ccw: false),
+            Square(60f, 0.05f, ccw: false),
+        ];
+
+        var region = MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.ToPathsD(polys);
+
+        // The hollow interior must survive: centre outside, ring material inside.
+        Assert.False(MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.InsideRegion(
+            region, new Vector2(0, 0)), "hollow interior was filled");
+        Assert.True(MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.InsideRegion(
+            region, new Vector2(80, 0)), "ring material missing");
+
+        // And the emitted layer prints BOTH walls exactly once each.
+        var plan = new MassiveSlicer.Core.Slicing.Lightning.LightningPlan(1);
+        var layer = new ToolpathLayer(0, 3f) { Height = 3f };
+        MassiveSlicer.Core.Slicing.Lightning.LightningGenerator.EmitLightning(
+            polys, plan.Layers[0], 3f, layer, Bead, 0f);
+        bool NearWall(float target) => layer.Moves.Any(m => m.Kind == MoveKind.Extrude
+            && Math.Abs(MathF.Max(Math.Abs((m.From.X + m.To.X) * 0.5f), Math.Abs((m.From.Y + m.To.Y) * 0.5f)) - target) < 2f);
+        Assert.True(NearWall(100f), "outer wall missing");
+        Assert.True(NearWall(60f), "inner wall missing");
+    }
+
+    [Fact]
     public void ConvergingFingersMergeInsteadOfLeavingASliver()
     {
         // Two parallel fingers 8 mm apart (bead 6): their slit walls face each other

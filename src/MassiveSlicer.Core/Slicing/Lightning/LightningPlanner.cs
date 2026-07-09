@@ -367,16 +367,63 @@ public static class LightningPlanner
 
     internal static PathsD ToPathsD(List<List<Vector2>> polys)
     {
-        var paths = new PathsD(polys.Count);
+        // Real-world meshes are often double-shelled (every surface duplicated by the
+        // CAD export), which slices every contour twice with arbitrary windings. A raw
+        // NonZero union of such pairs fills hollow interiors and swallows inner walls
+        // (fuselage bug, 2026-07-09), so: (1) drop near-coincident duplicate contours,
+        // (2) re-orient the survivors by nesting parity, (3) union.
+        var kept = new List<PathD>();
+        var keptArea = new List<double>();
+        var keptCentroid = new List<PointD>();
         foreach (var poly in polys)
         {
             if (poly.Count < 3) continue;
             var path = new PathD(poly.Count);
             foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
+
+            double area = Math.Abs(Clipper.Area(path));
+            var c = PathCentroid(path);
+            bool dup = false;
+            for (int i = 0; i < kept.Count && !dup; i++)
+                dup = Math.Abs(keptArea[i] - area) < Math.Max(1.0, area * 0.002)
+                      && Sq(keptCentroid[i].x - c.x) + Sq(keptCentroid[i].y - c.y) < 1.0;
+            if (dup) continue;
+
+            kept.Add(path);
+            keptArea.Add(area);
+            keptCentroid.Add(c);
+        }
+
+        // Orientation by nesting parity: even depth = outer (CCW/positive), odd = hole.
+        var paths = new PathsD(kept.Count);
+        for (int i = 0; i < kept.Count; i++)
+        {
+            int depth = 0;
+            var sample = kept[i][0];
+            for (int j = 0; j < kept.Count; j++)
+                if (j != i && Clipper.PointInPolygon(sample, kept[j]) == PointInPolygonResult.IsInside)
+                    depth++;
+            bool wantPositive = depth % 2 == 0;
+            var path = kept[i];
+            if ((Clipper.Area(path) > 0) != wantPositive)
+            {
+                path = new PathD(path);
+                path.Reverse();
+            }
             paths.Add(path);
         }
+
         // Normalize windings/overlaps once so parity tests behave.
         return Clipper.Union(paths, FillRule.NonZero);
+    }
+
+    private static double Sq(double v) => v * v;
+
+    private static PointD PathCentroid(PathD path)
+    {
+        double x = 0, y = 0;
+        foreach (var pt in path) { x += pt.x; y += pt.y; }
+        return new PointD(x / path.Count, y / path.Count);
     }
 
     /// <summary>Even-odd containment across all region paths (outer + holes).</summary>
