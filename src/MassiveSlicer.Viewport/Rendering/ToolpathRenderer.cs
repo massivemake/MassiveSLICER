@@ -25,6 +25,8 @@ public enum ToolpathColorMode
     Speed,
     /// <summary>Gradient by extrusion rate / RPM demand (blue low → red high).</summary>
     Rpm,
+    /// <summary>Gradient by simulated interlayer temperature (blue cold → red hot).</summary>
+    Thermal,
 }
 
 public sealed class ToolpathRenderer : IDisposable
@@ -347,6 +349,8 @@ public sealed class ToolpathRenderer : IDisposable
     /// <summary>Per-move factor for the active gradient mode (relative units — normalised later).</summary>
     private float MoveScalar(ToolpathMove move, ToolpathLayer layer)
     {
+        if (_colorMode == ToolpathColorMode.Thermal)
+            return float.IsNaN(layer.ThermalTempC) ? 0f : layer.ThermalTempC;
         float speed = move.PrintSpeedScale * (move.IsResumeRamp ? move.ResumeSpeedScale : 1f);
         if (_colorMode == ToolpathColorMode.Speed) return speed;
         // RPM demand ∝ speed · layer height (bead width constant per slice) · ramp/wipe scales.

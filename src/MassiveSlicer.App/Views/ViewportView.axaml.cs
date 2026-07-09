@@ -91,6 +91,17 @@ public partial class ViewportView : UserControl
     // Pointer capture
     private IPointer? _capturedPointer;
 
+    // Toolpath seam-point drag: click-hold a seam point, slide the mouse left/right
+    // to walk the seam along its contour, release to re-seam the whole toolpath there.
+    private bool _seamPointDragging;
+    private SceneNode? _seamDragNode;
+    private readonly List<TkVector3> _seamDragLoopWorld = [];
+    private readonly List<System.Numerics.Vector2> _seamDragLoopLocalXY = [];
+    private float[] _seamDragCumLen = [];
+    private float _seamDragOffsetMm;
+    private float _seamDragMmPerPixel = 1f;
+    private int _seamDragVertex;
+
     // Seam guide drag
     private bool _seamGuideDragging;
     private WeldedMesh? _boundaryEditorMesh;
@@ -670,6 +681,7 @@ public partial class ViewportView : UserControl
                     RebuildToolpathsFromRaw(additive);
             };
 
+            additive.OnSimulateThermalRequested = () => RunThermalSimulation(vm, additive);
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
             UpdateSeamGuideMarkers(vm);
             GlCanvas.RequestNextFrameRendering();
@@ -2098,6 +2110,15 @@ public partial class ViewportView : UserControl
                 _capturedPointer = e.Pointer;
                 return;
             }
+
+            if (DataContext is ViewportViewModel spVm
+                && TryBeginSeamPointDrag(spVm, mx, my, vpW, vpH))
+            {
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
         }
 
         if (btn.HasValue)
@@ -2141,6 +2162,13 @@ public partial class ViewportView : UserControl
             if (_toolIsDragging)
                 RunIkForToolDrag();
             GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        if (_seamPointDragging)
+        {
+            _leftDragged = true;
+            UpdateSeamPointDrag((float)delta.X);
             return;
         }
 
@@ -2216,6 +2244,16 @@ public partial class ViewportView : UserControl
         if (kind == PointerUpdateKind.LeftButtonReleased && _kbTransformActive)
         {
             CommitKbTransform();
+            _leftDragged = false;
+            return;
+        }
+
+        if (kind == PointerUpdateKind.LeftButtonReleased && _seamPointDragging)
+        {
+            if (DataContext is ViewportViewModel spVm)
+                FinishSeamPointDrag(spVm);
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
             _leftDragged = false;
             return;
         }
@@ -2736,6 +2774,7 @@ public partial class ViewportView : UserControl
             LightningTipLoopRadiusMm = (float)s.LightningTipLoopRadiusMm,
             LightningAnchorInterior  = s.LightningAnchorInterior,
             LightningAnchorExterior  = s.LightningAnchorExterior,
+            LightningExteriorOverhangs = s.LightningExteriorOverhangs,
             ZHopMm          = (float)s.ZHopMm,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -2757,6 +2796,9 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            ThermalDepositTempC        = (float)Math.Max(s.Temperature1, Math.Max(s.Temperature2, s.Temperature3)),
+            ThermalGlassTransitionC    = ThermalSimulator.GlassTransitionC(s.SelectedPreset?.MaterialType),
+            ThermalDensityGmCc         = (float)(s.SelectedPreset?.MaterialDensity ?? 1.05),
             SeamGuidePoints = s.BuildSeamGuideList(),
             CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
             CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
@@ -2853,6 +2895,8 @@ public partial class ViewportView : UserControl
 
             var smoothed = OrientationSmoother.Apply(toSmooth, settings);
             SliceLogger.Step("OrientationSmoother done");
+
+            ThermalSimulator.StampLayerTemps(smoothed, settings);
             Pct(100);
 
             return (smoothed, raw);
@@ -2869,7 +2913,9 @@ public partial class ViewportView : UserControl
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
         OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
-        return OrientationSmoother.Apply(toSmooth, settings);
+        var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+        ThermalSimulator.StampLayerTemps(smoothed, settings);
+        return smoothed;
     }
 
     private ToolpathSnapshot? GetToolpathSnapshot(SceneNode node)
@@ -3565,6 +3611,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningTipLoopRadiusMm),
         nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
         nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
+        nameof(AdditiveSettingsViewModel.LightningExteriorOverhangs),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
@@ -3799,6 +3846,44 @@ public partial class ViewportView : UserControl
         "Black"   => new(0.15f, 0.15f, 0.15f),
         _         => new(0.95f, 0.95f, 0.95f),  // Other / no preset → white
     };
+
+    /// <summary>
+    /// Runs the analytical thermomechanical screen on the visible toolpath, fills the
+    /// Adaptive Speed low/high values from the safe layer-time window, and stamps the
+    /// per-layer interlayer temperatures for the Thermal view.
+    /// </summary>
+    private void RunThermalSimulation(ViewportViewModel vm, AdditiveSettingsViewModel s)
+    {
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            s.ThermalSummary = "Slice a model first — the simulation runs on the toolpath.";
+            return;
+        }
+
+        var settings = BuildSliceSettings(s);
+        var result = ThermalSimulator.Simulate(pair.Value, settings);
+
+        var sb = new System.Text.StringBuilder();
+        if (result.RecommendedMaxMmS > 0f)
+        {
+            // Setting these re-processes the toolpath, which re-stamps layer temps.
+            s.LayerSpeedBasisDisplay = "Cut length";
+            s.LayerSpeedMinMmS = Math.Round(result.RecommendedMinMmS, 1);
+            s.LayerSpeedMaxMmS = Math.Round(result.RecommendedMaxMmS, 1);
+            s.LayerSpeedAdaptEnabled = true;
+
+            sb.Append($"Deposit {result.DepositTempC:0}°C, cooling τ {result.TimeConstantS:0} s. ");
+            sb.Append($"Safe layer time {result.MinLayerTimeS:0}–{result.MaxLayerTimeS:0} s ");
+            sb.Append($"(sag ≤{result.SagTempC:0}°C, bond ≥{result.BondTempC:0}°C); ");
+            sb.Append($"targeting {result.TargetLayerTimeS:0} s → interface ≈{result.PredictedInterfaceTempC:0}°C. ");
+            sb.Append($"Speeds set to {result.RecommendedMinMmS:0.#}–{result.RecommendedMaxMmS:0.#} mm/s.");
+        }
+        foreach (var w in result.Warnings)
+            sb.Append($"\n⚠ {w}");
+        sb.Append("\nAnalytical lumped-capacitance model — verify on the part.");
+        s.ThermalSummary = sb.ToString();
+    }
 
     private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
         Toolpath toolpath, AdditiveSettingsViewModel s)
@@ -4568,6 +4653,167 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
+    /// Hit-tests the rendered toolpath seam points (each closed contour's start vertex).
+    /// On a hit within 12 px, grabs that contour for the slide-along-the-path seam drag.
+    /// </summary>
+    private bool TryBeginSeamPointDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        if (vm.IsSeamEditorActive || vm.IsToolpathSeamEditActive || vm.IsBoundaryEditorActive)
+            return false;
+        if (!vm.ShowSeam || vm.ViewMode is "Body" or "Preview")
+            return false;
+
+        const float pickPx = 12f;
+        float bestD = pickPx;
+        SceneNode? bestNode = null;
+        Toolpath? bestTp = null;
+        ToolpathLayer? bestLayer = null;
+        ContourSpan? bestSpan = null;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            // Seam points only render on the selected toolpath — and requiring selection
+            // keeps a plain click near the seam free to do normal scene selection.
+            if (!node.Visible || !ReferenceEquals(node, _renderer.SelectedNode)) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            var wt = node.WorldTransform;
+            foreach (var layer in tp.Layers)
+            {
+                foreach (var span in layer.Contours)
+                {
+                    if (!span.Closed || span.Count < 3) continue;
+                    if (span.Start < 0 || span.Start + span.Count > layer.Moves.Count) continue;
+                    var v = layer.Moves[span.Start].From;
+                    var world = TransformPoint(
+                        new TkVector3(v.X - origin.X, v.Y - origin.Y, v.Z - origin.Z), wt);
+                    var p = _renderer.ProjectToScreen(new TkVector3(world.X, world.Y, world.Z), vpW, vpH);
+                    if (float.IsNaN(p.X)) continue;
+                    float d = MathF.Sqrt((p.X - mx) * (p.X - mx) + (p.Y - my) * (p.Y - my));
+                    if (d < bestD)
+                    {
+                        bestD = d; bestNode = node; bestTp = tp;
+                        bestLayer = layer; bestSpan = span;
+                    }
+                }
+            }
+        }
+        if (bestNode is null || bestTp is null || bestLayer is null || bestSpan is null)
+            return false;
+
+        // Cache the grabbed loop: vertex 0 = the current seam. World positions drive the
+        // preview marker and pixel scale; toolpath-local XY feeds ApplySeams on release.
+        _seamDragLoopWorld.Clear();
+        _seamDragLoopLocalXY.Clear();
+        _toolpathOriginByNode.TryGetValue(bestNode, out var org);
+        var w = bestNode.WorldTransform;
+        var span2 = bestSpan;
+        var cum = new float[span2.Count + 1];
+        for (int i = 0; i < span2.Count; i++)
+        {
+            var v = bestLayer.Moves[span2.Start + i].From;
+            var wp = TransformPoint(new TkVector3(v.X - org.X, v.Y - org.Y, v.Z - org.Z), w);
+            _seamDragLoopWorld.Add(new TkVector3(wp.X, wp.Y, wp.Z));
+            _seamDragLoopLocalXY.Add(new System.Numerics.Vector2(v.X, v.Y));
+            if (i > 0)
+                cum[i] = cum[i - 1] + TkVector3.Distance(_seamDragLoopWorld[i - 1], _seamDragLoopWorld[i]);
+        }
+        cum[span2.Count] = cum[span2.Count - 1]
+            + TkVector3.Distance(_seamDragLoopWorld[^1], _seamDragLoopWorld[0]);
+        if (cum[span2.Count] < 1f) return false;   // degenerate loop
+
+        // World size of one screen pixel at the seam point (for a natural drag feel).
+        var s0 = _renderer.ProjectToScreen(_seamDragLoopWorld[0], vpW, vpH);
+        var sx = _renderer.ProjectToScreen(_seamDragLoopWorld[0] + TkVector3.UnitX, vpW, vpH);
+        var sy = _renderer.ProjectToScreen(_seamDragLoopWorld[0] + TkVector3.UnitY, vpW, vpH);
+        float pxPerMm = MathF.Max(
+            MathF.Sqrt((sx.X - s0.X) * (sx.X - s0.X) + (sx.Y - s0.Y) * (sx.Y - s0.Y)),
+            MathF.Sqrt((sy.X - s0.X) * (sy.X - s0.X) + (sy.Y - s0.Y) * (sy.Y - s0.Y)));
+        _seamDragMmPerPixel = pxPerMm > 0.01f ? 1f / pxPerMm : 1f;
+
+        _seamPointDragging = true;
+        _seamDragNode      = bestNode;
+        _seamDragCumLen    = cum;
+        _seamDragOffsetMm  = 0f;
+        _seamDragVertex    = 0;
+        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], 0);
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    /// <summary>Slides the seam preview along the grabbed contour by the horizontal mouse delta.</summary>
+    private void UpdateSeamPointDrag(float deltaX)
+    {
+        if (!_seamPointDragging || _seamDragLoopWorld.Count == 0) return;
+
+        float total = _seamDragCumLen[^1];
+        _seamDragOffsetMm += deltaX * _seamDragMmPerPixel;
+        float off = ((_seamDragOffsetMm % total) + total) % total;
+
+        // Nearest vertex to the arc-length offset (cum[] is ascending).
+        int idx = Array.BinarySearch(_seamDragCumLen, off);
+        if (idx < 0) idx = ~idx;
+        int n = _seamDragLoopWorld.Count;
+        int vertex;
+        if (idx <= 0) vertex = 0;
+        else if (idx >= n) vertex = 0;   // wrapped past the closing edge — back to start
+        else vertex = off - _seamDragCumLen[idx - 1] < _seamDragCumLen[idx] - off ? idx - 1 : idx % n;
+
+        if (vertex != _seamDragVertex)
+        {
+            _seamDragVertex = vertex;
+            _renderer.SetSeamGuides([_seamDragLoopWorld[vertex]], 0);
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Applies the dragged seam position to the whole toolpath: every closed loop re-seams
+    /// to its vertex nearest the new XY (same semantics as the seam-point editor), the raw
+    /// export toolpath follows, and the geometry re-uploads without a re-slice.
+    /// </summary>
+    private void FinishSeamPointDrag(ViewportViewModel vm)
+    {
+        bool moved = _seamPointDragging && _seamDragVertex != 0 && _seamDragNode is not null;
+        var node   = _seamDragNode;
+        var xy     = moved ? _seamDragLoopLocalXY[_seamDragVertex] : default;
+
+        _seamPointDragging = false;
+        _seamDragNode      = null;
+        _seamDragLoopWorld.Clear();
+        _seamDragLoopLocalXY.Clear();
+        _seamDragCumLen    = [];
+        UpdateSeamGuideMarkers(vm);   // restore the regular guide markers
+
+        if (!moved || node is null || !_toolpathByNode.TryGetValue(node, out var tp))
+        {
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        var pts = new List<System.Numerics.Vector2> { xy };
+        MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(tp, pts);
+
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+        if (raw is not null && !ReferenceEquals(raw, tp))
+            MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(raw, pts);
+
+        var snap = GetToolpathSnapshot(node);
+        if (snap is not null)
+        {
+            vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = tp,
+                RawToolpath   = raw ?? tp,
+                Node          = node,
+                BeadWidth     = snap.BeadWidth,
+                LayerHeight   = snap.LayerHeight,
+                MaterialColor = snap.MaterialColor,
+            });
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
     /// Re-seams the selected toolpath in place toward the placed seam points (no re-slice),
     /// then re-renders on the GL thread. The same Toolpath object feeds KRL export, so the
     /// new seam flows through to exported programs.
@@ -5127,7 +5373,7 @@ public partial class ViewportView : UserControl
     private const float ViewTagBandMm = 152.4f;   // 6 inches
     private DispatcherTimer? _viewTagTimer;
     private Toolpath? _viewTagCachedToolpath;
-    private readonly List<(NVec3 Local, float Scale)> _viewTagBands = [];
+    private readonly List<(NVec3 Local, float Scale, float TempC)> _viewTagBands = [];
 
     private void StartViewTagTimer(ViewportViewModel vm)
     {
@@ -5140,7 +5386,7 @@ public partial class ViewportView : UserControl
     /// (Speed view) or extrusion RPM % with the material flow rate (RPM view).</summary>
     private void UpdateViewTags(ViewportViewModel vm)
     {
-        if (vm.ViewMode is not ("Speed" or "RPM"))
+        if (vm.ViewMode is not ("Speed" or "RPM" or "Thermal"))
         {
             if (vm.ViewTags.Count > 0) vm.ViewTags = [];
             return;
@@ -5177,7 +5423,8 @@ public partial class ViewportView : UserControl
                     }
                     if (found)
                     {
-                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z), scale));
+                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
+                                           scale, layer.ThermalTempC));
                         nextBand += ViewTagBandMm;
                     }
                 }
@@ -5188,7 +5435,6 @@ public partial class ViewportView : UserControl
         float vpH = (float)GlCanvas.Bounds.Height;
         if (vpW < 10 || vpH < 10) return;
 
-        bool  speedView = vm.ViewMode == "Speed";
         float baseSpeed = (float)(vm.AdditiveSettings?.PrintSpeed ?? 100.0);
         float rpmBase   = vm.AdditiveSettings?.GetEffectiveExtrusionSpeedPercent() ?? 100f;
         float flow      = (float)(vm.AdditiveSettings?.SelectedPreset?.FlowRateFor(
@@ -5196,7 +5442,7 @@ public partial class ViewportView : UserControl
 
         var wt   = node.WorldTransform;
         var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
-        foreach (var (local, scale) in _viewTagBands)
+        foreach (var (local, scale, tempC) in _viewTagBands)
         {
             var world = new TkVector3(
                 local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
@@ -5208,9 +5454,12 @@ public partial class ViewportView : UserControl
 
             var overlayPt = this.TranslatePoint(new Point(p.X + 14, p.Y - 9), OverlayView)
                             ?? new Point(p.X + 14, p.Y - 9);
-            string text = speedView
-                ? $"{baseSpeed * scale:0} mm/s"
-                : $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})";
+            string text = vm.ViewMode switch
+            {
+                "Speed"   => $"{baseSpeed * scale:0} mm/s",
+                "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
+                _         => $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})",
+            };
             tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
         }
         vm.ViewTags = tags;

@@ -28,7 +28,8 @@ public static class OrientationSmoother
         foreach (var layer in toolpath.Layers)
         {
             var newLayer = new ToolpathLayer(layer.Index, layer.Z)
-                { Height = layer.Height, PlaneNormal = layer.PlaneNormal };
+                { Height = layer.Height, PlaneNormal = layer.PlaneNormal, ThermalTempC = layer.ThermalTempC };
+            newLayer.Contours.AddRange(layer.Contours);   // move counts are preserved 1:1
 
             int i = 0;
             while (i < layer.Moves.Count)

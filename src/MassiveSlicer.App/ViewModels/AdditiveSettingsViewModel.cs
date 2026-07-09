@@ -25,6 +25,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
+        SimulateThermalCommand           = new RelayCommand(() => OnSimulateThermalRequested?.Invoke());
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
 
@@ -251,6 +252,21 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public RelayCommand OpenSeamEditorCommand { get; }
 
     internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    /// <summary>Runs the analytical thermomechanical screen and fills Adaptive Speed low/high.</summary>
+    public RelayCommand SimulateThermalCommand { get; }
+
+    internal Action? OnSimulateThermalRequested { get; set; }
+
+    private string _thermalSummary = "";
+    /// <summary>Human-readable result of the last thermomechanical simulation.</summary>
+    public string ThermalSummary
+    {
+        get => _thermalSummary;
+        set { if (SetField(ref _thermalSummary, value)) OnPropertyChanged(nameof(HasThermalSummary)); }
+    }
+
+    public bool HasThermalSummary => !string.IsNullOrEmpty(_thermalSummary);
 
     // -- Curved slicing boundaries --------------------------------------------
 
@@ -808,6 +824,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _lightningAnchorExterior;
         set => SetField(ref _lightningAnchorExterior, value);
+    }
+
+    private bool _lightningExteriorOverhangs;
+    /// <summary>Grow sacrificial external fins under outward overhangs (cut away later).</summary>
+    public bool LightningExteriorOverhangs
+    {
+        get => _lightningExteriorOverhangs;
+        set => SetField(ref _lightningExteriorOverhangs, value);
     }
 
     private double _infillSpacingMm = 0.0;

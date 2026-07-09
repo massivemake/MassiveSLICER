@@ -2322,6 +2322,7 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         "Speed" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Speed,
         "RPM"   => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Rpm,
+        "Thermal" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Thermal,
         _       => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Normal,
     };
 
@@ -2341,6 +2342,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 break;
             case "Speed":
             case "RPM":
+            case "Thermal":
                 ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
                 break;
             case "Toolpath":
@@ -2392,7 +2394,7 @@ public sealed class ViewportViewModel : ViewModelBase
         public float ToolpathLineOpacity { get; set; } = 1f;
     }
 
-    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
+    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview"];
     private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
     private bool _applyingViewProfile;
 
@@ -2401,7 +2403,7 @@ public sealed class ViewportViewModel : ViewModelBase
         var d = new Dictionary<string, ViewDisplayProfile>();
         foreach (var m in ViewModeNames)
         {
-            bool lineView = m is "Toolpath" or "Speed" or "RPM";
+            bool lineView = m is "Toolpath" or "Speed" or "RPM" or "Thermal";
             d[m] = lineView
                 ? new ViewDisplayProfile
                 {

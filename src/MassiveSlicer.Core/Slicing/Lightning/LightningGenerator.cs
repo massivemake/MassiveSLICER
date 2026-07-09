@@ -36,18 +36,30 @@ public static class LightningGenerator
 
         if (plan is not null && plan.Trees.Count > 0)
         {
-            float halfBead = beadWidth * 0.5f;
             foreach (var tree in plan.Trees)
             {
                 var slit = BuildTreeSlit(tree, region, beadWidth, tipLoopRadius);
                 if (slit.Count == 0) continue;
 
-                var candidate = Clipper.Difference(result, slit, FillRule.NonZero);
-                candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
-
-                // Guard: a slit that cuts clean across a neck would split the region
-                // into extra islands (adding travels) — drop that tree instead.
-                if (CountOuters(candidate) > outerCount) continue;
+                PathsD candidate;
+                if (tree.External)
+                {
+                    // Sacrificial fin OUTSIDE the part: add the bump instead of
+                    // notching. The boundary detours outward around it — still one loop.
+                    candidate = Clipper.Union(result, slit, FillRule.NonZero);
+                    candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
+                    // Guard: a fin bridging to another island would merge outers
+                    // (changes topology unexpectedly) — drop that fin.
+                    if (CountOuters(candidate) < outerCount) continue;
+                }
+                else
+                {
+                    candidate = Clipper.Difference(result, slit, FillRule.NonZero);
+                    candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
+                    // Guard: a slit that cuts clean across a neck would split the region
+                    // into extra islands (adding travels) — drop that tree instead.
+                    if (CountOuters(candidate) > outerCount) continue;
+                }
 
                 // Guard: degenerate output (region consumed).
                 if (candidate.Count == 0) continue;

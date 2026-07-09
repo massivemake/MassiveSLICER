@@ -37,6 +37,10 @@
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=RPM}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="RPM"
                         ToolTip.Tip="Extrusion rate / flowrate demand"/>
+                <Button Classes="ViewPill" Content="Thermal"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Thermal}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Thermal"
+                        ToolTip.Tip="Thermomechanical simulation — predicted interlayer temperature per layer"/>
                 <Button Classes="ViewPill" Content="Preview"
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>

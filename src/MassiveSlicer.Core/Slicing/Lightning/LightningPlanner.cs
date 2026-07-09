@@ -72,8 +72,9 @@ public static class LightningPlanner
                 RetractLeafTips(t, stepAbove);
                 if (t.Branches.Count == 0) continue;
 
-                t.Anchor = ClosestOnRegionBoundary(anchorPaths, t.Anchor);
-                ClampInside(t, region, core, MaxStep(i));
+                t.Anchor = ClosestOnRegionBoundary(t.External ? region : anchorPaths, t.Anchor);
+                if (!t.External)
+                    ClampInside(t, region, core, MaxStep(i));
                 if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
                 {
                     t.Branches[0].Centerline[0] = t.Anchor;
@@ -100,9 +101,12 @@ public static class LightningPlanner
                 for (int si = 0; si < samples.Count; si++)
                 {
                     var pt = samples[si];
-                    unsupported[si] =
-                        Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius
-                        && InsideRegion(region, pt)                             // outward flare = hopeless
+                    bool far = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
+                    bool inside = InsideRegion(region, pt);
+                    // Inward-shrinking arcs are always demand; outward flares only when
+                    // sacrificial external fins are enabled.
+                    unsupported[si] = far
+                        && (inside || settings.LightningExteriorOverhangs)
                         && !NearAnyCenterline(layerPlan.Trees, pt, supportRadius);
                 }
 
@@ -118,13 +122,18 @@ public static class LightningPlanner
                         int si = (start + (int)((k + 0.5f) * count / tipCount)) % samples.Count;
                         var sPt = samples[si];
 
-                        // Finger tip goes right under the unsupported arc, kept ≥ one
-                        // bead inside the region so the slit can't breach the far wall.
-                        var tip = InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
+                        bool external = !InsideRegion(region, sPt);
+
+                        // Interior demand: tip goes right under the unsupported arc, kept
+                        // ≥ one bead inside so the slit can't breach the far wall.
+                        // External demand: the fin tip is the overhanging point itself.
+                        var tip = external
+                            ? sPt
+                            : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
 
                         if (TooCloseToExisting(layerPlan.Trees, tip, spacing * 0.5f)) continue;
 
-                        var anchor = ClosestOnRegionBoundary(anchorPaths, tip);
+                        var anchor = ClosestOnRegionBoundary(external ? region : anchorPaths, tip);
                         if (Vector2.Distance(anchor, tip) < bead) continue;   // wall covers it
 
                 // Merge: root on the nearest existing centerline when that is closer
@@ -149,7 +158,7 @@ public static class LightningPlanner
                 }
                 else
                 {
-                    var t = new LightningTree { Anchor = anchor };
+                    var t = new LightningTree { Anchor = anchor, External = external };
                     t.Branches.Add(new LightningBranch([anchor, tip]));
                     layerPlan.Trees.Add(t);
                 }
@@ -162,8 +171,11 @@ public static class LightningPlanner
             //       within one step of the new position. ──────────────────────────
             float budget = MaxStep(i);
             foreach (var t in layerPlan.Trees)
+            {
+                if (t.External) continue;   // fins are short and live outside the core
                 foreach (var b in t.Branches)
                     Straighten(b.Centerline, budget, core);
+            }
         }
 
         return plan;

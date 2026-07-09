@@ -1054,6 +1054,9 @@
                                     <CheckBox Margin="8,2,8,4" FontSize="11" Content="Bridge from outside perimeter"
                                               IsChecked="{Binding Additive.LightningAnchorExterior, Mode=TwoWay}"
                                               ToolTip.Tip="Root support fingers on the outer perimeter — the notch is visible on the outside surface."/>
+                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Support exterior overhangs (sacrificial)"
+                                              IsChecked="{Binding Additive.LightningExteriorOverhangs, Mode=TwoWay}"
+                                              ToolTip.Tip="Grow external support fins under outward overhangs. The fins add material OUTSIDE the part — cut them away after printing."/>
                                 </StackPanel>
 
                                 <TextBlock Margin="8,2,8,4" TextWrapping="Wrap"
@@ -1200,6 +1203,16 @@
                                                    FormatString="F0" FontSize="11"/>
                                 </Grid>
                             </StackPanel>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                            <Button Content="Simulate Thermomechanical"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Command="{Binding Additive.SimulateThermalCommand}"
+                                    ToolTip.Tip="Analytical interlayer-cooling simulation: predicts the temperature each layer lands on, derives the safe layer-time window between sag and bonding limits, and sets the Adaptive Speed low/high values. View the result with the Thermal view pill."/>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                       IsVisible="{Binding Additive.HasThermalSummary}"
+                                       Text="{Binding Additive.ThermalSummary}"/>
                         </StackPanel>
                     </Border>
                     </Expander>

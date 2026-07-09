@@ -23,6 +23,12 @@ public sealed class ToolpathLayer
     /// </summary>
     public Vector3 PlaneNormal { get; init; } = Vector3.UnitZ;
 
+    /// <summary>
+    /// Predicted temperature (°C) of the surface this layer is deposited onto, stamped by
+    /// <c>ThermalSimulator.StampLayerTemps</c> after post-processing. NaN = not simulated.
+    /// </summary>
+    public float ThermalTempC { get; set; } = float.NaN;
+
     /// <summary>All move segments in this layer, in order of execution.</summary>
     public List<ToolpathMove> Moves { get; } = [];
 
