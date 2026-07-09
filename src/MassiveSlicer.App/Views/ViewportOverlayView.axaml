@@ -748,6 +748,24 @@
             </StackPanel>
         </Border>
 
+        <!-- Multi-Planar: show/hide the guide plane quads -->
+        <Border HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,58,196,0" ZIndex="15"
+                IsVisible="{Binding AdditiveSettings.ShowMultiPlanarControls, FallbackValue=False}"
+                Background="#B3222222" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="3">
+            <ToggleButton Classes="ToolbarButton" Padding="8,4" FontSize="11"
+                          IsChecked="{Binding ShowMultiPlanarPlanes, Mode=TwoWay}"
+                          Classes.active="{Binding ShowMultiPlanarPlanes}"
+                          ToolTip.Tip="Show/hide the Multi-Planar guide planes (the distortion spine stays visible)">
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                    <ia:Icon Value="mdi-layers-outline" FontSize="13"/>
+                    <TextBlock Text="Planes" VerticalAlignment="Center"/>
+                </StackPanel>
+            </ToggleButton>
+        </Border>
+
         <!-- Toolpath stats — top-right, below the view pills -->
         <StackPanel HorizontalAlignment="Right"
                     VerticalAlignment="Top"
