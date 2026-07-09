@@ -51,6 +51,19 @@ public static class LightningPlanner
             var core = Clipper.InflatePaths(region, -bead, JoinType.Miter, EndType.Polygon, 3.0);
             if (core.Count == 0) continue;
 
+            // Fingers may only ROOT on allowed boundary classes: interior boundaries
+            // (holes / inner walls — notch hidden inside the part) and/or the outer
+            // perimeter (notch visible outside). After Union normalization, outers
+            // have positive area and holes negative.
+            var anchorPaths = new PathsD();
+            foreach (var path in region)
+            {
+                bool isOuter = Clipper.Area(path) > 0;
+                if (isOuter ? settings.LightningAnchorExterior : settings.LightningAnchorInterior)
+                    anchorPaths.Add(path);
+            }
+            if (anchorPaths.Count == 0) continue;   // nowhere allowed to root
+
             // ── 1. Inherit the layer-above's trees with retracted tips ─────────
             float stepAbove = MaxStep(i + 1);
             foreach (var above in plan.Layers[i + 1].Trees)
@@ -59,7 +72,7 @@ public static class LightningPlanner
                 RetractLeafTips(t, stepAbove);
                 if (t.Branches.Count == 0) continue;
 
-                t.Anchor = ClosestOnRegionBoundary(region, t.Anchor);
+                t.Anchor = ClosestOnRegionBoundary(anchorPaths, t.Anchor);
                 ClampInside(t, region, core, MaxStep(i));
                 if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
                 {
@@ -111,7 +124,7 @@ public static class LightningPlanner
 
                         if (TooCloseToExisting(layerPlan.Trees, tip, spacing * 0.5f)) continue;
 
-                        var anchor = ClosestOnRegionBoundary(region, tip);
+                        var anchor = ClosestOnRegionBoundary(anchorPaths, tip);
                         if (Vector2.Distance(anchor, tip) < bead) continue;   // wall covers it
 
                 // Merge: root on the nearest existing centerline when that is closer

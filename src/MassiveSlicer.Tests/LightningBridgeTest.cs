@@ -214,6 +214,62 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void AnchorClassCheckboxesControlWhereFingersRoot()
+    {
+        // Shrinking square (demand every layer) with a fixed centered hole: with
+        // interior-only anchoring every tree roots on the hole boundary; with
+        // exterior-only, on the outer square.
+        List<List<List<Vector2>>> Polys()
+        {
+            var layers = new List<List<List<Vector2>>>();
+            for (int i = 0; i < 8; i++)
+            {
+                float h = 90f - i * 6f;
+                layers.Add(
+                [
+                    [new(-h, -h), new(h, -h), new(h, h), new(-h, h)],                     // outer CCW
+                    [new(-20f, -20f), new(-20f, 20f), new(20f, 20f), new(20f, -20f)],     // hole CW
+                ]);
+            }
+            return layers;
+        }
+        var heights = Enumerable.Repeat(LayerH, 8).ToList();
+
+        var interiorOnly = LightningPlanner.Build(Polys(), heights, new SliceSettings
+        {
+            LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
+            InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true, LightningAnchorExterior = false,
+        });
+        var exteriorOnly = LightningPlanner.Build(Polys(), heights, new SliceSettings
+        {
+            LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
+            InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
+            LightningAnchorInterior = false, LightningAnchorExterior = true,
+        });
+
+        bool sawInterior = false, sawExterior = false;
+        foreach (var lp in interiorOnly.Layers)
+            foreach (var t in lp.Trees)
+            {
+                sawInterior = true;
+                float m = MathF.Max(MathF.Abs(t.Anchor.X), MathF.Abs(t.Anchor.Y));
+                Assert.True(MathF.Abs(m - 20f) < 1.5f,
+                    $"interior-only anchor ({t.Anchor.X:0.#},{t.Anchor.Y:0.#}) not on the hole");
+            }
+        foreach (var lp in exteriorOnly.Layers)
+            foreach (var t in lp.Trees)
+            {
+                sawExterior = true;
+                float m = MathF.Max(MathF.Abs(t.Anchor.X), MathF.Abs(t.Anchor.Y));
+                Assert.True(m > 25f,
+                    $"exterior-only anchor ({t.Anchor.X:0.#},{t.Anchor.Y:0.#}) on the hole");
+            }
+        Assert.True(sawInterior, "no trees planned with interior anchoring");
+        Assert.True(sawExterior, "no trees planned with exterior anchoring");
+    }
+
+    [Fact]
     public void TipLoopsAddSupportPadPathLength()
     {
         var square = new List<List<Vector2>>

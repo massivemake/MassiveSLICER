@@ -794,6 +794,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _lightningTipLoopRadiusMm, Math.Clamp(value, 0.0, 200.0));
     }
 
+    private bool _lightningAnchorInterior = true;
+    /// <summary>Root fingers on interior boundaries (holes/inner walls — hidden notches).</summary>
+    public bool LightningAnchorInterior
+    {
+        get => _lightningAnchorInterior;
+        set => SetField(ref _lightningAnchorInterior, value);
+    }
+
+    private bool _lightningAnchorExterior = true;
+    /// <summary>Root fingers on the outer perimeter (notch visible outside).</summary>
+    public bool LightningAnchorExterior
+    {
+        get => _lightningAnchorExterior;
+        set => SetField(ref _lightningAnchorExterior, value);
+    }
+
     private double _infillSpacingMm = 0.0;
 
     /// <summary>Centre-to-centre infill line spacing in mm. 0 = use bead width.</summary>
