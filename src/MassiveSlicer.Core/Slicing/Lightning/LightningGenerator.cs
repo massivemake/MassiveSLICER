@@ -71,6 +71,35 @@ public static class LightningGenerator
 
                 result = candidate;
             }
+
+            // Converging fingers (inherited lineages drifting together — common on
+            // angled sweeps) can leave a sliver of region thinner than a bead between
+            // their slits: two walls printed almost on top of each other = gross
+            // over-extrusion. Morphologically CLOSE the cut area (dilate + erode) so
+            // near-touching slits merge into one clean notch. Gaps bounded by the
+            // part's real exterior only dilate from one side and survive untouched.
+            if (!ReferenceEquals(result, region))
+            {
+                var cut = Clipper.Difference(region, result, FillRule.NonZero);
+                if (cut.Count > 0)
+                {
+                    double closeR = beadWidth * 0.55;
+                    var closed = Clipper.InflatePaths(cut, closeR, JoinType.Round, EndType.Polygon);
+                    closed     = Clipper.InflatePaths(closed, -closeR, JoinType.Round, EndType.Polygon);
+                    // Subtract from RESULT (not region): the notches are already cut
+                    // (idempotent) and unioned external fins must survive the merge.
+                    var merged = Clipper.Difference(result, closed, FillRule.NonZero);
+                    merged     = Clipper.SimplifyPaths(merged, 0.05, false);
+                    // The rounded dilate/erode leaves sub-millimetre lens fragments along
+                    // the old sliver midline; anything smaller than one bead² is
+                    // unprintable anyway — drop it before judging topology.
+                    merged.RemoveAll(path => Math.Abs(Clipper.Area(path)) < beadWidth * beadWidth);
+                    // Keep the per-tree guards' promises: adopt the merge only when it
+                    // doesn't change the island topology.
+                    if (merged.Count > 0 && CountOuters(merged) == CountOuters(result))
+                        result = merged;
+                }
+            }
         }
 
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
