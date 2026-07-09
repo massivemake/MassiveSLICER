@@ -282,16 +282,17 @@ public sealed class SliceSettings
     /// (material added outside the part — cut away after printing).</summary>
     public bool LightningExteriorOverhangs { get; init; } = false;
 
-    // ── Multi-Planar slicing (three guide planes: base → middle → top) ───────
+    // ── Multi-Planar slicing (a stack of guide planes) ───────────────────────
 
-    /// <summary>Plane tilt (deg, about Y like <see cref="TiltAngle"/>) at the part's base.</summary>
-    public float MultiPlanarBaseDeg { get; init; } = 0f;
+    /// <summary>Guide planes as (height % of the part, tilt °): the slicing plane's
+    /// tilt interpolates linearly between adjacent guides as the print climbs.
+    /// Constant tilt below the first and above the last guide. Minimum two planes.</summary>
+    public IReadOnlyList<MultiPlanarPlane> MultiPlanarPlanes { get; init; } =
+        [new(0f, 0f), new(50f, 15f), new(100f, 30f)];
 
-    /// <summary>Plane tilt (deg) at half the part's height.</summary>
-    public float MultiPlanarMidDeg { get; init; } = 15f;
-
-    /// <summary>Plane tilt (deg) at the part's top.</summary>
-    public float MultiPlanarTopDeg { get; init; } = 30f;
+    /// <summary>False = tilt about Y (planes lean along X, like <see cref="TiltAngle"/>);
+    /// true = tilt about X (planes lean along Y).</summary>
+    public bool MultiPlanarAxisX { get; init; } = false;
 
     // ── Thermomechanical simulation (analytical interlayer cooling) ──────────
 

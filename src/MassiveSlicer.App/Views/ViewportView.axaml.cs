@@ -2137,6 +2137,15 @@ public partial class ViewportView : UserControl
                 e.Handled = true;
                 return;
             }
+
+            if (DataContext is ViewportViewModel gpVm
+                && TryBeginGuidePlaneDrag(gpVm, mx, my, vpW, vpH))
+            {
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
         }
 
         if (btn.HasValue)
@@ -2187,6 +2196,13 @@ public partial class ViewportView : UserControl
         {
             _leftDragged = true;
             UpdateSeamPointDrag((float)delta.X);
+            return;
+        }
+
+        if (_guidePlaneDragging && DataContext is ViewportViewModel gpDragVm)
+        {
+            _leftDragged = true;
+            UpdateGuidePlaneDrag(gpDragVm, (float)delta.X, (float)delta.Y);
             return;
         }
 
@@ -2262,6 +2278,16 @@ public partial class ViewportView : UserControl
         if (kind == PointerUpdateKind.LeftButtonReleased && _kbTransformActive)
         {
             CommitKbTransform();
+            _leftDragged = false;
+            return;
+        }
+
+        if (kind == PointerUpdateKind.LeftButtonReleased && _guidePlaneDragging)
+        {
+            if (DataContext is ViewportViewModel gpVm)
+                FinishGuidePlaneDrag(gpVm);
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
             _leftDragged = false;
             return;
         }
@@ -2814,9 +2840,10 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
-            MultiPlanarBaseDeg         = (float)s.MultiPlanarBaseDeg,
-            MultiPlanarMidDeg          = (float)s.MultiPlanarMidDeg,
-            MultiPlanarTopDeg          = (float)s.MultiPlanarTopDeg,
+            MultiPlanarPlanes          = s.MultiPlanarPlanes
+                .Select(r => new MassiveSlicer.Core.Models.MultiPlanarPlane((float)r.HeightPct, (float)r.AngleDeg))
+                .ToList(),
+            MultiPlanarAxisX           = s.MultiPlanarAxisX,
             ThermalDepositTempC        = (float)Math.Max(s.Temperature1, Math.Max(s.Temperature2, s.Temperature3)),
             ThermalGlassTransitionC    = ThermalSimulator.GlassTransitionC(s.SelectedPreset?.MaterialType),
             ThermalDensityGmCc         = (float)(s.SelectedPreset?.MaterialDensity ?? 1.05),
@@ -3637,9 +3664,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
         nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
         nameof(AdditiveSettingsViewModel.LightningExteriorOverhangs),
-        nameof(AdditiveSettingsViewModel.MultiPlanarBaseDeg),
-        nameof(AdditiveSettingsViewModel.MultiPlanarMidDeg),
-        nameof(AdditiveSettingsViewModel.MultiPlanarTopDeg),
+        nameof(AdditiveSettingsViewModel.MultiPlanarStamp),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
@@ -6542,9 +6567,37 @@ public partial class ViewportView : UserControl
         return (timesMs, vPeak);
     }
 
+    // Multi-Planar guide planes (world space) — cached for viewport hit-testing.
+    private readonly List<TkVector3> _guidePlaneCenters = [];
+    private readonly List<TkVector3> _guidePlaneNormals = [];
+    private readonly List<MultiPlanarPlaneRow> _guidePlaneRows = [];
+    private float _guidePlaneSize;
+    private bool  _guidePlanesActive;
+    private int   _guidePlaneSelected = -1;
+    private bool  _guidePlaneDragging;
+    private MultiPlanarPlaneRow? _guidePlaneDragRow;
+    private Toolpath? _spineCachedToolpath;
+    private TkMatrix4 _spineCachedWorld;
+
     private void UpdateAnglePlanePreview(ViewportViewModel vm)
     {
         var node = _renderer.SelectedNode;
+        bool multiPlanar = vm.AdditiveSettings?.Method == SliceMethod.MultiPlanar;
+        if (!multiPlanar && _guidePlanesActive)
+        {
+            _guidePlanesActive = false;
+            _guidePlaneSelected = -1;
+            _renderer.SetGuidePlanes([], 0f);
+            _renderer.SetMultiPlanarSpine([]);
+        }
+        if (multiPlanar)
+        {
+            UpdateMultiPlanarOverlay(vm);
+            _renderer.SetPlanePreview(null, null);
+            _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
+            return;
+        }
+
         if (node is null
             || vm.AdditiveSettings?.Method != SliceMethod.Angled
             || _renderer.IsToolpathNode(node))
@@ -6612,6 +6665,225 @@ public partial class ViewportView : UserControl
             _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
         }
     }
+
+    /// <summary>
+    /// Multi-Planar viewport overlay: three guide-plane quads (base / middle / top,
+    /// click-and-drag horizontally to rotate one) plus the spine — a polyline through
+    /// every layer's centre coloured by wedge distortion (green = uniform thickness,
+    /// red = the thin side nearing self-crossing or the thick side nearing a gap).
+    /// </summary>
+    private void UpdateMultiPlanarOverlay(ViewportViewModel vm)
+    {
+        // Note: model BODIES are hidden in the toolpath views — the guide planes must
+        // still show, so take the first user model regardless of visibility.
+        var model = vm.GetUserModelItems().FirstOrDefault()?.Node;
+        if (model is null || vm.AdditiveSettings is not { } s || s.MultiPlanarPlanes.Count < 2)
+        {
+            ClearMultiPlanarOverlay();
+            return;
+        }
+
+        // World AABB of the model.
+        var min = new TkVector3(float.MaxValue);
+        var max = new TkVector3(float.MinValue);
+        bool hasGeometry = false;
+        foreach (var n in model.SelfAndDescendants())
+        {
+            if (n.Mesh?.PickingData is not { } mesh) continue;
+            var world = n.WorldTransform;
+            var (bMin, bMax) = mesh.LocalBounds;
+            for (int ci = 0; ci < 8; ci++)
+            {
+                var pLocal = new TkVector3(
+                    (ci & 1) == 0 ? bMin.X : bMax.X,
+                    (ci & 2) == 0 ? bMin.Y : bMax.Y,
+                    (ci & 4) == 0 ? bMin.Z : bMax.Z);
+                var w = TransformTk(pLocal, world);
+                min = TkVector3.ComponentMin(min, w);
+                max = TkVector3.ComponentMax(max, w);
+            }
+            hasGeometry = true;
+        }
+        if (!hasGeometry)
+        {
+            ClearMultiPlanarOverlay();
+            return;
+        }
+
+        float cx = (min.X + max.X) * 0.5f, cy = (min.Y + max.Y) * 0.5f;
+        float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.15f;
+        bool axisX = s.MultiPlanarAxisX;
+
+        _guidePlaneCenters.Clear();
+        _guidePlaneNormals.Clear();
+        _guidePlaneRows.Clear();
+        var planes = new List<(TkVector3 Center, TkVector3 Normal)>();
+        foreach (var row in s.MultiPlanarPlanes.OrderBy(r => r.HeightPct))
+        {
+            float t = (float)(row.AngleDeg * Math.PI / 180.0);
+            var nrm = axisX
+                ? new TkVector3(0f, -MathF.Sin(t), MathF.Cos(t))
+                : new TkVector3(MathF.Sin(t), 0f, MathF.Cos(t));
+            float h = min.Z + (float)(row.HeightPct / 100.0) * (max.Z - min.Z);
+            var c = new TkVector3(cx, cy, h);
+            planes.Add((c, nrm));
+            _guidePlaneCenters.Add(c);
+            _guidePlaneNormals.Add(nrm);
+            _guidePlaneRows.Add(row);
+        }
+        _guidePlaneSize = size;
+        _guidePlanesActive = true;
+        if (_guidePlaneSelected >= planes.Count) _guidePlaneSelected = -1;
+        _renderer.SetGuidePlanes(planes, size, _guidePlaneSelected);
+
+        // Combined rotate+translate affordance on the selected plane: a rotation ring
+        // about the tilt axis plus a vertical height arrow, drawn as one polyline.
+        if (_guidePlaneSelected >= 0)
+        {
+            var c = _guidePlaneCenters[_guidePlaneSelected];
+            var gizmo = new List<(TkVector3, TkVector3)>();
+            var yellow = new TkVector3(1f, 0.85f, 0.1f);
+            float r = size * 0.28f;
+            // Ring in the plane perpendicular to the tilt axis (XZ for Y-tilt, YZ for X-tilt).
+            for (int i = 0; i <= 32; i++)
+            {
+                float a = MathF.Tau * i / 32f;
+                var pt = axisX
+                    ? new TkVector3(c.X, c.Y + r * MathF.Cos(a), c.Z + r * MathF.Sin(a))
+                    : new TkVector3(c.X + r * MathF.Cos(a), c.Y, c.Z + r * MathF.Sin(a));
+                gizmo.Add((pt, yellow));
+            }
+            // Height arrow: ring → up spike → down spike (drawn within the same strip).
+            float ah = size * 0.38f;
+            gizmo.Add((c, yellow));
+            gizmo.Add((c + new TkVector3(0, 0, ah), yellow));
+            gizmo.Add((c + new TkVector3(0, 0, -ah), yellow));
+            gizmo.Add((c, yellow));
+            _renderer.SetGuidePlaneGizmo(gizmo);
+        }
+        else
+            _renderer.SetGuidePlaneGizmo([]);
+
+        // Spine from the sliced toolpath: layer centres coloured by wedge distortion.
+        // Rebuilt only when the toolpath or its pose changes — this runs per frame.
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            _spineCachedToolpath = null;
+            _renderer.SetMultiPlanarSpine([]);
+            return;
+        }
+        if (ReferenceEquals(pair.Value, _spineCachedToolpath)
+            && pair.Key.WorldTransform == _spineCachedWorld)
+            return;
+        _spineCachedToolpath = pair.Value;
+        _spineCachedWorld    = pair.Key.WorldTransform;
+        _toolpathOriginByNode.TryGetValue(pair.Key, out var origin);
+        var wt = pair.Key.WorldTransform;
+        var spine = new List<(TkVector3 Pos, TkVector3 Color)>(pair.Value.Layers.Count);
+        foreach (var layer in pair.Value.Layers)
+        {
+            float minS = float.MaxValue, maxS = float.MinValue;
+            var sum = System.Numerics.Vector3.Zero;
+            int cnt = 0;
+            foreach (var m in layer.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsWipe) continue;
+                sum += (m.From + m.To) * 0.5f;
+                cnt++;
+                if (m.HeightScale < minS) minS = m.HeightScale;
+                if (m.HeightScale > maxS) maxS = m.HeightScale;
+            }
+            if (cnt == 0) continue;
+            var centroid = sum / cnt;
+            var world = TransformTk(new TkVector3(
+                centroid.X - origin.X, centroid.Y - origin.Y, centroid.Z - origin.Z), wt);
+
+            // Distortion 0…1: thin side approaching the 0.25 crossing clamp, or thick
+            // side approaching the 3× gap clamp.
+            float thin  = Math.Clamp((1f - minS) / 0.75f, 0f, 1f);
+            float thick = Math.Clamp((maxS - 1f) / 2f, 0f, 1f);
+            float d = MathF.Max(thin, thick);
+            var color = d < 0.5f
+                ? TkVector3.Lerp(new TkVector3(0.15f, 0.85f, 0.25f), new TkVector3(1f, 0.85f, 0.1f), d * 2f)
+                : TkVector3.Lerp(new TkVector3(1f, 0.85f, 0.1f), new TkVector3(1f, 0.15f, 0.1f), (d - 0.5f) * 2f);
+            spine.Add((world, color));
+        }
+        _renderer.SetMultiPlanarSpine(spine);
+    }
+
+    private void ClearMultiPlanarOverlay()
+    {
+        if (!_guidePlanesActive) return;
+        _guidePlanesActive = false;
+        _guidePlaneSelected = -1;
+        _guidePlaneRows.Clear();
+        _renderer.SetGuidePlanes([], 0f);
+        _renderer.SetMultiPlanarSpine([]);
+        _renderer.SetGuidePlaneGizmo([]);
+    }
+
+    private static TkVector3 TransformTk(TkVector3 p, TkMatrix4 m) => new(
+        p.X * m.M11 + p.Y * m.M21 + p.Z * m.M31 + m.M41,
+        p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
+        p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
+
+    /// <summary>Ray-tests the guide-plane quads; grabs the nearest for the combined
+    /// rotate (horizontal drag) + height slide (vertical drag) interaction.</summary>
+    private bool TryBeginGuidePlaneDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        if (!_guidePlanesActive || vm.AdditiveSettings is not { } s) return false;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        int best = -1; float bestT = float.MaxValue;
+        for (int k = 0; k < _guidePlaneCenters.Count; k++)
+        {
+            var n = _guidePlaneNormals[k];
+            var c = _guidePlaneCenters[k];
+            float denom = TkVector3.Dot(ray.Direction, n);
+            if (MathF.Abs(denom) < 1e-6f) continue;
+            float t = TkVector3.Dot(c - ray.Origin, n) / denom;
+            if (t <= 0f || t >= bestT) continue;
+            var hit = ray.Origin + ray.Direction * t;
+            var up = MathF.Abs(n.Y) < 0.9f ? TkVector3.UnitY : TkVector3.UnitX;
+            var u = TkVector3.Normalize(TkVector3.Cross(n, up));
+            var v = TkVector3.Cross(n, u);
+            var rel = hit - c;
+            float hu = MathF.Abs(TkVector3.Dot(rel, u));
+            float hv = MathF.Abs(TkVector3.Dot(rel, v));
+            if (hu <= _guidePlaneSize * 0.5f && hv <= _guidePlaneSize * 0.5f)
+            {
+                best = k; bestT = t;
+            }
+        }
+        if (best < 0) return false;
+
+        _guidePlaneSelected = best;
+        _guidePlaneDragging = true;
+        _guidePlaneDragRow  = _guidePlaneRows[best];
+        vm.RealtimeSlicingPaused = true;   // one re-slice on release, not per pixel
+        // No GL calls here (UI thread) — the per-frame overlay pass redraws.
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    private void UpdateGuidePlaneDrag(ViewportViewModel vm, float deltaX, float deltaY)
+    {
+        if (!_guidePlaneDragging || _guidePlaneDragRow is not { } row) return;
+        row.AngleDeg  += deltaX * 0.2;        // horizontal → rotate
+        row.HeightPct -= deltaY * 0.12;       // vertical → slide the plane up/down
+        GlCanvas.RequestNextFrameRendering();  // overlay refreshes on the GL thread
+    }
+
+    private void FinishGuidePlaneDrag(ViewportViewModel vm)
+    {
+        if (!_guidePlaneDragging) return;
+        _guidePlaneDragging = false;
+        _guidePlaneDragRow  = null;
+        vm.RealtimeSlicingPaused = false;   // fires the deferred re-slice
+        GlCanvas.RequestNextFrameRendering();
+    }
+
 
     private void FocusSelected()
     {

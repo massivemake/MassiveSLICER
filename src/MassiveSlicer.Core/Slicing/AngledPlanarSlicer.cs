@@ -147,22 +147,38 @@ public static class AngledPlanarSlicer
 
         float cx = (xMin + xMax) * 0.5f;
         float cy = (yMin + yMax) * 0.5f;
-        // Tilt is about Y, so thickness varies along X: the lever arm is the part's
-        // largest X reach from the anchor axis.
-        float lever = MathF.Max(MathF.Max(xMax - cx, cx - xMin), 1f);
+        bool axisX = settings.MultiPlanarAxisX;
+        // Thickness varies along the lean direction: X for tilt-about-Y, Y for
+        // tilt-about-X — the lever arm is the part's largest reach on that axis.
+        float lever = axisX
+            ? MathF.Max(MathF.Max(yMax - cy, cy - yMin), 1f)
+            : MathF.Max(MathF.Max(xMax - cx, cx - xMin), 1f);
 
         float layerH = MathF.Max(settings.LayerHeight, 0.1f);
-        float t0 = settings.MultiPlanarBaseDeg * MathF.PI / 180f;
-        float tm = settings.MultiPlanarMidDeg  * MathF.PI / 180f;
-        float t1 = settings.MultiPlanarTopDeg  * MathF.PI / 180f;
+
+        // Guide stack, sorted by height; constant tilt outside the ends.
+        var guides = (settings.MultiPlanarPlanes is { Count: >= 2 } g
+                ? g.OrderBy(pl => pl.HeightPct).ToArray()
+                : [new MultiPlanarPlane(0f, 0f), new MultiPlanarPlane(100f, 30f)]);
 
         // Planes must not cross inside the part: thickness at the far edge is
         // layerH − Δθ·lever, so cap the per-layer rotation at 75% of the nominal.
         float maxStepRad = 0.75f * layerH / lever;
 
-        float ThetaAt(float f) => f <= 0.5f
-            ? t0 + (tm - t0) * (f * 2f)
-            : tm + (t1 - tm) * ((f - 0.5f) * 2f);
+        float ThetaAt(float f)
+        {
+            float pct = f * 100f;
+            if (pct <= guides[0].HeightPct) return guides[0].AngleDeg * MathF.PI / 180f;
+            for (int k = 1; k < guides.Length; k++)
+            {
+                if (pct > guides[k].HeightPct) continue;
+                float span = MathF.Max(guides[k].HeightPct - guides[k - 1].HeightPct, 1e-3f);
+                float t = (pct - guides[k - 1].HeightPct) / span;
+                float a = guides[k - 1].AngleDeg + (guides[k].AngleDeg - guides[k - 1].AngleDeg) * t;
+                return a * MathF.PI / 180f;
+            }
+            return guides[^1].AngleDeg * MathF.PI / 180f;
+        }
 
         var toolpath  = new Toolpath();
         var prevTracks = new List<ContourTrack>();
@@ -183,13 +199,15 @@ public static class AngledPlanarSlicer
             float f = Math.Clamp((h - zMin) / (zMax - zMin), 0f, 1f);
             float theta = Math.Clamp(ThetaAt(f), thetaPrev - maxStepRad, thetaPrev + maxStepRad);
 
-            var normal = Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
+            var normal = axisX
+                ? Vector3.Normalize(new Vector3(0f, -MathF.Sin(theta), MathF.Cos(theta)))
+                : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
             var anchor = new Vector3(cx, cy, h);
             float planeD = Vector3.Dot(anchor, normal);
             var origin = normal * planeD;
 
-            var worldY = new Vector3(0f, 1f, 0f);
-            var u = Vector3.Normalize(Vector3.Cross(worldY, normal));
+            var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
+            var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
             var v = Vector3.Cross(normal, u);
 
             var sd3d = new Vector3(sd.X, sd.Y, 0f);

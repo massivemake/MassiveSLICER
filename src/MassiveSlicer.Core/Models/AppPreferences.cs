@@ -178,14 +178,12 @@ public sealed class AppPreferences
     /// <summary>Lightning Bridge: sacrificial external fins under outward overhangs.</summary>
     public bool LightningExteriorOverhangs { get; set; }
 
-    /// <summary>Multi-Planar: guide plane tilt (deg) at the part base.</summary>
-    public double MultiPlanarBaseDeg { get; set; } = 0.0;
+    /// <summary>Multi-Planar guide planes as [heightPct, angleDeg] pairs.</summary>
+    public List<double[]> MultiPlanarPlanes { get; set; } =
+        [[0, 0], [50, 15], [100, 30]];
 
-    /// <summary>Multi-Planar: guide plane tilt (deg) at half height.</summary>
-    public double MultiPlanarMidDeg { get; set; } = 15.0;
-
-    /// <summary>Multi-Planar: guide plane tilt (deg) at the part top.</summary>
-    public double MultiPlanarTopDeg { get; set; } = 30.0;
+    /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
+    public bool MultiPlanarAxisX { get; set; }
 
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
