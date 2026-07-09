@@ -28,7 +28,7 @@ public static class LightningGenerator
         float tipLoopRadius,
         Func<Vector2, Vector3>? project = null)
     {
-        var region = LightningPlanner.ToPathsD(fillPolys);
+        var region = LightningPlanner.ToPathsD(fillPolys, beadWidth);
         if (region.Count == 0) return;
 
         // Debug hook: set MSL_LIGHTNING_DUMP to a directory to dump each layer's
