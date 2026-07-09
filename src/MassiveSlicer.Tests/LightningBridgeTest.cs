@@ -230,18 +230,33 @@ public sealed class LightningBridgeTest
         };
         var on = PlanarSlicer.Slice([mesh], onS, null);
 
-        float MaxRadiusBelowFlare(Toolpath tp) => tp.Layers
-            .Where(l => l.Z > 80f && l.Z < 117f)
+        float MaxRadiusInBand(Toolpath tp, float zLo, float zHi) => tp.Layers
+            .Where(l => l.Z > zLo && l.Z < zHi)
             .SelectMany(l => l.Moves.Where(m => m.Kind == MoveKind.Extrude))
             .SelectMany(m => new[] { m.From, m.To })
-            .Max(pnt => new Vector2(pnt.X, pnt.Y).Length());
+            .Select(pnt => new Vector2(pnt.X, pnt.Y).Length())
+            .DefaultIfEmpty(0f)
+            .Max();
 
         // Off: nothing beyond the wall (r=57 inset + half bead of slit rounding).
-        Assert.True(MaxRadiusBelowFlare(off) < 60f,
-            $"external material without the checkbox: r={MaxRadiusBelowFlare(off):0.#}");
+        Assert.True(MaxRadiusInBand(off, 80f, 117f) < 60f,
+            $"external material without the checkbox: r={MaxRadiusInBand(off, 80f, 117f):0.#}");
         // On: fins reach outward well past the wall beneath the flare.
-        Assert.True(MaxRadiusBelowFlare(on) > 66f,
-            $"fins did not grow outward: r={MaxRadiusBelowFlare(on):0.#}");
+        Assert.True(MaxRadiusInBand(on, 80f, 117f) > 66f,
+            $"fins did not grow outward: r={MaxRadiusInBand(on, 80f, 117f):0.#}");
+        // Fins lean at the bead-on-bead limit (bead/2 per layer), so they peel off
+        // the perimeter close under the flare instead of trailing a shallow sail
+        // toward the bed: 18 mm of reach at 3 mm/layer starts the fins at z = 105
+        // (measured); the old 1.73 mm/layer surface-quality lean reached z ≈ 93.
+        float lowestFinZ = on.Layers
+            .Where(l => l.Moves.Any(m => m.Kind == MoveKind.Extrude
+                && MathF.Max(new Vector2(m.From.X, m.From.Y).Length(),
+                             new Vector2(m.To.X, m.To.Y).Length()) > 61f))
+            .Select(l => l.Z)
+            .DefaultIfEmpty(float.MaxValue)
+            .Min();
+        Assert.True(lowestFinZ > 100f,
+            $"fins trail too far below the flare: outward material starts at z={lowestFinZ:0.#}");
 
         // Continuity holds with fins (single island, zero travels).
         foreach (var layer in on.Layers)
