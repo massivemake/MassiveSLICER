@@ -283,6 +283,75 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void DroppedTreeLineageNeverPrintsAboveTheDrop()
+    {
+        // Layer 0: thin strip the slit cuts clean across → neck guard drops the tree.
+        // Layer 1: shorter finger that would emit fine — but its support column died
+        // at layer 0, so the shared dropped-lineage set must silence it too.
+        List<List<Vector2>> strip =
+            [[new(0, 0), new(100, 0), new(100, 20), new(0, 20)]];
+
+        var plan = new MassiveSlicer.Core.Slicing.Lightning.LightningPlan(2);
+        var full = new MassiveSlicer.Core.Slicing.Lightning.LightningTree { Id = 7, Anchor = new(0, 10) };
+        full.Branches.Add(new MassiveSlicer.Core.Slicing.Lightning.LightningBranch(
+            [new Vector2(0, 10), new Vector2(101, 10)]));           // crosses the far wall
+        plan.Layers[0].Trees.Add(full);
+
+        var partial = new MassiveSlicer.Core.Slicing.Lightning.LightningTree { Id = 7, Anchor = new(0, 10) };
+        partial.Branches.Add(new MassiveSlicer.Core.Slicing.Lightning.LightningBranch(
+            [new Vector2(0, 10), new Vector2(50, 10)]));            // healthy mid-region finger
+        plan.Layers[1].Trees.Add(partial);
+
+        var l0 = new ToolpathLayer(0, 3f) { Height = 3f };
+        var l1 = new ToolpathLayer(1, 6f) { Height = 3f };
+        MassiveSlicer.Core.Slicing.Lightning.LightningGenerator.EmitLightning(strip, plan.Layers[0], 3f, l0, Bead, 0f);
+        MassiveSlicer.Core.Slicing.Lightning.LightningGenerator.EmitLightning(strip, plan.Layers[1], 6f, l1, Bead, 0f);
+
+        Assert.Contains(7, plan.Layers[0].DroppedTrees);            // neck guard fired
+
+        // Assert on geometry, not the IsLightning tag: no extrude material may exist
+        // in the strip's interior band the finger walls would occupy (y 7–13,
+        // x 8–45 — the perimeter rectangle never enters it).
+        // Long straight slit walls have vertices only at their ends, so probe the
+        // segment midpoint as well as the endpoints.
+        static bool InBand(float x, float y) => x > 8 && x < 45 && y > 5 && y < 15;
+        static bool FingerMaterial(ToolpathLayer l) => l.Moves.Any(m =>
+            m.Kind == MoveKind.Extrude
+            && (InBand(m.From.X, m.From.Y) || InBand(m.To.X, m.To.Y)
+                || InBand((m.From.X + m.To.X) * 0.5f, (m.From.Y + m.To.Y) * 0.5f)));
+        Assert.False(FingerMaterial(l0), "layer 0 kept the region-splitting finger");
+        Assert.False(FingerMaterial(l1), "layer 1 printed a finger over the dropped column");
+        Assert.Contains(l1.Moves, m => m.Kind == MoveKind.Extrude); // perimeter still prints
+    }
+
+    [Fact]
+    public void AnchorJumpRetiresTheWholeLineage()
+    {
+        // Top layers: a small square shrinking inside a big one → interior demand
+        // roots fingers on the big square's boundary. Bottom layers: the region
+        // teleports 200 mm sideways — the wall under the fingers is gone, so the
+        // whole lineage must vanish from every layer instead of re-anchoring there.
+        List<List<Vector2>> big     = [[new(0, 0), new(60, 0), new(60, 60), new(0, 60)]];
+        List<List<Vector2>> small   = [[new(15, 15), new(45, 15), new(45, 45), new(15, 45)]];
+        List<List<Vector2>> shifted = [[new(200, 0), new(260, 0), new(260, 60), new(200, 60)]];
+
+        var settings = Settings();
+        float[] heights = [LayerH, LayerH, LayerH, LayerH, LayerH, LayerH];
+
+        // Control: continuous wall below — fingers exist under the shrink.
+        var okPlan = MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.Build(
+            [big, big, big, big, small, small], heights, settings);
+        Assert.True(okPlan.Layers[3].Trees.Count > 0, "control: no demand fingers formed");
+
+        // Boundary teleports under the fingers at layers 0–1.
+        var jumpPlan = MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.Build(
+            [shifted, shifted, big, big, small, small], heights, settings);
+        for (int i = 0; i < jumpPlan.Layers.Length; i++)
+            Assert.True(jumpPlan.Layers[i].Trees.Count == 0,
+                $"layer {i} kept {jumpPlan.Layers[i].Trees.Count} tree(s) after the anchor jump");
+    }
+
+    [Fact]
     public void AnchorClassCheckboxesControlWhereFingersRoot()
     {
         // Shrinking square (demand every layer) with a fixed centered hole: with

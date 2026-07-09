@@ -14,20 +14,32 @@ public sealed class LightningPlan
 
     public LightningPlan(int layerCount)
     {
+        // One shared dropped-lineage set: emission runs bottom-up, so a tree the
+        // generator has to drop at some layer (neck/union guard) must also vanish
+        // from every layer above it — otherwise its inherited fingers print in
+        // mid-air over the gap.
+        var dropped = new HashSet<int>();
         Layers = new LightningLayerPlan[layerCount];
         for (int i = 0; i < layerCount; i++)
-            Layers[i] = new LightningLayerPlan();
+            Layers[i] = new LightningLayerPlan { DroppedTrees = dropped };
     }
 }
 
 public sealed class LightningLayerPlan
 {
     public List<LightningTree> Trees { get; } = [];
+
+    /// <summary>Tree ids removed mid-emission — shared across ALL layers of the plan.</summary>
+    public HashSet<int> DroppedTrees { get; init; } = [];
 }
 
 /// <summary>One finger tree rooted on a region boundary.</summary>
 public sealed class LightningTree
 {
+    /// <summary>Stable lineage id — survives per-layer cloning, so one tree can be
+    /// dropped across every layer at once when it loses its footing.</summary>
+    public int Id;
+
     /// <summary>Root point on the region boundary; re-projected every layer.</summary>
     public Vector2 Anchor;
 
@@ -41,7 +53,7 @@ public sealed class LightningTree
 
     public LightningTree Clone()
     {
-        var t = new LightningTree { Anchor = Anchor, External = External };
+        var t = new LightningTree { Id = Id, Anchor = Anchor, External = External };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))
             {
