@@ -175,6 +175,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
+            OnPropertyChanged(nameof(ShowMultiPlanarControls));
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
@@ -186,20 +187,23 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public string[] AvailableMethodNames { get; } =
-        ["Planar", "Angled", "Geodesic (Experimental)", "Curved (Sweep)"];
+        ["Planar", "Angled", "Multi-Planar", "Geodesic (Experimental)", "Curved (Sweep)"];
 
     public string MethodDisplayName
     {
         get => Method switch
         {
-            SliceMethod.Angled   => "Angled",
-            SliceMethod.Geodesic => "Geodesic (Experimental)",
-            SliceMethod.Curved   => "Curved (Sweep)",
-            _                    => "Planar",
+            SliceMethod.Angled      => "Angled",
+            SliceMethod.MultiPlanar => "Multi-Planar",
+            SliceMethod.Geodesic    => "Geodesic (Experimental)",
+            SliceMethod.Curved      => "Curved (Sweep)",
+            _                       => "Planar",
         };
         set => Method = value switch
         {
             "Angled"                  => SliceMethod.Angled,
+            "Multi-Planar"            => SliceMethod.MultiPlanar,
+            "MultiPlanar"             => SliceMethod.MultiPlanar,
             "Geodesic (Experimental)" => SliceMethod.Geodesic,
             "Geodesic"                => SliceMethod.Geodesic,
             "Curved (Sweep)"          => SliceMethod.Curved,
@@ -208,9 +212,34 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         };
     }
 
+    private double _multiPlanarBaseDeg = 0.0;
+    /// <summary>Multi-Planar: plane tilt (deg) at the base of the part.</summary>
+    public double MultiPlanarBaseDeg
+    {
+        get => _multiPlanarBaseDeg;
+        set => SetField(ref _multiPlanarBaseDeg, Math.Clamp(value, -80.0, 80.0));
+    }
+
+    private double _multiPlanarMidDeg = 15.0;
+    /// <summary>Multi-Planar: plane tilt (deg) at half height.</summary>
+    public double MultiPlanarMidDeg
+    {
+        get => _multiPlanarMidDeg;
+        set => SetField(ref _multiPlanarMidDeg, Math.Clamp(value, -80.0, 80.0));
+    }
+
+    private double _multiPlanarTopDeg = 30.0;
+    /// <summary>Multi-Planar: plane tilt (deg) at the top of the part.</summary>
+    public double MultiPlanarTopDeg
+    {
+        get => _multiPlanarTopDeg;
+        set => SetField(ref _multiPlanarTopDeg, Math.Clamp(value, -80.0, 80.0));
+    }
+
     public bool IsCurvedMethod          => Method == SliceMethod.Curved;
     public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
+    public bool ShowMultiPlanarControls => Method == SliceMethod.MultiPlanar;
     public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private bool _disableContourOffset;

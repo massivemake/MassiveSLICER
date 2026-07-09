@@ -27,6 +27,11 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// <summary>Pre-travel filament wipe extrusion segment.</summary>
     public bool  IsWipe { get; init; }
 
+    /// <summary>Local layer thickness relative to the layer's nominal height (1 = nominal).
+    /// Multi-Planar layers are wedges: the plane tilt changes between layers, so thickness
+    /// varies along the path. Scales extrusion RPM in export and bead height in preview.</summary>
+    public float HeightScale { get; init; } = 1f;
+
     /// <summary>Part of a Lightning Bridge support finger (perimeter detour) —
     /// rendered as its own display layer so fingers can be isolated/hidden.</summary>
     public bool IsLightning { get; init; }

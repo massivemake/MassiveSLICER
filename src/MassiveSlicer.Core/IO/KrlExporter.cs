@@ -821,6 +821,8 @@ public static class KrlExporter
         float scale = Math.Max(move.PrintSpeedScale, 1e-6f);
         if (move.IsResumeRamp)
             scale *= Math.Max(move.ResumeRpmScale, 1e-6f);
+        // Multi-Planar wedge layers: flow follows the local thickness.
+        scale *= Math.Max(move.HeightScale, 1e-6f);
         return scale;
     }
 
@@ -831,7 +833,9 @@ public static class KrlExporter
 
         float rpmPercent = s.ExtrusionRpmPercent
             ?? KrlAnout.ComputeRpmPercent(s.BeadWidthMm, s.LayerHeightMm, s.PrintSpeedMps, s.FlowRate);
-        rpmPercent *= Math.Clamp(rpmScale, 0f, 1f);
+        // Thicker-than-nominal moves (Multi-Planar wedges) may demand more than the
+        // nominal RPM — allow it, but never beyond the extruder's 100 %.
+        rpmPercent = Math.Min(rpmPercent * Math.Max(rpmScale, 0f), 100f);
         return KrlAnout.RpmPercentToAnoutText(rpmPercent);
     }
 

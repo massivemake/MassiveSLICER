@@ -255,6 +255,33 @@
                                            TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                             </Grid>
 
+                            <!-- Multi-Planar: three guide-plane angles (base → middle → top) -->
+                            <StackPanel IsVisible="{Binding Additive.ShowMultiPlanarControls}" Spacing="2" Margin="0,2,0,2">
+                                <TextBlock Margin="8,0,8,2" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           Text="The slicing plane's tilt interpolates through three guide angles as the print climbs. Layers become wedges — extrusion RPM follows the local thickness automatically."/>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
+                                    <TextBlock Grid.Column="0" Text="Base (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
+                                               Value="{Binding Additive.MultiPlanarBaseDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                               Text="{Binding Additive.MultiPlanarBaseDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
+                                    <TextBlock Grid.Column="0" Text="Middle (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
+                                               Value="{Binding Additive.MultiPlanarMidDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                               Text="{Binding Additive.MultiPlanarMidDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
+                                    <TextBlock Grid.Column="0" Text="Top (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
+                                               Value="{Binding Additive.MultiPlanarTopDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
+                                               Text="{Binding Additive.MultiPlanarTopDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                </Grid>
+                            </StackPanel>
+
                             <SplitButton Margin="8,4,8,2" HorizontalAlignment="Stretch"
                                          HorizontalContentAlignment="Center"
                                          Content="Auto Calculate Tilt"

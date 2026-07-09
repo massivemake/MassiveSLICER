@@ -282,6 +282,17 @@ public sealed class SliceSettings
     /// (material added outside the part — cut away after printing).</summary>
     public bool LightningExteriorOverhangs { get; init; } = false;
 
+    // ── Multi-Planar slicing (three guide planes: base → middle → top) ───────
+
+    /// <summary>Plane tilt (deg, about Y like <see cref="TiltAngle"/>) at the part's base.</summary>
+    public float MultiPlanarBaseDeg { get; init; } = 0f;
+
+    /// <summary>Plane tilt (deg) at half the part's height.</summary>
+    public float MultiPlanarMidDeg { get; init; } = 15f;
+
+    /// <summary>Plane tilt (deg) at the part's top.</summary>
+    public float MultiPlanarTopDeg { get; init; } = 30f;
+
     // ── Thermomechanical simulation (analytical interlayer cooling) ──────────
 
     /// <summary>Melt temperature at deposition (°C) — hottest extruder zone.</summary>

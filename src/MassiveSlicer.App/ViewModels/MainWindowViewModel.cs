@@ -2825,6 +2825,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningAnchorInterior  = copy.LightningAnchorInterior;
         live.LightningAnchorExterior  = copy.LightningAnchorExterior;
         live.LightningExteriorOverhangs = copy.LightningExteriorOverhangs;
+        live.MultiPlanarBaseDeg = copy.MultiPlanarBaseDeg;
+        live.MultiPlanarMidDeg  = copy.MultiPlanarMidDeg;
+        live.MultiPlanarTopDeg  = copy.MultiPlanarTopDeg;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -2999,6 +3002,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LightningAnchorInterior  = p.LightningAnchorInterior;
         add.LightningAnchorExterior  = p.LightningAnchorExterior;
         add.LightningExteriorOverhangs = p.LightningExteriorOverhangs;
+        add.MultiPlanarBaseDeg = p.MultiPlanarBaseDeg;
+        add.MultiPlanarMidDeg  = p.MultiPlanarMidDeg;
+        add.MultiPlanarTopDeg  = p.MultiPlanarTopDeg;
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -3258,6 +3264,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LightningAnchorInterior  = add.LightningAnchorInterior;
         p.LightningAnchorExterior  = add.LightningAnchorExterior;
         p.LightningExteriorOverhangs = add.LightningExteriorOverhangs;
+        p.MultiPlanarBaseDeg = add.MultiPlanarBaseDeg;
+        p.MultiPlanarMidDeg  = add.MultiPlanarMidDeg;
+        p.MultiPlanarTopDeg  = add.MultiPlanarTopDeg;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;

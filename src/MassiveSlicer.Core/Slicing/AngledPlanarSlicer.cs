@@ -120,6 +120,119 @@ public static class AngledPlanarSlicer
         return toolpath;
     }
 
+    /// <summary>
+    /// Multi-Planar slicing: the cutting plane's tilt interpolates through three guide
+    /// planes — a base angle at the bottom of the part, a middle angle at half height,
+    /// and a top angle at the top — rotating a little between every layer (all tilts
+    /// about Y, like <see cref="SliceSettings.TiltAngle"/>). Because consecutive planes
+    /// are not parallel, each layer is a wedge: per-move <see cref="ToolpathMove.HeightScale"/>
+    /// records the local thickness relative to the nominal layer height so export can
+    /// scale extrusion RPM and the preview can draw the true bead height. The per-layer
+    /// tilt change is clamped so the thin side never drops below a quarter layer.
+    /// </summary>
+    public static Toolpath SliceMultiPlanar(IReadOnlyList<Vector3[]> meshes, SliceSettings settings)
+    {
+        // Bounds and the vertical axis the guide planes anchor to.
+        float xMin = float.MaxValue, xMax = float.MinValue;
+        float yMin = float.MaxValue, yMax = float.MinValue;
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        foreach (var verts in meshes)
+            foreach (var vert in verts)
+            {
+                if (vert.X < xMin) xMin = vert.X; if (vert.X > xMax) xMax = vert.X;
+                if (vert.Y < yMin) yMin = vert.Y; if (vert.Y > yMax) yMax = vert.Y;
+                if (vert.Z < zMin) zMin = vert.Z; if (vert.Z > zMax) zMax = vert.Z;
+            }
+        if (zMax <= zMin) return new Toolpath();
+
+        float cx = (xMin + xMax) * 0.5f;
+        float cy = (yMin + yMax) * 0.5f;
+        // Tilt is about Y, so thickness varies along X: the lever arm is the part's
+        // largest X reach from the anchor axis.
+        float lever = MathF.Max(MathF.Max(xMax - cx, cx - xMin), 1f);
+
+        float layerH = MathF.Max(settings.LayerHeight, 0.1f);
+        float t0 = settings.MultiPlanarBaseDeg * MathF.PI / 180f;
+        float tm = settings.MultiPlanarMidDeg  * MathF.PI / 180f;
+        float t1 = settings.MultiPlanarTopDeg  * MathF.PI / 180f;
+
+        // Planes must not cross inside the part: thickness at the far edge is
+        // layerH − Δθ·lever, so cap the per-layer rotation at 75% of the nominal.
+        float maxStepRad = 0.75f * layerH / lever;
+
+        float ThetaAt(float f) => f <= 0.5f
+            ? t0 + (tm - t0) * (f * 2f)
+            : tm + (t1 - tm) * ((f - 0.5f) * 2f);
+
+        var toolpath  = new Toolpath();
+        var prevTracks = new List<ContourTrack>();
+        int idx = 0;
+
+        var sd = settings.SeamDirection;
+        float sdLen = sd.Length();
+        if (sdLen < 1e-6f) sd = new Vector2(0f, 1f); else sd /= sdLen;
+        float reach = (xMax - xMin + yMax - yMin) + 10f;
+        var seamOriginXY = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
+
+        float h = zMin + settings.FirstLayerHeight;
+        float thetaPrev = ThetaAt(0f);
+        Vector3 nPrev = default; float dPrev = 0f; bool hasPrev = false;
+
+        while (h < zMax - 1e-4f)
+        {
+            float f = Math.Clamp((h - zMin) / (zMax - zMin), 0f, 1f);
+            float theta = Math.Clamp(ThetaAt(f), thetaPrev - maxStepRad, thetaPrev + maxStepRad);
+
+            var normal = Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
+            var anchor = new Vector3(cx, cy, h);
+            float planeD = Vector3.Dot(anchor, normal);
+            var origin = normal * planeD;
+
+            var worldY = new Vector3(0f, 1f, 0f);
+            var u = Vector3.Normalize(Vector3.Cross(worldY, normal));
+            var v = Vector3.Cross(normal, u);
+
+            var sd3d = new Vector3(sd.X, sd.Y, 0f);
+            sd3d -= Vector3.Dot(sd3d, normal) * normal;
+            float sd3dLen = sd3d.Length();
+            if (sd3dLen < 1e-6f) sd3d = u; else sd3d /= sd3dLen;
+            var seamDirLocal    = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
+            var seamOriginLocal = ToLocal(seamOriginXY, normal, planeD, origin, u, v);
+
+            var layer = new ToolpathLayer(idx++, h) { PlaneNormal = normal, Height = layerH };
+
+            bool isLastLayer = h + layerH / MathF.Max(MathF.Cos(theta), 0.2f) >= zMax - 1e-4f;
+            prevTracks = BuildLayer(meshes, normal, planeD, origin, u, v,
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
+                cachedContours: null, lightningPlan: null);
+
+            // Wedge thickness: distance from each move to the PREVIOUS plane, relative
+            // to nominal. First layer sits on the bed at nominal thickness.
+            if (hasPrev && layer.Moves.Count > 0)
+            {
+                for (int mi = 0; mi < layer.Moves.Count; mi++)
+                {
+                    var move = layer.Moves[mi];
+                    if (move.Kind != MoveKind.Extrude) continue;
+                    var mid = (move.From + move.To) * 0.5f;
+                    float thick = MathF.Abs(Vector3.Dot(mid, nPrev) - dPrev);
+                    float scale = Math.Clamp(thick / layerH, 0.25f, 3f);
+                    layer.Moves[mi] = move with { HeightScale = scale };
+                }
+            }
+
+            if (layer.Moves.Count > 0)
+                toolpath.Layers.Add(layer);
+
+            nPrev = normal; dPrev = planeD; hasPrev = true;
+            thetaPrev = theta;
+            // Advance so plane spacing at the anchor axis stays the nominal height.
+            h += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
+        }
+
+        return toolpath;
+    }
+
     /// <summary>Surface mode fills across closed boundary chains only (1 mm closure).</summary>
     private static List<List<Vector2>> FilterFillPolys(List<List<Vector2>> contours, bool surfaceMode)
         => surfaceMode
