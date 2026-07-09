@@ -160,6 +160,15 @@ public sealed class AppPreferences
     public double InfillSpacingMm { get; set; }
     public double InfillAngleDeg { get; set; }
 
+    /// <summary>Lightning Bridge: max unsupported overhang angle (deg).</summary>
+    public double LightningOverhangDeg { get; set; } = 30.0;
+
+    /// <summary>Lightning Bridge: finger root spacing (mm). 0 = auto.</summary>
+    public double LightningBranchSpacingMm { get; set; }
+
+    /// <summary>Lightning Bridge: tip support-pad loop radius (mm). 0 = off.</summary>
+    public double LightningTipLoopRadiusMm { get; set; }
+
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
 

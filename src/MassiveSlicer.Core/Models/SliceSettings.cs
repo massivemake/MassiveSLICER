@@ -256,6 +256,20 @@ public sealed class SliceSettings
     /// </summary>
     public float InfillAngleDeg { get; init; } = 0f;
 
+    // -- Lightning Bridge infill ----------------------------------------------------
+
+    /// <summary>Max unsupported overhang angle for lightning finger growth (degrees).
+    /// Per-layer lateral step = min(layerHeight · tan(angle), 0.5 · BeadWidth).</summary>
+    public float LightningOverhangDeg { get; init; } = 30f;
+
+    /// <summary>Spacing between lightning finger roots along unsupported arcs (mm).
+    /// 0 = auto (4 × BeadWidth).</summary>
+    public float LightningBranchSpacingMm { get; init; } = 0f;
+
+    /// <summary>Radius of the support pad loop at each finger tip (mm). 0 = plain
+    /// rounded tip (one bead wide).</summary>
+    public float LightningTipLoopRadiusMm { get; init; } = 0f;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>

@@ -62,6 +62,28 @@ public static class PlanarSlicer
         var prevTracks   = new List<ContourTrack>();
         ToolpathLayer? prevLayer = null;
 
+        // ── Lightning Bridge pre-pass: contours for every layer first (pass A),
+        //    then the top-down finger plan (pass B). Pass C below reuses the cached
+        //    contours verbatim so plan and geometry cannot drift.
+        List<(List<List<Vector2>> Contours, List<bool> Closed)>? lightningCache = null;
+        Lightning.LightningPlan? lightningPlan = null;
+        if (settings.InfillPattern == InfillPattern.LightningBridge)
+        {
+            bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+            lightningCache = new(zPositions.Length);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(zPositions.Length);
+            var heights = new List<float>(zPositions.Length);
+            for (int zi = 0; zi < zPositions.Length; zi++)
+            {
+                if ((zi & 15) == 0) progress?.Invoke(0.3f * zi / zPositions.Length);
+                var cached = ComputeInsetContours(meshes, zPositions[zi], settings);
+                lightningCache.Add(cached);
+                fillPolysPerLayer.Add(FilterFillPolys(cached.Contours, cached.Closed, surfaceMode));
+                heights.Add(zi == 0 ? zPositions[0] - zMin : zPositions[zi] - zPositions[zi - 1]);
+            }
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+        }
+
         for (int zi = 0; zi < zPositions.Length; zi++)
         {
             if ((zi & 15) == 0) progress?.Invoke(zi / (float)zPositions.Length);
@@ -69,7 +91,9 @@ public static class PlanarSlicer
             float prevZ       = zi == 0 ? zMin : zPositions[zi - 1];
             bool  isLastLayer = zi == zPositions.Length - 1;
             var layer         = new ToolpathLayer(idx++, z) { Height = z - prevZ };
-            prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer);
+            prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer,
+                cachedContours: lightningCache?[zi],
+                lightningPlan:  lightningPlan?.Layers[zi]);
 
             if (layer.Moves.Count > 0)
             {
@@ -125,14 +149,48 @@ public static class PlanarSlicer
         Vector2 seamDir,
         List<ContourTrack> prevTracks,
         ToolpathLayer layer,
-        bool isLastLayer = false)
+        bool isLastLayer = false,
+        (List<List<Vector2>> Contours, List<bool> Closed)? cachedContours = null,
+        Lightning.LightningLayerPlan? lightningPlan = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
-        // ── Stage 1: raw intersection segments ───────────────────────────────
-        var normalLookup = settings.OverhangOrientation
-            ? new List<(Vector2 pos, Vector3 normal)>()
-            : null;
+        List<List<Vector2>> insetContours;
+        List<bool> insetClosed;
+        List<(Vector2 pos, Vector3 normal)>? normalLookup = null;
+
+        if (cachedContours is { } cc)
+        {
+            // Lightning pre-pass already computed this layer's contours — reuse them
+            // verbatim so the plan and the emitted geometry can never drift apart.
+            (insetContours, insetClosed) = cc;
+        }
+        else
+        {
+            normalLookup = settings.OverhangOrientation
+                ? new List<(Vector2 pos, Vector3 normal)>()
+                : null;
+            (insetContours, insetClosed) = ComputeInsetContours(meshes, z, settings, normalLookup);
+        }
+        if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
+            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan);
+    }
+
+    /// <summary>
+    /// Stages 1–3 of layer construction: mesh∩plane segments → chained contours →
+    /// nesting/orientation/offset. Extracted so the Lightning pre-pass can compute
+    /// (and cache) every layer's contours before any moves are emitted.
+    /// </summary>
+    private static (List<List<Vector2>> Contours, List<bool> Closed) ComputeInsetContours(
+        IReadOnlyList<Vector3[]> meshes,
+        float z,
+        SliceSettings settings,
+        List<(Vector2 pos, Vector3 normal)>? normalLookup = null)
+    {
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+        var empty = (new List<List<Vector2>>(), new List<bool>());
 
         var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
         foreach (var verts in meshes)
@@ -142,7 +200,7 @@ public static class PlanarSlicer
             CollectSegments(verts, z, segs, normalLookup, surfaceMode && settings.OverhangOrientation);
             if (segs.Count > 0) perMeshSegs.Add(segs);
         }
-        if (perMeshSegs.Count == 0) return new List<ContourTrack>();
+        if (perMeshSegs.Count == 0) return empty;
 
         // ── Stage 2: chain by endpoint proximity (per mesh) ─────────────────
         // Adjacent segments from a manifold mesh share an endpoint to floating-point
@@ -152,8 +210,8 @@ public static class PlanarSlicer
         foreach (var segs in perMeshSegs)
             rawContours.AddRange(ChainByProximity(segs));
 
-        // ── Stage 3: nesting depth + contour offset + seam ───────────────────
-        if (rawContours.Count == 0) return new List<ContourTrack>();
+        // ── Stage 3: nesting depth + contour offset ──────────────────────────
+        if (rawContours.Count == 0) return empty;
 
         // Determine nesting depth via point-in-polygon so outer (even depth) and
         // hole (odd depth) contours can be distinguished, then orient and offset each.
@@ -227,21 +285,24 @@ public static class PlanarSlicer
                 }
             }
         }
-        if (insetContours.Count == 0) return new List<ContourTrack>();
+        return (insetContours, insetClosed);
+    }
+
+    private static List<ContourTrack> BuildLayerBody(
+        SliceSettings settings, ToolpathLayer layer, float z, bool isLastLayer,
+        List<List<Vector2>> insetContours, List<bool> insetClosed,
+        List<(Vector2 pos, Vector3 normal)>? normalLookup,
+        Vector2 seamOrigin, Vector2 seamDir, List<ContourTrack> prevTracks,
+        Lightning.LightningLayerPlan? lightningPlan)
+    {
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Surface mode fills across CLOSED boundary chains (open chains can't bound
         // a region, so layers without any closed chain keep their boundary paths).
         if (settings.InfillPattern != InfillPattern.None)
         {
-            List<List<Vector2>> fillPolys;
-            if (surfaceMode)
-            {
-                fillPolys = new List<List<Vector2>>();
-                for (int ci = 0; ci < insetContours.Count; ci++)
-                    if (insetClosed[ci]) fillPolys.Add(insetContours[ci]);
-            }
-            else fillPolys = insetContours;
+            var fillPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
 
             if (fillPolys.Count > 0)
             {
@@ -256,7 +317,10 @@ public static class PlanarSlicer
                 float spacing = settings.InfillSpacingMm > 0f
                     ? settings.InfillSpacingMm
                     : settings.BeadWidth;
-                if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                if (settings.InfillPattern == InfillPattern.LightningBridge)
+                    Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
+                        settings.BeadWidth, settings.LightningTipLoopRadiusMm);
+                else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                     InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer,
                                                   insetStepMm: settings.BeadWidth);
                 else
@@ -282,6 +346,17 @@ public static class PlanarSlicer
 
         ContourSeamPlanner.EmitOptimizedContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
         return tracks;
+    }
+
+    /// <summary>Surface mode fills across CLOSED boundary chains only.</summary>
+    private static List<List<Vector2>> FilterFillPolys(
+        List<List<Vector2>> contours, List<bool> closed, bool surfaceMode)
+    {
+        if (!surfaceMode) return contours;
+        var polys = new List<List<Vector2>>();
+        for (int ci = 0; ci < contours.Count; ci++)
+            if (closed[ci]) polys.Add(contours[ci]);
+        return polys;
     }
 
     // -- Intersection / segment collection -------------------------------------
