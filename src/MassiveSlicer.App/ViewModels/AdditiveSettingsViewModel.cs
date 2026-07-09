@@ -810,6 +810,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _lightningAnchorExterior, value);
     }
 
+    private bool _lightningExteriorOverhangs;
+    /// <summary>Grow sacrificial external fins under outward overhangs (cut away later).</summary>
+    public bool LightningExteriorOverhangs
+    {
+        get => _lightningExteriorOverhangs;
+        set => SetField(ref _lightningExteriorOverhangs, value);
+    }
+
     private double _infillSpacingMm = 0.0;
 
     /// <summary>Centre-to-centre infill line spacing in mm. 0 = use bead width.</summary>

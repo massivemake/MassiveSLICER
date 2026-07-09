@@ -2736,6 +2736,7 @@ public partial class ViewportView : UserControl
             LightningTipLoopRadiusMm = (float)s.LightningTipLoopRadiusMm,
             LightningAnchorInterior  = s.LightningAnchorInterior,
             LightningAnchorExterior  = s.LightningAnchorExterior,
+            LightningExteriorOverhangs = s.LightningExteriorOverhangs,
             ZHopMm          = (float)s.ZHopMm,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -3565,6 +3566,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningTipLoopRadiusMm),
         nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
         nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
+        nameof(AdditiveSettingsViewModel.LightningExteriorOverhangs),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),

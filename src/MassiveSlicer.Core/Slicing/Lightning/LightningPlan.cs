@@ -31,13 +31,17 @@ public sealed class LightningTree
     /// <summary>Root point on the region boundary; re-projected every layer.</summary>
     public Vector2 Anchor;
 
+    /// <summary>External support fin: the slit is UNIONED outside the part instead of
+    /// subtracted from it (sacrificial support under outward overhangs).</summary>
+    public bool External;
+
     /// <summary>Branch 0 is the trunk (starts at <see cref="Anchor"/>); later branches
     /// attach to an earlier branch's node (tree merging).</summary>
     public List<LightningBranch> Branches { get; } = [];
 
     public LightningTree Clone()
     {
-        var t = new LightningTree { Anchor = Anchor };
+        var t = new LightningTree { Anchor = Anchor, External = External };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))
             {

@@ -278,6 +278,10 @@ public sealed class SliceSettings
     /// the outside surface).</summary>
     public bool LightningAnchorExterior { get; init; } = true;
 
+    /// <summary>Grow sacrificial external support fins under OUTWARD overhangs
+    /// (material added outside the part — cut away after printing).</summary>
+    public bool LightningExteriorOverhangs { get; init; } = false;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>

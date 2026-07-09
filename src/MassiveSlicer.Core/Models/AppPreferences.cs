@@ -175,6 +175,9 @@ public sealed class AppPreferences
     /// <summary>Lightning Bridge: root fingers on the outer perimeter.</summary>
     public bool LightningAnchorExterior { get; set; } = true;
 
+    /// <summary>Lightning Bridge: sacrificial external fins under outward overhangs.</summary>
+    public bool LightningExteriorOverhangs { get; set; }
+
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
 

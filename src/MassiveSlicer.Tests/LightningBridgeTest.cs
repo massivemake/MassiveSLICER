@@ -214,6 +214,60 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void ExteriorOverhangCheckboxGrowsSacrificialFins()
+    {
+        // Cylinder flaring OUTWARD near the top (r 60 → 90 over one layer's height —
+        // far beyond the support radius). Off: skipped as unsupportable. On:
+        // sacrificial fins grow outside the wall beneath the flare.
+        var mesh = Revolve([(60f, 0f), (60f, 117f), (90f, 123f)]);
+
+        var off = PlanarSlicer.Slice([mesh], Settings(), null);
+        var onS = new SliceSettings
+        {
+            LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
+            InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
+            LightningExteriorOverhangs = true,
+        };
+        var on = PlanarSlicer.Slice([mesh], onS, null);
+
+        float MaxRadiusBelowFlare(Toolpath tp) => tp.Layers
+            .Where(l => l.Z > 80f && l.Z < 117f)
+            .SelectMany(l => l.Moves.Where(m => m.Kind == MoveKind.Extrude))
+            .SelectMany(m => new[] { m.From, m.To })
+            .Max(pnt => new Vector2(pnt.X, pnt.Y).Length());
+
+        // Off: nothing beyond the wall (r=57 inset + half bead of slit rounding).
+        Assert.True(MaxRadiusBelowFlare(off) < 60f,
+            $"external material without the checkbox: r={MaxRadiusBelowFlare(off):0.#}");
+        // On: fins reach outward well past the wall beneath the flare.
+        Assert.True(MaxRadiusBelowFlare(on) > 66f,
+            $"fins did not grow outward: r={MaxRadiusBelowFlare(on):0.#}");
+
+        // Continuity holds with fins (single island, zero travels).
+        foreach (var layer in on.Layers)
+            Assert.DoesNotContain(
+                layer.Moves.SkipWhile(m => m.IsLayerChange || m.IsLayerStitch),
+                m => m.Kind == MoveKind.Travel);
+
+        // Every fin layer rests on the fin below (same growth invariant).
+        for (int li = 1; li < on.Layers.Count; li++)
+        {
+            var below = on.Layers[li - 1].Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+            if (below.Count == 0) continue;
+            foreach (var m in on.Layers[li].Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+                var mid = (m.From + m.To) * 0.5f;
+                float best = float.MaxValue;
+                foreach (var b in below)
+                    best = MathF.Min(best, DistToSegment2D(mid, b.From, b.To));
+                Assert.True(best <= MathF.Max(SupportRadius + 0.75f, 4f * Bead * 0.6f),
+                    $"z={on.Layers[li].Z}: fin bead floats {best:0.##} mm");
+            }
+        }
+    }
+
+    [Fact]
     public void AnchorClassCheckboxesControlWhereFingersRoot()
     {
         // Shrinking square (demand every layer) with a fixed centered hole: with
