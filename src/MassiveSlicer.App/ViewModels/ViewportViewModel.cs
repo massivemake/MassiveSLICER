@@ -292,6 +292,14 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showTravelMoves, value);
     }
 
+    private bool _showLightningMoves = true;
+    /// <summary>Lightning Bridge finger segments (orange display layer).</summary>
+    public bool ShowLightningMoves
+    {
+        get => _showLightningMoves;
+        set => SetField(ref _showLightningMoves, value);
+    }
+
     private bool _showSeam = true;
     public bool ShowSeam
     {

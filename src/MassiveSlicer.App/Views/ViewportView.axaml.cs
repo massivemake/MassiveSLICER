@@ -274,6 +274,7 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.PbrMaterial)         or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
+                    nameof(ViewportViewModel.ShowLightningMoves)  or
                     nameof(ViewportViewModel.ShowSeam)               or
                     nameof(ViewportViewModel.ShowBead)               or
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
@@ -869,6 +870,7 @@ public partial class ViewportView : UserControl
             _renderer.CavityWorldDistance     = vm.CavityWorldDistance;
             _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
+            _renderer.ShowLightningMoves = vm.ShowLightningMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
             _renderer.ShowBead          = vm.ShowBead;
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
