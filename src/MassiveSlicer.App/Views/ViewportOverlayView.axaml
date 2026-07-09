@@ -671,9 +671,9 @@
                                 <CheckBox Content="Travel moves" FontSize="11"
                                           IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
                                           ToolTip.Tip="Rapid repositioning moves"/>
-                                <CheckBox Content="Lightning bridges" FontSize="11"
+                                <CheckBox Content="Formbound bridges" FontSize="11"
                                           IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
-                                          ToolTip.Tip="Lightning Bridge support fingers (orange) — uncheck Extrusion lines to isolate them"/>
+                                          ToolTip.Tip="Formbound Bridge support fingers (orange) — uncheck Extrusion lines to isolate them"/>
                                 <CheckBox Content="Seam points" FontSize="11"
                                           IsChecked="{Binding ShowSeam, Mode=TwoWay}"
                                           ToolTip.Tip="Layer seam locations"/>

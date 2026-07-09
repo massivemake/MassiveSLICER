@@ -91,6 +91,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             AppPreferences.LastWorkspacePath is { Length: > 0 } wp
                 ? System.IO.Path.GetFileNameWithoutExtension(wp)
                 : null;
+        Viewport.Erp.FindWorkspaceFiles = FindErpWorkspaceFiles;
+
+        Viewport.Erp.OpenWorkspaceFile  = p => OpenWorkspace(p);
+
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
         Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
         Toolbar.OpenRecentRequested += (_, recentPath) =>
@@ -2550,6 +2554,31 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Lists saved .mass workspaces in the attached project's documents folder,
+    /// newest first — the ERP dock offers them so an existing element's work can be
+    /// loaded and iterated (each new send registers the next rev).</summary>
+    internal IReadOnlyList<(string Path, string Name, string Detail)> FindErpWorkspaceFiles()
+    {
+        try
+        {
+            if (ResolveErpProjectDocsFolder() is not { } docs) return [];
+            return System.IO.Directory.EnumerateFiles(docs, "*.mass", System.IO.SearchOption.TopDirectoryOnly)
+                .Select(f => new System.IO.FileInfo(f))
+                .OrderByDescending(fi => fi.LastWriteTimeUtc)
+                .Take(12)
+                .Select(fi => (
+                    fi.FullName,
+                    System.IO.Path.GetFileNameWithoutExtension(fi.Name),
+                    $"{fi.LastWriteTime:MMM d, HH:mm} · {fi.Length / (1024.0 * 1024.0):0.#} MB"))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[erp] workspace scan failed: {ex.Message}");
+            return [];
+        }
+    }
+
     /// <summary>"yyyy_MMdd - <first model>.mass" (their file convention) for the first
     /// save of a fresh ERP-linked workspace.</summary>
     private string ErpDefaultWorkspaceFileName()
@@ -2603,6 +2632,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             AppPreferences.LastWorkspacePath = path;
             RecordRecentWorkspace(path);
+            Viewport.Erp.RefreshWorkspaceCandidates();
             PreferencesLoader.Save(AppPreferences);
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"

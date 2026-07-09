@@ -2808,7 +2808,8 @@ public partial class ViewportView : UserControl
                 "Grid"            => InfillPattern.Grid,
                 "Triangle"        => InfillPattern.Triangle,
                 "Ghost Mesh Grid" => InfillPattern.GhostMeshGrid,
-                "Lightning Bridge" => InfillPattern.LightningBridge,
+                "Formbound Bridge" => InfillPattern.LightningBridge,
+                "Lightning Bridge" => InfillPattern.LightningBridge,   // legacy name in old .mass/prefs
                 _                 => InfillPattern.None,
             },
             InfillSpacingMm = (float)s.InfillSpacingMm,
