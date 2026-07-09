@@ -190,25 +190,61 @@ public static class AngledPlanarSlicer
         float reach = (xMax - xMin + yMax - yMin) + 10f;
         var seamOriginXY = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
 
-        float h = zMin + settings.FirstLayerHeight;
-        float thetaPrev = ThetaAt(0f);
+        // ── Pre-compute the whole plane march (needed twice for lightning). Frames
+        //    are anchored at the part's central axis: consecutive frames rotate at
+        //    most maxStepRad, so a point's plane-local coordinates drift by at most
+        //    0.75·layerH per layer at the far edge — under the lightning planner's
+        //    support radius, which is what lets its cross-layer propagation work on
+        //    a slowly rotating frame stack.
+        var march = new List<(float H, float Theta, Vector3 Normal, float PlaneD, Vector3 Origin, Vector3 U, Vector3 V)>();
+        {
+            float h0 = zMin + settings.FirstLayerHeight;
+            float thetaWalk = ThetaAt(0f);
+            var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
+            while (h0 < zMax - 1e-4f)
+            {
+                float f = Math.Clamp((h0 - zMin) / (zMax - zMin), 0f, 1f);
+                float theta = Math.Clamp(ThetaAt(f), thetaWalk - maxStepRad, thetaWalk + maxStepRad);
+                var normal = axisX
+                    ? Vector3.Normalize(new Vector3(0f, -MathF.Sin(theta), MathF.Cos(theta)))
+                    : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
+                var anchor = new Vector3(cx, cy, h0);
+                float planeD = Vector3.Dot(anchor, normal);
+                var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
+                var v = Vector3.Cross(normal, u);
+                march.Add((h0, theta, normal, planeD, anchor, u, v));
+                thetaWalk = theta;
+                h0 += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
+            }
+        }
+        if (march.Count == 0) return toolpath;
+
+        // ── Formbound Bridge pre-pass: cache every plane's contours, then build the
+        //    top-down finger plan across the (slowly rotating) frame stack.
+        List<List<List<Vector2>>>? lightningCache = null;
+        Lightning.LightningPlan? lightningPlan = null;
+        if (settings.InfillPattern == InfillPattern.LightningBridge)
+        {
+            bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+            var dedupedMeshes = meshes;
+            lightningCache = new(march.Count);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(march.Count);
+            var heights = new List<float>(march.Count);
+            foreach (var st in march)
+            {
+                var contours = ComputeInsetContours(dedupedMeshes, st.Normal, st.PlaneD, st.Origin, st.U, st.V, settings);
+                lightningCache.Add(contours);
+                fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
+                heights.Add(layerH);
+            }
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+        }
+
         Vector3 nPrev = default; float dPrev = 0f; bool hasPrev = false;
 
-        while (h < zMax - 1e-4f)
+        for (int si = 0; si < march.Count; si++)
         {
-            float f = Math.Clamp((h - zMin) / (zMax - zMin), 0f, 1f);
-            float theta = Math.Clamp(ThetaAt(f), thetaPrev - maxStepRad, thetaPrev + maxStepRad);
-
-            var normal = axisX
-                ? Vector3.Normalize(new Vector3(0f, -MathF.Sin(theta), MathF.Cos(theta)))
-                : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
-            var anchor = new Vector3(cx, cy, h);
-            float planeD = Vector3.Dot(anchor, normal);
-            var origin = normal * planeD;
-
-            var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
-            var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
-            var v = Vector3.Cross(normal, u);
+            var (h, theta, normal, planeD, origin, u, v) = march[si];
 
             var sd3d = new Vector3(sd.X, sd.Y, 0f);
             sd3d -= Vector3.Dot(sd3d, normal) * normal;
@@ -219,10 +255,11 @@ public static class AngledPlanarSlicer
 
             var layer = new ToolpathLayer(idx++, h) { PlaneNormal = normal, Height = layerH };
 
-            bool isLastLayer = h + layerH / MathF.Max(MathF.Cos(theta), 0.2f) >= zMax - 1e-4f;
+            bool isLastLayer = si == march.Count - 1;
             prevTracks = BuildLayer(meshes, normal, planeD, origin, u, v,
                 seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
-                cachedContours: null, lightningPlan: null);
+                cachedContours: lightningCache?[si],
+                lightningPlan:  lightningPlan?.Layers[si]);
 
             // Wedge thickness: distance from each move to the PREVIOUS plane, relative
             // to nominal. First layer sits on the bed at nominal thickness.
@@ -243,9 +280,6 @@ public static class AngledPlanarSlicer
                 toolpath.Layers.Add(layer);
 
             nPrev = normal; dPrev = planeD; hasPrev = true;
-            thetaPrev = theta;
-            // Advance so plane spacing at the anchor axis stays the nominal height.
-            h += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
         }
 
         return toolpath;

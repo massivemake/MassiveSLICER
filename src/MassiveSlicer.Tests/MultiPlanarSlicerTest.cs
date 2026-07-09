@@ -104,6 +104,83 @@ public class MultiPlanarSlicerTest
         Assert.True(TiltDeg(tp.Layers[^1]) > 12f, $"top only {TiltDeg(tp.Layers[^1]):0.#}°");
     }
 
+    /// <summary>Flat-top vessel: cylinder closing to a small cap — the closing top
+    /// demands Formbound Bridge support fingers.</summary>
+    private static Vector3[] FlatTopVessel(int seg = 48)
+    {
+        (float r, float z)[] profile = [(60f, 0f), (60f, 117f), (6f, 123f)];
+        var tris = new List<Vector3>();
+        for (int k = 0; k < profile.Length - 1; k++)
+        {
+            var (r0, z0) = profile[k];
+            var (r1, z1) = profile[k + 1];
+            for (int i = 0; i < seg; i++)
+            {
+                float a0 = MathF.Tau * i / seg, a1 = MathF.Tau * (i + 1) / seg;
+                var p00 = new Vector3(r0 * MathF.Cos(a0), r0 * MathF.Sin(a0), z0);
+                var p01 = new Vector3(r0 * MathF.Cos(a1), r0 * MathF.Sin(a1), z0);
+                var p10 = new Vector3(r1 * MathF.Cos(a0), r1 * MathF.Sin(a0), z1);
+                var p11 = new Vector3(r1 * MathF.Cos(a1), r1 * MathF.Sin(a1), z1);
+                tris.AddRange([p00, p01, p11]);
+                tris.AddRange([p00, p11, p10]);
+                tris.AddRange([new Vector3(0, 0, 0), p01, p00]);
+                tris.AddRange([new Vector3(0, 0, 123f), p10, p11]);
+            }
+        }
+        return [.. tris];
+    }
+
+    [Fact]
+    public void FormboundBridgeGrowsFingersUnderMultiPlanar()
+    {
+        var s = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f,
+            InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true, LightningAnchorExterior = true,
+            MultiPlanarPlanes = [new(0f, 0f), new(50f, 10f), new(100f, 20f)],
+        };
+        var tp = AngledPlanarSlicer.SliceMultiPlanar([FlatTopVessel()], s);
+        Assert.True(tp.Layers.Count > 30, $"only {tp.Layers.Count} layers");
+
+        // Fingers exist under the closing top and are tagged.
+        int lightningMoves = tp.Layers.SelectMany(l => l.Moves).Count(m => m.IsLightning);
+        Assert.True(lightningMoves > 50, $"only {lightningMoves} Formbound moves");
+
+        // Continuity per layer (fingers are perimeter detours, not islands).
+        foreach (var layer in tp.Layers)
+        {
+            int travels = layer.Moves.Count(m =>
+                m.Kind == MoveKind.Travel && !m.IsLayerChange && !m.IsZHop);
+            Assert.True(travels <= 2, $"z={layer.Z:0.#}: {travels} travels");
+        }
+
+        // Support: fingers rest within reach of the previous layer's material.
+        float allowance = MathF.Max(1.74f + 3f + 0.75f, 4f * 6f * 0.6f) + 6.5f;
+        for (int li = 1; li < tp.Layers.Count; li++)
+        {
+            var below = tp.Layers[li - 1].Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+            if (below.Count == 0) continue;
+            foreach (var m in tp.Layers[li].Moves)
+            {
+                if (!m.IsLightning || m.Kind != MoveKind.Extrude) continue;
+                var mid = (m.From + m.To) * 0.5f;
+                float best = float.MaxValue;
+                foreach (var b in below)
+                {
+                    var ab = b.To - b.From;
+                    float len2 = ab.LengthSquared();
+                    float t = len2 < 1e-9f ? 0f : Math.Clamp(Vector3.Dot(mid - b.From, ab) / len2, 0f, 1f);
+                    float d = (mid - (b.From + ab * t)).Length();
+                    if (d < best) best = d;
+                    if (best < allowance) break;
+                }
+                Assert.True(best <= allowance,
+                    $"floating finger at z={tp.Layers[li].Z:0.#}: {best:0.##} mm");
+            }
+        }
+    }
+
     [Fact]
     public void ConsecutivePlanesNeverCrossInsideThePart()
     {
