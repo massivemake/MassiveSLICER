@@ -44,7 +44,7 @@ public static class LightningPlanner
 
         var regions = new PathsD[n];
         for (int i = 0; i < n; i++)
-            regions[i] = ToPathsD(fillPolysPerLayer[i]);
+            regions[i] = ToPathsD(fillPolysPerLayer[i], bead);
 
         for (int i = n - 2; i >= 0; i--)
         {
@@ -365,7 +365,7 @@ public static class LightningPlanner
 
     // -- Region geometry helpers ---------------------------------------------------
 
-    internal static PathsD ToPathsD(List<List<Vector2>> polys)
+    internal static PathsD ToPathsD(List<List<Vector2>> polys, float beadWidth = 0f)
     {
         // Real-world meshes are often double-shelled (every surface duplicated by the
         // CAD export), which slices every contour twice with arbitrary windings. A raw
@@ -382,6 +382,7 @@ public static class LightningPlanner
             foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
 
             double area = Math.Abs(Clipper.Area(path));
+
             var c = PathCentroid(path);
             bool dup = false;
             for (int i = 0; i < kept.Count && !dup; i++)
@@ -401,8 +402,19 @@ public static class LightningPlanner
         // cavity is exactly their overlap and must be a hole, where a NonZero union
         // would fill it and erase its walls from the toolpath.
         var paths = new PathsD(kept);
-        return Clipper.Union(paths, FillRule.EvenOdd);
+        var region = Clipper.Union(paths, FillRule.EvenOdd);
+
+        // Parity punches a small hole wherever tangent-band junk fragments overlap
+        // the wall — each one otherwise emits a stub loop (a diamond-lattice artifact
+        // in the bead preview). A bead physically fuses any opening smaller than a
+        // couple of bead widths shut, so drop sub-(2×bead)² holes. Material is only
+        // ever ADDED by this, never removed.
+        if (beadWidth > 0f)
+            region.RemoveAll(path => Clipper.Area(path) < 0
+                && Math.Abs(Clipper.Area(path)) < 4.0 * beadWidth * beadWidth);
+        return region;
     }
+
 
     private static double Sq(double v) => v * v;
 
