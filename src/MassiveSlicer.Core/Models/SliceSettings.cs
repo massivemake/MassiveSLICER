@@ -270,6 +270,14 @@ public sealed class SliceSettings
     /// rounded tip (one bead wide).</summary>
     public float LightningTipLoopRadiusMm { get; init; } = 0f;
 
+    /// <summary>Allow fingers to anchor on interior boundaries (holes / inner walls —
+    /// notches stay hidden inside the part).</summary>
+    public bool LightningAnchorInterior { get; init; } = true;
+
+    /// <summary>Allow fingers to anchor on the outer perimeter (notches visible on
+    /// the outside surface).</summary>
+    public bool LightningAnchorExterior { get; init; } = true;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>

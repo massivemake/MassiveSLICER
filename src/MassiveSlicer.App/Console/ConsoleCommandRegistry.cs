@@ -548,10 +548,21 @@ public sealed class ConsoleCommandRegistry
             Name = "select",
             Aliases = ["sel"],
             Description = "Select a content object by name (drives the outliner selection path)",
-            Usage = "select <name>",
+            Usage = "select <name> [--toolpath]",
             Execute = (ctx, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: select <name>  (run `objects` to list)"); return; }
+                if (args.EndsWith("--toolpath", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = args[..^"--toolpath".Length].Trim();
+                    var item = ctx.Main.Viewport.GetUserModelItems()
+                        .FirstOrDefault(m => m.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+                    var tp = item?.Children.FirstOrDefault(c => c.IsToolpath);
+                    if (tp is null) { ctx.LogError($"[select] no toolpath under '{name}'"); return; }
+                    ctx.Main.Viewport.ForceSelectNode?.Invoke(tp.Node);
+                    ctx.Log($"[select] toolpath of \"{item!.Name}\" selected.");
+                    return;
+                }
                 ctx.Log(ctx.Main.Viewport.SelectByName(args));
             },
         });

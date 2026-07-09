@@ -567,9 +567,11 @@ public partial class ViewportView : UserControl
         vm.OnSelectionTranslated = (x, y, z) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
+            var old = node.LocalTransform;
             var lt = node.LocalTransform;
             lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
             node.LocalTransform = lt;
+            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Move");
@@ -577,6 +579,7 @@ public partial class ViewportView : UserControl
         vm.OnSelectionRotated = (a, b, c) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
+            var old  = node.LocalTransform;
             var lt   = node.LocalTransform;
             float sX = lt.Row0.Xyz.Length;
             float sY = lt.Row1.Xyz.Length;
@@ -586,6 +589,7 @@ public partial class ViewportView : UserControl
             lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
             lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
             node.LocalTransform = lt;
+            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Rotate");
@@ -2238,6 +2242,7 @@ public partial class ViewportView : UserControl
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
                 if (DataContext is ViewportViewModel vmGz2)
@@ -2729,6 +2734,8 @@ public partial class ViewportView : UserControl
             LightningOverhangDeg     = (float)s.LightningOverhangDeg,
             LightningBranchSpacingMm = (float)s.LightningBranchSpacingMm,
             LightningTipLoopRadiusMm = (float)s.LightningTipLoopRadiusMm,
+            LightningAnchorInterior  = s.LightningAnchorInterior,
+            LightningAnchorExterior  = s.LightningAnchorExterior,
             ZHopMm          = (float)s.ZHopMm,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -3556,6 +3563,8 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningOverhangDeg),
         nameof(AdditiveSettingsViewModel.LightningBranchSpacingMm),
         nameof(AdditiveSettingsViewModel.LightningTipLoopRadiusMm),
+        nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
+        nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
@@ -4499,6 +4508,7 @@ public partial class ViewportView : UserControl
         _gizmoDragPlaneNormal  = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
         _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
         _gizmoDragInitialLocal = node.LocalTransform;
+        BeginTransformLink(node);
 
         var startRay = _renderer.Camera.GetPickRay(
             (float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y, vpW, vpH);
@@ -4644,6 +4654,7 @@ public partial class ViewportView : UserControl
                 KbScale(node, dx, vpW);
                 break;
         }
+        ApplyTransformLink(node);
 
         if (_toolIsDragging)
             RunIkForToolDrag();
@@ -6444,6 +6455,7 @@ public partial class ViewportView : UserControl
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal = node.LocalTransform;
         _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
+        BeginTransformLink(node);
         BeginToolIkDrag(node);
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
@@ -6501,6 +6513,86 @@ public partial class ViewportView : UserControl
             case GizmoMode.Translate: ProcessTranslateDrag(node, hitWorld); break;
             case GizmoMode.Scale:     ProcessScaleDrag(node, hitWorld);     break;
             case GizmoMode.Rotate:    ProcessRotateDrag(node, hitWorld);    break;
+        }
+        ApplyTransformLink(node);
+    }
+
+    // ── Model ↔ toolpath transform linking ───────────────────────────────────
+    // A model and its toolpath(s) move as one rigid assembly: dragging either one
+    // carries the others along. They are scene-graph siblings with independent
+    // transforms (and different parents on rotary cells), so the link is applied
+    // as a world-space delta re-expressed in each follower's parent frame.
+    private List<(SceneNode Node, Matrix4 InitialWorld, Matrix4 InvParentWorld)>? _transformLinkFollowers;
+    private Matrix4 _transformLinkDraggedInvInitialWorld;
+
+    /// <summary>All nodes rigidly linked to <paramref name="node"/>: for a model, its
+    /// toolpaths; for a toolpath, its model plus sibling toolpaths.</summary>
+    private static List<SceneNode> ResolveLinkedNodes(ViewportViewModel vm, SceneNode node)
+    {
+        var result = new List<SceneNode>();
+        foreach (var item in vm.GetUserModelItems())
+        {
+            var toolpaths = item.Children.Where(c => c.IsToolpath).ToList();
+            bool isModel    = ReferenceEquals(item.Node, node);
+            bool isToolpath = toolpaths.Any(c => ReferenceEquals(c.Node, node));
+            if (!isModel && !isToolpath) continue;
+
+            if (!isModel) result.Add(item.Node);
+            foreach (var c in toolpaths)
+                if (!ReferenceEquals(c.Node, node))
+                    result.Add(c.Node);
+            break;
+        }
+        return result;
+    }
+
+    /// <summary>Captures follower baselines at drag start.</summary>
+    private void BeginTransformLink(SceneNode node)
+    {
+        _transformLinkFollowers = null;
+        if (DataContext is not ViewportViewModel vm) return;
+        var linked = ResolveLinkedNodes(vm, node);
+        if (linked.Count == 0) return;
+
+        Matrix4.Invert(node.WorldTransform, out _transformLinkDraggedInvInitialWorld);
+        var followers = new List<(SceneNode, Matrix4, Matrix4)>(linked.Count);
+        foreach (var ln in linked)
+        {
+            var parentWorld = ln.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(parentWorld, out var invParent);
+            followers.Add((ln, ln.WorldTransform, invParent));
+        }
+        _transformLinkFollowers = followers;
+    }
+
+    /// <summary>Re-poses every follower from the dragged node's current transform.</summary>
+    private void ApplyTransformLink(SceneNode node)
+    {
+        if (_transformLinkFollowers is not { Count: > 0 } followers) return;
+        // Row-vector convention: worldDelta applied on the right.
+        var worldDelta = _transformLinkDraggedInvInitialWorld * node.WorldTransform;
+        foreach (var (fn, initialWorld, invParent) in followers)
+            fn.LocalTransform = initialWorld * worldDelta * invParent;
+    }
+
+    private void EndTransformLink() => _transformLinkFollowers = null;
+
+    /// <summary>One-shot link for typed coordinate edits (no drag session).</summary>
+    private void MirrorTypedTransformDelta(ViewportViewModel vm, SceneNode node, Matrix4 oldLocal)
+    {
+        var linked = ResolveLinkedNodes(vm, node);
+        if (linked.Count == 0) return;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        var oldWorld    = oldLocal * parentWorld;
+        Matrix4.Invert(oldWorld, out var invOldWorld);
+        var worldDelta = invOldWorld * node.WorldTransform;
+
+        foreach (var ln in linked)
+        {
+            var lp = ln.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(lp, out var invLp);
+            ln.LocalTransform = ln.WorldTransform * worldDelta * invLp;
         }
     }
 

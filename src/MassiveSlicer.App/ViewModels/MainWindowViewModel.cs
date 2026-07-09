@@ -2818,6 +2818,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningOverhangDeg     = copy.LightningOverhangDeg;
         live.LightningBranchSpacingMm = copy.LightningBranchSpacingMm;
         live.LightningTipLoopRadiusMm = copy.LightningTipLoopRadiusMm;
+        live.LightningAnchorInterior  = copy.LightningAnchorInterior;
+        live.LightningAnchorExterior  = copy.LightningAnchorExterior;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -2989,6 +2991,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LightningOverhangDeg     = p.LightningOverhangDeg;
         add.LightningBranchSpacingMm = p.LightningBranchSpacingMm;
         add.LightningTipLoopRadiusMm = p.LightningTipLoopRadiusMm;
+        add.LightningAnchorInterior  = p.LightningAnchorInterior;
+        add.LightningAnchorExterior  = p.LightningAnchorExterior;
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -3245,6 +3249,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LightningOverhangDeg     = add.LightningOverhangDeg;
         p.LightningBranchSpacingMm = add.LightningBranchSpacingMm;
         p.LightningTipLoopRadiusMm = add.LightningTipLoopRadiusMm;
+        p.LightningAnchorInterior  = add.LightningAnchorInterior;
+        p.LightningAnchorExterior  = add.LightningAnchorExterior;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;

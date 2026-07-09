@@ -169,6 +169,12 @@ public sealed class AppPreferences
     /// <summary>Lightning Bridge: tip support-pad loop radius (mm). 0 = off.</summary>
     public double LightningTipLoopRadiusMm { get; set; }
 
+    /// <summary>Lightning Bridge: root fingers on interior boundaries (hidden notches).</summary>
+    public bool LightningAnchorInterior { get; set; } = true;
+
+    /// <summary>Lightning Bridge: root fingers on the outer perimeter.</summary>
+    public bool LightningAnchorExterior { get; set; } = true;
+
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
 
