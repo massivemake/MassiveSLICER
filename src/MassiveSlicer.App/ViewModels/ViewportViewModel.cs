@@ -1345,6 +1345,14 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _hasSelection, value);
     }
 
+    private bool _showMultiPlanarPlanes = true;
+    /// <summary>Viewport toggle: show/hide the Multi-Planar guide plane quads.</summary>
+    public bool ShowMultiPlanarPlanes
+    {
+        get => _showMultiPlanarPlanes;
+        set { if (SetField(ref _showMultiPlanarPlanes, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _isDevMode;
 
     /// <summary>When true, cell environment props (bed, stands, docks) can be picked and edited.</summary>

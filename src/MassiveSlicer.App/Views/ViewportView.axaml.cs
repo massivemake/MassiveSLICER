@@ -6733,13 +6733,15 @@ public partial class ViewportView : UserControl
             _guidePlaneRows.Add(row);
         }
         _guidePlaneSize = size;
-        _guidePlanesActive = true;
         if (_guidePlaneSelected >= planes.Count) _guidePlaneSelected = -1;
-        _renderer.SetGuidePlanes(planes, size, _guidePlaneSelected);
+        // Viewport toggle: hide the quads (and the drag hit-testing with them) while
+        // keeping the distortion spine visible.
+        _guidePlanesActive = vm.ShowMultiPlanarPlanes;
+        _renderer.SetGuidePlanes(_guidePlanesActive ? planes : [], size, _guidePlaneSelected);
 
         // Combined rotate+translate affordance on the selected plane: a rotation ring
         // about the tilt axis plus a vertical height arrow, drawn as one polyline.
-        if (_guidePlaneSelected >= 0)
+        if (_guidePlaneSelected >= 0 && _guidePlanesActive)
         {
             var c = _guidePlaneCenters[_guidePlaneSelected];
             var gizmo = new List<(TkVector3, TkVector3)>();
