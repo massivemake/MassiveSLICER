@@ -405,6 +405,7 @@ public sealed class ErpViewModel : ViewModelBase
         OnPropertyChanged(nameof(AttachmentSummary));
         OnPropertyChanged(nameof(ToggleLabel));
         NotifySectionVisibility();
+        RefreshWorkspaceCandidates();
     }
 
     /// <summary>Workspace open: restore the persisted attachment (works offline).
@@ -646,6 +647,51 @@ public sealed class ErpViewModel : ViewModelBase
         var result = await client.GetQuoteAsync(req, CancellationToken.None);
         if (result.Ok) Post(() => CheckPricingVersion(result.Value!.PricingVersion));
         return result;
+    }
+
+    // -- Project workspaces (iterate on existing elements) ---------------------------
+
+    /// <summary>One saved workspace found in the attached project's documents folder.</summary>
+    public sealed record ErpWorkspaceCandidate(string Path, string Name, string Detail);
+
+    /// <summary>Saved .mass workspaces in the attached project's folder, newest first —
+    /// open one to load the project's elements and keep iterating (new revs).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<ErpWorkspaceCandidate> WorkspaceCandidates { get; } = [];
+
+    public bool HasWorkspaceCandidates => WorkspaceCandidates.Count > 0;
+
+    /// <summary>Wired by MainWindowViewModel: lists .mass files in the attached
+    /// project's documents folder.</summary>
+    public Func<IReadOnlyList<(string Path, string Name, string Detail)>>? FindWorkspaceFiles { get; set; }
+
+    /// <summary>Wired by MainWindowViewModel: opens a workspace file.</summary>
+    public Action<string>? OpenWorkspaceFile { get; set; }
+
+    public RelayCommand<ErpWorkspaceCandidate> OpenWorkspaceCandidateCommand => _openCandidate ??=
+        new RelayCommand<ErpWorkspaceCandidate>(c =>
+        {
+            if (c is null) return;
+            _log?.Invoke($"[erp] opening project workspace: {c.Name}");
+            OpenWorkspaceFile?.Invoke(c.Path);
+        });
+    private RelayCommand<ErpWorkspaceCandidate>? _openCandidate;
+
+    /// <summary>Rescans the attached project's folder for saved workspaces. Call after
+    /// attach / re-attach / a successful save.</summary>
+    public void RefreshWorkspaceCandidates()
+    {
+        Post(() =>
+        {
+            WorkspaceCandidates.Clear();
+            if (_attachment is not null && FindWorkspaceFiles is not null)
+            {
+                foreach (var (path, name, detail) in FindWorkspaceFiles())
+                    WorkspaceCandidates.Add(new ErpWorkspaceCandidate(path, name, detail));
+                if (WorkspaceCandidates.Count > 0)
+                    _log?.Invoke($"[erp] {WorkspaceCandidates.Count} saved workspace(s) on file for {_attachment.Number} — open one from the ERP panel to iterate.");
+            }
+            OnPropertyChanged(nameof(HasWorkspaceCandidates));
+        });
     }
 
     // -- Slice registration --------------------------------------------------------

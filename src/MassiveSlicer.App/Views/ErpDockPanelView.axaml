@@ -1,4 +1,4 @@
-<UserControl xmlns="https://github.com/avaloniaui"
+<UserControl xmlns:vm="using:MassiveSlicer.ViewModels" xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.ErpDockPanelView"
@@ -146,6 +146,27 @@
                 <Button Grid.Column="2" Content="Detach" HorizontalAlignment="Stretch"
                         Command="{Binding DetachCommand}"/>
             </Grid>
+        </StackPanel>
+
+        <!-- Saved workspaces in the attached project's folder — open to iterate an element -->
+        <StackPanel IsVisible="{Binding HasWorkspaceCandidates}" Spacing="2" Margin="0,4,0,0">
+            <TextBlock Text="PROJECT WORKSPACES" FontSize="9" LetterSpacing="1" Opacity="0.6"/>
+            <ItemsControl ItemsSource="{Binding WorkspaceCandidates}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Grid ColumnDefinitions="*,Auto" Margin="0,1">
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="{Binding Name}" FontSize="10" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock Text="{Binding Detail}" FontSize="9" Opacity="0.55"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Open" FontSize="10" Padding="8,2" VerticalAlignment="Center"
+                                    Command="{Binding $parent[ItemsControl].((vm:ErpViewModel)DataContext).OpenWorkspaceCandidateCommand}"
+                                    CommandParameter="{Binding}"
+                                    ToolTip.Tip="Open this saved workspace — its elements, toolpaths and ERP link load into the app so you can iterate (the next send registers a new rev)."/>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
         </StackPanel>
 
         <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="10" Opacity="0.7"/>

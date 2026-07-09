@@ -827,7 +827,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     // -- Infill pattern -------------------------------------------------------
 
-    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Lightning Bridge"];
+    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Formbound Bridge"];
 
     private string _infillPattern = "None";
 
@@ -847,7 +847,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public bool ShowInfillControls => InfillPattern != "None";
 
-    public bool ShowLightningControls => InfillPattern == "Lightning Bridge";
+    public bool ShowLightningControls => InfillPattern is "Formbound Bridge" or "Lightning Bridge";
 
     private double _lightningOverhangDeg = 30.0;
     /// <summary>Max unsupported overhang angle for lightning finger growth (deg).</summary>
