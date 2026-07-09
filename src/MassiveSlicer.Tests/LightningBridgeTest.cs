@@ -325,6 +325,47 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void ConvergingFingersMergeInsteadOfLeavingASliver()
+    {
+        // Two parallel fingers 8 mm apart (bead 6): their slit walls face each other
+        // 2 mm apart — a sliver tongue printed as two nearly-coincident beads.
+        // The generator must merge the near-touching slits into one clean notch.
+        List<List<Vector2>> rect = [[new(0, 0), new(200, 0), new(200, 68), new(0, 68)]];
+
+        var plan = new MassiveSlicer.Core.Slicing.Lightning.LightningPlan(1);
+        var a = new MassiveSlicer.Core.Slicing.Lightning.LightningTree { Id = 1, Anchor = new(0, 30) };
+        a.Branches.Add(new MassiveSlicer.Core.Slicing.Lightning.LightningBranch(
+            [new Vector2(0, 30), new Vector2(120, 30)]));
+        var b = new MassiveSlicer.Core.Slicing.Lightning.LightningTree { Id = 2, Anchor = new(0, 38) };
+        b.Branches.Add(new MassiveSlicer.Core.Slicing.Lightning.LightningBranch(
+            [new Vector2(0, 38), new Vector2(120, 38)]));
+        plan.Layers[0].Trees.Add(a);
+        plan.Layers[0].Trees.Add(b);
+
+        var layer = new ToolpathLayer(0, 3f) { Height = 3f };
+        MassiveSlicer.Core.Slicing.Lightning.LightningGenerator.EmitLightning(
+            rect, plan.Layers[0], 3f, layer, Bead, 0f);
+
+        // Without the merge, the sliver's facing walls run at y = 33 and y = 35
+        // (30+bead/2 / 38−bead/2) between the anchors and the tips.
+        static bool InSliver(float x, float y) => x > 10 && x < 100 && y > 32 && y < 36;
+        Assert.DoesNotContain(layer.Moves, m =>
+            m.Kind == MoveKind.Extrude
+            && (InSliver(m.From.X, m.From.Y) || InSliver(m.To.X, m.To.Y)
+                || InSliver((m.From.X + m.To.X) * 0.5f, (m.From.Y + m.To.Y) * 0.5f)));
+
+        // Still one continuous island: no travels after the layer lead-in.
+        Assert.DoesNotContain(
+            layer.Moves.SkipWhile(m => m.IsLayerChange || m.IsLayerStitch),
+            m => m.Kind == MoveKind.Travel);
+
+        // The merged notch still exists (fingers weren't just dropped).
+        Assert.Contains(layer.Moves, m => m.Kind == MoveKind.Extrude
+            && (m.From.X + m.To.X) * 0.5f > 40
+            && (m.From.Y + m.To.Y) * 0.5f is > 20 and < 48);
+    }
+
+    [Fact]
     public void AnchorJumpRetiresTheWholeLineage()
     {
         // Top layers: a small square shrinking inside a big one → interior demand
