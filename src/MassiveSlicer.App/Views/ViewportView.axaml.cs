@@ -6767,6 +6767,14 @@ public partial class ViewportView : UserControl
         else
             _renderer.SetGuidePlaneGizmo([]);
 
+        // The Planes toggle governs the whole overlay: hide the spine with the quads.
+        if (!vm.ShowMultiPlanarPlanes)
+        {
+            _spineCachedToolpath = null;   // rebuild when re-enabled
+            _renderer.SetMultiPlanarSpine([]);
+            return;
+        }
+
         // Spine from the sliced toolpath: layer centres coloured by wedge distortion.
         // Rebuilt only when the toolpath or its pose changes — this runs per frame.
         var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
@@ -6812,7 +6820,51 @@ public partial class ViewportView : UserControl
                 : TkVector3.Lerp(new TkVector3(1f, 0.85f, 0.1f), new TkVector3(1f, 0.15f, 0.1f), (d - 0.5f) * 2f);
             spine.Add((world, color));
         }
-        _renderer.SetMultiPlanarSpine(spine);
+        _renderer.SetMultiPlanarSpine(SmoothSpine(spine));
+    }
+
+    /// <summary>Denoises the per-layer spine (seam wobble makes raw layer centroids
+    /// zigzag) with a moving average, then interpolates a Catmull-Rom spline through
+    /// the result so the curve renders butter-smooth. Colors ride along.</summary>
+    private static List<(TkVector3 Pos, TkVector3 Color)> SmoothSpine(
+        List<(TkVector3 Pos, TkVector3 Color)> raw)
+    {
+        if (raw.Count < 4) return raw;
+
+        // Moving average (window 7, clamped at the ends).
+        var avg = new List<(TkVector3 Pos, TkVector3 Color)>(raw.Count);
+        const int half = 3;
+        for (int i = 0; i < raw.Count; i++)
+        {
+            var pSum = TkVector3.Zero; var cSum = TkVector3.Zero; int n = 0;
+            for (int k = Math.Max(0, i - half); k <= Math.Min(raw.Count - 1, i + half); k++)
+            {
+                pSum += raw[k].Pos; cSum += raw[k].Color; n++;
+            }
+            avg.Add((pSum / n, cSum / n));
+        }
+
+        // Catmull-Rom through the averaged points, 6 subdivisions per segment.
+        var smooth = new List<(TkVector3 Pos, TkVector3 Color)>((avg.Count - 1) * 6 + 1);
+        for (int i = 0; i < avg.Count - 1; i++)
+        {
+            var p0 = avg[Math.Max(0, i - 1)].Pos;
+            var p1 = avg[i].Pos;
+            var p2 = avg[i + 1].Pos;
+            var p3 = avg[Math.Min(avg.Count - 1, i + 2)].Pos;
+            for (int sdiv = 0; sdiv < 6; sdiv++)
+            {
+                float t = sdiv / 6f, t2 = t * t, t3 = t2 * t;
+                var pos = 0.5f * ((2f * p1)
+                    + (p2 - p0) * t
+                    + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2
+                    + (3f * p1 - p3 - 3f * p2 + p0) * t3);
+                var col = TkVector3.Lerp(avg[i].Color, avg[i + 1].Color, t);
+                smooth.Add((pos, col));
+            }
+        }
+        smooth.Add(avg[^1]);
+        return smooth;
     }
 
     private void ClearMultiPlanarOverlay()
