@@ -136,7 +136,7 @@ public sealed class ToolpathRenderer : IDisposable
         public required NVec3[] CsR;          // m+1 blended right vectors
         public required int[]   SegFirstFlat; // m: first flat move index covered by segment j
         public required int[]   SegLastFlat;  // m: last  flat move index covered by segment j
-        public required float   Hh;           // half layer height
+        public required float[] Hh;           // per-section half layer height (wedge layers vary)
         public required NVec3   Up;           // layer plane normal — beads stack along it (angled prints)
     }
     private List<BeadContour> _beadPlan = [];
@@ -358,7 +358,7 @@ public sealed class ToolpathRenderer : IDisposable
         float rpm = speed
                   * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
                   * (move.IsWipe ? move.WipeRpmScale : 1f)
-                  * MathF.Max(0.1f, layer.Height);
+                  * MathF.Max(0.1f, layer.Height * move.HeightScale);
         return rpm;
     }
 
@@ -582,7 +582,9 @@ public sealed class ToolpathRenderer : IDisposable
     private void BuildBeadPlan(Toolpath toolpath, float layerHeight)
     {
         // Collect raw contours: positions + flat move indices of consecutive cut runs.
-        var raw = new List<(List<NVec3> pts, List<int> flats, float hh, NVec3 up)>();
+        // Half-heights are PER POINT: Multi-Planar wedge layers vary in thickness
+        // along the path (ToolpathMove.HeightScale).
+        var raw = new List<(List<NVec3> pts, List<int> flats, List<float> hhs, NVec3 up)>();
         int flatIdx = 0;
         foreach (var layer in toolpath.Layers)
         {
@@ -594,7 +596,7 @@ public sealed class ToolpathRenderer : IDisposable
             var layerUp = layer.PlaneNormal.LengthSquared() > 1e-6f
                 ? NVec3.Normalize(layer.PlaneNormal)
                 : NVec3.UnitZ;
-            List<NVec3>? pts = null; List<int>? flats = null;
+            List<NVec3>? pts = null; List<int>? flats = null; List<float>? hhs = null;
             foreach (var move in layer.Moves)
             {
                 // Wipes are extrude-kind but deposit a ramping-down dribble, not a
@@ -604,13 +606,14 @@ public sealed class ToolpathRenderer : IDisposable
                 {
                     if (pts is null)
                     {
-                        pts = [move.From]; flats = [];
-                        raw.Add((pts, flats, lhh, layerUp));
+                        pts = [move.From]; flats = []; hhs = [lhh * move.HeightScale];
+                        raw.Add((pts, flats, hhs, layerUp));
                     }
                     pts.Add(move.To);
                     flats!.Add(flatIdx);
+                    hhs!.Add(lhh * move.HeightScale);
                 }
-                else { pts = null; flats = null; }
+                else { pts = null; flats = null; hhs = null; }
                 flatIdx++;
             }
         }
@@ -621,15 +624,16 @@ public sealed class ToolpathRenderer : IDisposable
         {
             _beadPlan = [];
             long totalSegs = 0;
-            foreach (var (pts, flats, hh, contourUp) in raw)
+            foreach (var (pts, flats, hhs, contourUp) in raw)
             {
                 var keep = DecimatePolyline(pts, eps);
                 int m = keep.Count - 1;
                 if (m <= 0) continue;
                 var cPts  = new NVec3[m + 1];
+                var cHh   = new float[m + 1];
                 var first = new int[m];
                 var last  = new int[m];
-                for (int j = 0; j <= m; j++) cPts[j] = pts[keep[j]];
+                for (int j = 0; j <= m; j++) { cPts[j] = pts[keep[j]]; cHh[j] = hhs[keep[j]]; }
                 for (int j = 0; j <  m; j++)
                 {
                     first[j] = flats[keep[j]];
@@ -668,7 +672,7 @@ public sealed class ToolpathRenderer : IDisposable
                 }
                 csR[m] = rights[m - 1];
 
-                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh, Up = contourUp });
+                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = cHh, Up = contourUp });
                 totalSegs += m;
             }
             if (totalSegs <= MaxBeadSegments || attempt >= 4) break;
@@ -750,13 +754,13 @@ public sealed class ToolpathRenderer : IDisposable
         foreach (var c in _beadPlan)
         {
             int   m  = c.Pts.Length;   // cross-sections in this contour (segments + 1)
-            float hh = c.Hh;
             var   up = c.Up;
 
             for (int s = 0; s < m; s++)
             {
                 var r  = c.CsR[s];
                 var pt = c.Pts[s];
+                float hh = c.Hh[s];
                 var (nLb, nRb, nLt, nRt) = SideNormals(r, up);
                 // corner order: 0=lb, 1=rb, 2=lt, 3=rt
                 EmitCorner(verts, ref vi, pt - r*hw - up*hh, nLb);
@@ -901,10 +905,11 @@ public sealed class ToolpathRenderer : IDisposable
 
                 var r  = c.CsR[s];
                 var pt = c.Pts[s];
-                EmitColored(pt - r*hw - up*c.Hh, col);
-                EmitColored(pt + r*hw - up*c.Hh, col);
-                EmitColored(pt - r*hw + up*c.Hh, col);
-                EmitColored(pt + r*hw + up*c.Hh, col);
+                float hh = c.Hh[s];
+                EmitColored(pt - r*hw - up*hh, col);
+                EmitColored(pt + r*hw - up*hh, col);
+                EmitColored(pt - r*hw + up*hh, col);
+                EmitColored(pt + r*hw + up*hh, col);
             }
         }
 

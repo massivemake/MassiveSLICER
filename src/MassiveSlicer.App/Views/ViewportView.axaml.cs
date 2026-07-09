@@ -2814,6 +2814,9 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            MultiPlanarBaseDeg         = (float)s.MultiPlanarBaseDeg,
+            MultiPlanarMidDeg          = (float)s.MultiPlanarMidDeg,
+            MultiPlanarTopDeg          = (float)s.MultiPlanarTopDeg,
             ThermalDepositTempC        = (float)Math.Max(s.Temperature1, Math.Max(s.Temperature2, s.Temperature3)),
             ThermalGlassTransitionC    = ThermalSimulator.GlassTransitionC(s.SelectedPreset?.MaterialType),
             ThermalDensityGmCc         = (float)(s.SelectedPreset?.MaterialDensity ?? 1.05),
@@ -2868,6 +2871,7 @@ public partial class ViewportView : UserControl
                 SliceMethod.Curved   => "Curved (Sweep): computing boundaries and layers…",
                 SliceMethod.Geodesic => "Geodesic: computing surface-distance layers…",
                 SliceMethod.Angled   => "Angled: intersecting tilted planes…",
+                SliceMethod.MultiPlanar => "Multi-Planar: interpolating guide planes…",
                 _                    => "Planar: intersecting layers…",
             });
             Pct(5);
@@ -2875,6 +2879,7 @@ public partial class ViewportView : UserControl
             // Stage weights: slicing dominates wall-clock, so it owns 5→75%.
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.MultiPlanar) tp = AngledPlanarSlicer.SliceMultiPlanar(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
             else                                     tp = PlanarSlicer.Slice(flatMeshes, settings,
@@ -3632,6 +3637,9 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
         nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
         nameof(AdditiveSettingsViewModel.LightningExteriorOverhangs),
+        nameof(AdditiveSettingsViewModel.MultiPlanarBaseDeg),
+        nameof(AdditiveSettingsViewModel.MultiPlanarMidDeg),
+        nameof(AdditiveSettingsViewModel.MultiPlanarTopDeg),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
