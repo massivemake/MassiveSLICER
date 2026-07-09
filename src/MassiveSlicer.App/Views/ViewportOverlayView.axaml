@@ -771,15 +771,43 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Time"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding StatsTime}"   Classes="Readout" FontSize="11"/>
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Material" Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding StatsWeight}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="Cost"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding StatsCost}"   Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
             </Grid>
+            </Border>
+
+            <!-- Cost — collapsed by default so it never shows on screen shares / client demos -->
+            <Border IsVisible="{Binding HasToolpathStats}"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="5"
+                    Opacity="0.88"
+                    Padding="6,4"
+                    HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ToggleButton x:Name="CostReveal"
+                                  Padding="6,2"
+                                  Classes="ToolbarButton"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  ToolTip.Tip="Show/hide the estimated cost. Kept collapsed so pricing never appears on the viewport by default.">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <ia:Icon Value="mdi-currency-usd" FontSize="12"/>
+                            <TextBlock Text="Cost" FontSize="11" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <ia:Icon Value="mdi-chevron-right" FontSize="12"
+                                     IsVisible="{Binding !#CostReveal.IsChecked}"/>
+                            <ia:Icon Value="mdi-chevron-down" FontSize="12"
+                                     IsVisible="{Binding #CostReveal.IsChecked}"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <TextBlock Text="{Binding StatsCost}" Classes="Readout" FontSize="11"
+                               VerticalAlignment="Center" Margin="0,0,4,0"
+                               IsVisible="{Binding #CostReveal.IsChecked}"/>
+                </StackPanel>
             </Border>
         </StackPanel>
 
