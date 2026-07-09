@@ -1169,9 +1169,10 @@
                                 <Border Height="10" CornerRadius="5" ClipToBounds="True">
                                     <Border.Background>
                                         <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                            <GradientStop Color="#D94F3D" Offset="0"/>
-                                            <GradientStop Color="#E8A43B" Offset="0.5"/>
-                                            <GradientStop Color="#3DB87A" Offset="1"/>
+                                            <!-- Matches the viewport Speed/RPM/Thermal gradient (ToolpathRenderer.GradientColor): blue = low/slow/cold → red = high/fast/hot. -->
+                                            <GradientStop Color="#3373FF" Offset="0"/>
+                                            <GradientStop Color="#40D94D" Offset="0.5"/>
+                                            <GradientStop Color="#FF4026" Offset="1"/>
                                         </LinearGradientBrush>
                                     </Border.Background>
                                 </Border>
