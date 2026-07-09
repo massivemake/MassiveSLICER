@@ -636,6 +636,9 @@ public sealed class ToolpathRenderer : IDisposable
                 // Blended cross-section right vectors (same construction as before).
                 var rights = new NVec3[m];
                 var up = contourUp;
+                // Stable in-plane perpendicular of `up` for degenerate segments.
+                var upPerp = NVec3.Normalize(NVec3.Cross(up,
+                    MathF.Abs(up.X) < 0.9f ? NVec3.UnitX : NVec3.UnitY));
                 for (int j = 0; j < m; j++)
                 {
                     var d = cPts[j + 1] - cPts[j];
@@ -643,12 +646,23 @@ public sealed class ToolpathRenderer : IDisposable
                         ? NVec3.Normalize(d)
                         : (j > 0 ? NVec3.Normalize(cPts[j] - cPts[j - 1]) : NVec3.UnitX);
                     var r = NVec3.Cross(fwd, up);
-                    if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwd, NVec3.UnitX);
-                    rights[j] = NVec3.Normalize(r);
+                    // Segments climbing out of the layer plane (layer stitches, ramps)
+                    // run nearly parallel to `up`: the cross product collapses and its
+                    // normalized direction is numeric noise that renders as fat twisted
+                    // tubes. Within ~9° of parallel, carry the previous right instead.
+                    rights[j] = r.LengthSquared() < 0.025f
+                        ? (j > 0 ? rights[j - 1] : upPerp)
+                        : NVec3.Normalize(r);
                 }
                 var csR = new NVec3[m + 1];
                 csR[0] = rights[0];
-                for (int j = 1; j < m; j++) csR[j] = NVec3.Normalize(rights[j - 1] + rights[j]);
+                for (int j = 1; j < m; j++)
+                {
+                    // Opposite rights (180° turnaround) sum to ~zero — normalizing that
+                    // is NaN; keep the incoming segment's frame there.
+                    var sum = rights[j - 1] + rights[j];
+                    csR[j] = sum.LengthSquared() > 1e-6f ? NVec3.Normalize(sum) : rights[j];
+                }
                 csR[m] = rights[m - 1];
 
                 _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh, Up = contourUp });
