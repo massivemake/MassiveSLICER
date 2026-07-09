@@ -2825,9 +2825,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningAnchorInterior  = copy.LightningAnchorInterior;
         live.LightningAnchorExterior  = copy.LightningAnchorExterior;
         live.LightningExteriorOverhangs = copy.LightningExteriorOverhangs;
-        live.MultiPlanarBaseDeg = copy.MultiPlanarBaseDeg;
-        live.MultiPlanarMidDeg  = copy.MultiPlanarMidDeg;
-        live.MultiPlanarTopDeg  = copy.MultiPlanarTopDeg;
+        live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
+        live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -3002,9 +3001,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LightningAnchorInterior  = p.LightningAnchorInterior;
         add.LightningAnchorExterior  = p.LightningAnchorExterior;
         add.LightningExteriorOverhangs = p.LightningExteriorOverhangs;
-        add.MultiPlanarBaseDeg = p.MultiPlanarBaseDeg;
-        add.MultiPlanarMidDeg  = p.MultiPlanarMidDeg;
-        add.MultiPlanarTopDeg  = p.MultiPlanarTopDeg;
+        add.MultiPlanarPlanes.Clear();
+        foreach (var pair in p.MultiPlanarPlanes.Where(a => a is { Length: >= 2 }))
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(pair[0], pair[1]));
+        if (add.MultiPlanarPlanes.Count < 2)
+        {
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(0, 0));
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(100, 30));
+        }
+        add.MultiPlanarAxisX = p.MultiPlanarAxisX;
+        add.BumpMultiPlanarStamp();
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -3264,9 +3270,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LightningAnchorInterior  = add.LightningAnchorInterior;
         p.LightningAnchorExterior  = add.LightningAnchorExterior;
         p.LightningExteriorOverhangs = add.LightningExteriorOverhangs;
-        p.MultiPlanarBaseDeg = add.MultiPlanarBaseDeg;
-        p.MultiPlanarMidDeg  = add.MultiPlanarMidDeg;
-        p.MultiPlanarTopDeg  = add.MultiPlanarTopDeg;
+        p.MultiPlanarPlanes = add.MultiPlanarPlanes
+            .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
+        p.MultiPlanarAxisX = add.MultiPlanarAxisX;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;

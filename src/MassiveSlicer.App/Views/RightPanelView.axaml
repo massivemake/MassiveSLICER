@@ -255,31 +255,46 @@
                                            TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                             </Grid>
 
-                            <!-- Multi-Planar: three guide-plane angles (base → middle → top) -->
+                            <!-- Multi-Planar: guide-plane stack -->
                             <StackPanel IsVisible="{Binding Additive.ShowMultiPlanarControls}" Spacing="2" Margin="0,2,0,2">
                                 <TextBlock Margin="8,0,8,2" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                           Text="The slicing plane's tilt interpolates through three guide angles as the print climbs. Layers become wedges — extrusion RPM follows the local thickness automatically."/>
-                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
-                                    <TextBlock Grid.Column="0" Text="Base (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
-                                               Value="{Binding Additive.MultiPlanarBaseDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
-                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
-                                               Text="{Binding Additive.MultiPlanarBaseDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                           Text="The slicing plane's tilt interpolates through the guide planes below as the print climbs. Layers become wedges — extrusion RPM follows the local thickness automatically. Click a plane in the viewport and drag: horizontal rotates, vertical slides its height."/>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Tilt axis" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <ToggleSwitch IsChecked="{Binding Additive.MultiPlanarAxisX, Mode=TwoWay}"
+                                                      OnContent="" OffContent="" MinWidth="0" Padding="0"
+                                                      ToolTip.Tip="Off: tilt about Y (planes lean along X). On: tilt about X (planes lean along Y)."/>
+                                        <TextBlock Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    </StackPanel>
                                 </Grid>
-                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
-                                    <TextBlock Grid.Column="0" Text="Middle (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
-                                               Value="{Binding Additive.MultiPlanarMidDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
-                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
-                                               Text="{Binding Additive.MultiPlanarMidDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                <Grid Margin="8,2,8,0" ColumnDefinitions="56,*,60,26">
+                                    <TextBlock Grid.Column="0" Text="Height %" Classes="LabelMuted" FontSize="9"/>
+                                    <TextBlock Grid.Column="1" Text="Tilt (°)" Classes="LabelMuted" FontSize="9"/>
                                 </Grid>
-                                <Grid Margin="8,0,8,2" ColumnDefinitions="70,*,56">
-                                    <TextBlock Grid.Column="0" Text="Top (°)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                    <Slider    Grid.Column="1" Minimum="-60" Maximum="60"
-                                               Value="{Binding Additive.MultiPlanarTopDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
-                                    <TextBox   Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
-                                               Text="{Binding Additive.MultiPlanarTopDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
-                                </Grid>
+                                <ItemsControl ItemsSource="{Binding Additive.MultiPlanarPlanes}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="8,1,8,1" ColumnDefinitions="56,*,60,26">
+                                                <TextBox Grid.Column="0" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2"
+                                                         VerticalContentAlignment="Center"
+                                                         Text="{Binding HeightPct, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                                                <Slider  Grid.Column="1" Margin="6,0" Minimum="-60" Maximum="60"
+                                                         Value="{Binding AngleDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                                <TextBox Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2"
+                                                         VerticalContentAlignment="Center"
+                                                         Text="{Binding AngleDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                                <Button  Grid.Column="3" Content="✕" FontSize="10" Padding="4,2" Margin="4,0,0,0"
+                                                         Command="{Binding RemoveCommand}"
+                                                         ToolTip.Tip="Remove this guide plane (minimum two)"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Button Margin="8,4,8,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Content="+ Add plane" FontSize="11"
+                                        Command="{Binding Additive.AddMultiPlanarPlaneCommand}"/>
                             </StackPanel>
 
                             <SplitButton Margin="8,4,8,2" HorizontalAlignment="Stretch"

@@ -25,10 +25,11 @@ public class MultiPlanarSlicerTest
         return [.. tris];
     }
 
-    private static SliceSettings Settings() => new()
+    private static SliceSettings Settings(bool axisX = false) => new()
     {
         LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f,
-        MultiPlanarBaseDeg = 0f, MultiPlanarMidDeg = 15f, MultiPlanarTopDeg = 30f,
+        MultiPlanarPlanes = [new(0f, 0f), new(50f, 15f), new(100f, 30f)],
+        MultiPlanarAxisX = axisX,
     };
 
     [Fact]
@@ -64,6 +65,43 @@ public class MultiPlanarSlicerTest
         // Average thickness stays near nominal (wedge is balanced about the axis).
         float avg = ext.Average(m => m.HeightScale);
         Assert.InRange(avg, 0.75f, 1.3f);
+    }
+
+    [Fact]
+    public void AxisToggleLeansAlongY()
+    {
+        var tp = AngledPlanarSlicer.SliceMultiPlanar([Cylinder()], Settings(axisX: true));
+        Assert.True(tp.Layers.Count > 60);
+        var top = tp.Layers[^1].PlaneNormal;
+        Assert.True(MathF.Abs(top.Y) > 0.15f, $"expected Y lean, normal={top}");
+        Assert.True(MathF.Abs(top.X) < 0.02f, $"unexpected X lean, normal={top}");
+
+        // Wedge now varies along Y, not X.
+        var mid = tp.Layers[tp.Layers.Count / 2];
+        var ext = mid.Moves.Where(m => m.Kind == MoveKind.Extrude && !m.IsLayerStitch).ToList();
+        float plusY  = ext.Where(m => (m.From.Y + m.To.Y) * 0.5f > 40f).Select(m => m.HeightScale).DefaultIfEmpty(1f).Average();
+        float minusY = ext.Where(m => (m.From.Y + m.To.Y) * 0.5f < -40f).Select(m => m.HeightScale).DefaultIfEmpty(1f).Average();
+        Assert.True(MathF.Abs(plusY - minusY) > 0.08f, $"no Y wedge: {plusY:0.###} vs {minusY:0.###}");
+    }
+
+    [Fact]
+    public void FivePlaneStackInterpolatesThroughEveryGuide()
+    {
+        var s = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f,
+            MultiPlanarPlanes =
+                [new(0f, 0f), new(25f, 10f), new(50f, 5f), new(75f, 20f), new(100f, 30f)],
+        };
+        var tp = AngledPlanarSlicer.SliceMultiPlanar([Cylinder()], s);
+        float TiltDeg(ToolpathLayer l) =>
+            MathF.Atan2(MathF.Abs(l.PlaneNormal.X), l.PlaneNormal.Z) * 180f / MathF.PI;
+        // Tilt rises to ~10 by a quarter height, dips toward 5 at half, climbs after.
+        var quarter = tp.Layers[tp.Layers.Count / 4];
+        var half    = tp.Layers[tp.Layers.Count / 2];
+        Assert.True(TiltDeg(quarter) > TiltDeg(half) - 8f && TiltDeg(quarter) > 4f,
+            $"quarter {TiltDeg(quarter):0.#}° vs half {TiltDeg(half):0.#}°");
+        Assert.True(TiltDeg(tp.Layers[^1]) > 12f, $"top only {TiltDeg(tp.Layers[^1]):0.#}°");
     }
 
     [Fact]

@@ -709,6 +709,47 @@ public sealed class SceneRenderer : IDisposable
         _planePreview.Update(center.Value, normal.Value, size);
     }
 
+    // ── Multi-Planar guide planes + distortion spine ─────────────────────────
+
+    private readonly List<PlanePreviewRenderer> _guidePlanes = [];
+    private List<(Vector3 Center, Vector3 Normal)> _guidePlaneData = [];
+    private float _guidePlaneSize;
+    private int   _guidePlaneSelected = -1;
+    private SpineRenderer? _spine;
+    private int _spineCount;
+    private SpineRenderer? _guideGizmo;
+    private int _guideGizmoCount;
+
+    /// <summary>Shows the Multi-Planar guide planes (base/middle/top). Empty list hides
+    /// them. <paramref name="selected"/> highlights the plane being rotated.</summary>
+    public void SetGuidePlanes(IReadOnlyList<(Vector3 Center, Vector3 Normal)> planes, float size, int selected = -1)
+    {
+        _guidePlaneData     = [.. planes];
+        _guidePlaneSize     = size;
+        _guidePlaneSelected = selected;
+        while (_guidePlanes.Count < planes.Count) _guidePlanes.Add(new PlanePreviewRenderer());
+    }
+
+    /// <summary>Multi-Planar spine polyline through the layer centres, coloured by
+    /// distortion. Empty list hides it. Must be called on the GL thread.</summary>
+    public void SetMultiPlanarSpine(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _spineCount = points.Count;
+        if (points.Count < 2) return;
+        _spine ??= new SpineRenderer();
+        _spine.Update(points);
+    }
+
+    /// <summary>Rotate/translate affordance polyline for the selected guide plane
+    /// (rotation ring + height arrow). Empty hides it. GL thread only.</summary>
+    public void SetGuidePlaneGizmo(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _guideGizmoCount = points.Count;
+        if (points.Count < 2) return;
+        _guideGizmo ??= new SpineRenderer();
+        _guideGizmo.Update(points);
+    }
+
     /// <summary>
     /// Builds and uploads a 1-D heatmap texture from slice layer data so the layer-preview
     /// shader can colour each fragment by the thickness of the layer it falls in.
@@ -1019,6 +1060,30 @@ public sealed class SceneRenderer : IDisposable
 
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
+
+        for (int gi = 0; gi < _guidePlaneData.Count && gi < _guidePlanes.Count; gi++)
+        {
+            var (c, n) = _guidePlaneData[gi];
+            _guidePlanes[gi].Update(c, n, _guidePlaneSize);
+            bool gpSel = gi == _guidePlaneSelected;
+            _guidePlanes[gi].Draw(mvp,
+                gpSel ? new Vector4(1.0f, 0.85f, 0.1f, 0.18f) : new Vector4(0.1f, 0.45f, 0.9f, 0.10f),
+                gpSel ? new Vector4(1.0f, 0.85f, 0.1f, 0.9f)  : new Vector4(0.1f, 0.45f, 0.9f, 0.65f));
+        }
+
+        if (_spineCount >= 2 && _spine is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _spine.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        if (_guideGizmoCount >= 2 && _guideGizmo is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _guideGizmo.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
 
         // -- Cavity normal prepass (world normals for screen/world cavity) -----
         if (_cavity is not null && CavityEnabled)
@@ -1673,7 +1738,10 @@ public sealed class SceneRenderer : IDisposable
         _bedBoundary?.Dispose();
         _gizmo?.Dispose();
         _backdrop?.Dispose();
-        _planePreview?.Dispose();
+_planePreview?.Dispose();
+        foreach (var gp in _guidePlanes) gp.Dispose();
+_spine?.Dispose();
+        _guideGizmo?.Dispose();
         _seamGuides?.Dispose();
         _boundaryLowMarkers?.Dispose();
         _boundaryHighMarkers?.Dispose();

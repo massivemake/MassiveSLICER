@@ -26,6 +26,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         SimulateThermalCommand           = new RelayCommand(() => OnSimulateThermalRequested?.Invoke());
+        foreach (var row in MultiPlanarPlanes) row.Owner = this;
+        MultiPlanarPlanes.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems is not null)
+                foreach (MultiPlanarPlaneRow row in e.NewItems) row.Owner = this;
+        };
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
 
@@ -212,28 +218,56 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         };
     }
 
-    private double _multiPlanarBaseDeg = 0.0;
-    /// <summary>Multi-Planar: plane tilt (deg) at the base of the part.</summary>
-    public double MultiPlanarBaseDeg
+    /// <summary>Multi-Planar guide plane stack (height % + tilt °), min two rows.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<MultiPlanarPlaneRow> MultiPlanarPlanes { get; } =
+    [
+        new(0, 0), new(50, 15), new(100, 30),
+    ];
+
+    /// <summary>Bumped whenever any plane row (or the stack shape) changes —
+    /// registered as a realtime re-slice trigger.</summary>
+    public int MultiPlanarStamp
     {
-        get => _multiPlanarBaseDeg;
-        set => SetField(ref _multiPlanarBaseDeg, Math.Clamp(value, -80.0, 80.0));
+        get => _multiPlanarStamp;
+        private set => SetField(ref _multiPlanarStamp, value);
+    }
+    private int _multiPlanarStamp;
+
+    internal void BumpMultiPlanarStamp() => MultiPlanarStamp++;
+
+    private bool _multiPlanarAxisX;
+    /// <summary>False = tilt about Y (lean along X); true = tilt about X (lean along Y).</summary>
+    public bool MultiPlanarAxisX
+    {
+        get => _multiPlanarAxisX;
+        set { if (SetField(ref _multiPlanarAxisX, value)) BumpMultiPlanarStamp(); }
     }
 
-    private double _multiPlanarMidDeg = 15.0;
-    /// <summary>Multi-Planar: plane tilt (deg) at half height.</summary>
-    public double MultiPlanarMidDeg
+    public RelayCommand AddMultiPlanarPlaneCommand => _addMultiPlanarPlane ??= new RelayCommand(() =>
     {
-        get => _multiPlanarMidDeg;
-        set => SetField(ref _multiPlanarMidDeg, Math.Clamp(value, -80.0, 80.0));
-    }
+        // Insert into the biggest height gap so new planes land somewhere useful.
+        var sorted = MultiPlanarPlanes.OrderBy(r => r.HeightPct).ToList();
+        double bestGap = -1, at = 50, angle = 15;
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            double gap = sorted[i].HeightPct - sorted[i - 1].HeightPct;
+            if (gap > bestGap)
+            {
+                bestGap = gap;
+                at = (sorted[i].HeightPct + sorted[i - 1].HeightPct) * 0.5;
+                angle = (sorted[i].AngleDeg + sorted[i - 1].AngleDeg) * 0.5;
+            }
+        }
+        MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(Math.Round(at), Math.Round(angle, 1)));
+        BumpMultiPlanarStamp();
+    });
+    private RelayCommand? _addMultiPlanarPlane;
 
-    private double _multiPlanarTopDeg = 30.0;
-    /// <summary>Multi-Planar: plane tilt (deg) at the top of the part.</summary>
-    public double MultiPlanarTopDeg
+    public void RemoveMultiPlanarPlane(MultiPlanarPlaneRow row)
     {
-        get => _multiPlanarTopDeg;
-        set => SetField(ref _multiPlanarTopDeg, Math.Clamp(value, -80.0, 80.0));
+        if (MultiPlanarPlanes.Count <= 2) return;   // interpolation needs two ends
+        MultiPlanarPlanes.Remove(row);
+        BumpMultiPlanarStamp();
     }
 
     public bool IsCurvedMethod          => Method == SliceMethod.Curved;
