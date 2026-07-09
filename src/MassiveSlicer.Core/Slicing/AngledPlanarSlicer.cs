@@ -67,12 +67,37 @@ public static class AngledPlanarSlicer
         var seamDirLocal = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
 
         var   toolpath   = new Toolpath();
-        float step       = tMin + settings.FirstLayerHeight;
         int   idx        = 0;
         var   prevTracks = new List<ContourTrack>();
 
-        while (step < tMax - 1e-4f)
+        var steps = new List<float>();
+        for (float st = tMin + settings.FirstLayerHeight; st < tMax - 1e-4f; st += settings.LayerHeight)
+            steps.Add(st);
+
+        // ── Lightning Bridge pre-pass (see PlanarSlicer): cache contours for every
+        //    plane, then build the top-down finger plan in plane-local 2D (the (u,v)
+        //    frame is constant across layers, so propagation works unchanged).
+        List<List<List<Vector2>>>? lightningCache = null;
+        Lightning.LightningPlan? lightningPlan = null;
+        if (settings.InfillPattern == InfillPattern.LightningBridge)
         {
+            bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+            lightningCache = new(steps.Count);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(steps.Count);
+            var heights = new List<float>(steps.Count);
+            for (int si = 0; si < steps.Count; si++)
+            {
+                var contours = ComputeInsetContours(meshes, normal, steps[si], normal * steps[si], u, v, settings);
+                lightningCache.Add(contours);
+                fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
+                heights.Add(si == 0 ? settings.FirstLayerHeight : settings.LayerHeight);
+            }
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+        }
+
+        for (int si = 0; si < steps.Count; si++)
+        {
+            float step = steps[si];
             // origin = closest point on this plane to the world origin.
             var origin = normal * step;
 
@@ -82,17 +107,25 @@ public static class AngledPlanarSlicer
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
             var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
 
-            bool isLastLayer = step + settings.LayerHeight >= tMax - 1e-4f;
+            bool isLastLayer = si == steps.Count - 1;
             prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
-                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer);
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
+                cachedContours: lightningCache?[si],
+                lightningPlan:  lightningPlan?.Layers[si]);
 
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);
-            step += settings.LayerHeight;
         }
 
         return toolpath;
     }
+
+    /// <summary>Surface mode fills across closed boundary chains only (1 mm closure).</summary>
+    private static List<List<Vector2>> FilterFillPolys(List<List<Vector2>> contours, bool surfaceMode)
+        => surfaceMode
+            ? contours.Where(c => c.Count >= 3
+                && Vector2.DistanceSquared(c[0], c[^1]) <= 1.0f).ToList()
+            : contours;
 
     // Projects a world-XY point to plane-local (u,v) by solving the plane equation for Z.
     private static Vector2 ToLocal(Vector2 xy, Vector3 normal, float planeD,
@@ -115,7 +148,28 @@ public static class AngledPlanarSlicer
         SliceSettings settings,
         List<ContourTrack> prevTracks,
         ToolpathLayer layer,
-        bool isLastLayer = false)
+        bool isLastLayer = false,
+        List<List<Vector2>>? cachedContours = null,
+        Lightning.LightningLayerPlan? lightningPlan = null)
+    {
+        var insetContours = cachedContours
+            ?? ComputeInsetContours(meshes, normal, planeD, origin, u, v, settings);
+        if (insetContours.Count == 0) return new List<ContourTrack>();
+
+        return BuildLayerBody(settings, layer, normal, planeD, origin, u, v,
+            seamOrigin2d, seamDir2d, prevTracks, insetContours, isLastLayer, lightningPlan);
+    }
+
+    /// <summary>
+    /// Stages 1–3: mesh∩plane segments (plane-local 2D) → chained contours →
+    /// nesting/orientation/offset. Extracted so the Lightning pre-pass can compute
+    /// and cache every layer's contours before any moves are emitted.
+    /// </summary>
+    private static List<List<Vector2>> ComputeInsetContours(
+        IReadOnlyList<Vector3[]> meshes,
+        Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v,
+        SliceSettings settings)
     {
         // ── Stage 1: collect 3D intersection segments, project to plane-local 2D ─
         var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
@@ -147,15 +201,15 @@ public static class AngledPlanarSlicer
             }
             if (segs.Count > 0) perMeshSegs.Add(segs);
         }
-        if (perMeshSegs.Count == 0) return new List<ContourTrack>();
+        if (perMeshSegs.Count == 0) return new List<List<Vector2>>();
 
         // ── Stage 2: chain by endpoint proximity in 2D ───────────────────────
         var rawContours = new List<List<Vector2>>();
         foreach (var segs in perMeshSegs)
             rawContours.AddRange(ChainByProximity(segs));
 
-        // ── Stage 3: nesting depth + bead-width offset + seam ────────────────
-        if (rawContours.Count == 0) return new List<ContourTrack>();
+        // ── Stage 3: nesting depth + bead-width offset ───────────────────────
+        if (rawContours.Count == 0) return new List<List<Vector2>>();
 
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -209,7 +263,20 @@ public static class AngledPlanarSlicer
                         insetContours.Add(simpTol > 0f ? SimplifyContour2D(r, simpTol) : r);
             }
         }
-        if (insetContours.Count == 0) return new List<ContourTrack>();
+        return insetContours;
+    }
+
+    private static List<ContourTrack> BuildLayerBody(
+        SliceSettings settings, ToolpathLayer layer,
+        Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v,
+        Vector2 seamOrigin2d, Vector2 seamDir2d,
+        List<ContourTrack> prevTracks,
+        List<List<Vector2>> insetContours,
+        bool isLastLayer,
+        Lightning.LightningLayerPlan? lightningPlan)
+    {
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Contours are plane-local 2D; the projector lifts infill back onto the tilted plane.
@@ -217,10 +284,7 @@ public static class AngledPlanarSlicer
         {
             // Surface mode fills across closed boundary chains only (1 mm closure
             // threshold, same as ChainByProximity); open chains keep their paths.
-            var fillPolys = surfaceMode
-                ? insetContours.Where(c => c.Count >= 3
-                    && Vector2.DistanceSquared(c[0], c[^1]) <= 1.0f).ToList()
-                : insetContours;
+            var fillPolys = FilterFillPolys(insetContours, surfaceMode);
             if (fillPolys.Count > 0)
             {
             float baseAngle = settings.InfillAngleDeg;
@@ -237,7 +301,10 @@ public static class AngledPlanarSlicer
             Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
 
             int firstInfillMove = layer.Moves.Count;
-            if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+            if (settings.InfillPattern == InfillPattern.LightningBridge)
+                Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject);
+            else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                 InfillGenerator.EmitGhostMesh(fillPolys, planeD, layer, infillSpacing, infillAngle,
                                               isLastLayer, Unproject, settings.BeadWidth);
             else

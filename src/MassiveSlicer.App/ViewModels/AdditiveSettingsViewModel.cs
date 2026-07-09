@@ -748,7 +748,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     // -- Infill pattern -------------------------------------------------------
 
-    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid"];
+    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Lightning Bridge"];
 
     private string _infillPattern = "None";
 
@@ -759,11 +759,40 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _infillPattern, value))
+            {
                 OnPropertyChanged(nameof(ShowInfillControls));
+                OnPropertyChanged(nameof(ShowLightningControls));
+            }
         }
     }
 
     public bool ShowInfillControls => InfillPattern != "None";
+
+    public bool ShowLightningControls => InfillPattern == "Lightning Bridge";
+
+    private double _lightningOverhangDeg = 30.0;
+    /// <summary>Max unsupported overhang angle for lightning finger growth (deg).</summary>
+    public double LightningOverhangDeg
+    {
+        get => _lightningOverhangDeg;
+        set => SetField(ref _lightningOverhangDeg, Math.Clamp(value, 5.0, 80.0));
+    }
+
+    private double _lightningBranchSpacingMm;
+    /// <summary>Spacing between finger roots along unsupported arcs (mm). 0 = auto.</summary>
+    public double LightningBranchSpacingMm
+    {
+        get => _lightningBranchSpacingMm;
+        set => SetField(ref _lightningBranchSpacingMm, Math.Clamp(value, 0.0, 500.0));
+    }
+
+    private double _lightningTipLoopRadiusMm;
+    /// <summary>Support-pad loop radius at finger tips (mm). 0 = plain tip.</summary>
+    public double LightningTipLoopRadiusMm
+    {
+        get => _lightningTipLoopRadiusMm;
+        set => SetField(ref _lightningTipLoopRadiusMm, Math.Clamp(value, 0.0, 200.0));
+    }
 
     private double _infillSpacingMm = 0.0;
 

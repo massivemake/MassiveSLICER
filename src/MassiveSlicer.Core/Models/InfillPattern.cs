@@ -19,4 +19,11 @@ public enum InfillPattern
     /// On the final layer the entire outer perimeter is traced once to close the path.
     /// </summary>
     GhostMeshGrid,
+
+    /// <summary>
+    /// Lightning-style sparse support: thin two-wall "fingers" detour inward from
+    /// the perimeter only where upper layers need material below them, then rejoin —
+    /// the whole layer stays one continuous extrusion (no travels).
+    /// </summary>
+    LightningBridge,
 }

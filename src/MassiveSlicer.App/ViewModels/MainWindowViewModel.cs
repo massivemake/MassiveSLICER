@@ -2815,6 +2815,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.InfillPattern          = copy.InfillPattern;
         live.InfillSpacingMm        = copy.InfillSpacingMm;
         live.InfillAngleDeg         = copy.InfillAngleDeg;
+        live.LightningOverhangDeg     = copy.LightningOverhangDeg;
+        live.LightningBranchSpacingMm = copy.LightningBranchSpacingMm;
+        live.LightningTipLoopRadiusMm = copy.LightningTipLoopRadiusMm;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -2983,6 +2986,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.InfillPattern    = p.InfillPattern;
         add.InfillSpacingMm  = p.InfillSpacingMm;
         add.InfillAngleDeg   = p.InfillAngleDeg;
+        add.LightningOverhangDeg     = p.LightningOverhangDeg;
+        add.LightningBranchSpacingMm = p.LightningBranchSpacingMm;
+        add.LightningTipLoopRadiusMm = p.LightningTipLoopRadiusMm;
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -3236,6 +3242,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.InfillPattern    = add.InfillPattern;
         p.InfillSpacingMm  = add.InfillSpacingMm;
         p.InfillAngleDeg   = add.InfillAngleDeg;
+        p.LightningOverhangDeg     = add.LightningOverhangDeg;
+        p.LightningBranchSpacingMm = add.LightningBranchSpacingMm;
+        p.LightningTipLoopRadiusMm = add.LightningTipLoopRadiusMm;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;
