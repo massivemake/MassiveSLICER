@@ -253,7 +253,7 @@ public sealed class AppPreferences
     public double WipeLengthMm { get; set; } = 10.0;
     public double WipeRampMm { get; set; } = 5.0;
     public double WipeSpeed { get; set; } = 120.0;
-    public double ExtrusionStartWaitSec { get; set; } = 1.0;
+    public double ExtrusionStartWaitSec { get; set; }
     public double ExtrusionResumeWaitSec { get; set; }
 
     public bool ResumeRampEnabled { get; set; }

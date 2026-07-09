@@ -149,5 +149,8 @@
         </StackPanel>
 
         <TextBlock Text="{Binding Status}" TextWrapping="Wrap" FontSize="10" Opacity="0.7"/>
+        <TextBlock Text="{Binding PricingSummary}" TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                   IsVisible="{Binding PricingSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                   ToolTip.Tip="Rates in effect from the ERP Printing Cost Basis page. The stats panel cost uses these when connected; sendslice returns the authoritative cost for the revision."/>
     </StackPanel>
 </UserControl>

@@ -119,6 +119,43 @@ The ERP can treat a rev carrying `sentToRobot` as "program is on the printer,
 ready to run" — e.g. set the slice status accordingly and show the cell name.
 Unknown fields are safe to ignore until that lands.
 
+## Pricing sync (live at /api/slicer/v1 — slicer support shipped)
+
+The ERP is the source of truth for all pricing; the slicer never hard-codes
+rates, material prices, or markup.
+
+### GET /pricing
+
+Returns the pricing config: `version` (hash — changes when any pricing number
+changes), machine rates (`effectiveRatePerHour`,
+`effectiveRateWithFinishingPerHour`), the active `materials` catalog
+(`costPerKg`/`costPerLb`/`density`), `markup` (overhead + profit rates), and
+`quantityDiscounts` (`minQuantity` + `rate`).
+
+Slicer behavior: fetched on every successful connect and re-fetched whenever a
+quote/costing echoes a different `pricingVersion`. The cached config drives the
+live cost line in the stats panel (shown as "(ERP est.)"); rates appear in the
+ERP dock. Console: `erp pricing` prints the full cached catalog.
+
+### POST /quote
+
+Body: `printTimeSec` and/or `weightKg` (at least one resolvable or 400),
+optional `material` (name), `quantity` (triggers discounts), `finishing`,
+`customMachineRatePerHour`. Response: `machineCost`, `materialCost`,
+`quantityDiscount`, `markup`, `subtotalCost` (internal — never client-facing),
+`clientPrice` (the customer number), `pricingVersion`.
+
+Slicer behavior: `erp quote [qty] [finishing]` posts the current slice stats and
+prints the authoritative breakdown. Slice registration also now sends numeric
+`stats.printTimeSec` + `stats.weightKg` alongside the display strings.
+
+### Costing on slice registration
+
+`POST /slices` 201 responses include a `costing` block (same shape as a quote,
+quantity 1, no finishing) — the permanent cost record for that rev. The slicer
+shows the client price in the dock status and console after `sendslice`, and
+uses the echoed `pricingVersion` to detect stale configs.
+
 ## Slicer-side state (already shipped)
 
 - `.mass` workspaces persist the attachment (`type/id/number/title/elementId?/

@@ -58,7 +58,7 @@ public sealed record KrlExportSettings
     /// Pause (seconds) after the first extrusion RPM-on before the first print move. 0 = disabled.
     /// When &gt; 0, emits an immediate <c>$ANOUT[4]</c> (not TRIGGER) so the wait happens after RPM changes.
     /// </summary>
-    public float ExtrusionStartWaitSec { get; init; } = 1f;
+    public float ExtrusionStartWaitSec { get; init; }
 
     /// <summary>
     /// Pause (seconds) after each travel before the next extrusion move. 0 = disabled.

@@ -3361,6 +3361,10 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     private string _statsWeight = "";
+    /// <summary>Numeric twins of the display stats — feed ERP quotes/slice costing.</summary>
+    public double StatsTimeSeconds { get; set; }
+    public double StatsWeightKg    { get; set; }
+
     public string StatsWeight
     {
         get => _statsWeight;

@@ -682,6 +682,11 @@ public partial class ViewportView : UserControl
             };
 
             additive.OnSimulateThermalRequested = () => RunThermalSimulation(vm, additive);
+            vm.Erp.PricingChanged += () => Dispatcher.UIThread.Post(() =>
+            {
+                if (_activeScrubNode is { } statsNode && _toolpathByNode.TryGetValue(statsNode, out var statsTp))
+                    ApplyToolpathStats(vm, statsTp);
+            });
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
             UpdateSeamGuideMarkers(vm);
             GlCanvas.RequestNextFrameRendering();
@@ -1518,10 +1523,12 @@ public partial class ViewportView : UserControl
         var world = node.WorldTransform;
         node.Parent?.RemoveChild(node);
 
-        if (_rotaryBedPivot is { } pivot)
+        // Content lives under the print bed: the rotary pivot where one exists (so E1
+        // spins the part with the table), else the flat bed node. World pose preserved.
+        if ((_rotaryBedPivot ?? _bedNode) is { } bed)
         {
-            node.LocalTransform = world * pivot.WorldTransform.Inverted();
-            pivot.AddChild(node);
+            node.LocalTransform = world * bed.WorldTransform.Inverted();
+            bed.AddChild(node);
         }
         else
         {
@@ -1576,13 +1583,20 @@ public partial class ViewportView : UserControl
     private void RestoreUserContentAfterCellSwap(
         ViewportViewModel vm,
         List<PreservedUserModel> users,
-        List<PreservedToolpathUpload> toolpaths)
+        List<PreservedToolpathUpload> toolpaths,
+        Matrix4 oldBedWorld)
     {
         if (users.Count == 0 && toolpaths.Count == 0) return;
 
+        // Old-bed → new-bed frame change. Content keeps its pose relative to the print
+        // bed, so it lands on the new cell's bed instead of floating at the old cell's
+        // world coordinates. Identity when either cell has no bed (world preserved).
+        var newBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
+        var bedDelta    = oldBedWorld.Inverted() * newBedWorld;
+
         foreach (var (node, world) in users)
         {
-            node.LocalTransform = world;
+            node.LocalTransform = world * bedDelta;
             AttachUserImportToCell(node);
         }
 
@@ -1596,7 +1610,7 @@ public partial class ViewportView : UserControl
                 BeadWidth              = snap.BeadWidth,
                 LayerHeight            = snap.LayerHeight,
                 MaterialColor          = snap.MaterialColor,
-                LocalTransformOverride = local,
+                LocalTransformOverride = local * bedDelta,
             }, addToScene: true);
         }
 
@@ -1613,6 +1627,10 @@ public partial class ViewportView : UserControl
             ClearToolChangeSequence(restorePriorMount: false);
         else
             Dispatcher.UIThread.Invoke(() => ClearToolChangeSequence(restorePriorMount: false));
+
+        // Content transfers bed-relative: capture the outgoing bed frame before teardown
+        // so restored models/toolpaths land on the NEW bed where they sat on the old one.
+        var oldBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
 
         var preservedUsers      = DetachUserModelsForCellSwap(vm);
         var preservedToolpaths  = SnapshotToolpathsForCellSwap(vm);
@@ -1831,7 +1849,7 @@ public partial class ViewportView : UserControl
                 System.Console.WriteLine("[cell] scene swap applied — robot visible");
         }
 
-        RestoreUserContentAfterCellSwap(vm, preservedUsers, preservedToolpaths);
+        RestoreUserContentAfterCellSwap(vm, preservedUsers, preservedToolpaths, oldBedWorld);
 
         // Dispatch UI-thread updates: joint limits, home angles, tool library.
         Dispatcher.UIThread.InvokeAsync(() =>
@@ -3007,7 +3025,9 @@ public partial class ViewportView : UserControl
 
     private static void ApplyToolpathStats(ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel s)
     {
-        var (t, w, c, layerStats) = ComputeToolpathStats(toolpath, s);
+        var (t, w, c, layerStats, massKg) = ComputeToolpathStats(toolpath, s, vm.Erp.PricingConfig);
+        vm.StatsTimeSeconds        = layerStats.TotalTimeSeconds;
+        vm.StatsWeightKg           = massKg;
         vm.StatsTime               = t;
         vm.StatsWeight             = w;
         vm.StatsCost               = c;
@@ -3885,8 +3905,8 @@ public partial class ViewportView : UserControl
         s.ThermalSummary = sb.ToString();
     }
 
-    private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
-        Toolpath toolpath, AdditiveSettingsViewModel s)
+    private static (string time, string weight, string cost, ToolpathStatsResult layerStats, double massKg)
+        ComputeToolpathStats(Toolpath toolpath, AdditiveSettingsViewModel s, Erp.ErpPricingConfig? pricing)
     {
         var rates = new ToolpathMotionRates(s.PrintSpeed, s.TravelSpeed, s.WipeSpeed);
         var stats = ToolpathStatistics.Compute(toolpath, rates, s.BeadWidth, s.LayerHeight);
@@ -3898,13 +3918,32 @@ public partial class ViewportView : UserControl
         double costPerLb   = preset?.CostPerLb       ?? 0.0;
 
         double massLbs = stats.VolumeMm3 / 1000.0 * densityGCm3 / 453.592;
-        double cost    = massLbs * costPerLb;
+        double massKg  = massLbs * 0.453592;
+
+        // Live rough estimate from the cached ERP pricing config when connected —
+        // the authoritative number is always a POST /quote or a slice's costing block.
+        string costStr;
+        if (pricing is { RatePerHour: { } ratePerHour })
+        {
+            double machine = stats.TotalTimeSeconds / 3600.0 * ratePerHour;
+            var erpMat = pricing.MatchMaterial(preset?.Name) ?? pricing.MatchMaterial(preset?.MaterialType);
+            double? perKg = erpMat?.CostPerKg
+                ?? (erpMat?.CostPerLb is { } perLb ? perLb / 0.453592 : null);
+            double material = perKg is { } pk ? massKg * pk : massLbs * costPerLb;
+            double markup = 1.0 + (pricing.OverheadRate ?? 0.0) + (pricing.ProfitRate ?? 0.0);
+            costStr = $"${(machine + material) * markup:F2} (ERP est.)";
+        }
+        else
+            costStr = preset is not null ? $"${cost(massLbs, costPerLb):F2}" : "--";
 
         return (
             ToolpathStatistics.FormatDuration(stats.TotalTimeSeconds),
             $"{massLbs:F3} lbs",
-            preset is not null ? $"${cost:F2}" : "--",
-            stats);
+            costStr,
+            stats,
+            massKg);
+
+        static double cost(double lbs, double perLb) => lbs * perLb;
     }
 
     private static NVec3 TransformPoint(TkVector3 p, TkMatrix4 m)

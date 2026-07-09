@@ -135,7 +135,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | detach | status",
+            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
@@ -179,6 +179,51 @@ public sealed class ConsoleCommandRegistry
                     }
                     case "sendslice": erp.SendSliceCommand.Execute(null); break;
                     case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
+                    case "pricing":
+                        if (erp.PricingConfig is { } cfg)
+                        {
+                            ctx.Log($"[erp] {erp.PricingSummary}");
+                            foreach (var m in cfg.Materials)
+                                ctx.Log($"[erp]   {m.Name}: ${m.CostPerKg:0.00}/kg (density {m.DensityGmCc:0.###})");
+                            foreach (var d in cfg.QuantityDiscounts)
+                                ctx.Log($"[erp]   {d.MinQuantity}+ units → {d.Rate:P0} off");
+                        }
+                        else ctx.Log("[erp] no pricing config cached — fetching…");
+                        _ = erp.RefreshPricingAsync();
+                        break;
+                    case "quote":
+                    {
+                        var vp = ctx.Main.Viewport;
+                        if (vp.StatsTimeSeconds <= 0 && vp.StatsWeightKg <= 0)
+                        {
+                            ctx.Log("[erp] no slice stats — slice a model first.");
+                            break;
+                        }
+                        var qargs = (parts.ElementAtOrDefault(1) ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        int qty = qargs.Length > 0 && int.TryParse(qargs[0], out int q) ? q : 1;
+                        bool finishing = qargs.Contains("finishing", StringComparer.OrdinalIgnoreCase);
+                        var req = new MassiveSlicer.App.Erp.ErpQuoteRequest(
+                            PrintTimeSec: vp.StatsTimeSeconds > 0 ? vp.StatsTimeSeconds : null,
+                            WeightKg:     vp.StatsWeightKg > 0 ? vp.StatsWeightKg : null,
+                            Material:     ctx.Main.RightPanel.Additive.SelectedPreset?.Name,
+                            Quantity:     qty,
+                            Finishing:    finishing);
+                        ctx.Log($"[erp] requesting quote (qty {qty}{(finishing ? ", finishing" : "")})…");
+                        _ = erp.QuoteAsync(req).ContinueWith(t =>
+                        {
+                            var r = t.Result;
+                            if (r.Ok)
+                            {
+                                var c = r.Value!;
+                                ctx.Log($"[erp] quote: machine ${c.MachineCost:0.00} + material ${c.MaterialCost:0.00}"
+                                    + (c.QuantityDiscount is { } qd and not 0.0 ? $" − discount ${qd:0.00}" : "")
+                                    + (c.Markup is { } mk and not 0.0 ? $" + markup ${mk:0.00}" : "")
+                                    + $" → CLIENT PRICE ${c.ClientPrice:0.00} (v{c.PricingVersion})");
+                            }
+                            else ctx.Log($"[erp] quote failed: {r.Error!.Message}");
+                        }, TaskScheduler.Default);
+                        break;
+                    }
                     default:
                         ctx.Log($"[erp] state={erp.ConnectionState} status='{erp.Status}' results={erp.SearchResults.Count} " +
                                 $"elements={erp.Elements.Count} attached='{erp.ToggleLabel}'");

@@ -172,6 +172,8 @@ public sealed class ErpClient : IDisposable
                 ["material"]      = stats.Material,
                 ["layerHeightMm"] = stats.LayerHeightMm,
                 ["beadWidthMm"]   = stats.BeadWidthMm,
+                ["printTimeSec"]  = stats.PrintTimeSec,
+                ["weightKg"]      = stats.WeightKg,
             },
             ["files"] = files.Select(f => new Dictionary<string, object?>
             {
@@ -188,8 +190,63 @@ public sealed class ErpClient : IDisposable
 
         using var doc = r.Value!;
         int rev = GetInt(doc.RootElement, "rev", "revision", "revNumber") ?? 0;
+        ErpCosting? costing = null;
+        if (TryGetPropertyCi(doc.RootElement, "costing", out var costEl) && costEl.ValueKind == JsonValueKind.Object)
+            costing = ParseCosting(costEl);
         return ErpResult<ErpSliceReceipt>.Success(
-            new ErpSliceReceipt(rev, GetString(doc.RootElement, "url", "link")));
+            new ErpSliceReceipt(rev, GetString(doc.RootElement, "url", "link"), costing));
+    }
+
+    /// <summary>Fetches the ERP's pricing configuration (rates, materials catalog,
+    /// markup, quantity discounts). Cache by <see cref="ErpPricingConfig.Version"/> and
+    /// re-fetch when a quote/costing echoes a different version.</summary>
+    public async Task<ErpResult<ErpPricingConfig>> GetPricingAsync(CancellationToken ct)
+    {
+        var r = await GetJsonAsync("api/slicer/v1/pricing", ct);
+        if (r.Error is not null) return ErpResult<ErpPricingConfig>.Fail(r.Error);
+
+        using var doc = r.Value!;
+        try
+        {
+            return ParsePricing(doc.RootElement) is { } cfg
+                ? ErpResult<ErpPricingConfig>.Success(cfg)
+                : ErpResult<ErpPricingConfig>.Fail(ErpErrorKind.BadResponse, "pricing config missing from response");
+        }
+        catch (Exception ex)
+        {
+            return ErpResult<ErpPricingConfig>.Fail(ErpErrorKind.BadResponse, $"unexpected response: {ex.Message}");
+        }
+    }
+
+    /// <summary>Requests an authoritative quote for the given slice stats. The ERP
+    /// computes the exact breakdown it would use itself — do no pricing math locally
+    /// beyond rough live estimates from the cached config.</summary>
+    public async Task<ErpResult<ErpCosting>> GetQuoteAsync(ErpQuoteRequest req, CancellationToken ct)
+    {
+        var body = new Dictionary<string, object?>
+        {
+            ["printTimeSec"] = req.PrintTimeSec,
+            ["weightKg"]     = req.WeightKg,
+            ["material"]     = req.Material,
+            ["quantity"]     = req.Quantity,
+            ["finishing"]    = req.Finishing,
+            ["customMachineRatePerHour"] = req.CustomMachineRatePerHour,
+        };
+        var r = await PostJsonAsync("api/slicer/v1/quote", body, ct);
+        if (r.Error is not null) return ErpResult<ErpCosting>.Fail(r.Error);
+
+        using var doc = r.Value!;
+        try
+        {
+            var root = doc.RootElement;
+            if (TryGetPropertyCi(root, "quote", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object)
+                root = wrapped;
+            return ErpResult<ErpCosting>.Success(ParseCosting(root));
+        }
+        catch (Exception ex)
+        {
+            return ErpResult<ErpCosting>.Fail(ErpErrorKind.BadResponse, $"unexpected response: {ex.Message}");
+        }
     }
 
     public void Dispose() => _http.Dispose();
@@ -343,6 +400,109 @@ public sealed class ErpClient : IDisposable
             Name:          GetString(el, "name", "title", "elementName") ?? $"Element {id}",
             ElementNumber: GetString(el, "elementNumber", "element", "number", "no"),
             RevisionCount: GetInt(el, "revCount", "revisionCount", "revisions", "currentRevCount", "sliceCount") ?? 0);
+    }
+
+    internal static ErpPricingConfig? ParsePricing(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        if (TryGetPropertyCi(root, "pricing", out var wrapped) && wrapped.ValueKind == JsonValueKind.Object)
+            root = wrapped;
+
+        // Machine rates arrive flat or under a machineRate/machineRates/rates object
+        // (the live ERP uses singular "machineRate").
+        var rates = root;
+        foreach (var key in new[] { "machineRate", "machineRates", "rates" })
+            if (TryGetPropertyCi(root, key, out var mr) && mr.ValueKind == JsonValueKind.Object)
+            {
+                rates = mr;
+                break;
+            }
+
+        double? overhead = GetDouble(root, "overheadRate", "overhead");
+        double? profit   = GetDouble(root, "profitRate", "profit");
+        if (TryGetPropertyCi(root, "markup", out var mu) && mu.ValueKind == JsonValueKind.Object)
+        {
+            overhead ??= GetDouble(mu, "overheadRate", "overhead");
+            profit   ??= GetDouble(mu, "profitRate", "profit");
+        }
+
+        var materials = new List<ErpPricingMaterial>();
+        foreach (var el in EnumerateArray(
+                     TryGetPropertyCi(root, "materials", out var mats) ? mats : default,
+                     "materials", "items"))
+        {
+            if (el.ValueKind != JsonValueKind.Object) continue;
+            string name = GetString(el, "name", "material", "title") ?? "";
+            if (name.Length == 0) continue;
+            materials.Add(new ErpPricingMaterial(
+                Id:          GetString(el, "id", "materialId") ?? name,
+                Name:        name,
+                Type:        GetString(el, "type", "materialType"),
+                CostPerKg:   GetDouble(el, "costPerKg", "pricePerKg"),
+                CostPerLb:   GetDouble(el, "costPerLb", "pricePerLb"),
+                DensityGmCc: GetDouble(el, "density", "densityGCm3", "densityGmCc")));
+        }
+
+        var discounts = new List<ErpQuantityDiscount>();
+        if (TryGetPropertyCi(root, "quantityDiscounts", out var qd) && qd.ValueKind == JsonValueKind.Array)
+            foreach (var el in qd.EnumerateArray())
+            {
+                if (el.ValueKind != JsonValueKind.Object) continue;
+                int? min = GetInt(el, "minQuantity", "minQty", "min", "quantity");
+                double? rate = GetDouble(el, "rate", "discount", "discountRate", "discountPercent", "percent");
+                if (min is { } m && rate is { } dr)
+                    discounts.Add(new ErpQuantityDiscount(m, dr > 1 ? dr / 100.0 : dr));
+            }
+
+        return new ErpPricingConfig(
+            Version:                  GetString(root, "version", "pricingVersion", "hash") ?? "",
+            RatePerHour:              GetDouble(rates, "effectiveRatePerHour", "ratePerHour", "machineRatePerHour"),
+            RateWithFinishingPerHour: GetDouble(rates, "effectiveRateWithFinishingPerHour", "rateWithFinishingPerHour"),
+            OverheadRate:             overhead is { } o && o > 1 ? o / 100.0 : overhead,
+            ProfitRate:               profit   is { } pr && pr > 1 ? pr / 100.0 : profit,
+            Materials:                materials,
+            QuantityDiscounts:        discounts.OrderBy(d => d.MinQuantity).ToList());
+    }
+
+    internal static ErpCosting ParseCosting(JsonElement el)
+    {
+        // Live-ERP shape: per-unit costs nest under "perUnit"; quantityDiscount and
+        // markup are objects ({rate, amount} / {overheadAmount, profitAmount,
+        // totalAmount}). Flat scalar variants are accepted too.
+        var perUnit = el;
+        if (TryGetPropertyCi(el, "perUnit", out var pu) && pu.ValueKind == JsonValueKind.Object)
+            perUnit = pu;
+
+        double? discount = GetDouble(el, "quantityDiscount", "discount", "discountAmount");
+        if (discount is null && TryGetPropertyCi(el, "quantityDiscount", out var qd) && qd.ValueKind == JsonValueKind.Object)
+            discount = GetDouble(qd, "amount");
+
+        double? markup = GetDouble(el, "markup", "markupAmount");
+        if (markup is null && TryGetPropertyCi(el, "markup", out var mk) && mk.ValueKind == JsonValueKind.Object)
+            markup = GetDouble(mk, "totalAmount", "amount");
+
+        return new(
+            MachineCost:      GetDouble(perUnit, "machineCost", "machine") ?? GetDouble(el, "machineCost"),
+            MaterialCost:     GetDouble(perUnit, "materialCost", "material") ?? GetDouble(el, "materialCost"),
+            QuantityDiscount: discount,
+            Markup:           markup,
+            SubtotalCost:     GetDouble(el, "subtotalCost", "subtotal"),
+            ClientPrice:      GetDouble(el, "clientPrice", "price", "total", "clientTotal"),
+            PricingVersion:   GetString(el, "pricingVersion", "version"));
+    }
+
+    private static double? GetDouble(JsonElement el, params string[] names)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return null;
+        foreach (var name in names)
+        {
+            if (!TryGetPropertyCi(el, name, out var v)) continue;
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out double d)) return d;
+            if (v.ValueKind == JsonValueKind.String
+                && double.TryParse(v.GetString(), System.Globalization.NumberStyles.Float,
+                       System.Globalization.CultureInfo.InvariantCulture, out double p)) return p;
+        }
+        return null;
     }
 
     /// <summary>Case-insensitive multi-name string lookup; numbers stringify.</summary>
