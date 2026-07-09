@@ -31,6 +31,15 @@ public static class LightningGenerator
         var region = LightningPlanner.ToPathsD(fillPolys);
         if (region.Count == 0) return;
 
+        // Debug hook: set MSL_LIGHTNING_DUMP to a directory to dump each layer's
+        // input contours and normalized region as plane-local polylines.
+        string? dumpDir = Environment.GetEnvironmentVariable("MSL_LIGHTNING_DUMP");
+        if (dumpDir is not null)
+            DumpPaths(dumpDir, z, ("FILL", fillPolys.Select(poly =>
+                    string.Join(";", poly.Select(pt => $"{pt.X:0.##},{pt.Y:0.##}")))),
+                ("REGION", region.Select(path =>
+                    string.Join(";", path.Select(pt => $"{pt.x:0.##},{pt.y:0.##}")))));
+
 
         int outerCount = CountOuters(region);
         var result = region;
@@ -120,7 +129,19 @@ public static class LightningGenerator
             }
         }
 
+        if (dumpDir is not null)
+            DumpPaths(dumpDir, z, ("RESULT", result.Select(path =>
+                string.Join(";", path.Select(pt => $"{pt.x:0.##},{pt.y:0.##}")))));
+
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
+    }
+
+    private static void DumpPaths(string dir, float z, params (string Tag, IEnumerable<string> Lines)[] groups)
+    {
+        using var fw = new StreamWriter(Path.Combine(dir, $"gen_z{z:0.0}.txt"), append: true);
+        foreach (var (tag, lines) in groups)
+            foreach (var line in lines)
+                fw.WriteLine($"{tag}\t{line}");
     }
 
     /// <summary>Inflates one tree's centerlines (plus optional tip discs) into slit polygons.</summary>

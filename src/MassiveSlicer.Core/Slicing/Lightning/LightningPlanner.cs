@@ -394,27 +394,14 @@ public static class LightningPlanner
             keptCentroid.Add(c);
         }
 
-        // Orientation by nesting parity: even depth = outer (CCW/positive), odd = hole.
-        var paths = new PathsD(kept.Count);
-        for (int i = 0; i < kept.Count; i++)
-        {
-            int depth = 0;
-            var sample = kept[i][0];
-            for (int j = 0; j < kept.Count; j++)
-                if (j != i && Clipper.PointInPolygon(sample, kept[j]) == PointInPolygonResult.IsInside)
-                    depth++;
-            bool wantPositive = depth % 2 == 0;
-            var path = kept[i];
-            if ((Clipper.Area(path) > 0) != wantPositive)
-            {
-                path = new PathD(path);
-                path.Reverse();
-            }
-            paths.Add(path);
-        }
-
-        // Normalize windings/overlaps once so parity tests behave.
-        return Clipper.Union(paths, FillRule.NonZero);
+        // Parity (EvenOdd) union: winding-agnostic, so corrupted contour orientations
+        // don't matter, and doubly-covered areas cancel. That is the physically right
+        // reading of messy real-world slices — e.g. a hollow part whose intersection
+        // chains split into two half-loops that each enclose the shared cavity: the
+        // cavity is exactly their overlap and must be a hole, where a NonZero union
+        // would fill it and erase its walls from the toolpath.
+        var paths = new PathsD(kept);
+        return Clipper.Union(paths, FillRule.EvenOdd);
     }
 
     private static double Sq(double v) => v * v;
