@@ -66,10 +66,15 @@ public static class LightningPlanner
 
             // ── 1. Inherit the layer-above's trees with retracted tips ─────────
             float stepAbove = MaxStep(i + 1);
+            // Sacrificial external fins lean at the physical bead-on-bead limit —
+            // half a bead of offset per layer — instead of the shallower
+            // surface-quality overhang angle. They peel off the perimeter close
+            // under the overhang rather than trailing a sail down to the bed.
+            float stepAboveExternal = MathF.Max(stepAbove, 0.5f * bead);
             foreach (var above in plan.Layers[i + 1].Trees)
             {
                 var t = above.Clone();
-                RetractLeafTips(t, stepAbove);
+                RetractLeafTips(t, t.External ? stepAboveExternal : stepAbove);
                 if (t.Branches.Count == 0) continue;
 
                 t.Anchor = ClosestOnRegionBoundary(t.External ? region : anchorPaths, t.Anchor);
