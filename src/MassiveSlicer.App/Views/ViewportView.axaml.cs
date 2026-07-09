@@ -4462,8 +4462,15 @@ public partial class ViewportView : UserControl
 
         bool isUserContent = node is not null && vm.IsUserModelSceneNode(node);
 
+        // Dev mode: registered environment props (print bed, stands, docks) are pickable —
+        // resolve the mesh-leaf hit to its dev root so the gizmo transforms the whole prop.
+        if (!isUserContent && node is not null && vm.IsDevMode
+            && FindDevNodeRoot(node) is { } devRoot)
+        {
+            node = devRoot;
+        }
         // LFAM production cells block infrastructure picks unless they are user imports/scans.
-        if (!isUserContent && node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
+        else if (!isUserContent && node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
         {
             if (_currentToolNode is not null)
                 node = _currentToolNode;
@@ -4493,8 +4500,10 @@ public partial class ViewportView : UserControl
             node = _currentToolNode;
         }
 
-        // Locked outliner rows (robot, bed, locked toolheads) can't be selected.
-        if (node is not null && vm.IsNodeLockedInOutliner(node))
+        // Locked outliner rows (robot, bed, locked toolheads) can't be selected —
+        // except dev-editable props while dev mode is on.
+        if (node is not null && vm.IsNodeLockedInOutliner(node)
+            && !(vm.IsDevMode && IsDevNode(node)))
             node = null;
 
         if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
@@ -5127,6 +5136,14 @@ public partial class ViewportView : UserControl
         foreach (var node in _devNodeKinds.Keys)
             node.Selectable = enabled;
 
+        // Unlock the matching outliner rows (e.g. "Print Bed") while dev mode is on;
+        // re-lock them the moment it turns off.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is ViewportViewModel lockVm)
+                lockVm.SetCellEnvironmentDevLock(IsDevNode, locked: !enabled);
+        });
+
         if (!enabled && _renderer.SelectedNode is { } sel && IsDevNode(sel))
         {
             _renderer.Select(null);
@@ -5136,6 +5153,15 @@ public partial class ViewportView : UserControl
 
     private bool IsDevNode(SceneNode? node)
         => node is not null && _devNodeKinds.ContainsKey(node);
+
+    /// <summary>Nearest ancestor (or self) registered as a dev-editable prop, else null.</summary>
+    private SceneNode? FindDevNodeRoot(SceneNode? node)
+    {
+        for (var cur = node; cur is not null; cur = cur.Parent)
+            if (_devNodeKinds.ContainsKey(cur))
+                return cur;
+        return null;
+    }
 
     private string DevLabel(SceneNode node)
     {

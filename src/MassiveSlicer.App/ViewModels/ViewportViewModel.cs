@@ -3702,6 +3702,15 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Locks/unlocks the cell-environment rows whose scene node is dev-editable
+    /// (print bed, stands) — dev mode unlocks them so they can be selected and transformed.</summary>
+    internal void SetCellEnvironmentDevLock(Func<SceneNode, bool> isDevNode, bool locked)
+    {
+        foreach (var item in _cellEnvOutlinerItems)
+            if (isDevNode(item.Node))
+                item.IsLocked = locked;
+    }
+
     private OutlinerItemViewModel? _robotGroupItem;
     private OutlinerItemViewModel? _robotPedestalItem;
     private OutlinerItemViewModel? _robotArmItem;
