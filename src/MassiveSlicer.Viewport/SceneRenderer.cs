@@ -415,6 +415,7 @@ public sealed class SceneRenderer : IDisposable
 
     public bool ShowExtrusionMoves { get; set; } = true;
     public bool ShowTravelMoves    { get; set; } = true;
+    public bool ShowLightningMoves { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
     public bool ShowBeadOverhang        { get; set; } = false;
@@ -992,6 +993,7 @@ public sealed class SceneRenderer : IDisposable
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
+                showLightning: ShowLightningMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
@@ -1042,7 +1044,7 @@ public sealed class SceneRenderer : IDisposable
                     if (!tpNode.Visible) continue;
                     var tpMvp = tpNode.LocalTransform * mvp;
                     entry.Renderer.DrawCavityPunch(tpMvp,
-                        lines: ShowExtrusionMoves || ShowTravelMoves,
+                        lines: ShowExtrusionMoves || ShowTravelMoves || ShowLightningMoves,
                         bead: ShowBead);
                 }
                 GL.DepthMask(true);

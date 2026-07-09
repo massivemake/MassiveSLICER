@@ -56,7 +56,7 @@ public static class LightningGenerator
             }
         }
 
-        EmitLoops(result, z, layer, project);
+        EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
     }
 
     /// <summary>Inflates one tree's centerlines (plus optional tip discs) into slit polygons.</summary>
@@ -118,9 +118,34 @@ public static class LightningGenerator
 
     /// <summary>Emits every result polygon as a closed extrude loop; separate polygons
     /// (islands, holes) are connected by travels exactly like shell printing.</summary>
-    private static void EmitLoops(PathsD polys, float z, ToolpathLayer layer, Func<Vector2, Vector3>? project)
+    private static void EmitLoops(PathsD polys, float z, ToolpathLayer layer, Func<Vector2, Vector3>? project,
+        LightningLayerPlan? plan = null, float beadWidth = 0f, float tipLoopRadius = 0f)
     {
         Vector3 P(Vector2 p) => project?.Invoke(p) ?? new Vector3(p.X, p.Y, z);
+
+        // Segments hugging a finger centerline (or a tip pad) are tagged so the
+        // viewport can show/hide the fingers as their own display layer.
+        float tagRadius = beadWidth * 0.8f;
+        bool IsLightningSeg(Vector2 a2, Vector2 b2)
+        {
+            if (plan is null || plan.Trees.Count == 0) return false;
+            var mid = (a2 + b2) * 0.5f;
+            foreach (var tree in plan.Trees)
+                foreach (var branch in tree.Branches)
+                {
+                    var line = branch.Centerline;
+                    for (int i = 1; i < line.Count; i++)
+                        if (DistToSegmentSq(mid, line[i - 1], line[i]) < tagRadius * tagRadius)
+                            return true;
+                    if (tipLoopRadius > 0f && line.Count > 0)
+                    {
+                        float rr = tipLoopRadius + beadWidth * 0.8f;
+                        if (Vector2.DistanceSquared(mid, line[^1]) < rr * rr)
+                            return true;
+                    }
+                }
+            return false;
+        }
 
         // Largest outer first, then by area descending — mirrors shell ordering.
         var ordered = polys
@@ -146,21 +171,26 @@ public static class LightningGenerator
                 }
             }
 
-            var first = P(new Vector2((float)path[start].x, (float)path[start].y));
+            var first2 = new Vector2((float)path[start].x, (float)path[start].y);
+            var first  = P(first2);
             if (runningEnd is { } prev && Vector3.Distance(prev, first) > 0.01f)
                 layer.Moves.Add(new ToolpathMove(prev, first, MoveKind.Travel));
 
-            var cur = first;
+            var cur  = first;
+            var cur2 = first2;   // plane-local twin of cur — tagging must use plane space
             for (int k = 1; k <= path.Count; k++)
             {
-                var idx = (start + k) % path.Count;
-                var nxt = P(new Vector2((float)path[idx].x, (float)path[idx].y));
+                var idx  = (start + k) % path.Count;
+                var nxt2 = new Vector2((float)path[idx].x, (float)path[idx].y);
+                var nxt  = P(nxt2);
                 if (Vector3.DistanceSquared(cur, nxt) < 1e-6f) continue;
-                layer.Moves.Add(new ToolpathMove(cur, nxt, MoveKind.Extrude));
-                cur = nxt;
+                layer.Moves.Add(new ToolpathMove(cur, nxt, MoveKind.Extrude)
+                    { IsLightning = IsLightningSeg(cur2, nxt2) });
+                cur = nxt; cur2 = nxt2;
             }
             if (Vector3.DistanceSquared(cur, first) > 1e-6f)
-                layer.Moves.Add(new ToolpathMove(cur, first, MoveKind.Extrude));
+                layer.Moves.Add(new ToolpathMove(cur, first, MoveKind.Extrude)
+                    { IsLightning = IsLightningSeg(cur2, first2) });
 
             runningEnd = first;
         }
@@ -172,6 +202,14 @@ public static class LightningGenerator
         foreach (var p in polys)
             if (Clipper.Area(p) > 0) outers++;
         return outers;
+    }
+
+    private static float DistToSegmentSq(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        float t = len2 < 1e-12f ? 0f : Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+        return Vector2.DistanceSquared(p, a + ab * t);
     }
 
     private static float ArcLength(List<Vector2> line)

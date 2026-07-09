@@ -32,6 +32,7 @@ public sealed class ToolpathRenderer : IDisposable
     // Separate VAOs per category so each can be toggled independently.
     private int  _extrudeVao, _extrudeVbo, _extrudeCount;
     private int  _travelVao,  _travelVbo,  _travelCount;
+    private int  _lightningVao, _lightningVbo, _lightningCount;
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
     private int  _beadVao, _beadVbo, _beadEbo, _beadCount;   // _beadCount = index count
@@ -148,6 +149,8 @@ public sealed class ToolpathRenderer : IDisposable
     private int   _totalMoveCount;
     private int[] _extrudeVertexCumulative = [];
     private int[] _travelVertexCumulative  = [];
+    private int[] _lightningVertexCumulative = [];
+    private static readonly Vector3 LightningColor = new(1.00f, 0.58f, 0.12f);
     private int[] _beadVertexCumulative    = [];
     private int[] _seamVertexCumulative    = [];
 
@@ -178,6 +181,14 @@ public sealed class ToolpathRenderer : IDisposable
         {
             (_extrudeVao, _extrudeVbo) = BuildVao(extData);
             _extrudeCount = extData.Length / 6;
+        }
+        if (_lightningVao != 0) { GL.DeleteVertexArray(_lightningVao); GL.DeleteBuffer(_lightningVbo); }
+        _lightningVao = _lightningVbo = _lightningCount = 0;
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0)
+        {
+            (_lightningVao, _lightningVbo) = BuildVao(lgData);
+            _lightningCount = lgData.Length / 6;
         }
     }
 
@@ -253,6 +264,11 @@ public sealed class ToolpathRenderer : IDisposable
         var extData = BuildExtrudeData();
         if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
 
+        if (_lightningVao != 0) { GL.DeleteVertexArray(_lightningVao); GL.DeleteBuffer(_lightningVbo); }
+        _lightningVao = _lightningVbo = _lightningCount = 0;
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
+
         if (_travelVao != 0) { GL.DeleteVertexArray(_travelVao); GL.DeleteBuffer(_travelVbo); }
         _travelVao = _travelVbo = _travelCount = 0;
         var trData = BuildTravelData();
@@ -265,12 +281,13 @@ public sealed class ToolpathRenderer : IDisposable
         if (_pointCount > 0) (_ptVao, _ptVbo) = BuildVao(ptData);
     }
 
-    private float[] BuildExtrudeData()
+    private float[] BuildExtrudeData(bool lightningOnly = false)
     {
         int extrudeCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind is MoveKind.Extrude or MoveKind.Mill) extrudeCount++;
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill
+                    && move.IsLightning == lightningOnly) extrudeCount++;
 
         var extData = new float[extrudeCount * 2 * 6];
         int ei = 0, mi = 0;
@@ -300,7 +317,8 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill
+                    && move.IsLightning == lightningOnly)
                 {
                     Vector3 color;
                     if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
@@ -311,6 +329,8 @@ public sealed class ToolpathRenderer : IDisposable
                         color = scalarRange < 1e-6f
                             ? GradientColor(0.5f)
                             : GradientColor((MoveScalar(move, layer) - scalarMin) / scalarRange);
+                    else if (lightningOnly)
+                        color = LightningColor;
                     else if (move.IsWipe)
                         color = _wipeColor;
                     else
@@ -376,19 +396,24 @@ public sealed class ToolpathRenderer : IDisposable
             total += layer.Moves.Count;
         _totalMoveCount = total;
 
-        _extrudeVertexCumulative = new int[total + 1];
-        _travelVertexCumulative  = new int[total + 1];
+        _extrudeVertexCumulative   = new int[total + 1];
+        _travelVertexCumulative    = new int[total + 1];
+        _lightningVertexCumulative = new int[total + 1];
 
-        int ei = 0, ti = 0, fi = 0;
+        int ei = 0, ti = 0, li = 0, fi = 0;
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) ei += 2;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    if (move.IsLightning) li += 2; else ei += 2;
+                }
                 else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
                 fi++;
-                _extrudeVertexCumulative[fi] = ei;
-                _travelVertexCumulative[fi]  = ti;
+                _extrudeVertexCumulative[fi]   = ei;
+                _travelVertexCumulative[fi]    = ti;
+                _lightningVertexCumulative[fi] = li;
             }
         }
     }
@@ -426,6 +451,9 @@ public sealed class ToolpathRenderer : IDisposable
         ComputeMovePrefixSums();
         var extData = BuildExtrudeData();
         if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
+
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
 
         var trData = BuildTravelData();
         if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
@@ -869,7 +897,8 @@ public sealed class ToolpathRenderer : IDisposable
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showBeadOverhang = false,
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
-                     Vector3 eyeLocal = default, float lineOpacity = 1f)
+                     Vector3 eyeLocal = default, float lineOpacity = 1f,
+                     bool showLightning = true)
     {
         if (_disposed) return;
 
@@ -878,6 +907,7 @@ public sealed class ToolpathRenderer : IDisposable
         _shader.SetFloat("uOpacity", lineOpacity);
 
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
+        int lgCount    = ScrubCount(_lightningVertexCumulative, _lightningCount, scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
         int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
         int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
@@ -896,6 +926,13 @@ public sealed class ToolpathRenderer : IDisposable
                 GL.BindVertexArray(_extrudeVao);
                 GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
             }
+            if (showLightning && lgCount > 0)
+            {
+                // Lightning orange is the layer's identity — keep it when unselected.
+                _shader.SetFloat("uOverride", 0f);
+                GL.BindVertexArray(_lightningVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, lgCount);
+            }
         }
         else
         {
@@ -905,6 +942,12 @@ public sealed class ToolpathRenderer : IDisposable
             {
                 GL.BindVertexArray(_extrudeVao);
                 GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
+            }
+
+            if (showLightning && lgCount > 0)
+            {
+                GL.BindVertexArray(_lightningVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, lgCount);
             }
 
             if (showTravel && trCount > 0)
@@ -1023,6 +1066,7 @@ public sealed class ToolpathRenderer : IDisposable
         _disposed = true;
         if (_extrudeVao       != 0) { GL.DeleteVertexArray(_extrudeVao);       GL.DeleteBuffer(_extrudeVbo);       }
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
+        if (_lightningVao     != 0) { GL.DeleteVertexArray(_lightningVao);     GL.DeleteBuffer(_lightningVbo);     }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
         if (_beadEbo          != 0) GL.DeleteBuffer(_beadEbo);
