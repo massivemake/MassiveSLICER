@@ -489,6 +489,9 @@
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                        Text="Decorative wall pattern applied to the toolpath when slicing."/>
 
+                            <Expander Classes="SectionExpander" Header="PATTERN TOOLS" IsExpanded="False" Margin="0,0,0,4">
+                            <StackPanel>
+
                             <!-- Pattern tiles (effector port) -->
                             <UniformGrid Columns="4" Margin="8,0,8,4">
                                 <Button Classes="PatternTile"
@@ -715,6 +718,9 @@
                                     <Slider Minimum="0" Maximum="1000" Value="{Binding Additive.PatternFadeOut, Mode=TwoWay}"/>
                                 </StackPanel>
                             </Grid>
+
+                            </StackPanel>
+                            </Expander>
 
                             <!-- Live effector: draggable glowing points that locally boost the pattern -->
                             <ToggleButton Classes="ExportCta" Margin="10,12,10,4"

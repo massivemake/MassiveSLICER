@@ -1123,7 +1123,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         return Math.Max(0f, pct);
     }
 
-    private double _extrusionStartWaitSec = 1.0;
+    private double _extrusionStartWaitSec;
 
     /// <summary>Pause (seconds) after first RPM-on before the first extrusion move.</summary>
     public double ExtrusionStartWaitSec

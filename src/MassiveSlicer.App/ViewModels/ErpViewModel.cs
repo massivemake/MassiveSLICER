@@ -165,6 +165,7 @@ public sealed class ErpViewModel : ViewModelBase
                 _log?.Invoke($"[erp] connected to {_baseUrl.Trim()}");
                 _showSettingsRequested = false;
                 NotifySectionVisibility();
+                _ = RefreshPricingAsync();     // ERP is the pricing source of truth
             }
             else
             {
@@ -509,6 +510,12 @@ public sealed class ErpViewModel : ViewModelBase
             {
                 Status = $"Rev {result.Value!.Rev} registered — sent to robot.";
                 _log?.Invoke($"[erp] rev {result.Value.Rev} registered on element {att.ElementName ?? elementId} ({att.Number}) as sent-to-robot");
+                if (result.Value.Costing is { } costing)
+                {
+                    if (costing.ClientPrice is { } price)
+                        _log?.Invoke($"[erp] rev {result.Value.Rev} client price ${price:0.00}");
+                    CheckPricingVersion(costing.PricingVersion);
+                }
             }
             else
             {
@@ -569,6 +576,78 @@ public sealed class ErpViewModel : ViewModelBase
         });
     }
 
+    // -- Pricing (source of truth: the ERP — never hard-code rates) -----------------
+
+    private ErpPricingConfig? _pricingConfig;
+    /// <summary>Cached ERP pricing config. Refreshed on connect and whenever a
+    /// quote/costing echoes a different <c>pricingVersion</c>. Null while offline.</summary>
+    public ErpPricingConfig? PricingConfig
+    {
+        get => _pricingConfig;
+        private set
+        {
+            if (SetField(ref _pricingConfig, value))
+                OnPropertyChanged(nameof(PricingSummary));
+        }
+    }
+
+    /// <summary>One-line "rates in effect" readout for the dock.</summary>
+    public string PricingSummary => _pricingConfig is not { } p
+        ? ""
+        : $"ERP pricing v{Truncate(p.Version, 8)} — ${p.RatePerHour:0.##}/hr"
+          + (p.RateWithFinishingPerHour is { } rf ? $" (${rf:0.##}/hr w/ finishing)" : "")
+          + $", {p.Materials.Count} material(s)";
+
+    private static string Truncate(string s, int n) => s.Length <= n ? s : s[..n];
+
+    /// <summary>Raised when the pricing config changes (stats panel recomputes cost).</summary>
+    public event Action? PricingChanged;
+
+    /// <summary>Fetches /pricing and caches it. Safe to call repeatedly.</summary>
+    public async Task RefreshPricingAsync()
+    {
+        var client = _client;
+        if (client is null) return;
+        var result = await client.GetPricingAsync(CancellationToken.None);
+        Post(() =>
+        {
+            if (result.Ok)
+            {
+                PricingConfig = result.Value;
+                _log?.Invoke($"[erp] pricing config v{result.Value!.Version} — "
+                    + $"${result.Value.RatePerHour:0.##}/hr, {result.Value.Materials.Count} material(s), "
+                    + $"markup {result.Value.OverheadRate:P0}+{result.Value.ProfitRate:P0}");
+                PricingChanged?.Invoke();
+            }
+            else if (result.Error!.HttpStatus == 404)
+                _log?.Invoke("[erp] pricing endpoint not available on this ERP yet — using local material preset costs");
+            else
+                _log?.Invoke($"[erp] pricing fetch failed: {result.Error.Kind} — {result.Error.Message}");
+        });
+    }
+
+    /// <summary>Re-fetches the config when a quote/costing echoes a different version.</summary>
+    private void CheckPricingVersion(string? echoed)
+    {
+        if (echoed is { Length: > 0 } v && _pricingConfig is { } cfg
+            && !string.Equals(cfg.Version, v, StringComparison.Ordinal))
+        {
+            _log?.Invoke($"[erp] pricing changed on the ERP (v{Truncate(v, 8)}) — refreshing config");
+            _ = RefreshPricingAsync();
+        }
+    }
+
+    /// <summary>Requests an authoritative quote from the ERP for the given stats.</summary>
+    public async Task<ErpResult<ErpCosting>> QuoteAsync(ErpQuoteRequest req)
+    {
+        var client = _client;
+        if (client is null || !IsConnected)
+            return ErpResult<ErpCosting>.Fail(ErpErrorKind.Network, "not connected to the ERP");
+        var result = await client.GetQuoteAsync(req, CancellationToken.None);
+        if (result.Ok) Post(() => CheckPricingVersion(result.Value!.PricingVersion));
+        return result;
+    }
+
     // -- Slice registration --------------------------------------------------------
 
     /// <summary>Builds the slice payload (renders the preview PNG beside the .mass and
@@ -608,8 +687,18 @@ public sealed class ErpViewModel : ViewModelBase
             {
                 if (result.Ok)
                 {
-                    Status = $"Slice registered as Rev {result.Value!.Rev}.";
+                    var costing = result.Value!.Costing;
+                    Status = costing?.ClientPrice is { } price
+                        ? $"Slice registered as Rev {result.Value.Rev} — client price ${price:0.00}."
+                        : $"Slice registered as Rev {result.Value.Rev}.";
                     _log?.Invoke($"[erp] slice registered as rev {result.Value.Rev} on element {att.ElementName ?? elementId} ({att.Number})");
+                    if (costing is not null)
+                    {
+                        _log?.Invoke($"[erp] rev {result.Value.Rev} costing: machine ${costing.MachineCost:0.00} + material ${costing.MaterialCost:0.00}"
+                            + (costing.QuantityDiscount is { } qd and not 0 ? $" − discount ${qd:0.00}" : "")
+                            + $" → client ${costing.ClientPrice:0.00}");
+                        CheckPricingVersion(costing.PricingVersion);
+                    }
                 }
                 else
                 {

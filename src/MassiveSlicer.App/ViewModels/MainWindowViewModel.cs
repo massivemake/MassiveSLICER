@@ -1283,7 +1283,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
             Material:      add.SelectedPreset?.Name,
             LayerHeightMm: add.LayerHeight,
-            BeadWidthMm:   add.BeadWidth);
+            BeadWidthMm:   add.BeadWidth,
+            PrintTimeSec:  Viewport.StatsTimeSeconds > 0 ? Viewport.StatsTimeSeconds : null,
+            WeightKg:      Viewport.StatsWeightKg > 0 ? Viewport.StatsWeightKg : null);
         return (stats, files);
     }
 
@@ -1315,7 +1317,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
             Material:      add.SelectedPreset?.Name,
             LayerHeightMm: add.LayerHeight,
-            BeadWidthMm:   add.BeadWidth);
+            BeadWidthMm:   add.BeadWidth,
+            PrintTimeSec:  Viewport.StatsTimeSeconds > 0 ? Viewport.StatsTimeSeconds : null,
+            WeightKg:      Viewport.StatsWeightKg > 0 ? Viewport.StatsWeightKg : null);
 
         await Viewport.Erp.NotifySentToRobotAsync(stats, files, new Dictionary<string, object?>
         {
