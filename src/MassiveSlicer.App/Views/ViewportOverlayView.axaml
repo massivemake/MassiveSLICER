@@ -4,6 +4,7 @@
              xmlns:ctrl="clr-namespace:MassiveSlicer.Controls"
              xmlns:local="clr-namespace:MassiveSlicer.App.Views"
              xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             xmlns:ctl="using:MassiveSlicer.Controls"
              xmlns:conv="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
              x:DataType="vm:ViewportViewModel"
@@ -1287,33 +1288,35 @@
             </StackPanel>
         </Border>
 
-        <!-- Edit-mode LAYERS window — right edge. Two handles focus the visible
-             toolpath onto a layer band: TOP slider = upper bound (the timeline's
-             scrub), BOTTOM slider = lower bound (hides everything beneath). -->
+        <!-- Edit-mode LAYERS window — right edge, spanning from below the top-right
+             buttons to above the bottom bars. One track, two pill handles: top =
+             upper bound (the timeline's scrub), bottom = lower bound (hides
+             everything beneath). Tick labels are layer numbers. -->
         <Border IsVisible="{Binding IsPaintEditOpen}"
-                HorizontalAlignment="Right" VerticalAlignment="Center"
-                Margin="0,0,8,0" ZIndex="16"
+                HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                Margin="0,64,8,150" ZIndex="16"
                 Background="#D9191919" CornerRadius="8"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
-                Padding="6,8">
-            <StackPanel Spacing="4" HorizontalAlignment="Center">
-                <TextBlock Text="LAYERS" FontSize="10" FontWeight="Bold"
-                           Foreground="#AAAAAA" HorizontalAlignment="Center"/>
-                <TextBlock Text="{Binding ToolpathScrubLayerLabel}" FontSize="10"
-                           Foreground="#DDDDDD" HorizontalAlignment="Center"/>
-                <StackPanel Orientation="Horizontal" Spacing="0" HorizontalAlignment="Center">
-                    <Slider Orientation="Vertical" Height="260" Width="22"
-                            Minimum="0" Maximum="{Binding ToolpathScrubMax}"
-                            Value="{Binding ToolpathScrubIndex, Mode=TwoWay}"
-                            ToolTip.Tip="Top of the layer window"/>
-                    <Slider Orientation="Vertical" Height="260" Width="22"
-                            Minimum="0" Maximum="{Binding ToolpathScrubMax}"
-                            Value="{Binding ToolpathScrubLowIndex, Mode=TwoWay}"
-                            ToolTip.Tip="Bottom of the layer window — hides everything beneath"/>
-                </StackPanel>
-                <TextBlock Text="{Binding ToolpathScrubLowLayerLabel, StringFormat='from layer {0}'}"
-                           FontSize="10" Foreground="#DDDDDD" HorizontalAlignment="Center"/>
-            </StackPanel>
+                Padding="8,8">
+            <Grid RowDefinitions="Auto,Auto,*,Auto" Width="96">
+                <TextBlock Grid.Row="0" Text="LAYERS" FontSize="10" FontWeight="Bold"
+                           Foreground="#AAAAAA" HorizontalAlignment="Center" Margin="0,0,0,6"/>
+                <TextBox  Grid.Row="1" CornerRadius="5" FontSize="11" Padding="6,3"
+                          HorizontalAlignment="Right" MinWidth="56"
+                          HorizontalContentAlignment="Right"
+                          Text="{Binding ToolpathScrubLayerHigh, Mode=TwoWay}"
+                          ToolTip.Tip="Top of the layer window (layer number)"/>
+                <ctl:DualRangeSlider Grid.Row="2" Margin="0,6"
+                          Minimum="1"
+                          Maximum="{Binding ToolpathScrubLayerCount}"
+                          HighValue="{Binding ToolpathScrubLayerHigh, Mode=TwoWay}"
+                          LowValue="{Binding ToolpathScrubLayerLow, Mode=TwoWay}"/>
+                <TextBox  Grid.Row="3" CornerRadius="5" FontSize="11" Padding="6,3"
+                          HorizontalAlignment="Right" MinWidth="56"
+                          HorizontalContentAlignment="Right"
+                          Text="{Binding ToolpathScrubLayerLow, Mode=TwoWay}"
+                          ToolTip.Tip="Bottom of the layer window — hides everything beneath"/>
+            </Grid>
         </Border>
 
         <!-- Box-select marquee -->
