@@ -1933,6 +1933,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (SetField(ref _toolpathScrubLowIndex, clamped))
             {
                 OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLow));
                 NotifyRenderNeeded();
             }
         }
@@ -1950,6 +1951,48 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    // ── Layer-unit range (the edit-mode LAYERS window binds in layers, not moves) ──
+
+    /// <summary>Total layers of the scrubbed toolpath (1 when none).</summary>
+    public int ToolpathScrubLayerCount =>
+        Math.Max(1, _scrubLayerEnds?.Length ?? ActiveScrubToolpath?.Layers.Count ?? 1);
+
+    /// <summary>Upper bound in LAYER units (1-based). Maps to the move scrub.</summary>
+    public double ToolpathScrubLayerHigh
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return ToolpathScrubLayerCount;
+            return GetScrubLayerIndex() + 1;
+        }
+        set
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+            int layer = Math.Clamp((int)Math.Round(value), 1, _scrubLayerEnds.Length);
+            ToolpathScrubIndex = _scrubLayerEnds[layer - 1];
+            OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        }
+    }
+
+    /// <summary>Lower bound in LAYER units (1-based). 1 = show from the first layer.</summary>
+    public double ToolpathScrubLayerLow
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return 1;
+            int idx = 0;
+            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex) idx++;
+            return idx + 1;
+        }
+        set
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+            int layer = Math.Clamp((int)Math.Round(value), 1, _scrubLayerEnds.Length);
+            ToolpathScrubLowIndex = layer <= 1 ? 0 : _scrubLayerEnds[layer - 2];
+            OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        }
+    }
+
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
     {
@@ -1960,6 +2003,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
                 // Keep the editable text box in sync unless we're already being
@@ -1999,6 +2043,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
             }
