@@ -55,8 +55,67 @@ public static class LightningGenerator
                 region,
                 Clipper.InflatePaths(region, -beadWidth * 0.6, JoinType.Miter, EndType.Polygon, 3.0),
                 FillRule.NonZero);
-            foreach (var tree in plan.Trees)
+
+            // Cut, then verify the perimeter held. Crowded lineages (converging
+            // inherited fingers) can merge into a cut blob that swallows a stretch
+            // of wall no single-tree guard can see; any uncovered boundary arc
+            // longer than a finger mouth drops the lineages that caused it and
+            // re-cuts. The perimeter always wins over infill.
+            for (int attempt = 0; ; attempt++)
             {
+                result = CutTrees(region, boundaryBand, plan, beadWidth, tipLoopRadius, outerCount);
+                if (attempt >= 3) break;
+                var offenders = PerimeterBreachTrees(region, result, plan, beadWidth, tipLoopRadius);
+                if (offenders.Count == 0) break;
+                foreach (var id in offenders) plan.DroppedTrees.Add(id);
+            }
+        }
+
+        if (dumpDir is not null)
+            DumpPaths(dumpDir, z, ("RESULT", result.Select(path =>
+                string.Join(";", path.Select(pt => $"{pt.x:0.##},{pt.y:0.##}")))));
+
+        // Single-bead walls (e.g. interior partitions modelled at exactly one bead
+        // thick) collapse to near-zero area under the half-bead inset and vanish from
+        // the region — but they are real printable geometry that shells mode draws.
+        // Recover them as standalone loops, deduped against their double-shell twins
+        // and against curves the region already covers.
+        var walls = new PathsD();
+        foreach (var poly in fillPolys)
+        {
+            if (poly.Count < 3) continue;
+            var path = new PathD(poly.Count);
+            foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
+            double a = Math.Abs(Clipper.Area(path));
+            double perim = 0;
+            for (int i = 0; i < path.Count; i++)
+            {
+                var p0 = path[i];
+                var p1 = path[(i + 1) % path.Count];
+                perim += Math.Sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+            }
+            if (perim < beadWidth) continue;                       // speck
+            if (a >= perim * beadWidth * 0.25) continue;           // has real area → in region
+            bool covered = result.Any(r => LightningPlanner.LiesOnCurve(path, r, beadWidth * 0.6))
+                        || walls.Any(w => LightningPlanner.LiesOnCurve(path, w, 0.3));
+            if (!covered) walls.Add(path);
+        }
+        if (walls.Count > 0)
+            result.AddRange(walls);
+
+        EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
+    }
+
+    /// <summary>Applies every live tree's slit to the region (notch interior fingers,
+    /// union external fins), running the per-tree guards, then morphologically closes
+    /// the cut so converging slits merge into one clean notch instead of leaving
+    /// sub-bead slivers. Trees failing a guard join <see cref="LightningLayerPlan.DroppedTrees"/>.</summary>
+    private static PathsD CutTrees(PathsD region, PathsD boundaryBand,
+        LightningLayerPlan plan, float beadWidth, float tipLoopRadius, int outerCount)
+    {
+        var result = region;
+        foreach (var tree in plan.Trees)
+        {
                 // A guard dropped this lineage at a lower layer — its support column
                 // is gone, so printing the inherited finger here would leave it in
                 // mid-air. (Emission runs bottom-up.)
@@ -127,41 +186,57 @@ public static class LightningGenerator
                         result = merged;
                 }
             }
-        }
 
-        if (dumpDir is not null)
-            DumpPaths(dumpDir, z, ("RESULT", result.Select(path =>
-                string.Join(";", path.Select(pt => $"{pt.x:0.##},{pt.y:0.##}")))));
+        return result;
+    }
 
-        // Single-bead walls (e.g. interior partitions modelled at exactly one bead
-        // thick) collapse to near-zero area under the half-bead inset and vanish from
-        // the region — but they are real printable geometry that shells mode draws.
-        // Recover them as standalone loops, deduped against their double-shell twins
-        // and against curves the region already covers.
-        var walls = new PathsD();
-        foreach (var poly in fillPolys)
+    /// <summary>Finds boundary stretches of <paramref name="region"/> that
+    /// <paramref name="result"/> leaves without a wall. A healthy finger mouth
+    /// uncovers ≲2 beads of boundary; anything longer means the cut swallowed real
+    /// perimeter — returns the live trees whose slits touch those breaches.</summary>
+    private static List<int> PerimeterBreachTrees(PathsD region, PathsD result,
+        LightningLayerPlan plan, float beadWidth, float tipLoopRadius)
+    {
+        var offenders = new List<int>();
+        if (ReferenceEquals(result, region)) return offenders;
+
+        // Thin band along every region wall (outers and holes alike).
+        double bandW = beadWidth * 0.5;
+        var band = Clipper.Difference(region,
+            Clipper.InflatePaths(region, -bandW, JoinType.Miter, EndType.Polygon, 3.0),
+            FillRule.NonZero);
+        if (band.Count == 0) return offenders;
+
+        // Tube around the emitted walls — where printed bead actually lies. The
+        // result loops are closed rings; re-close them explicitly and inflate as
+        // open polylines so the tube follows the wall CURVE, not the wall area.
+        var wallLines = new PathsD();
+        foreach (var path in result)
         {
-            if (poly.Count < 3) continue;
-            var path = new PathD(poly.Count);
-            foreach (var pt in poly) path.Add(new PointD(pt.X, pt.Y));
-            double a = Math.Abs(Clipper.Area(path));
-            double perim = 0;
-            for (int i = 0; i < path.Count; i++)
-            {
-                var p0 = path[i];
-                var p1 = path[(i + 1) % path.Count];
-                perim += Math.Sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
-            }
-            if (perim < beadWidth) continue;                       // speck
-            if (a >= perim * beadWidth * 0.25) continue;           // has real area → in region
-            bool covered = result.Any(r => LightningPlanner.LiesOnCurve(path, r, beadWidth * 0.6))
-                        || walls.Any(w => LightningPlanner.LiesOnCurve(path, w, 0.3));
-            if (!covered) walls.Add(path);
+            if (path.Count < 2) continue;
+            var open = new PathD(path) { path[0] };
+            wallLines.Add(open);
         }
-        if (walls.Count > 0)
-            result.AddRange(walls);
+        var tube = Clipper.InflatePaths(wallLines, beadWidth * 0.9, JoinType.Round, EndType.Round);
 
-        EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
+        var uncovered = Clipper.Difference(band, tube, FillRule.NonZero);
+        if (uncovered.Count == 0) return offenders;
+
+        var breaches = new PathsD();
+        foreach (var path in uncovered)
+            if (Clipper.Area(path) > 3.0 * beadWidth * bandW) breaches.Add(path);
+        if (breaches.Count == 0) return offenders;
+
+        var nearBreach = Clipper.InflatePaths(breaches, beadWidth, JoinType.Round, EndType.Polygon);
+        foreach (var tree in plan.Trees)
+        {
+            if (plan.DroppedTrees.Contains(tree.Id)) continue;
+            var slit = BuildTreeSlit(tree, region, beadWidth, tipLoopRadius);
+            if (slit.Count == 0) continue;
+            if (Clipper.Intersect(nearBreach, slit, FillRule.NonZero).Count > 0)
+                offenders.Add(tree.Id);
+        }
+        return offenders;
     }
 
     private static void DumpPaths(string dir, float z, params (string Tag, IEnumerable<string> Lines)[] groups)

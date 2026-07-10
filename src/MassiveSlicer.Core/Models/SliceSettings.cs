@@ -282,6 +282,14 @@ public sealed class SliceSettings
     /// (material added outside the part — cut away after printing).</summary>
     public bool LightningExteriorOverhangs { get; init; } = false;
 
+    /// <summary>Formbound Buttress: minimum solid ramp thickness in bead multiples
+    /// (multi-bead pad under overhangs). Default 2.5.</summary>
+    public float LightningRampMinBeads { get; init; } = 2.5f;
+
+    /// <summary>Formbound Buttress: prefer mouths on interior boundaries (holes /
+    /// inner walls) before scarifying the outer face.</summary>
+    public bool LightningPreferInteriorMouths { get; init; } = true;
+
     // ── Multi-Planar slicing (a stack of guide planes) ───────────────────────
 
     /// <summary>Guide planes as (height % of the part, tilt °): the slicing plane's

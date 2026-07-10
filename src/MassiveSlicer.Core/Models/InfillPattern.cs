@@ -24,6 +24,14 @@ public enum InfillPattern
     /// Lightning-style sparse support: thin two-wall "fingers" detour inward from
     /// the perimeter only where upper layers need material below them, then rejoin —
     /// the whole layer stays one continuous extrusion (no travels).
+    /// UI label: Formbound Bridge.
     /// </summary>
     LightningBridge,
+
+    /// <summary>
+    /// Formbound Buttress: solid multi-bead ramps grown from few perimeter mouths
+    /// (preferring interior anchors) that taper up under overhang demand. Continuous
+    /// extrusion — mouth width follows bead width; interior fill is multi-bead dense.
+    /// </summary>
+    FormboundButtress,
 }

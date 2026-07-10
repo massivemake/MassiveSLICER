@@ -81,7 +81,12 @@ public static class PlanarSlicer
                 fillPolysPerLayer.Add(FilterFillPolys(cached.Contours, cached.Closed, surfaceMode));
                 heights.Add(zi == 0 ? zPositions[0] - zMin : zPositions[zi] - zPositions[zi - 1]);
             }
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+            // The oracle probes just BELOW the plane: the demanding solid occupies
+            // the layer beneath it, and a grazing plane itself is ambiguous.
+            var meshTester = new Lightning.MeshInsideTester(meshes);
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
+                solidAt: (li, p) => meshTester.IsInside(
+                    new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])));
         }
 
         for (int zi = 0; zi < zPositions.Length; zi++)

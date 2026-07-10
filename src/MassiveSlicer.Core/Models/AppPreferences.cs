@@ -178,6 +178,12 @@ public sealed class AppPreferences
     /// <summary>Lightning Bridge: sacrificial external fins under outward overhangs.</summary>
     public bool LightningExteriorOverhangs { get; set; }
 
+    /// <summary>Formbound Buttress: minimum solid ramp thickness in bead multiples.</summary>
+    public double LightningRampMinBeads { get; set; } = 2.5;
+
+    /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
+    public bool LightningPreferInteriorMouths { get; set; } = true;
+
     /// <summary>Multi-Planar guide planes as [heightPct, angleDeg] pairs.</summary>
     public List<double[]> MultiPlanarPlanes { get; set; } =
         [[0, 0], [50, 15], [100, 30]];

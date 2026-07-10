@@ -370,6 +370,93 @@ public sealed class LightningBridgeTest
     }
 
     [Fact]
+    public void MeshInsideTesterHandlesDoubleShelledExports()
+    {
+        // Axis-aligned cube 0..100 as a triangle soup, then the same cube again
+        // offset 0.02 mm (double-shelled CAD export). Parity ray-casting must read
+        // the twin surfaces as ONE surface or every answer inverts.
+        static Vector3[] Cube(float o)
+        {
+            Vector3 p000 = new(o, o, o), p100 = new(100 + o, o, o), p010 = new(o, 100 + o, o),
+                p110 = new(100 + o, 100 + o, o), p001 = new(o, o, 100 + o), p101 = new(100 + o, o, 100 + o),
+                p011 = new(o, 100 + o, 100 + o), p111 = new(100 + o, 100 + o, 100 + o);
+            return
+            [
+                p000, p010, p110, p000, p110, p100,   // bottom
+                p001, p101, p111, p001, p111, p011,   // top
+                p000, p100, p101, p000, p101, p001,   // front
+                p010, p011, p111, p010, p111, p110,   // back
+                p000, p001, p011, p000, p011, p010,   // left
+                p100, p110, p111, p100, p111, p101,   // right
+            ];
+        }
+
+        foreach (var meshes in new[] { new[] { Cube(0f) }, new[] { Cube(0f), Cube(0.02f) } })
+        {
+            var t = new MeshInsideTester(meshes);
+            Assert.True(t.IsInside(new Vector3(50, 50, 50)), "centre must be solid");
+            Assert.True(t.IsInside(new Vector3(5, 5, 5)), "near-corner must be solid");
+            Assert.False(t.IsInside(new Vector3(150, 50, 50)), "beside the cube must be void");
+            Assert.False(t.IsInside(new Vector3(50, 50, 150)), "above the cube must be void");
+            Assert.False(t.IsInside(new Vector3(50, 50, -50)), "below the cube must be void");
+        }
+    }
+
+    [Fact]
+    public void PhantomIslandDoesNotSeedFingerLadder()
+    {
+        // A grazing cut over a pocket rim emits the rim curve without the wall that
+        // hosts it, and the parity union reads that lone contour as a SOLID island —
+        // for the one or two layers the tangency lasts. Real geometry persists;
+        // phantoms vanish. The planner must refuse to grow fingers under solids
+        // that are gone a few layers further up, or each phantom seeds a ladder of
+        // bridging for dozens of layers below geometry that doesn't exist
+        // (Drone V52 bug, 2026-07-09).
+        static List<Vector2> Square(float half, bool ccw)
+        {
+            List<Vector2> pts =
+                [new(-half, -half), new(half, -half), new(half, half), new(-half, half)];
+            if (!ccw) pts.Reverse();
+            return pts;
+        }
+
+        const int n = 40;
+        var polys = new List<List<List<Vector2>>>();
+        for (int i = 0; i < n; i++)
+        {
+            List<List<Vector2>> layer = i < 20
+                ? [Square(100f, ccw: true)]                             // solid floor
+                : [Square(100f, ccw: true), Square(70f, ccw: false)];   // ring above
+            if (i is 20 or 21)
+                layer.Add(Square(15f, ccw: true));   // phantom island in the ring void
+            polys.Add(layer);
+        }
+        var heights = Enumerable.Repeat(3f, n).ToList();
+        var plan = LightningPlanner.Build(polys, heights, new SliceSettings
+        {
+            LayerHeight = 3f, BeadWidth = Bead, InfillPattern = InfillPattern.LightningBridge,
+            LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true, LightningAnchorExterior = true,
+        },
+        // Mesh-truth oracle: everything the layers claim is real EXCEPT the phantom
+        // island's footprint (the mesh has a void there — grazing-cut rim curve).
+        solidAt: (li, p) => !(MathF.Abs(p.X) < 16f && MathF.Abs(p.Y) < 16f));
+
+        // No finger may chase the phantom: nothing reaches its footprint below it.
+        for (int i = 0; i < 20; i++)
+            foreach (var t in plan.Layers[i].Trees)
+                foreach (var b in t.Branches)
+                    foreach (var p in b.Centerline)
+                        Assert.True(p.Length() > 40f,
+                            $"layer {i}: finger node at ({p.X:0.#},{p.Y:0.#}) chases the phantom island");
+
+        // Control: the ring's inner wall floats over the hollow floor and PERSISTS —
+        // that demand is real and must still grow fingers.
+        Assert.True(plan.Layers[19].Trees.Count > 0,
+            "persistent real demand (ring inner wall) no longer plans support");
+    }
+
+    [Fact]
     public void ConvergingFingersMergeInsteadOfLeavingASliver()
     {
         // Two parallel fingers 8 mm apart (bead 6): their slit walls face each other

@@ -92,7 +92,12 @@ public static class AngledPlanarSlicer
                 fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
                 heights.Add(si == 0 ? settings.FirstLayerHeight : settings.LayerHeight);
             }
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+            // The oracle probes just BELOW the plane: the demanding solid occupies
+            // the layer beneath it, and a grazing plane itself is ambiguous.
+            var meshTester = new Lightning.MeshInsideTester(meshes);
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
+                solidAt: (li, p) => meshTester.IsInside(
+                    normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y));
         }
 
         for (int si = 0; si < steps.Count; si++)
@@ -230,14 +235,22 @@ public static class AngledPlanarSlicer
             lightningCache = new(march.Count);
             var fillPolysPerLayer = new List<List<List<Vector2>>>(march.Count);
             var heights = new List<float>(march.Count);
+            var frames  = new List<(Vector3 Origin, Vector3 U, Vector3 V)>(march.Count);
             foreach (var st in march)
             {
                 var contours = ComputeInsetContours(dedupedMeshes, st.Normal, st.PlaneD, st.Origin, st.U, st.V, settings);
                 lightningCache.Add(contours);
                 fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
                 heights.Add(layerH);
+                frames.Add((st.Origin, st.U, st.V));
             }
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings);
+            // The oracle probes just BELOW the plane: the demanding solid occupies
+            // the layer beneath it, and a grazing plane itself is ambiguous.
+            var meshTester = new Lightning.MeshInsideTester(meshes);
+            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings, frames,
+                solidAt: (li, p) => meshTester.IsInside(
+                    march[li].Origin - march[li].Normal * (0.4f * layerH)
+                    + march[li].U * p.X + march[li].V * p.Y));
         }
 
         Vector3 nPrev = default; float dPrev = 0f; bool hasPrev = false;
