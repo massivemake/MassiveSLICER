@@ -27,6 +27,10 @@ public sealed class LightningPlan
     public int AuditExtensions { get; set; }
     /// <summary>Live tree slots after orphan wipe (sum of per-layer tree counts).</summary>
     public int LiveSlots { get; set; }
+
+    /// <summary>Layer + plane-local coordinates of REAL uncovered demand samples
+    /// (capped) — surfaced in the app console so a support gap is never silent.</summary>
+    public List<string> UncoveredLog { get; } = [];
     public float BarMm { get; set; }
     public float SpacingMm { get; set; }
     public bool MultiPlanar { get; set; }
@@ -47,6 +51,7 @@ public sealed class LightningPlan
         BarMm            = BarMm,
         SpacingMm        = SpacingMm,
         MultiPlanar      = MultiPlanar,
+        UncoveredLog     = [.. UncoveredLog],
     };
 
     public LightningPlan(int layerCount)
@@ -154,6 +159,9 @@ public sealed class FormboundPlanStats
     public float BarMm { get; init; }
     public float SpacingMm { get; init; }
     public bool MultiPlanar { get; init; }
+
+    /// <summary>Per-sample "UNCOVERED layer N at (x,y)" lines (capped).</summary>
+    public IReadOnlyList<string> UncoveredLog { get; init; } = [];
 
     public string ToLogLine() =>
         $"[formbound] plan: layers={LayerCount} demand={DemandFlags} treesBorn={TreesBorn} " +
