@@ -877,6 +877,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (SetField(ref _infillPattern, value))
             {
                 OnPropertyChanged(nameof(ShowInfillControls));
+                OnPropertyChanged(nameof(ShowGridControls));
                 OnPropertyChanged(nameof(ShowLightningControls));
                 OnPropertyChanged(nameof(ShowButtressControls));
             }
@@ -884,6 +885,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public bool ShowInfillControls => InfillPattern != "None";
+
+    /// <summary>Grid width / angle only apply to the line-based fills — Formbound
+    /// patterns are demand-driven and ignore them.</summary>
+    public bool ShowGridControls =>
+        InfillPattern is "Rectilinear" or "Grid" or "Triangle" or "Ghost Mesh Grid";
 
     public bool ShowLightningControls => InfillPattern is "Formbound Bridge" or "Lightning Bridge" or "Formbound Buttress";
 
