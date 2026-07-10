@@ -359,7 +359,42 @@ pattern-None slice of identical settings (same layers), assert every
 baseline wall midpoint has material nearby, and pin known artifacts with
 frontier bounds rather than aspirational ones.
 
-## 11. Known limits
+## 11. Manual control — the toolpath Edit menu (paint marks)
+
+The Preview view has an Edit menu (pencil icon, left of the viewport) with four
+tools plus Clear and Reslice. All of them write `PaintMark` records — WORLD-space
+spheres `(Center, Radius, Kind)` stored in `SliceSettings.PaintMarks`, persisted
+with the workspace, and therefore stable across re-slices:
+
+- **Bridge brush / Line support** — `PaintMarkKind.Bridge`. The slicers project
+  every Bridge mark onto each slicing plane
+  (`ToolpathPaintFilter.ProjectBridgeMarks`) and the planner treats the projected
+  points as *manual demand*: fingers grow beneath them with geometric sanity
+  checks only — no spacing thinning, no mesh-oracle veto (the user explicitly
+  asked), external fins allowed regardless of the setting.
+- **Remove brush / Line remove** — `PaintMarkKind.Remove`.
+  `ToolpathPaintFilter.ApplyRemovals` runs after each slice: extrude moves whose
+  midpoint falls inside a Remove mark are deleted and each contiguous removed run
+  is spliced with one travel. This is the manual override for stray geometry the
+  automatic vetoes must leave alone (e.g. thin real ledges the mesh oracle
+  confirms).
+- Brushes: left-drag paints, Alt erases, right-click-drag horizontally resizes.
+  Line tools: one click marks the whole picked contour (dabs laid along its
+  length), Alt-click unmarks it.
+- Realtime slicing is PAUSED while the Edit menu is open (`RealtimeSlicingPaused`
+  + the pending-slice flag); collapsing the menu or pressing Reslice fires the
+  deferred re-slice.
+- Feedback overlay (`PaintOverlayRenderer`, GL_LINES): every mark renders as
+  three orthogonal circles (cyan = Bridge, red = Remove), the bead under the
+  cursor gets a brush-radius circle, and line tools highlight the contour they
+  would pick before the click. All GL calls happen on the GL thread
+  (`UpdatePaintOverlay` in the per-frame sync); pointer handlers only mutate
+  state.
+- Marks store RAW toolpath coordinates (the slicer's world space at slice time),
+  picked from the rendered beads by screen-space projection — so the filter and
+  planner compare like with like.
+
+## 12. Known limits
 
 - Junction/tangent planes still emit 1–2 layer phantom parity *walls*
   (bounded, cosmetic); only their bridging is suppressed.

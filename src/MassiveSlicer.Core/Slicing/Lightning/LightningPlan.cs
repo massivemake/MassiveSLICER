@@ -31,6 +31,19 @@ public sealed class LightningLayerPlan
 
     /// <summary>Tree ids removed mid-emission — shared across ALL layers of the plan.</summary>
     public HashSet<int> DroppedTrees { get; init; } = [];
+
+    /// <summary>Mesh-truth oracle in THIS layer's plane-local frame (the same lift
+    /// the planner used), probing just below OR above the plane — set by the slicer
+    /// after planning. Used to verify recovered single-bead walls (a real wall has
+    /// material adjacent to the plane; a fresh wall's material starts above it).</summary>
+    public Func<Vector2, bool>? SolidAt { get; set; }
+
+    /// <summary>Mesh-truth oracle probing exactly AT the plane. A real contour's
+    /// interior is solid at its own plane by definition of slicing; a parity
+    /// phantom's interior is void there — this is what the island veto asks.
+    /// (The near-plane probe above can't tell them apart on grazing cuts: the
+    /// surface weaves within a millimetre of the plane across the whole island.)</summary>
+    public Func<Vector2, bool>? SolidAtPlane { get; set; }
 }
 
 /// <summary>One finger / buttress tree rooted on a region boundary.</summary>
@@ -48,24 +61,13 @@ public sealed class LightningTree
     public bool External;
 
     /// <summary>Branch 0 is the trunk (starts at <see cref="Anchor"/>); later branches
-    /// attach to an earlier branch's node (tree merging).</summary>
+    /// attach to an earlier branch's node. Formbound Buttress uses trunk = wall approach
+    /// and two leaf branches = the horizontal support bar (T morph).</summary>
     public List<LightningBranch> Branches { get; } = [];
-
-    /// <summary>
-    /// Formbound Buttress: closed solid ramp polygon (plane-local) for this layer —
-    /// multi-bead pad grown from the mouth. Null for dual-wall Formbound Bridge fingers.
-    /// </summary>
-    public List<Vector2>? Solid;
 
     public LightningTree Clone()
     {
-        var t = new LightningTree
-        {
-            Id = Id,
-            Anchor = Anchor,
-            External = External,
-            Solid = Solid is null ? null : new List<Vector2>(Solid),
-        };
+        var t = new LightningTree { Id = Id, Anchor = Anchor, External = External };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))
             {

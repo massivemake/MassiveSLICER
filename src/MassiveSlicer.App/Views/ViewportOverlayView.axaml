@@ -47,6 +47,69 @@
             </StackPanel>
         </Border>
 
+        <!-- Toolpath EDIT menu — left edge, Preview view only. The pencil expands
+             the tool stack; realtime slicing PAUSES while the menu is open (edits
+             accumulate) and the deferred re-slice fires when it collapses or when
+             the Reslice button is pressed. Brushes: left-drag paints, Alt erases,
+             right-drag resizes. Line tools: click one bead line to mark the whole
+             contour as supported (bridge) / removed; Alt-click unmarks it. -->
+        <Border HorizontalAlignment="Left" VerticalAlignment="Center"
+                Margin="336,0,0,0" ZIndex="15"
+                Background="#B3222222" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="3"
+                IsVisible="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}">
+            <StackPanel Orientation="Vertical" Spacing="2">
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding IsPaintEditOpen, Mode=TwoWay}"
+                              Classes.active="{Binding IsPaintEditOpen}"
+                              ToolTip.Tip="Edit toolpath — slicing pauses while open; collapsing re-slices with your edits">
+                    <ia:Icon Value="mdi-pencil" FontSize="15"/>
+                </ToggleButton>
+
+                <StackPanel Orientation="Vertical" Spacing="2"
+                            IsVisible="{Binding IsPaintEditOpen}">
+                    <ToggleButton Classes="ToolbarButton" Padding="7"
+                                  IsChecked="{Binding PaintBridgeActive, Mode=TwoWay}"
+                                  Classes.active="{Binding PaintBridgeActive}"
+                                  ToolTip.Tip="Bridge brush — paint beads that need support; Formbound fingers grow beneath them. Right-drag resizes the brush, Alt+paint erases.">
+                        <ia:Icon Value="mdi-brush" FontSize="15"/>
+                    </ToggleButton>
+                    <ToggleButton Classes="ToolbarButton" Padding="7"
+                                  IsChecked="{Binding PaintRemoveActive, Mode=TwoWay}"
+                                  Classes.active="{Binding PaintRemoveActive}"
+                                  ToolTip.Tip="Remove brush — painted beads are deleted from the toolpath (artifacts, mistakes, unwanted geometry). Right-drag resizes the brush, Alt+paint erases.">
+                        <ia:Icon Value="mdi-eraser" FontSize="15"/>
+                    </ToggleButton>
+                    <ToggleButton Classes="ToolbarButton" Padding="7"
+                                  IsChecked="{Binding PaintLineBridgeActive, Mode=TwoWay}"
+                                  Classes.active="{Binding PaintLineBridgeActive}"
+                                  ToolTip.Tip="Line support — click a bead line to mark the whole contour as needing support. Alt-click unmarks it.">
+                        <ia:Icon Value="mdi-vector-polyline-plus" FontSize="15"/>
+                    </ToggleButton>
+                    <ToggleButton Classes="ToolbarButton" Padding="7"
+                                  IsChecked="{Binding PaintLineRemoveActive, Mode=TwoWay}"
+                                  Classes.active="{Binding PaintLineRemoveActive}"
+                                  ToolTip.Tip="Line remove — click a bead line to delete the whole contour from the toolpath. Alt-click unmarks it.">
+                        <ia:Icon Value="mdi-vector-polyline-minus" FontSize="15"/>
+                    </ToggleButton>
+                    <Button Classes="ToolbarButton" Padding="7"
+                            Command="{Binding AdditiveSettings.ClearPaintMarksCommand}"
+                            ToolTip.Tip="Clear all painted marks">
+                        <ia:Icon Value="mdi-broom" FontSize="15"/>
+                    </Button>
+                    <TextBlock Text="{Binding PaintBrushRadiusMm, StringFormat='{}{0:0} mm'}"
+                               FontSize="10" HorizontalAlignment="Center" Foreground="#AAAAAA"
+                               IsVisible="{Binding PaintBrushActive}"/>
+                    <Button Classes="ToolbarButton" Padding="7"
+                            Command="{Binding ReslicePaintCommand}"
+                            ToolTip.Tip="Re-slice now with the accumulated edits (menu stays open)">
+                        <ia:Icon Value="mdi-refresh" FontSize="15"/>
+                    </Button>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
         <!-- View pie menu (Ctrl+Space) — appears around the pointer -->
         <Grid Background="#01000000" ZIndex="60" IsVisible="{Binding IsViewPieOpen}">
             <Grid.GestureRecognizers/>
@@ -648,6 +711,15 @@
                         ToolTip.Tip="Mesh Cleanup — repair common mesh problems (duplicate faces, welded vertices, degenerate polygons) before slicing">
                     <ia:Icon Value="mdi-broom" FontSize="14"/>
                 </Button>
+                <Button Classes="ToolbarButton"
+                        Padding="6,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding CutToolCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        IsEnabled="{Binding CanCutTool}"
+                        ToolTip.Tip="Cut Tool — split model into two halves with Formbound alignment tabs and bolt lugs along the cut perimeter">
+                    <ia:Icon Value="mdi-content-cut" FontSize="14"/>
+                </Button>
 
                 <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
                         IsVisible="{Binding !IsToolpathSelected}"/>
@@ -673,7 +745,7 @@
                                           ToolTip.Tip="Rapid repositioning moves"/>
                                 <CheckBox Content="Formbound bridges" FontSize="11"
                                           IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
-                                          ToolTip.Tip="Formbound Bridge support fingers (orange) — uncheck Extrusion lines to isolate them"/>
+                                          ToolTip.Tip="Formbound Bridge / Buttress support (orange) — uncheck Extrusion lines to isolate them"/>
                                 <CheckBox Content="Seam points" FontSize="11"
                                           IsChecked="{Binding ShowSeam, Mode=TwoWay}"
                                           ToolTip.Tip="Layer seam locations"/>

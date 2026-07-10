@@ -332,6 +332,41 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "paint",
+            Description = "Toolpath paint marks: bridge/remove dabs, list, clear",
+            Usage = "paint <bridge|remove> <x> <y> <z> <radius> | paint list | paint clear",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                switch (parts.FirstOrDefault())
+                {
+                    case "bridge" or "remove" when parts.Length >= 5:
+                        add.PaintMarks.Add(new MassiveSlicer.Core.Models.PaintMark(
+                            new System.Numerics.Vector3(
+                                float.Parse(parts[1]), float.Parse(parts[2]), float.Parse(parts[3])),
+                            float.Parse(parts[4]),
+                            parts[0] == "bridge"
+                                ? MassiveSlicer.Core.Models.PaintMarkKind.Bridge
+                                : MassiveSlicer.Core.Models.PaintMarkKind.Remove));
+                        add.BumpPaintStamp();
+                        ctx.Log($"[paint] {parts[0]} mark added ({add.PaintMarks.Count} total)");
+                        break;
+                    case "clear":
+                        add.ClearPaintMarksCommand.Execute(null);
+                        ctx.Log("[paint] cleared");
+                        break;
+                    default:
+                        foreach (var m in add.PaintMarks)
+                            ctx.Log($"[paint] {m.Kind} ({m.Center.X:0.#},{m.Center.Y:0.#},{m.Center.Z:0.#}) r={m.Radius:0.#}");
+                        ctx.Log($"[paint] {add.PaintMarks.Count} mark(s)");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>
@@ -666,7 +701,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "set-frame [tool] [base]   default: app LFAM tool/base",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
                 int tool = p.Length > 0 && int.TryParse(p[0], System.Globalization.NumberStyles.Integer, inv, out var t)
                     ? t : ctx.Main.RightPanel.Settings.Robot.KrlToolIndex;
@@ -732,7 +767,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "scan [cpu-only] [save]",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 bool cpuOnly = p.Any(x => x.Equals("cpu-only", StringComparison.OrdinalIgnoreCase)
                                        || x.Equals("cpu", StringComparison.OrdinalIgnoreCase));
                 bool save = p.Any(x => x.Equals("save", StringComparison.OrdinalIgnoreCase)
@@ -749,7 +784,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "move-e1 <value> [vel%]",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (p.Length < 1 || !double.TryParse(p[0], System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var value))
                 {
@@ -834,7 +869,7 @@ public sealed class ConsoleCommandRegistry
 
     private static void RunWaypoint(ConsoleCommandContext ctx, string args)
     {
-        var parts = (args ?? string.Empty).Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
             ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name>");
@@ -913,7 +948,7 @@ public sealed class ConsoleCommandRegistry
             return;
         }
 
-        var parts = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         string dir = parts[0].ToLowerInvariant();
         string rest = parts.Length > 1 ? string.Join(' ', parts[1..]) : string.Empty;
 
@@ -940,7 +975,7 @@ public sealed class ConsoleCommandRegistry
     // Parses "x y z [a b c] [vel%] [tool] [base]" and fires a MS_* Cartesian move.
     private static void RunServerMove(ConsoleCommandContext ctx, string args, bool linear)
     {
-        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         double D(int i, double def) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : def;
         if (p.Length < 3) { ctx.LogError("usage: move-pose <x> <y> <z> [a b c] [vel%] [tool] [base]"); return; }
@@ -974,7 +1009,7 @@ public sealed class ConsoleCommandRegistry
 
     private static void RunServerJoints(ConsoleCommandContext ctx, string args)
     {
-        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         double D(int i) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : 0;
         if (p.Length < 6) { ctx.LogError("usage: move-joints <a1>..<a6> [e1] [vel%] [tool] [base]"); return; }

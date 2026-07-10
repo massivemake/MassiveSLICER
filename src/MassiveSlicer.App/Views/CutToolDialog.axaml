@@ -1,0 +1,147 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ia="https://github.com/projektanker/icons.avalonia"
+        x:Class="MassiveSlicer.App.Views.CutToolDialog"
+        x:CompileBindings="False"
+        Title="Cut Tool"
+        Width="420" Height="620"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        CanResize="False"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg0}">
+
+    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="48"/>
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0" x:Name="TitleBar"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1"
+                    Cursor="SizeAll">
+                <Grid Margin="14,0">
+                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                        <ia:Icon Value="mdi-content-cut" FontSize="16" Foreground="{DynamicResource Accent}"/>
+                        <TextBlock Text="Cut Tool"
+                                   Foreground="{DynamicResource TextPrimary}"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Classes="ToolbarButton"
+                            Padding="6,2"
+                            Click="OnCancel">
+                        <ia:Icon Value="mdi-close" FontSize="14"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <ScrollViewer Grid.Row="1"
+                          VerticalScrollBarVisibility="Auto"
+                          Background="{DynamicResource Bg2}">
+                <StackPanel Margin="18,14,18,14" Spacing="8">
+                    <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="11"
+                               Text="Split the selected model into two printable halves. Formbound-style tabs along the cut perimeter nest for alignment; bolt lugs share a common axis on both parts."/>
+
+                    <TextBlock Text="{Binding ModelName}" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                    <TextBlock Classes="LabelMuted" FontSize="10"
+                               Text="{Binding ModelMinZ, StringFormat=Z range min: \{0\} mm}"/>
+                    <TextBlock Classes="LabelMuted" FontSize="10" Margin="0,-6,0,0"
+                               Text="{Binding ModelMaxZ, StringFormat=Z range max: \{0\} mm}"/>
+
+                    <TextBlock Text="CUT PLANE" Classes="SectionHeader" Margin="0,8,0,0"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="90"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                   ToolTip.Tip="Offset of the cut plane along its normal from the model origin. For a horizontal cut (normal Z), this is world Z."/>
+                        <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Height}"/>
+                    </Grid>
+
+                    <TextBlock Text="Normal" Classes="LabelMuted" Margin="0,4,0,0"/>
+                    <Grid ColumnDefinitions="*,*,*">
+                        <StackPanel Grid.Column="0" Margin="0,0,4,0">
+                            <TextBlock Text="X" FontSize="10" Classes="LabelMuted"/>
+                            <TextBox Classes="PanelTextBox" Text="{Binding NormalX}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="2,0">
+                            <TextBlock Text="Y" FontSize="10" Classes="LabelMuted"/>
+                            <TextBox Classes="PanelTextBox" Text="{Binding NormalY}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="4,0,0,0">
+                            <TextBlock Text="Z" FontSize="10" Classes="LabelMuted"/>
+                            <TextBox Classes="PanelTextBox" Text="{Binding NormalZ}"/>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <Button Content="XY (Z↑)" Classes="ToolbarButton" Padding="8,4" Click="OnNormalZ"/>
+                        <Button Content="XZ (Y↑)" Classes="ToolbarButton" Padding="8,4" Click="OnNormalY"/>
+                        <Button Content="YZ (X↑)" Classes="ToolbarButton" Padding="8,4" Click="OnNormalX"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Place both halves on the cut (keep world pose)"
+                              IsChecked="{Binding PlaceOnCut, Mode=TwoWay}"
+                              Margin="0,6,0,0"/>
+
+                    <TextBlock Text="CONNECTORS" Classes="SectionHeader" Margin="0,10,0,0"/>
+                    <CheckBox Content="Add Formbound tabs + bolt lugs along perimeter"
+                              IsChecked="{Binding AddConnectors, Mode=TwoWay}"/>
+
+                    <StackPanel IsVisible="{Binding AddConnectors}" Spacing="6" Margin="0,4,0,0">
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Distance between connector sites along the cut perimeter."/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding ConnectorSpacing}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Tab width (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabWidth}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Tab depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="How far alignment tabs protrude past the cut face."/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabDepth}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Tab height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding TabHeight}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Bolt Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding BoltDiameter}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Lug Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding BoltLugDiameter}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,90">
+                            <TextBlock Text="Min corner radius (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Softens tab edges — keep ≥ half bead width to avoid over-extrusion."/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding MinCornerRadius}"/>
+                        </Grid>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,1,0,0">
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                            Spacing="8" Margin="12,0">
+                    <Button Content="Cancel" Classes="ToolbarButton" Padding="14,6" Click="OnCancel"/>
+                    <Button Content="Perform cut" Classes="AccentButton" Padding="14,6" Click="OnOk"/>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

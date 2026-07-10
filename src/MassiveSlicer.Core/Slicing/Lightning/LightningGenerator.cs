@@ -5,17 +5,15 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.Slicing.Lightning;
 
 /// <summary>
-/// Realizes a layer's lightning plan as toolpath moves.
+/// Realizes a layer's lightning / Formbound plan as toolpath moves.
 ///
-/// Every finger tree's centerlines are inflated by half a bead
-/// (<c>JoinType.Round / EndType.Round</c>) into a closed "slit" polygon whose
-/// boundary is exactly the hairpin out-and-back wall pair with a rounded tip;
-/// the root end is extended past the region boundary so
-/// <c>Difference(region, slits)</c> notches the perimeter. The resulting
-/// polygons' boundaries ARE the perimeter-with-finger-detours paths — each is
-/// emitted as one plain closed extrude loop, so continuity comes for free.
-/// Optional tip discs are unioned onto the slits, making the boundary loop
-/// around each tip ("support pad").
+/// Every tree's centerlines are inflated by half a bead into a closed "slit";
+/// <c>Difference(region, slits)</c> notches the perimeter so the boundary path is
+/// a continuous hairpin detour (single bead — one continuous line).
+///
+/// <para><b>Formbound Bridge</b> — radial fingers (mouth → tip).</para>
+/// <para><b>Formbound Buttress</b> — T-morph: wall approach → horizontal support bar
+/// (still single-bead dual-wall slits, not multi-bead fill).</para>
 /// </summary>
 public static class LightningGenerator
 {
@@ -29,6 +27,17 @@ public static class LightningGenerator
         Func<Vector2, Vector3>? project = null)
     {
         var region = LightningPlanner.ToPathsD(fillPolys, beadWidth);
+        if (region.Count == 0) return;
+
+        // Phantom-island veto (mesh truth, when the slicer supplied an oracle):
+        // the planner already refuses to BRIDGE under parity phantoms; here the
+        // stray wall itself is removed. A real contour's interior is solid AT its
+        // own plane by definition of slicing; a phantom's is void. The dominant
+        // outer is never touched (safety), and real islands (posts) probe solid.
+        var solidAt = plan?.SolidAt;
+        string? dumpDirEarly = Environment.GetEnvironmentVariable("MSL_LIGHTNING_DUMP");
+        if (plan?.SolidAtPlane is { } solidAtPlane && region.Count > 1)
+            RemovePhantomIslands(region, solidAtPlane, plan.SolidAt, beadWidth, dumpDirEarly, z);
         if (region.Count == 0) return;
 
         // Debug hook: set MSL_LIGHTNING_DUMP to a directory to dump each layer's
@@ -98,12 +107,185 @@ public static class LightningGenerator
             if (a >= perim * beadWidth * 0.25) continue;           // has real area → in region
             bool covered = result.Any(r => LightningPlanner.LiesOnCurve(path, r, beadWidth * 0.6))
                         || walls.Any(w => LightningPlanner.LiesOnCurve(path, w, 0.3));
-            if (!covered) walls.Add(path);
+            if (covered) continue;
+            // Mesh check: a real collapsed partition lies ON the part; a parity
+            // phantom's synthetic closure chords hang in space. Require most of
+            // the curve to probe solid before printing it.
+            if (solidAt is not null)
+            {
+                int nS = Math.Min(path.Count, 9), hits = 0;
+                for (int k = 0; k < nS; k++)
+                {
+                    var pt = path[(int)((long)k * path.Count / nS)];
+                    if (solidAt(new Vector2((float)pt.x, (float)pt.y))) hits++;
+                }
+                if (hits * 10 < nS * 7) continue;   // < 70 % on-part → phantom
+            }
+            walls.Add(path);
         }
         if (walls.Count > 0)
             result.AddRange(walls);
 
+        // Soften acute corners on the toolpath without filling finger notches:
+        // vertex-wise fillet of each boundary polyline (min radius = bead width).
+        result = FilletBoundaryCorners(result, beadWidth);
+
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
+    }
+
+    /// <summary>
+    /// Replace sharp polyline corners with circular arcs of radius ≥ bead width so
+    /// the extruder never turns tighter than one bead. Operates on the boundary
+    /// curves only — does not inflate the filled region (which would erase slits).
+    /// </summary>
+    private static PathsD FilletBoundaryCorners(PathsD paths, float beadWidth)
+    {
+        if (paths.Count == 0 || beadWidth < 0.1f) return paths;
+        float r = beadWidth;
+        var outp = new PathsD();
+        foreach (var path in paths)
+        {
+            if (path.Count < 3) { outp.Add(path); continue; }
+            var pts = new List<Vector2>(path.Count);
+            foreach (var pt in path) pts.Add(new Vector2((float)pt.x, (float)pt.y));
+            // Closed loop: fillet including wrap-around corner.
+            var filleted = FilletClosedLoop(pts, r);
+            if (filleted.Count < 3) { outp.Add(path); continue; }
+            var np = new PathD(filleted.Count);
+            foreach (var p in filleted) np.Add(new PointD(p.X, p.Y));
+            outp.Add(np);
+        }
+        return outp;
+    }
+
+    private static List<Vector2> FilletClosedLoop(List<Vector2> pts, float radius)
+    {
+        int n = pts.Count;
+        if (n < 3) return pts;
+        var dst = new List<Vector2>();
+        for (int i = 0; i < n; i++)
+        {
+            var a = pts[(i - 1 + n) % n];
+            var b = pts[i];
+            var c = pts[(i + 1) % n];
+            var ba = a - b;
+            var bc = c - b;
+            float la = ba.Length();
+            float lc = bc.Length();
+            if (la < 1e-5f || lc < 1e-5f) { dst.Add(b); continue; }
+            ba /= la; bc /= lc;
+            float cos = Math.Clamp(Vector2.Dot(ba, bc), -1f, 1f);
+            float ang = MathF.Acos(cos);
+            float turn = MathF.PI - ang;
+            // Nearly straight — keep vertex.
+            if (turn < 0.2f || float.IsNaN(turn)) { dst.Add(b); continue; }
+            // Only fillet corners tighter than ~ bead (turn angle large enough that
+            // the inscribed radius would be < bead if cut short).
+            float half = turn * 0.5f;
+            float cut = radius / MathF.Max(MathF.Tan(half), 1e-3f);
+            cut = MathF.Min(cut, MathF.Min(la, lc) * 0.45f);
+            if (cut < radius * 0.2f) { dst.Add(b); continue; }
+
+            var p0 = b + ba * cut;
+            var p1 = b + bc * cut;
+            var inDir = -ba;
+            float crossIO = inDir.X * bc.Y - inDir.Y * bc.X;
+            var leftN = new Vector2(-inDir.Y, inDir.X);
+            var toCenter = crossIO >= 0 ? leftN : -leftN;
+            var center = p0 + toCenter * radius;
+            var v0 = p0 - center;
+            var v1 = p1 - center;
+            if (v0.LengthSquared() < 1e-8f || v1.LengthSquared() < 1e-8f) { dst.Add(b); continue; }
+            float a0 = MathF.Atan2(v0.Y, v0.X);
+            float a1 = MathF.Atan2(v1.Y, v1.X);
+            float da = a1 - a0;
+            if (crossIO >= 0) { while (da < 0) da += MathF.PI * 2f; }
+            else { while (da > 0) da -= MathF.PI * 2f; }
+            // Skip extremely long sweeps (would invert topology).
+            if (MathF.Abs(da) > MathF.PI * 1.1f) { dst.Add(b); continue; }
+            int segs = Math.Max(3, (int)MathF.Ceiling(MathF.Abs(da) / (MathF.PI / 8f)));
+            for (int s = 0; s <= segs; s++)
+            {
+                float t = s / (float)segs;
+                float angS = a0 + da * t;
+                dst.Add(center + new Vector2(MathF.Cos(angS), MathF.Sin(angS)) * radius);
+            }
+        }
+        return dst.Count >= 3 ? dst : pts;
+    }
+
+    /// <summary>Removes region islands whose interior is mesh-void AT the plane:
+    /// parity phantoms from grazing cuts (a pocket-rim curve without its host
+    /// wall). Outers are grouped with their holes; the dominant outer is never
+    /// dropped; an island goes only when under 30 % of its eroded-interior probes
+    /// read solid (grazing planes weave through the surface, so demand a clear
+    /// majority verdict, not a single sample).</summary>
+    private static void RemovePhantomIslands(PathsD region, Func<Vector2, bool> solidAt,
+        Func<Vector2, bool>? solidNear, float beadWidth, string? dumpDir = null, float z = 0f)
+    {
+        // Split into outers and holes; associate each hole with its enclosing outer.
+        var outers = new List<int>();
+        var holes  = new List<int>();
+        for (int i = 0; i < region.Count; i++)
+            (Clipper.Area(region[i]) > 0 ? outers : holes).Add(i);
+        if (outers.Count <= 1) return;
+
+        int dominant = outers.OrderByDescending(i => Clipper.Area(region[i])).First();
+        double dominantArea = Clipper.Area(region[dominant]);
+
+        var toRemove = new HashSet<int>();
+        foreach (int oi in outers)
+        {
+            if (oi == dominant) continue;
+            // Only small features can be phantoms worth auto-dropping. Components
+            // comparable to the dominant body are parity-composed real geometry
+            // (open-shell half-loops) whose eroded boundary verts land on synthetic
+            // chords through the cavity — no whole-island probe can judge them.
+            if (Clipper.Area(region[oi]) > dominantArea * 0.25) continue;
+            var component = new PathsD { region[oi] };
+            foreach (int hi in holes)
+                if (Clipper.PointInPolygon(region[hi][0], region[oi]) != PointInPolygonResult.IsOutside)
+                    component.Add(region[hi]);
+
+            // Erode so probes sit safely inside the claimed material, clear of the
+            // boundary curve (which lies on the mesh surface even for phantoms).
+            var inner = Clipper.InflatePaths(component, -beadWidth * 0.3, JoinType.Miter, EndType.Polygon, 3.0);
+            if (inner.Count == 0 || inner[0].Count == 0) continue;   // sliver — leave it
+
+            int solid = 0, near = 0, total = 0;
+            int nS = Math.Min(inner[0].Count, 9);
+            for (int k = 0; k < nS; k++)
+            {
+                var pt = inner[0][(int)((long)k * inner[0].Count / nS)];
+                var v2 = new Vector2((float)pt.x, (float)pt.y);
+                total++;
+                if (solidAt(v2)) solid++;
+                if (solidNear?.Invoke(v2) == true) near++;
+            }
+            if (dumpDir is not null)
+            {
+                var pts = string.Join(" ", Enumerable.Range(0, nS).Select(k =>
+                {
+                    var pt = inner[0][(int)((long)k * inner[0].Count / nS)];
+                    var v2 = new Vector2((float)pt.x, (float)pt.y);
+                    return $"({pt.x:0.#},{pt.y:0.#})={(solidAt(v2) ? 1 : 0)}";
+                }));
+                DumpPaths(dumpDir, z, ("VETO", [
+                    $"outer={oi} area={Clipper.Area(region[oi]):0} atPlane={solid}/{total} nearPlane={near}/{total} pts: {pts}"]));
+            }
+            if (total == 0 || solid * 10 >= total * 3) continue;   // ≥30 % solid → real
+
+            toRemove.Add(oi);
+            foreach (int hi in holes)
+                if (Clipper.PointInPolygon(region[hi][0], region[oi]) != PointInPolygonResult.IsOutside)
+                    toRemove.Add(hi);
+        }
+        if (toRemove.Count == 0) return;
+        var kept = new PathsD(region.Count - toRemove.Count);
+        for (int i = 0; i < region.Count; i++)
+            if (!toRemove.Contains(i)) kept.Add(region[i]);
+        region.Clear();
+        region.AddRange(kept);
     }
 
     /// <summary>Applies every live tree's slit to the region (notch interior fingers,
@@ -281,7 +463,9 @@ public static class LightningGenerator
         }
         if (openLines.Count == 0) return new PathsD();
 
-        var slit = Clipper.InflatePaths(openLines, halfBead, JoinType.Round, EndType.Round);
+        // Round joins + round ends: mouth and tip never form knife corners.
+        // Centerlines should already be filleted to ≥ bead radius in the planner.
+        var slit = Clipper.InflatePaths(openLines, halfBead, JoinType.Round, EndType.Round, 2.0);
 
         // Tip support pads: a disc at every leaf tip makes the boundary loop around it.
         if (tipLoopRadius > 0f)

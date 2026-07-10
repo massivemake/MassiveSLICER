@@ -29,9 +29,9 @@ public enum InfillPattern
     LightningBridge,
 
     /// <summary>
-    /// Formbound Buttress: solid multi-bead ramps grown from few perimeter mouths
-    /// (preferring interior anchors) that taper up under overhang demand. Continuous
-    /// extrusion — mouth width follows bead width; interior fill is multi-bead dense.
+    /// Formbound Buttress: single-bead continuous path that morphs from a perimeter
+    /// mouth (wall cut) into a horizontal support bar under overhang demand — one
+    /// extrusion line, not a filled pad. Prefers interior mouths.
     /// </summary>
     FormboundButtress,
 }

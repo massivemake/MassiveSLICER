@@ -73,6 +73,10 @@
                         <MenuItem Header="_Redo"
                                   Command="{Binding RedoCommand}"
                                   InputGesture="Ctrl+Y"/>
+                        <Separator/>
+                        <MenuItem Header="_Cut Tool..."
+                                  Command="{Binding Viewport.CutToolCommand}"
+                                  ToolTip.Tip="Split selected model into two parts with Formbound tabs and bolt lugs"/>
                     </MenuItem>
                 </Menu>
             </StackPanel>

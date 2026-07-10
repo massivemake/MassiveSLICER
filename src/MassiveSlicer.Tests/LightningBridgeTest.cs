@@ -628,6 +628,234 @@ public sealed class LightningBridgeTest
             m => m.Kind == MoveKind.Travel);
     }
 
+    // -- Formbound Buttress -------------------------------------------------------
+
+    private static SliceSettings ButtressSettings() => new()
+    {
+        LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
+        InfillPattern = InfillPattern.FormboundButtress,
+        LightningOverhangDeg = 30f,
+        LightningButtressBarMm = 40f,
+        LightningPreferInteriorMouths = true,
+    };
+
+    [Fact]
+    public void FormboundButtressGrowsUnderFlatTopAndStaysContinuous()
+    {
+        var tp = PlanarSlicer.Slice([FlatTopVessel()], ButtressSettings(), null);
+        Assert.True(tp.Layers.Count > 30);
+
+        float perimeter = 2f * MathF.PI * (60f - Bead / 2f);
+        var nearTop = tp.Layers.Where(l => l.Z > 100f && l.Z < 118f).ToList();
+        Assert.True(nearTop.Count > 2);
+        Assert.Contains(nearTop, l => ExtrudeLen(l) > perimeter * 1.3f);
+
+        foreach (var layer in tp.Layers)
+        {
+            var moves = layer.Moves
+                .SkipWhile(m => m.IsLayerChange || m.IsLayerStitch)
+                .ToList();
+            Assert.DoesNotContain(moves, m => m.Kind == MoveKind.Travel);
+            for (int k = 1; k < moves.Count; k++)
+                Assert.True(Vector3.Distance(moves[k].From, moves[k - 1].To) < 0.01f,
+                    $"z={layer.Z}: chain break at move {k}");
+        }
+    }
+
+    [Fact]
+    public void FormboundButtressBuildsHorizontalBarAsSingleBeadT()
+    {
+        // Shrinking squares: demand every layer. Buttress trees must be T-shaped
+        // (trunk + bar branches) with bar span near the configured length — not
+        // multi-bead solid pads.
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        for (int i = 0; i < 10; i++)
+        {
+            float h = 80f - i * 6f;
+            polys.Add([[new(-h, -h), new(h, -h), new(h, h), new(-h, h)]]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, ButtressSettings());
+
+        bool foundT = false;
+        float bestBar = 0f;
+        foreach (var lp in plan.Layers)
+            foreach (var t in lp.Trees)
+            {
+                // T-morph: trunk + at least one bar leaf.
+                if (t.Branches.Count < 2) continue;
+                foundT = true;
+                // Bar span ≈ sum of leaf branch lengths (or distance between leaf tips).
+                var tips = t.Branches.Where(b => b.ParentBranch >= 0)
+                    .Select(b => b.Centerline[^1]).ToList();
+                if (tips.Count >= 2)
+                    bestBar = MathF.Max(bestBar, Vector2.Distance(tips[0], tips[1]));
+                else if (tips.Count == 1)
+                    bestBar = MathF.Max(bestBar, t.Branches.Where(b => b.ParentBranch >= 0)
+                        .Max(b => b.ArcLength()));
+            }
+        Assert.True(foundT, "no T-morph buttress trees planned");
+        // Allow growth/retract: bar should approach the 40 mm setting on some layer.
+        Assert.True(bestBar >= 20f, $"horizontal bar only {bestBar:0.#} mm (want ~40)");
+    }
+
+    [Fact]
+    public void FormboundButtressSupportsAdjacentParallelLedges()
+    {
+        // Two long parallel unsupported top edges (like twin horizontal rails).
+        // A single T under one must not suppress demand for the other.
+        // Geometry: tall box that shrinks into two narrow parallel rectangles on top.
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        // Layers 0..5: big square (base). Layers 6..9: two separate islands side by side.
+        for (int i = 0; i < 6; i++)
+        {
+            polys.Add([[new(-80f, -40f), new(80f, -40f), new(80f, 40f), new(-80f, 40f)]]);
+            heights.Add(LayerH);
+        }
+        for (int i = 0; i < 4; i++)
+        {
+            // Two rails: Y≈-20 and Y≈+20, each 120×12 — parallel horizontals.
+            polys.Add([
+                [new(-60f, -26f), new(60f, -26f), new(60f, -14f), new(-60f, -14f)],
+                [new(-60f, 14f), new(60f, 14f), new(60f, 26f), new(-60f, 26f)],
+            ]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, ButtressSettings());
+
+        // On the layer just under the twin rails, we need trees reaching both Y bands.
+        bool south = false, north = false;
+        foreach (var lp in plan.Layers)
+            foreach (var t in lp.Trees)
+                foreach (var b in t.Branches)
+                    foreach (var p in b.Centerline)
+                    {
+                        if (p.Y < -10f) south = true;
+                        if (p.Y > 10f) north = true;
+                    }
+        Assert.True(south && north,
+            $"missed a parallel ledge (south={south}, north={north})");
+    }
+
+    [Fact]
+    public void FormboundButtressSupportsBothWallsOfChannel()
+    {
+        // U-channel: base plate + two parallel tall walls. Upper layers shrink the
+        // walls inward so both rims need support. Near-wall T's must not suppress
+        // far-wall demand (side-aware coverage).
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        // Base: solid rectangle
+        for (int i = 0; i < 4; i++)
+        {
+            polys.Add([[new(-60f, -40f), new(60f, -40f), new(60f, 40f), new(-60f, 40f)]]);
+            heights.Add(LayerH);
+        }
+        // Channel: outer box with hole — two long walls at Y=±30
+        for (int i = 0; i < 8; i++)
+        {
+            float inset = i < 4 ? 0f : (i - 3) * 3f; // upper layers walls move inward
+            float yOut = 40f - inset;
+            float yIn = 20f + inset * 0.3f;
+            polys.Add([
+                [new(-60f, -yOut), new(60f, -yOut), new(60f, yOut), new(-60f, yOut)],
+                // CW hole — channel interior
+                [new(-50f, -yIn), new(-50f, yIn), new(50f, yIn), new(50f, -yIn)],
+            ]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, ButtressSettings());
+
+        bool south = false, north = false;
+        foreach (var lp in plan.Layers)
+            foreach (var t in lp.Trees)
+            {
+                // Classify by ANCHOR wall (which side hosts the mouth), not bar tip.
+                if (t.Anchor.Y < -15f) south = true;
+                if (t.Anchor.Y > 15f) north = true;
+            }
+        Assert.True(south && north,
+            $"both channel walls must host mouths (south={south}, north={north})");
+    }
+
+    [Fact]
+    public void FormboundButtressCoversLongBridgeRunWithoutGaps()
+    {
+        // Long thin top ledge (~200 mm) over a wide base — the classic "orange line"
+        // case: one T in the middle leaves big unsupported spans along the bridge.
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        for (int i = 0; i < 8; i++)
+        {
+            polys.Add([[new(-100f, -50f), new(100f, -50f), new(100f, 50f), new(-100f, 50f)]]);
+            heights.Add(LayerH);
+        }
+        for (int i = 0; i < 4; i++)
+        {
+            // Narrow horizontal rail along X, full length.
+            polys.Add([[new(-100f, -8f), new(100f, -8f), new(100f, 8f), new(-100f, 8f)]]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, ButtressSettings());
+
+        // Collect all bar/trunk points under the rail on the densest layer.
+        var pts = new List<Vector2>();
+        foreach (var lp in plan.Layers)
+            foreach (var t in lp.Trees)
+                foreach (var b in t.Branches)
+                    pts.AddRange(b.Centerline);
+
+        Assert.True(pts.Count > 0, "no buttress geometry under long bridge");
+
+        // Sample the rail underside every 15 mm along X; each sample must be within
+        // half a bar-pitch of some centerline (continuous under-bridge coverage).
+        float maxGap = 0f;
+        for (float x = -90f; x <= 90f; x += 15f)
+        {
+            var probe = new Vector2(x, 0f);
+            float best = float.MaxValue;
+            foreach (var p in pts)
+                best = MathF.Min(best, Vector2.Distance(p, probe));
+            // Also check distance to any centerline segment more carefully via pts.
+            maxGap = MathF.Max(maxGap, best);
+        }
+        // With overlapping bars, gap to nearest support should stay modest.
+        Assert.True(maxGap < 35f,
+            $"long bridge has {maxGap:0.#} mm gap to nearest buttress (want < 35)");
+    }
+
+    [Fact]
+    public void FormboundButtressMouthsPreferInteriorOnHollowPart()
+    {
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        for (int i = 0; i < 12; i++)
+        {
+            float o = 60f - (i > 6 ? (i - 6) * 5f : 0f);
+            float hole = 25f;
+            polys.Add([
+                [new(-o, -o), new(o, -o), new(o, o), new(-o, o)],
+                [new(-hole, -hole), new(-hole, hole), new(hole, hole), new(hole, -hole)],
+            ]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, ButtressSettings());
+
+        int interiorMouths = 0, exteriorMouths = 0;
+        foreach (var lp in plan.Layers)
+            foreach (var t in lp.Trees)
+            {
+                float r = MathF.Max(MathF.Abs(t.Anchor.X), MathF.Abs(t.Anchor.Y));
+                if (r < 40f) interiorMouths++;
+                else exteriorMouths++;
+            }
+        Assert.True(interiorMouths + exteriorMouths > 0, "no buttress trees planned");
+        Assert.True(interiorMouths >= exteriorMouths,
+            $"interior mouths {interiorMouths} < exterior {exteriorMouths}");
+    }
+
     private static float DistToSegment2D(Vector3 p, Vector3 a, Vector3 b)
     {
         float abx = b.X - a.X, aby = b.Y - a.Y;

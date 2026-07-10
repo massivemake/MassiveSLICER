@@ -67,7 +67,7 @@ public static class PlanarSlicer
         //    contours verbatim so plan and geometry cannot drift.
         List<(List<List<Vector2>> Contours, List<bool> Closed)>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (settings.InfillPattern == InfillPattern.LightningBridge)
+        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             lightningCache = new(zPositions.Length);
@@ -86,7 +86,22 @@ public static class PlanarSlicer
             var meshTester = new Lightning.MeshInsideTester(meshes);
             lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
                 solidAt: (li, p) => meshTester.IsInside(
-                    new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])));
+                    new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])),
+                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, zPositions.Length,
+                    li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY)));
+            // Generator oracles: SolidAt probes both sides of the plane (fresh
+            // islands have material only above their first plane); SolidAtPlane
+            // probes exactly at it (a real contour's interior is solid there).
+            for (int li = 0; li < zPositions.Length; li++)
+            {
+                int cap = li;
+                lightningPlan.Layers[li].SolidAt = p =>
+                    meshTester.IsInside(new Vector3(p.X, p.Y, zPositions[cap] - 0.4f * heights[cap]))
+                    || meshTester.IsInside(new Vector3(p.X, p.Y, zPositions[cap] + 0.4f * heights[cap]));
+                lightningPlan.Layers[li].SolidAtPlane = p =>
+                    meshTester.IsInside(new Vector3(p.X, p.Y, zPositions[cap]));
+            }
         }
 
         for (int zi = 0; zi < zPositions.Length; zi++)
@@ -130,6 +145,9 @@ public static class PlanarSlicer
                 prevLayer = layer;
             }
         }
+
+        if (settings.PaintMarks.Count > 0)
+            ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
 
         return toolpath;
     }
@@ -322,7 +340,7 @@ public static class PlanarSlicer
                 float spacing = settings.InfillSpacingMm > 0f
                     ? settings.InfillSpacingMm
                     : settings.BeadWidth;
-                if (settings.InfillPattern == InfillPattern.LightningBridge)
+                if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
                     Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
                         settings.BeadWidth, settings.LightningTipLoopRadiusMm);
                 else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)

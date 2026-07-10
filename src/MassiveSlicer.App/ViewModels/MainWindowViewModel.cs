@@ -1522,7 +1522,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         robot.PauseStreaming();
         try
         {
-            foreach (var name in names.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var name in names.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 var value = await robot.ReadVarAsync(name);
                 Console.Log($"[var] {name} = {value.Trim()}");
@@ -2828,6 +2828,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
+        live.PaintMarks              = copy.PaintMarks;
         live.CurvedBoundarySource       = copy.CurvedBoundarySource;
         live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
         live.CurvedEnableRegionSplit    = copy.CurvedEnableRegionSplit;
@@ -2855,6 +2856,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningAnchorInterior  = copy.LightningAnchorInterior;
         live.LightningAnchorExterior  = copy.LightningAnchorExterior;
         live.LightningExteriorOverhangs = copy.LightningExteriorOverhangs;
+        live.LightningButtressBarMm         = copy.LightningButtressBarMm;
+        live.LightningPreferInteriorMouths  = copy.LightningPreferInteriorMouths;
         live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.WaveEffect             = copy.WaveEffect;
@@ -3031,6 +3034,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.LightningAnchorInterior  = p.LightningAnchorInterior;
         add.LightningAnchorExterior  = p.LightningAnchorExterior;
         add.LightningExteriorOverhangs = p.LightningExteriorOverhangs;
+        add.LightningButtressBarMm         = p.LightningButtressBarMm;
+        add.LightningPreferInteriorMouths  = p.LightningPreferInteriorMouths;
         add.MultiPlanarPlanes.Clear();
         foreach (var pair in p.MultiPlanarPlanes.Where(a => a is { Length: >= 2 }))
             add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(pair[0], pair[1]));
@@ -3109,6 +3114,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
+        add.SetPaintMarks(p.PaintMarks
+            .Where(a => a is { Length: >= 5 })
+            .Select(a => new PaintMark(
+                new System.Numerics.Vector3(a[0], a[1], a[2]), a[3],
+                a[4] >= 1f ? PaintMarkKind.Remove : PaintMarkKind.Bridge)));
         add.CurvedBoundarySourceDisplay = p.CurvedBoundarySource switch
         {
             "Viewport Pick" => "Viewport Pick",
@@ -3300,6 +3310,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LightningAnchorInterior  = add.LightningAnchorInterior;
         p.LightningAnchorExterior  = add.LightningAnchorExterior;
         p.LightningExteriorOverhangs = add.LightningExteriorOverhangs;
+        p.LightningButtressBarMm         = add.LightningButtressBarMm;
+        p.LightningPreferInteriorMouths  = add.LightningPreferInteriorMouths;
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
             .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
@@ -3356,6 +3368,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
+            .ToList();
+        p.PaintMarks = add.PaintMarks
+            .Select(m => new[] { m.Center.X, m.Center.Y, m.Center.Z, m.Radius, (float)m.Kind })
             .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
