@@ -296,6 +296,7 @@ public static class LightningGenerator
         LightningLayerPlan plan, float beadWidth, float tipLoopRadius, int outerCount)
     {
         var result = region;
+        PathsD? envelope = null;   // part silhouette — cavity tubes may never leave it
         foreach (var tree in plan.Trees)
         {
                 // A guard dropped this lineage at a lower layer — its support column
@@ -305,6 +306,16 @@ public static class LightningGenerator
 
                 var slit = BuildTreeSlit(tree, region, beadWidth, tipLoopRadius);
                 if (slit.Count == 0) continue;   // newborn stub, too small this layer — not a drop
+
+                // Cavity tubes stay INSIDE the closed mesh by construction: clip
+                // against the filled silhouette so a mouth overlapping a thin wall
+                // can never poke out the far side (union bead landing outside).
+                if (tree.Cavity)
+                {
+                    envelope ??= LightningPlanner.BuildEnvelope(region);
+                    slit = Clipper.Intersect(slit, envelope, FillRule.NonZero);
+                    if (slit.Count == 0) continue;
+                }
 
                 // Bite guard (slit body only — tip discs may legitimately graze the
                 // band when the loop radius exceeds the core inset).
@@ -463,8 +474,11 @@ public static class LightningGenerator
 
             var path = new PathD(line.Count + 1);
 
-            // Extend the root of trunk branches one bead past the boundary so the
-            // slit definitely crosses the perimeter and notches it.
+            // Extend the root of trunk branches past the boundary. Interior slits
+            // must fully CROSS the perimeter to notch it (one bead); cavity/fin
+            // tubes are UNIONED — they only need enough overlap to fuse with the
+            // wall, and a full bead punches straight through thin walls (union
+            // bead landing OUTSIDE the mesh on a 4 mm skin).
             if (branch.ParentBranch < 0)
             {
                 var dir = line[0] - line[1];
@@ -472,7 +486,10 @@ public static class LightningGenerator
                 if (dl > 1e-4f)
                 {
                     dir /= dl;
-                    var ext = line[0] + dir * beadWidth;
+                    float extLen = tree.Cavity || tree.External
+                        ? beadWidth * 0.45f
+                        : beadWidth;
+                    var ext = line[0] + dir * extLen;
                     path.Add(new PointD(ext.X, ext.Y));
                 }
             }

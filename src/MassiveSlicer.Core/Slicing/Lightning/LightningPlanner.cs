@@ -69,6 +69,7 @@ public static class LightningPlanner
         int demandFlags = 0;
         int meshVetoes = 0;
         int uncoveredTotal = 0;
+        PfNoAnchor = PfBarReach = PfNoFrame = PfCovered = PfElbow = 0;
         int inheritSkips = 0;
         int inheritReseeds = 0;
         int auditExtensions = 0;
@@ -98,6 +99,7 @@ public static class LightningPlanner
             // Multi-planar wedges are often thinner than a full bead: a hard empty-core
             // orphan wiped every tree (liveSlots=0 with treesBorn>0). Fall back to a
             // shallower inset, then the region itself, before giving up.
+            var envelope = BuildEnvelope(region);
             var core = Clipper.InflatePaths(region, -bead, JoinType.Miter, EndType.Polygon, 3.0);
             if (core.Count == 0)
                 core = Clipper.InflatePaths(region, -bead * 0.35, JoinType.Miter, EndType.Polygon, 3.0);
@@ -383,7 +385,7 @@ public static class LightningPlanner
                     // a hollow interior fails exactly like one over shells-only
                     // emptiness. Only true outward flares stay behind the
                     // sacrificial-fins setting.
-                    var space = ClassifyPoint(region, pt);
+                    var space = ClassifyPoint(region, envelope, pt);
                     bool covered = buttress
                         ? CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region)
                         : NearAnyCenterline(layerPlan.Trees, pt, coverRadius);
@@ -407,7 +409,7 @@ public static class LightningPlanner
                         {
                             int si = (start + (int)((k + 0.5f) * count / barCount)) % samples.Count;
                             if (!TryAddButtressAt(samples, si, sampleStep, count, start,
-                                region, core, anchorPaths, anchorInterior, anchorExterior,
+                                region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                                 preferInterior, settings, bead, adaptiveBar, coverRadius, sameSideMax,
                                 layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples))
                             {
@@ -420,12 +422,12 @@ public static class LightningPlanner
                             int si = (start + j) % samples.Count;
                             if (!unsupported[si]) continue;
                             var pt = samples[si];
-                            if (ClassifyPoint(region, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
+                            if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                                 continue;
                             if (CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region))
                                 continue;
                             TryAddButtressAt(samples, si, sampleStep, count, start,
-                                region, core, anchorPaths, anchorInterior, anchorExterior,
+                                region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                                 preferInterior, settings, bead, adaptiveBar, coverRadius, sameSideMax,
                                 layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples);
                         }
@@ -444,7 +446,7 @@ public static class LightningPlanner
                                 continue;
                             }
 
-                            var tipSpace = ClassifyPoint(region, sPt);
+                            var tipSpace = ClassifyPoint(region, envelope, sPt);
                             bool external = tipSpace == DemandSpace.Exterior;
                             bool cavity   = tipSpace == DemandSpace.Cavity;
                             // Interior tips stay a bead inside so the slit can't
@@ -510,12 +512,12 @@ public static class LightningPlanner
                         else
                             stillOpen = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
                         if (!stillOpen) continue;
-                        if (ClassifyPoint(region, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
+                        if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                             continue;
                         if (CoveredBySameSide(layerPlan.Trees, pt, coverRadius2, sameSideMax2, region))
                             continue;
                         TryAddButtressAt(samples, si, sampleStep, samples.Count, 0,
-                            region, core, anchorPaths, anchorInterior, anchorExterior,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                             preferInterior, settings, bead, adaptiveBar2, coverRadius2, sameSideMax2,
                             layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples);
                     }
@@ -560,7 +562,7 @@ public static class LightningPlanner
                                 : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
                                   > supportRadius;
                             if (!far) continue;
-                            if (ClassifyPoint(region, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
+                            if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                                 continue;
                             if (CoveredBySameSide(layerPlan.Trees, pt, coverRa, sameSideRa, region))
                                 continue;
@@ -576,7 +578,7 @@ public static class LightningPlanner
 
                             // 2) Birth a new T only when no same-side tree can grow here.
                             if (TryAddButtressAt(samples, si, sampleStep, samples.Count, 0,
-                                region, core, anchorPaths, anchorInterior, anchorExterior,
+                                region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                                 preferInterior, settings, bead, adaptiveBarA, coverRa, sameSideRa,
                                 layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples))
                             {
@@ -631,7 +633,7 @@ public static class LightningPlanner
                             : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
                               > supportRadius;
                         if (!far) continue;
-                        if (ClassifyPoint(region, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
+                        if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                             continue;
                         // Phantom demand the mesh oracle rejected (grazing-cut parity
                         // ledges) is CORRECTLY unsupported — not a coverage failure.
@@ -781,8 +783,15 @@ public static class LightningPlanner
         plan.SpacingMm = spacing;
         plan.MultiPlanar = frames is not null;
 
+        if (uncoveredTotal > 0)
+            plan.UncoveredLog.Add(
+                $"[formbound] place-fails: noAnchor={PfNoAnchor} barReach={PfBarReach} " +
+                $"noFrame={PfNoFrame} covered={PfCovered} elbowCrowd={PfElbow}");
+
         // Stdout for headless/tests; App surfaces the same line via Toolpath.FormboundStats.
         System.Console.WriteLine(plan.ToStats().ToLogLine());
+        foreach (var line in plan.UncoveredLog)
+            if (line.Contains("place-fails")) System.Console.WriteLine(line);
 
         return plan;
     }
@@ -935,7 +944,7 @@ public static class LightningPlanner
     /// Returns false when mesh veto / topology / proximity rejects it.</summary>
     private static bool TryAddButtressAt(
         List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
-        PathsD region, PathsD core,
+        PathsD region, PathsD envelope, PathsD core,
         PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
         bool preferInterior, SliceSettings settings, float bead, float barLen,
         float coverRadius, float sameSideMax,
@@ -948,7 +957,7 @@ public static class LightningPlanner
 
         var tree = TryBuildButtressT(
             samples, si, sampleStep, runCount, runStart,
-            region, core, anchorPaths, anchorInterior, anchorExterior,
+            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
             preferInterior, settings.LightningAnchorInterior,
             settings.LightningAnchorExterior,
             bead, barLen, nextTreeId);
@@ -958,9 +967,14 @@ public static class LightningPlanner
         // block this placement even if its bar ends near our elbow.
         var elbow = tree.Branches[0].Centerline[^1];
         if (CoveredBySameSide(layerPlan.Trees, elbow, coverRadius, sameSideMax, region))
-            return false;
-        if (TooCloseToElbowSameSide(layerPlan.Trees, tree.Anchor, elbow, bead * 1.25f, sameSideMax))
-            return false;
+        { PfCovered++; return false; }
+        // Crowding may never exceed the COVERAGE radius: an elbow rejected as
+        // "too close" must by definition already be covered, or samples in the
+        // annulus between the two radii deadlock — unplaceable yet uncovered
+        // (the exact hole the Drone deck ledge fell into). Coverage beats tidiness.
+        if (TooCloseToElbowSameSide(layerPlan.Trees, tree.Anchor, elbow,
+                MathF.Min(bead * 1.25f, coverRadius), sameSideMax))
+        { PfElbow++; return false; }
 
         nextTreeId++;
         layerPlan.Trees.Add(tree);
@@ -1027,7 +1041,7 @@ public static class LightningPlanner
     /// </summary>
     private static LightningTree? TryBuildButtressT(
         List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
-        PathsD region, PathsD core,
+        PathsD region, PathsD envelope, PathsD core,
         PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
         bool preferInterior, bool allowInterior, bool allowExterior,
         float bead, float barLen, int id)
@@ -1039,7 +1053,7 @@ public static class LightningPlanner
         // Interior = notch in material (elbow clamped to core); Cavity = over a
         // modeled internal void (tube UNIONED into the hole — elbow AT the demand,
         // structural growth); Exterior = sacrificial fin outside the part.
-        var space = ClassifyPoint(region, sPt);
+        var space = ClassifyPoint(region, envelope, sPt);
         bool external = space == DemandSpace.Exterior;
         bool cavity   = space == DemandSpace.Cavity;
         bool offMaterial = space != DemandSpace.Interior;
@@ -1112,7 +1126,7 @@ public static class LightningPlanner
             float score = dHome * 2f + dElbow;
             if (score < bestScore) { bestScore = score; anchor = cand; found = true; }
         }
-        if (!found) return null;
+        if (!found) { PfNoAnchor++; return null; }
 
         // T at birth (full). RetractButtress shortens trunk+bars layer-by-layer going down.
         var tree = new LightningTree { Id = id, Anchor = anchor, External = external, Cavity = cavity };
@@ -1131,9 +1145,9 @@ public static class LightningPlanner
         if (!hasBar)
         {
             if (!TryBoundaryFrame(region, anchor, out var tan2, out _))
-                return null;
+            { PfNoFrame++; return null; }
             float reach = MaxBarReach(elbow, tan2, halfBar, region, bead);
-            if (reach < bead * 0.75f) return null;
+            if (reach < bead * 0.75f) { PfBarReach++; return null; }
             tree.Branches.Add(new LightningBranch([elbow, elbow + tan2 * reach])
                 { ParentBranch = 0, ParentNode = 1 });
             float reachL = MaxBarReach(elbow, -tan2, halfBar, region, bead);
@@ -1985,20 +1999,36 @@ public static class LightningPlanner
     /// territory).</summary>
     internal enum DemandSpace { Interior, Cavity, Exterior }
 
-    internal static DemandSpace ClassifyPoint(PathsD region, Vector2 p)
+    /// <summary>The part's filled silhouette for one layer: every boundary path
+    /// treated as a solid (holes fill in), NonZero-unioned. Inside the envelope but
+    /// not in material = a truly ENCLOSED void. Per-path outer tests are unreliable
+    /// on parity-composed regions (half-loop chains) and on concave shapes — they
+    /// classified exterior air as cavity and put support tubes OUTSIDE the mesh.</summary>
+    internal static PathsD BuildEnvelope(PathsD region)
     {
-        var pt = new PointD(p.X, p.Y);
-        int containing = 0;
-        bool inAnyOuter = false;
+        var filled = new PathsD(region.Count);
         foreach (var path in region)
         {
-            if (Clipper.PointInPolygon(pt, path) != PointInPolygonResult.IsInside) continue;
-            containing++;
-            if (Clipper.Area(path) > 0) inAnyOuter = true;
+            if (path.Count < 3) continue;
+            var p2 = new PathD(path);
+            if (Clipper.Area(p2) < 0) p2.Reverse();
+            filled.Add(p2);
         }
-        if ((containing & 1) == 1) return DemandSpace.Interior;
-        return inAnyOuter ? DemandSpace.Cavity : DemandSpace.Exterior;
+        return Clipper.Union(filled, FillRule.NonZero);
     }
+
+    internal static DemandSpace ClassifyPoint(PathsD region, PathsD envelope, Vector2 p)
+    {
+        if (InsideRegion(region, p)) return DemandSpace.Interior;
+        var pt = new PointD(p.X, p.Y);
+        foreach (var path in envelope)
+            if (Clipper.PointInPolygon(pt, path) == PointInPolygonResult.IsInside)
+                return DemandSpace.Cavity;
+        return DemandSpace.Exterior;
+    }
+
+    // Placement-failure diagnostics, reset per Build, appended to the stats line.
+    internal static int PfNoAnchor, PfBarReach, PfNoFrame, PfCovered, PfElbow;
 
     internal static int CountOuterPaths(PathsD region)
     {
