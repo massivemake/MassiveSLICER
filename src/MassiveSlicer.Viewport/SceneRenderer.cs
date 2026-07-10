@@ -427,6 +427,10 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public int ToolpathActiveScrubIndex { get; set; } = int.MaxValue;
 
+    /// <summary>Lower bound of the layer window (edit mode): moves below this index
+    /// are hidden — pair with <see cref="ToolpathActiveScrubIndex"/> for a range.</summary>
+    public int ToolpathActiveScrubStart { get; set; }
+
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode
     {
@@ -1049,6 +1053,7 @@ public sealed class SceneRenderer : IDisposable
             bool isSelected = IsToolpathHighlighted(tpNode);
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
             int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
+            int scrubLo = isSelected ? ToolpathActiveScrubStart : 0;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
@@ -1057,7 +1062,8 @@ public sealed class SceneRenderer : IDisposable
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
-                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
+                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity,
+                scrubStart: scrubLo);
         }
 
         // Translucent helper geometry (effector range glow, …): depth-tested but not

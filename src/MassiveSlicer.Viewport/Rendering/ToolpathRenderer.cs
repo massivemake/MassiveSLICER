@@ -931,7 +931,7 @@ public sealed class ToolpathRenderer : IDisposable
                      bool showBead = false, bool showBeadOverhang = false,
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
                      Vector3 eyeLocal = default, float lineOpacity = 1f,
-                     bool showLightning = true)
+                     bool showLightning = true, int scrubStart = 0)
     {
         if (_disposed) return;
 
@@ -945,6 +945,17 @@ public sealed class ToolpathRenderer : IDisposable
         int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
         int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
 
+        // Layer-window low bound (edit mode): first vertex per buffer to draw.
+        int extFirst = 0, lgFirst = 0, trFirst = 0, beadFirst = 0, seamFirst = 0;
+        if (scrubStart > 0)
+        {
+            extFirst  = Math.Min(ScrubCount(_extrudeVertexCumulative,  _extrudeCount, scrubStart), extCount);
+            lgFirst   = Math.Min(ScrubCount(_lightningVertexCumulative, _lightningCount, scrubStart), lgCount);
+            trFirst   = Math.Min(ScrubCount(_travelVertexCumulative,   _travelCount,  scrubStart), trCount);
+            beadFirst = Math.Min(ScrubCount(_beadVertexCumulative,     _beadCount,    scrubStart), beadCount);
+            seamFirst = Math.Min(ScrubCount(_seamVertexCumulative,     _pointCount,   scrubStart), seamCount);
+        }
+
         if (!selected)
         {
             if (showExtrusion && extCount > 0)
@@ -957,14 +968,14 @@ public sealed class ToolpathRenderer : IDisposable
                 if (!gradient)
                     _shader.SetVector3("uOverrideColor", _unselectedGray);
                 GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
+                GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
             }
             if (showLightning && lgCount > 0)
             {
                 // Lightning orange is the layer's identity — keep it when unselected.
                 _shader.SetFloat("uOverride", 0f);
                 GL.BindVertexArray(_lightningVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, lgCount);
+                GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
             }
         }
         else
@@ -974,19 +985,19 @@ public sealed class ToolpathRenderer : IDisposable
             if (showExtrusion && extCount > 0)
             {
                 GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
+                GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
             }
 
             if (showLightning && lgCount > 0)
             {
                 GL.BindVertexArray(_lightningVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, lgCount);
+                GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
             }
 
             if (showTravel && trCount > 0)
             {
                 GL.BindVertexArray(_travelVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
+                GL.DrawArrays(PrimitiveType.Lines, trFirst, trCount - trFirst);
             }
 
             _shader.SetFloat("uOpacity", 1f);
@@ -994,7 +1005,7 @@ public sealed class ToolpathRenderer : IDisposable
             {
                 GL.PointSize(8f);
                 GL.BindVertexArray(_ptVao);
-                GL.DrawArrays(PrimitiveType.Points, 0, seamCount);
+                GL.DrawArrays(PrimitiveType.Points, seamFirst, seamCount - seamFirst);
                 GL.PointSize(1f);
             }
 
@@ -1019,8 +1030,9 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_orientationVao);
-            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_orientationCount, beadCount),
-                DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles,
+                Math.Max(0, Math.Min(_orientationCount, beadCount) - beadFirst),
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
@@ -1030,8 +1042,9 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadOverhangVao);
-            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_beadOverhangCount, beadCount),
-                DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles,
+                Math.Max(0, Math.Min(_beadOverhangCount, beadCount) - beadFirst),
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBead && beadCount > 0)
@@ -1042,7 +1055,8 @@ public sealed class ToolpathRenderer : IDisposable
             _beadShader.SetVector3("uEye",   eyeLocal);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
-            GL.DrawElements(PrimitiveType.Triangles, beadCount, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles, beadCount - beadFirst,
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
 

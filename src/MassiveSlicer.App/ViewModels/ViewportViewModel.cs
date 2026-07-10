@@ -1402,6 +1402,7 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(name);
         OnPropertyChanged(nameof(PaintBrushActive));
         OnPropertyChanged(nameof(PaintLineToolActive));
+        OnPropertyChanged(nameof(PaintPathSelectActive));
         NotifyRenderNeeded();
     }
 
@@ -1454,6 +1455,116 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _paintBrushRadiusMm;
         set => SetField(ref _paintBrushRadiusMm, Math.Clamp(value, 3.0, 200.0));
     }
+
+    // ── Edit-mode selection toolbar ────────────────────────────────────────────
+
+    private bool _paintHandActive;
+    /// <summary>Hand/navigate tool: clicks do nothing, camera drags as normal.</summary>
+    public bool PaintHandActive
+    {
+        get => _paintHandActive;
+        set
+        {
+            if (!SetField(ref _paintHandActive, value)) return;
+            if (value)
+            {
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+                PaintBoxSelectActive = false;
+            }
+            OnPropertyChanged(nameof(PaintPathSelectActive));
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _paintBoxSelectActive;
+    /// <summary>Box/marquee select: drag a rectangle, every path inside joins the selection.</summary>
+    public bool PaintBoxSelectActive
+    {
+        get => _paintBoxSelectActive;
+        set
+        {
+            if (!SetField(ref _paintBoxSelectActive, value)) return;
+            if (value)
+            {
+                PaintHandActive = false;
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+            }
+            OnPropertyChanged(nameof(PaintPathSelectActive));
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Default click-a-path select mode (no other tool armed).</summary>
+    public bool PaintPathSelectActive =>
+        IsPaintEditOpen && !PaintHandActive && !PaintBoxSelectActive && !PaintBrushActive;
+
+    public RelayCommand SelectPathToolCommand => _selectPathTool ??= new RelayCommand(() =>
+    {
+        PaintHandActive = false;
+        PaintBoxSelectActive = false;
+        PaintBridgeActive = false;
+        PaintRemoveActive = false;
+        PaintLineBridgeActive = false;
+        PaintLineRemoveActive = false;
+        OnPropertyChanged(nameof(PaintPathSelectActive));
+    });
+    private RelayCommand? _selectPathTool;
+
+    private int _paintSelectionCount;
+    /// <summary>Paths in the current edit selection (set by the viewport).</summary>
+    public int PaintSelectionCount
+    {
+        get => _paintSelectionCount;
+        set
+        {
+            if (SetField(ref _paintSelectionCount, value))
+                OnPropertyChanged(nameof(PaintSelectionLabel));
+        }
+    }
+
+    public string PaintSelectionLabel =>
+        PaintSelectionCount == 1 ? "1 path selected" : $"{PaintSelectionCount} paths selected";
+
+    public string[] PaintPickFilterOptions { get; } = ["All", "Formbound", "Perimeter"];
+
+    private string _paintPickFilter = "All";
+    /// <summary>Restricts what hover/click/box selection can pick.</summary>
+    public string PaintPickFilter
+    {
+        get => _paintPickFilter;
+        set => SetField(ref _paintPickFilter, value);
+    }
+
+    /// <summary>Marquee rectangle (viewport logical px) while box-dragging.</summary>
+    private bool _paintMarqueeVisible;
+    public bool PaintMarqueeVisible { get => _paintMarqueeVisible; set => SetField(ref _paintMarqueeVisible, value); }
+    private double _paintMarqueeX, _paintMarqueeY, _paintMarqueeW, _paintMarqueeH;
+    public double PaintMarqueeX { get => _paintMarqueeX; set => SetField(ref _paintMarqueeX, value); }
+    public double PaintMarqueeY { get => _paintMarqueeY; set => SetField(ref _paintMarqueeY, value); }
+    public double PaintMarqueeW { get => _paintMarqueeW; set => SetField(ref _paintMarqueeW, value); }
+    public double PaintMarqueeH { get => _paintMarqueeH; set => SetField(ref _paintMarqueeH, value); }
+
+    /// <summary>View hooks: the viewport owns the selection list.</summary>
+    internal Action? OnPaintDeselectRequested;
+    internal Action<bool>? OnPaintApplyRequested;   // true = Support, false = Remove
+
+    public RelayCommand DeselectPaintCommand => _deselectPaint ??= new RelayCommand(() =>
+        OnPaintDeselectRequested?.Invoke());
+    private RelayCommand? _deselectPaint;
+
+    public RelayCommand ApplySupportSelectionCommand => _applySupportSel ??= new RelayCommand(() =>
+        OnPaintApplyRequested?.Invoke(true));
+    private RelayCommand? _applySupportSel;
+
+    public RelayCommand ApplyRemoveSelectionCommand => _applyRemoveSel ??= new RelayCommand(() =>
+        OnPaintApplyRequested?.Invoke(false));
+    private RelayCommand? _applyRemoveSel;
 
     /// <summary>Re-slices NOW with the accumulated paint edits, keeping the edit
     /// menu open and slicing paused afterwards.</summary>
@@ -1808,6 +1919,35 @@ public sealed class ViewportViewModel : ViewModelBase
     private bool   _scrubSyncing;
     /// <summary>Exclusive end move index per layer (prefix sums) for O(log n) layer lookup.</summary>
     private int[]? _scrubLayerEnds;
+
+    private int _toolpathScrubLowIndex;
+    /// <summary>Lower bound of the layer window (edit mode): moves below this are
+    /// hidden. 0 = show from the first layer. Clamped under the upper scrub.</summary>
+    public int ToolpathScrubLowIndex
+    {
+        get => _toolpathScrubLowIndex;
+        set
+        {
+            int clamped = Math.Clamp(value, 0, Math.Max(0, ToolpathScrubIndex - 1));
+            if (SetField(ref _toolpathScrubLowIndex, clamped))
+            {
+                OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+                NotifyRenderNeeded();
+            }
+        }
+    }
+
+    /// <summary>Layer number (1-based) at the low handle for display.</summary>
+    public string ToolpathScrubLowLayerLabel
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return "1";
+            int idx = 0;
+            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex) idx++;
+            return (idx + 1).ToString();
+        }
+    }
 
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
