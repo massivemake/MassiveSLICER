@@ -147,7 +147,20 @@ public sealed class FormboundCavityTest
             }
         }
 
-        // 5. Control: no phantom columns far below the deck's lead-in.
+        // 5. NOTHING outside the closed mesh: with sacrificial exterior overhangs
+        //    OFF, every bead stays within the part's envelope (outer skin ≈ r=77
+        //    after the half-bead inset; allow half a bead of union rounding).
+        foreach (var l in tp.Layers)
+            foreach (var m in l.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude) continue;
+                var mid = (m.From + m.To) * 0.5f;
+                float r = new Vector2(mid.X, mid.Y).Length();
+                Assert.True(r < 80.5f,
+                    $"z={l.Z:0.#}: support outside the mesh at r={r:0.#} ({mid.X:0.#},{mid.Y:0.#})");
+            }
+
+        // 6. Control: no phantom columns far below the deck's lead-in.
         bool strayLow = tp.Layers.Where(l => l.Z is > 5f and < 18f)
             .SelectMany(l => l.Moves)
             .Any(m => m.Kind == MoveKind.Extrude
