@@ -44,7 +44,8 @@ public static class LightningPlanner
         IReadOnlyList<float> layerHeights,
         SliceSettings settings,
         IReadOnlyList<(Vector3 Origin, Vector3 U, Vector3 V)>? frames = null,
-        Func<int, Vector2, bool>? solidAt = null)
+        Func<int, Vector2, bool>? solidAt = null,
+        IReadOnlyList<IReadOnlyList<Vector2>>? manualDemand = null)
     {
         int n = fillPolysPerLayer.Count;
         var plan = new LightningPlan(n);
@@ -56,7 +57,10 @@ public static class LightningPlanner
             ? settings.LightningBranchSpacingMm
             : 4f * bead;
         bool  buttress = IsButtressPattern(settings.InfillPattern);
-        float minBeads = MathF.Max(settings.LightningRampMinBeads, 1f);
+        // Horizontal support bar length (single bead). 0 → auto = spacing.
+        float barLen = settings.LightningButtressBarMm > 0f
+            ? settings.LightningButtressBarMm
+            : spacing;
         bool  preferInterior = settings.LightningPreferInteriorMouths;
 
         float MaxStep(int i) => MathF.Min(MathF.Max(layerHeights[i], 0.1f) * tanA, 0.5f * bead);
@@ -124,7 +128,11 @@ public static class LightningPlanner
                 foreach (var p in anchorInterior) anchorPaths.Add(p);
                 foreach (var p in anchorExterior) anchorPaths.Add(p);
             }
-            if (anchorPaths.Count == 0 && anchorExterior.Count == 0) continue;
+            if (anchorPaths.Count == 0)
+            {
+                foreach (var p in anchorExterior) anchorPaths.Add(p);
+            }
+            if (anchorPaths.Count == 0) continue;
 
             // Frame remap (identity on constant-frame stacks): lift the plane-local
             // point to world in the source layer's frame, project into the target's.
@@ -149,12 +157,17 @@ public static class LightningPlanner
             foreach (var above in plan.Layers[i + 1].Trees)
             {
                 var t = above.Clone();
+                // Snapshot tips BEFORE re-aim so MaxStep stacking still holds.
+                var prevTips = SnapshotTips(t);
+
                 if (frames is not null)
                 {
                     t.Anchor = Down(t.Anchor);
                     foreach (var b in t.Branches)
                         for (int k = 0; k < b.Centerline.Count; k++)
                             b.Centerline[k] = Down(b.Centerline[k]);
+                    for (int pi = 0; pi < prevTips.Count; pi++)
+                        prevTips[pi] = Down(prevTips[pi]);
                 }
 
                 // Dangling check FIRST — before natural retraction-death can hide it.
@@ -175,6 +188,21 @@ public static class LightningPlanner
                 t.Anchor = reAnchor;
                 if (!t.External)
                     ClampInside(t, region, core, MaxStep(i));
+
+                // Multi-planar / rotating frames: re-aim trunk along this plane's wall
+                // normal and bar along wall tangent so a frozen birth angle does not
+                // walk off the overhang as the slice plane tilts. Tips stay within
+                // MaxStep of the remapped previous tips (bead-on-bead stack).
+                // Planar stacks (null frames) keep remapped geometry + re-root only.
+                if (buttress && !t.External && frames is not null)
+                    ReAimButtress(t, region, core, bead, barLen, MaxStep(i), prevTips);
+                else if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
+                    t.Branches[0].Centerline[0] = t.Anchor;
+
+                // Round every junction so dual-wall slits never form sub-bead corners
+                // (acute elbows → over-extrusion on the perimeter path).
+                FilletTreeCorners(t, bead);
+
                 if (t.Branches.Count > 0 && t.Branches[0].Centerline.Count > 0)
                 {
                     t.Branches[0].Centerline[0] = t.Anchor;
@@ -223,6 +251,17 @@ public static class LightningPlanner
                     for (int k = 0; k < samples.Count; k++)
                         samples[k] = Down(samples[k]);
 
+                // How close a demand sample must be to an existing centerline to count
+                // as already covered. Bridge uses the full support radius. Buttress is
+                // tighter — and SIDE-AWARE: a T rooted on the opposite wall of a cavity
+                // must not suppress demand on this wall (the "one side 95%, other side 0%" case).
+                float coverRadius = buttress
+                    ? MathF.Max(bead * 0.75f, supportRadius * 0.3f)
+                    : supportRadius;
+                // Anchors within this distance of the sample's home-wall foot count as
+                // "same side". Opposite wall of a typical channel is many beads away.
+                float sameSideMax = MathF.Max(6f * bead, barLen);
+
                 // Flag which boundary samples of the layer above lack support here.
                 var unsupported = new bool[samples.Count];
                 for (int si = 0; si < samples.Count; si++)
@@ -230,112 +269,81 @@ public static class LightningPlanner
                     var pt = samples[si];
                     bool far = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
                     bool inside = InsideRegion(region, pt);
-                    // Inward-shrinking arcs are always demand; outward flares only when
-                    // sacrificial external fins are enabled.
+                    bool covered = buttress
+                        ? CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region)
+                        : NearAnyCenterline(layerPlan.Trees, pt, coverRadius);
                     unsupported[si] = far
                         && (inside || settings.LightningExteriorOverhangs)
-                        && !NearAnyCenterline(layerPlan.Trees, pt, supportRadius);
+                        && !covered;
                 }
 
-                // Distribute tips EVENLY along each contiguous unsupported run —
-                // greedy first-come dedupe leaves worst-case 2×spacing holes at the
-                // run wrap-around, which shows up as one missing finger in a ring.
+                // Distribute support EVENLY along each contiguous unsupported run.
                 foreach (var (start, count) in CircularRuns(unsupported))
                 {
                     float runLen = count * sampleStep;
-                    int tipCount = Math.Max(1, (int)MathF.Round(runLen / spacing));
-                    for (int k = 0; k < tipCount; k++)
+                    if (buttress)
                     {
-                        int si = (start + (int)((k + 0.5f) * count / tipCount)) % samples.Count;
-                        var sPt = samples[si];
+                        // Pitch along the edge: dense enough that bars can stitch into a
+                        // continuous under-bridge. Overlap bars by ~half so a long rail
+                        // is not left with gaps between T's (the orange-line case).
+                        float barPitch = MathF.Max(bead * 2f, MathF.Min(spacing, barLen * 0.5f));
+                        // Adaptive arm length: at least the user barLen, but grow so
+                        // neighbouring T's overlap along the run (continuous coverage).
+                        float adaptiveBar = MathF.Max(barLen, barPitch * 2.2f);
+                        int barCount = Math.Max(1, (int)MathF.Ceiling(runLen / barPitch - 1e-4f));
 
-                        // Mesh-truth veto: pull a probe INSIDE the demanding solid
-                        // (layer i+1 frame) and ask the mesh whether material really
-                        // exists there. Parity phantoms fail; every real overhang —
-                        // closing domes, flanges, fast-sweeping tangent bands — passes,
-                        // because its claimed solid IS mesh material.
-                        if (solidAt is not null)
+                        for (int k = 0; k < barCount; k++)
                         {
-                            var raw  = rawSamples[si];
-                            var prev = rawSamples[(si - 1 + rawSamples.Count) % rawSamples.Count];
-                            var next = rawSamples[(si + 1) % rawSamples.Count];
-                            var tan  = next - prev;
-                            var nrm  = tan.LengthSquared() > 1e-9f
-                                ? Vector2.Normalize(new Vector2(-tan.Y, tan.X))
-                                : new Vector2(1f, 0f);
-                            if (!InsideRegion(regions[i + 1], raw + nrm * (0.6f * bead)))
-                                nrm = -nrm;
-                            var probe = raw + nrm * (2.5f * bead);
-                            if (!InsideRegion(regions[i + 1], probe))
-                                probe = raw + nrm * bead;
-                            if (!InsideRegion(regions[i + 1], probe))
-                                probe = raw + nrm * (0.6f * bead);
-
-                            if (!solidAt(i + 1, probe)) continue;
+                            int si = (start + (int)((k + 0.5f) * count / barCount)) % samples.Count;
+                            TryAddButtressAt(samples, si, sampleStep, count, start,
+                                region, core, anchorPaths, anchorInterior, anchorExterior,
+                                preferInterior, settings, bead, adaptiveBar, coverRadius, sameSideMax,
+                                layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples);
                         }
 
-                        bool external = !InsideRegion(region, sPt);
-
-                        // Interior demand: tip goes right under the unsupported arc, kept
-                        // ≥ one bead inside so the slit can't breach the far wall.
-                        // External demand: the fin tip is the overhanging point itself.
-                        var tip = external
-                            ? sPt
-                            : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
-
-                        // Buttress: wider cluster radius so fewer mouths cover more demand.
-                        float clusterR = buttress ? spacing : spacing * 0.5f;
-                        if (TooCloseToExisting(layerPlan.Trees, tip, clusterR)) continue;
-
-                        // Prefer attaching to an existing tree (shared mouth) when the tip
-                        // is closer to that tree than to a new boundary cut — especially
-                        // for Buttress multi-bead pads that can fan under a cluster.
-                        bool enableTreeMerging = buttress;
-                        var (nearTree, nearBranch, nearNode, distToTree) = enableTreeMerging
-                            ? NearestCenterlineNode(layerPlan.Trees, tip)
-                            : (null, 0, 0, float.MaxValue);
-
-                        Vector2 anchor;
-                        if (external)
-                            anchor = ClosestOnRegionBoundary(region, tip);
-                        else
+                        // Residual: every still-uncovered sample on this run gets another
+                        // shot. Side-aware so the far wall is never "covered" by near wall.
+                        for (int j = 0; j < count; j++)
                         {
-                            // Interior-first: try preferred anchor set, then exterior fallback.
-                            anchor = ClosestOnRegionBoundary(
-                                anchorPaths.Count > 0 ? anchorPaths : anchorExterior, tip);
-                            if (buttress && preferInterior && anchorInterior.Count > 0
-                                && anchorExterior.Count > 0)
-                            {
-                                var aIn  = ClosestOnRegionBoundary(anchorInterior, tip);
-                                var aOut = ClosestOnRegionBoundary(anchorExterior, tip);
-                                bool inOk  = SegmentInsideRegion(region, aIn, tip, bead);
-                                bool outOk = SegmentInsideRegion(region, aOut, tip, bead);
-                                if (inOk) anchor = aIn;
-                                else if (outOk) anchor = aOut;
-                                else continue;
-                            }
+                            int si = (start + j) % samples.Count;
+                            var pt = samples[si];
+                            if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
+                                continue;
+                            if (!InsideRegion(region, pt) && !settings.LightningExteriorOverhangs)
+                                continue;
+                            if (CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region))
+                                continue;
+                            TryAddButtressAt(samples, si, sampleStep, count, start,
+                                region, core, anchorPaths, anchorInterior, anchorExterior,
+                                preferInterior, settings, bead, adaptiveBar, coverRadius, sameSideMax,
+                                layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples);
                         }
-
-                        if (Vector2.Distance(anchor, tip) < bead) continue;   // wall covers it
-                        // Reject fingers whose centerline would cross a void (a chord
-                        // over a ring's hole) — the slit can't realize them.
-                        if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
-
-                        float distToBoundary = Vector2.Distance(anchor, tip);
-                        if (nearTree is not null && distToTree < distToBoundary
-                            && distToTree >= bead * 0.5f
-                            && (external || SegmentInsideRegion(region,
-                                    nearTree.Branches[nearBranch].Centerline[nearNode], tip, bead)))
+                    }
+                    else
+                    {
+                        int tipCount = Math.Max(1, (int)MathF.Round(runLen / spacing));
+                        for (int k = 0; k < tipCount; k++)
                         {
-                            var junction = nearTree.Branches[nearBranch].Centerline[nearNode];
-                            nearTree.Branches.Add(new LightningBranch([junction, tip])
-                            {
-                                ParentBranch = nearBranch,
-                                ParentNode   = nearNode,
-                            });
-                        }
-                        else
-                        {
+                            int si = (start + (int)((k + 0.5f) * count / tipCount)) % samples.Count;
+                            var sPt = samples[si];
+
+                            if (!PassesMeshVetoAt(solidAt, i + 1, regions[i + 1], rawSamples, si, bead))
+                                continue;
+
+                            bool external = !InsideRegion(region, sPt);
+                            var tip = external
+                                ? sPt
+                                : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
+
+                            if (TooCloseToExisting(layerPlan.Trees, tip, spacing * 0.5f)) continue;
+
+                            var anchor = external
+                                ? ClosestOnRegionBoundary(region, tip)
+                                : ClosestOnRegionBoundary(anchorPaths, tip);
+
+                            if (Vector2.Distance(anchor, tip) < bead) continue;
+                            if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+
                             var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
                             t.Branches.Add(new LightningBranch([anchor, tip]));
                             layerPlan.Trees.Add(t);
@@ -344,14 +352,71 @@ public static class LightningPlanner
                 }
             }
 
-            // Formbound Buttress: derive multi-bead solid polygons from each tree's
-            // centerlines so the generator can notch + fill continuous ramps.
+            // ── 2c. Opposite-wall sweep (Buttress only): re-walk every contour of the
+            //       layer above and force a T wherever a sample is still uncovered on
+            //       ITS home wall. Catches the far side of a channel after the near
+            //       side already placed long bars that would otherwise look "close".
             if (buttress)
             {
-                foreach (var t in layerPlan.Trees)
-                    t.Solid = BuildButtressSolid(t, region, core, bead, minBeads,
-                        settings.LightningTipLoopRadiusMm);
+                float coverRadius2 = MathF.Max(bead * 0.75f, supportRadius * 0.3f);
+                float sameSideMax2 = MathF.Max(6f * bead, barLen);
+                float adaptiveBar2 = MathF.Max(barLen, MathF.Max(bead * 2f, MathF.Min(spacing, barLen * 0.5f)) * 2.2f);
+
+                foreach (var path in regions[i + 1])
+                {
+                    if (Math.Abs(Clipper.Area(path)) < 4.0 * bead * bead) continue;
+                    var samples = SamplePath(path, sampleStep);
+                    if (samples.Count == 0) continue;
+                    var rawSamples = frames is not null ? new List<Vector2>(samples) : samples;
+                    if (frames is not null)
+                        for (int k = 0; k < samples.Count; k++)
+                            samples[k] = Down(samples[k]);
+
+                    for (int si = 0; si < samples.Count; si++)
+                    {
+                        var pt = samples[si];
+                        if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
+                            continue;
+                        if (!InsideRegion(region, pt) && !settings.LightningExteriorOverhangs)
+                            continue;
+                        if (CoveredBySameSide(layerPlan.Trees, pt, coverRadius2, sameSideMax2, region))
+                            continue;
+                        // Treat whole path as one run for WalkAlongRun clamping.
+                        TryAddButtressAt(samples, si, sampleStep, samples.Count, 0,
+                            region, core, anchorPaths, anchorInterior, anchorExterior,
+                            preferInterior, settings, bead, adaptiveBar2, coverRadius2, sameSideMax2,
+                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1], rawSamples);
+                    }
+                }
             }
+
+            // ── 2b. Manual demand: brush-painted Bridge marks projected onto the
+            //       layer above. The user explicitly asked for support under these
+            //       beads — geometric sanity checks only, no spacing thinning, no
+            //       mesh veto, and external fins allowed regardless of the setting.
+            if (manualDemand is not null && manualDemand.Count > i + 1)
+                foreach (var mPt in manualDemand[i + 1])
+                {
+                    var pt = Down(mPt);
+                    if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
+                        continue;   // wall below already carries it
+                    if (NearAnyCenterline(layerPlan.Trees, pt, spacing * 0.4f))
+                        continue;   // a finger is already headed there
+
+                    bool external = !InsideRegion(region, pt);
+                    var tip = external
+                        ? pt
+                        : InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt);
+                    var anchor = external
+                        ? ClosestOnRegionBoundary(region, tip)
+                        : ClosestOnRegionBoundary(anchorPaths, tip);
+                    if (Vector2.Distance(anchor, tip) < bead) continue;
+                    if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+
+                    var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
+                    t.Branches.Add(new LightningBranch([anchor, tip]));
+                    layerPlan.Trees.Add(t);
+                }
 
             // ── 3. Straightening: nudge interior nodes toward the root–tip chord,
             //       budgeted by this layer's max step so the layer above still rests
@@ -373,6 +438,569 @@ public static class LightningPlanner
     }
 
     // -- Tree operations ---------------------------------------------------------
+
+    private static bool PassesMeshVetoAt(
+        Func<int, Vector2, bool>? solidAt,
+        int layerAbove,
+        PathsD regionAbove,
+        List<Vector2> rawSamples,
+        int si,
+        float bead)
+    {
+        if (solidAt is null) return true;
+        var raw  = rawSamples[si];
+        var prev = rawSamples[(si - 1 + rawSamples.Count) % rawSamples.Count];
+        var next = rawSamples[(si + 1) % rawSamples.Count];
+        var tan  = next - prev;
+        var nrm  = tan.LengthSquared() > 1e-9f
+            ? Vector2.Normalize(new Vector2(-tan.Y, tan.X))
+            : new Vector2(1f, 0f);
+        if (!InsideRegion(regionAbove, raw + nrm * (0.6f * bead)))
+            nrm = -nrm;
+        var probe = raw + nrm * (2.5f * bead);
+        if (!InsideRegion(regionAbove, probe))
+            probe = raw + nrm * bead;
+        if (!InsideRegion(regionAbove, probe))
+            probe = raw + nrm * (0.6f * bead);
+        return solidAt(layerAbove, probe);
+    }
+
+    /// <summary>Try to place one Formbound Buttress T at sample <paramref name="si"/>.
+    /// Returns false when mesh veto / topology / proximity rejects it.</summary>
+    private static bool TryAddButtressAt(
+        List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
+        PathsD region, PathsD core,
+        PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
+        bool preferInterior, SliceSettings settings, float bead, float barLen,
+        float coverRadius, float sameSideMax,
+        LightningLayerPlan layerPlan, ref int nextTreeId,
+        Func<int, Vector2, bool>? solidAt, int layerAbove, PathsD regionAbove,
+        List<Vector2> rawSamples)
+    {
+        if (!PassesMeshVetoAt(solidAt, layerAbove, regionAbove, rawSamples, si, bead))
+            return false;
+
+        var tree = TryBuildButtressT(
+            samples, si, sampleStep, runCount, runStart,
+            region, core, anchorPaths, anchorInterior, anchorExterior,
+            preferInterior, settings.LightningAnchorInterior,
+            settings.LightningAnchorExterior,
+            bead, barLen, nextTreeId);
+        if (tree is null) return false;
+
+        // Proximity: same-side only. A T on the opposite wall of a channel must not
+        // block this placement even if its bar ends near our elbow.
+        var elbow = tree.Branches[0].Centerline[^1];
+        if (CoveredBySameSide(layerPlan.Trees, elbow, coverRadius, sameSideMax, region))
+            return false;
+        if (TooCloseToElbowSameSide(layerPlan.Trees, tree.Anchor, elbow, bead * 1.25f, sameSideMax))
+            return false;
+
+        nextTreeId++;
+        layerPlan.Trees.Add(tree);
+        return true;
+    }
+
+    /// <summary>
+    /// True when <paramref name="pt"/> lies near an existing tree's centerline AND
+    /// that tree is rooted on the same wall as <paramref name="pt"/>'s home foot.
+    /// Opposite-wall T's never count as coverage (channel far-side support).
+    /// </summary>
+    private static bool CoveredBySameSide(
+        List<LightningTree> trees, Vector2 pt, float coverRadius, float sameSideMax, PathsD region)
+    {
+        if (trees.Count == 0) return false;
+        var home = ClosestOnRegionBoundary(region, pt);
+        float coverR2 = coverRadius * coverRadius;
+        float sideR2 = sameSideMax * sameSideMax;
+
+        foreach (var t in trees)
+        {
+            // Same-side gate first (cheap): opposite wall anchors are far from home.
+            if (Vector2.DistanceSquared(t.Anchor, home) > sideR2)
+                continue;
+
+            foreach (var b in t.Branches)
+            {
+                var line = b.Centerline;
+                for (int i = 1; i < line.Count; i++)
+                    if (DistToSegmentSq(pt, line[i - 1], line[i]) < coverR2)
+                        return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>Elbow collision only against trees rooted on the same wall neighborhood.</summary>
+    private static bool TooCloseToElbowSameSide(
+        List<LightningTree> trees, Vector2 newAnchor, Vector2 elbow, float minDist, float sameSideMax)
+    {
+        float s2 = minDist * minDist;
+        float sideR2 = sameSideMax * sameSideMax;
+        foreach (var t in trees)
+        {
+            if (Vector2.DistanceSquared(t.Anchor, newAnchor) > sideR2) continue;
+            if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+            var other = t.Branches[0].Centerline[^1];
+            if (Vector2.DistanceSquared(other, elbow) < s2) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Formbound Buttress T-morph: single-bead centerline from a perimeter mouth
+    /// into a horizontal support bar that FOLLOWS the unsupported run (bridge edge),
+    /// not a free-space chord that can miss the ledge.
+    /// <para>
+    ///   wall ──► elbow ──┬── bar along run →
+    ///                    └── bar along run ←
+    /// </para>
+    /// Anchor search tries every allowed wall class (interior then exterior) and
+    /// picks the shortest valid approach so opposite sides of a cavity each get
+    /// their own mouth instead of all anchoring on one wall.
+    /// </summary>
+    private static LightningTree? TryBuildButtressT(
+        List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
+        PathsD region, PathsD core,
+        PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
+        bool preferInterior, bool allowInterior, bool allowExterior,
+        float bead, float barLen, int id)
+    {
+        var sPt = samples[si];
+        bool external = !InsideRegion(region, sPt);
+        var keep = external ? region : core;
+
+        // Elbow sits under the demand sample, kept inside printable core.
+        Vector2 elbow = external
+            ? sPt
+            : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
+
+        // Bar follows the UNSUPPORTED RUN (actual bridge edge), not a free tan walk.
+        // Walk ±halfBar of arc length along the sample ring, clamped to this run.
+        float halfBar = MathF.Max(barLen * 0.5f, bead);
+        var left  = WalkAlongRun(samples, si, runStart, runCount, sampleStep, -halfBar, keep, bead, external);
+        var right = WalkAlongRun(samples, si, runStart, runCount, sampleStep,  halfBar, keep, bead, external);
+
+        // Home wall under this demand: prefer an anchor on THIS wall so the far
+        // side of a channel roots on the far wall (not a long diagonal to the near one).
+        var homeWall = ClosestOnRegionBoundary(region, elbow);
+
+        var candidates = new List<Vector2>();
+        void AddClosest(PathsD paths)
+        {
+            if (paths.Count == 0) return;
+            candidates.Add(ClosestOnRegionBoundary(paths, elbow));
+        }
+        if (external)
+            AddClosest(region);
+        else
+        {
+            if (preferInterior)
+            {
+                if (allowInterior) AddClosest(anchorInterior);
+                if (allowExterior) AddClosest(anchorExterior);
+            }
+            else
+            {
+                AddClosest(anchorPaths);
+                if (allowInterior) AddClosest(anchorInterior);
+                if (allowExterior) AddClosest(anchorExterior);
+            }
+        }
+        // Always also consider the pure home-wall foot as a candidate.
+        candidates.Add(homeWall);
+
+        Vector2 anchor = default;
+        bool found = false;
+        float bestScore = float.MaxValue;
+        foreach (var cand in candidates)
+        {
+            float dElbow = Vector2.Distance(cand, elbow);
+            if (dElbow < bead * 0.5f) continue;
+            if (!external && !SegmentInsideRegion(region, cand, elbow, bead)) continue;
+            // Prefer anchors near the home wall (same side), then short trunk.
+            float dHome = Vector2.Distance(cand, homeWall);
+            float score = dHome * 2f + dElbow;
+            if (score < bestScore) { bestScore = score; anchor = cand; found = true; }
+        }
+        if (!found) return null;
+
+        // Single continuous morph as a T: trunk = wall→elbow, leaves = bar ends.
+        var tree = new LightningTree { Id = id, Anchor = anchor, External = external };
+        tree.Branches.Add(new LightningBranch([anchor, elbow])); // trunk
+        if (Vector2.Distance(elbow, left) >= bead * 0.4f)
+            tree.Branches.Add(new LightningBranch([elbow, left]) { ParentBranch = 0, ParentNode = 1 });
+        if (Vector2.Distance(elbow, right) >= bead * 0.4f)
+            tree.Branches.Add(new LightningBranch([elbow, right]) { ParentBranch = 0, ParentNode = 1 });
+
+        // Degenerate: no bar — fall back to plain radial finger.
+        if (tree.Branches.Count < 2)
+        {
+            tree.Branches.Clear();
+            tree.Branches.Add(new LightningBranch([anchor, elbow]));
+        }
+        FilletTreeCorners(tree, bead);
+        return tree;
+    }
+
+    /// <summary>Leaf tip positions (and trunk tip if no leaves) for MaxStep tracking.</summary>
+    private static List<Vector2> SnapshotTips(LightningTree tree)
+    {
+        var tips = new List<Vector2>();
+        for (int bi = 0; bi < tree.Branches.Count; bi++)
+        {
+            bool isLeaf = true;
+            for (int oj = 0; oj < tree.Branches.Count; oj++)
+                if (tree.Branches[oj].ParentBranch == bi) { isLeaf = false; break; }
+            if (isLeaf && tree.Branches[bi].Centerline.Count > 0)
+                tips.Add(tree.Branches[bi].Centerline[^1]);
+        }
+        if (tips.Count == 0 && tree.Branches.Count > 0 && tree.Branches[0].Centerline.Count > 0)
+            tips.Add(tree.Branches[0].Centerline[^1]);
+        return tips;
+    }
+
+    /// <summary>
+    /// Re-aim a Formbound Buttress T into this layer's plane geometry:
+    /// trunk along the wall's inward normal, bar along the wall tangent (horizontal
+    /// support under the overhang). Multi-planar frame rotation otherwise freezes
+    /// the birth angle and walks the stack off the ledge.
+    /// Tips may move at most <paramref name="maxStep"/> from <paramref name="prevTips"/>.
+    /// </summary>
+    private static void ReAimButtress(
+        LightningTree tree, PathsD region, PathsD core, float bead, float barLen,
+        float maxStep, List<Vector2> prevTips)
+    {
+        if (tree.Branches.Count == 0) return;
+        var trunk = tree.Branches[0].Centerline;
+        if (trunk.Count < 2) return;
+
+        var anchor = tree.Anchor;
+        if (!TryBoundaryFrame(region, anchor, out var tangent, out var inward))
+        {
+            trunk[0] = anchor;
+            return;
+        }
+
+        // Previous elbow / tips in this frame (after Down remap).
+        var prevElbow = trunk.Count > 1 ? trunk[^1] : anchor + inward * bead;
+        float trunkLen = Vector2.Distance(anchor, prevElbow);
+        if (trunkLen < bead * 0.5f) trunkLen = bead;
+
+        // Re-aim elbow along wall normal; keep length, then pull toward previous elbow.
+        var elbowTarget = anchor + inward * trunkLen;
+        if (!InsideRegion(core, elbowTarget))
+            elbowTarget = ClosestOnRegionBoundary(core, elbowTarget);
+        var elbow = PullWithin(prevElbow, elbowTarget, maxStep);
+        if (!InsideRegion(core, elbow))
+            elbow = ClosestOnRegionBoundary(core, elbow);
+        if (!SegmentInsideRegion(region, anchor, elbow, bead))
+        {
+            // Fall back: keep remapped trunk, only re-root.
+            trunk[0] = anchor;
+            return;
+        }
+
+        float halfBar = MathF.Max(barLen * 0.5f, bead);
+        var leftTarget  = elbow - tangent * halfBar;
+        var rightTarget = elbow + tangent * halfBar;
+        if (!InsideRegion(core, leftTarget))  leftTarget  = ClosestOnRegionBoundary(core, leftTarget);
+        if (!InsideRegion(core, rightTarget)) rightTarget = ClosestOnRegionBoundary(core, rightTarget);
+
+        // Match previous leaf tips (order by proximity) so stacking stays stable.
+        Vector2 prevLeft = prevTips.Count > 0 ? prevTips[0] : leftTarget;
+        Vector2 prevRight = prevTips.Count > 1 ? prevTips[1] : (prevTips.Count > 0 ? prevTips[0] : rightTarget);
+        if (prevTips.Count >= 2)
+        {
+            // Assign so each target stays near a previous tip.
+            float d0 = Vector2.Distance(prevTips[0], leftTarget) + Vector2.Distance(prevTips[1], rightTarget);
+            float d1 = Vector2.Distance(prevTips[0], rightTarget) + Vector2.Distance(prevTips[1], leftTarget);
+            if (d1 < d0) (prevLeft, prevRight) = (prevTips[1], prevTips[0]);
+            else (prevLeft, prevRight) = (prevTips[0], prevTips[1]);
+        }
+
+        var left  = PullWithin(prevLeft, leftTarget, maxStep);
+        var right = PullWithin(prevRight, rightTarget, maxStep);
+
+        // Rebuild T: trunk + two bar leaves.
+        tree.Branches.Clear();
+        tree.Branches.Add(new LightningBranch([anchor, elbow]));
+        if (Vector2.Distance(elbow, left) >= bead * 0.4f
+            && SegmentInsideRegion(region, elbow, left, bead))
+            tree.Branches.Add(new LightningBranch([elbow, left]) { ParentBranch = 0, ParentNode = 1 });
+        if (Vector2.Distance(elbow, right) >= bead * 0.4f
+            && SegmentInsideRegion(region, elbow, right, bead))
+            tree.Branches.Add(new LightningBranch([elbow, right]) { ParentBranch = 0, ParentNode = 1 });
+        tree.Anchor = anchor;
+    }
+
+    private static Vector2 PullWithin(Vector2 from, Vector2 target, float maxStep)
+    {
+        var d = target - from;
+        float len = d.Length();
+        if (len <= maxStep || maxStep <= 0f) return target;
+        return from + d * (maxStep / len);
+    }
+
+    /// <summary>Tangent (CCW along path) and inward unit normal at the boundary
+    /// point nearest <paramref name="p"/>.</summary>
+    private static bool TryBoundaryFrame(PathsD region, Vector2 p, out Vector2 tangent, out Vector2 inward)
+    {
+        tangent = new Vector2(1f, 0f);
+        inward = new Vector2(0f, 1f);
+        float best = float.MaxValue;
+        Vector2 bestA = default, bestB = default;
+        bool found = false;
+        foreach (var path in region)
+        {
+            int n = path.Count;
+            if (n < 2) continue;
+            for (int i = 0; i < n; i++)
+            {
+                var a = new Vector2((float)path[i].x, (float)path[i].y);
+                var b = new Vector2((float)path[(i + 1) % n].x, (float)path[(i + 1) % n].y);
+                var ab = b - a;
+                float len2 = ab.LengthSquared();
+                float t = len2 < 1e-12f ? 0f : Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f);
+                var c = a + ab * t;
+                float d2 = Vector2.DistanceSquared(p, c);
+                if (d2 < best) { best = d2; bestA = a; bestB = b; found = true; }
+            }
+        }
+        if (!found) return false;
+        var tan = bestB - bestA;
+        if (tan.LengthSquared() < 1e-12f) return false;
+        tangent = Vector2.Normalize(tan);
+        // Left normal of CCW outer = inward for positive-area outers; for holes
+        // (CW / negative area) the same left normal points into the solid too
+        // when the hole path is CW. Use a probe to pick the side that is inside.
+        var nrm = new Vector2(-tangent.Y, tangent.X);
+        var mid = (bestA + bestB) * 0.5f;
+        if (!InsideRegion(region, mid + nrm * 0.5f))
+            nrm = -nrm;
+        inward = nrm;
+        return true;
+    }
+
+    /// <summary>
+    /// Fillet every polyline corner and T-junction to a minimum radius of one
+    /// <paramref name="bead"/> so dual-wall slits never form acute corners that
+    /// over-extrude when the perimeter path detours through the finger.
+    /// </summary>
+    internal static void FilletTreeCorners(LightningTree tree, float bead)
+    {
+        float r = MathF.Max(bead, 0.5f);
+
+        // Soften the T-junction first (trunk meets bar leaves at ~90°).
+        if (tree.Branches.Count >= 2)
+        {
+            var trunk = tree.Branches[0].Centerline;
+            if (trunk.Count >= 2)
+            {
+                var elbow = trunk[^1];
+                var trunkDir = elbow - trunk[0];
+                if (trunkDir.LengthSquared() > 1e-8f)
+                {
+                    trunkDir = Vector2.Normalize(trunkDir);
+                    float tlen = Vector2.Distance(trunk[0], elbow);
+                    // Pull trunk tip back by r so the junction can arc.
+                    if (tlen > r * 1.5f)
+                        trunk[^1] = trunk[0] + trunkDir * (tlen - r);
+                    var trunkEnd = trunk[^1];
+
+                    for (int bi = 1; bi < tree.Branches.Count; bi++)
+                    {
+                        var leaf = tree.Branches[bi];
+                        if (leaf.ParentBranch != 0 || leaf.Centerline.Count < 2) continue;
+                        var tip = leaf.Centerline[^1];
+                        var dir = tip - elbow;
+                        float len = dir.Length();
+                        if (len < r * 1.2f) continue;
+                        dir /= len;
+
+                        // Arc from trunk approach direction to bar direction, radius r.
+                        var rebuilt = new List<Vector2>();
+                        // Start at trunk end (already pulled back).
+                        rebuilt.Add(trunkEnd);
+                        int segs = 6;
+                        for (int s = 1; s <= segs; s++)
+                        {
+                            float t = s / (float)segs;
+                            // Slerp-ish direction blend.
+                            var d = Vector2.Normalize(Vector2.Lerp(trunkDir, dir, t));
+                            if (d.LengthSquared() < 1e-8f) d = dir;
+                            // Point on circular-ish blend: offset from elbow by r toward blended normal.
+                            var along = Vector2.Lerp(trunkEnd, elbow + dir * r, t);
+                            // Push off the sharp corner by radius along the angle bisector.
+                            var bis = Vector2.Normalize(trunkDir + dir);
+                            if (bis.LengthSquared() > 1e-8f)
+                                along = elbow + bis * (r * MathF.Sin(t * MathF.PI * 0.5f))
+                                      + dir * (r * t);
+                            rebuilt.Add(along);
+                        }
+                        rebuilt.Add(tip);
+                        leaf.Centerline.Clear();
+                        leaf.Centerline.AddRange(SimplifyMinSpacing(rebuilt, bead * 0.35f));
+                        // Leaf no longer starts at old elbow — parent node still trunk tip.
+                        leaf.ParentNode = Math.Max(0, trunk.Count - 1);
+                    }
+                }
+            }
+        }
+
+        foreach (var b in tree.Branches)
+            FilletPolylineInPlace(b.Centerline, r);
+    }
+
+    private static void FilletPolylineInPlace(List<Vector2> line, float radius)
+    {
+        if (line.Count < 3) return;
+        var src = new List<Vector2>(line);
+        var dst = new List<Vector2> { src[0] };
+        for (int i = 1; i < src.Count - 1; i++)
+        {
+            var a = src[i - 1];
+            var b = src[i];
+            var c = src[i + 1];
+            var ba = a - b;
+            var bc = c - b;
+            float la = ba.Length();
+            float lc = bc.Length();
+            if (la < 1e-6f || lc < 1e-6f) { dst.Add(b); continue; }
+            ba /= la; bc /= lc;
+            float cos = Math.Clamp(Vector2.Dot(ba, bc), -1f, 1f);
+            float ang = MathF.Acos(cos); // interior turning-related angle between -ba and bc...
+            // Angle between incoming and outgoing directions (pi - corner angle).
+            float turn = MathF.PI - ang;
+            if (turn < 0.15f || float.IsNaN(turn)) { dst.Add(b); continue; } // nearly straight
+            // Cut distance along each leg for fillet of radius R: R / tan(turn/2)
+            float half = turn * 0.5f;
+            float cut = radius / MathF.Max(MathF.Tan(half), 1e-3f);
+            cut = MathF.Min(cut, MathF.Min(la, lc) * 0.45f);
+            if (cut < radius * 0.15f) { dst.Add(b); continue; }
+
+            var p0 = b + ba * cut; // along reverse incoming = toward a
+            var p1 = b + bc * cut;
+            // Arc from p0 to p1 around center offset along angle bisector.
+            var bis = ba + bc;
+            if (bis.LengthSquared() < 1e-10f) { dst.Add(b); continue; }
+            bis = Vector2.Normalize(bis);
+            // Center is along bisector from b; for convex corner from path, center is
+            // inside the turn: from b along -bis? For path A→B→C, turn left means
+            // center is left of BA. Use cross to pick side.
+            float cross = ba.X * bc.Y - ba.Y * bc.X;
+            var nIn = new Vector2(-ba.Y, ba.X); // left of incoming reverse... 
+            // Incoming direction is -ba (from a to b). Left normal of incoming:
+            var inDir = -ba;
+            var leftN = new Vector2(-inDir.Y, inDir.X);
+            // For a left turn (cross of inDir x outDir > 0), center is left.
+            var outDir = bc;
+            float crossIO = inDir.X * outDir.Y - inDir.Y * outDir.X;
+            var toCenter = crossIO >= 0 ? leftN : -leftN;
+            // Distance from corner to center: R / sin(turn/2)
+            float dist = radius / MathF.Max(MathF.Sin(half), 1e-3f);
+            // Better: center = p0 + leftNormal(inDir)*R (for left turn)
+            var center = p0 + toCenter * radius;
+            // Verify p1 is roughly on the circle; rebuild arc by angle.
+            var v0 = p0 - center;
+            var v1 = p1 - center;
+            if (v0.LengthSquared() < 1e-8f || v1.LengthSquared() < 1e-8f) { dst.Add(b); continue; }
+            float a0 = MathF.Atan2(v0.Y, v0.X);
+            float a1 = MathF.Atan2(v1.Y, v1.X);
+            float da = a1 - a0;
+            // Sweep the short arc matching the turn direction.
+            if (crossIO >= 0) { while (da < 0) da += MathF.PI * 2f; while (da > MathF.PI * 2f) da -= MathF.PI * 2f; }
+            else { while (da > 0) da -= MathF.PI * 2f; while (da < -MathF.PI * 2f) da += MathF.PI * 2f; }
+            int segs = Math.Max(3, (int)MathF.Ceiling(MathF.Abs(da) / (MathF.PI / 6f)));
+            for (int s = 0; s <= segs; s++)
+            {
+                float t = s / (float)segs;
+                float angS = a0 + da * t;
+                dst.Add(center + new Vector2(MathF.Cos(angS), MathF.Sin(angS)) * radius);
+            }
+        }
+        dst.Add(src[^1]);
+        line.Clear();
+        line.AddRange(SimplifyMinSpacing(dst, radius * 0.2f));
+    }
+
+    private static List<Vector2> SimplifyMinSpacing(List<Vector2> pts, float minDist)
+    {
+        if (pts.Count == 0) return pts;
+        var outp = new List<Vector2> { pts[0] };
+        float min2 = minDist * minDist;
+        for (int i = 1; i < pts.Count; i++)
+        {
+            if (Vector2.DistanceSquared(outp[^1], pts[i]) >= min2 || i == pts.Count - 1)
+            {
+                if (i == pts.Count - 1 && outp.Count > 1
+                    && Vector2.DistanceSquared(outp[^1], pts[i]) < min2 * 0.25f)
+                    outp[^1] = pts[i];
+                else
+                    outp.Add(pts[i]);
+            }
+        }
+        return outp;
+    }
+
+    /// <summary>Walk ±arc length along the sample ring from <paramref name="si"/>,
+    /// staying inside the run window when possible, and project onto <paramref name="keep"/>.</summary>
+    private static Vector2 WalkAlongRun(
+        List<Vector2> samples, int si, int runStart, int runCount, float sampleStep,
+        float signedArc, PathsD keep, float bead, bool external)
+    {
+        int n = samples.Count;
+        if (n == 0) return default;
+        int dir = signedArc >= 0f ? 1 : -1;
+        float remaining = MathF.Abs(signedArc);
+        int idx = si;
+        var last = samples[si];
+
+        // Prefer staying inside the unsupported run indices.
+        bool InRun(int i)
+        {
+            for (int j = 0; j < runCount; j++)
+                if ((runStart + j) % n == i) return true;
+            return false;
+        }
+
+        while (remaining > 0.01f)
+        {
+            int next = (idx + dir + n * 4) % n;
+            // Stop at run ends for finite runs (don't wrap into supported arc).
+            if (runCount < n && !InRun(next))
+                break;
+            float seg = Vector2.Distance(samples[idx], samples[next]);
+            if (seg < 1e-6f) { idx = next; continue; }
+            if (seg >= remaining)
+            {
+                float t = remaining / seg;
+                last = Vector2.Lerp(samples[idx], samples[next], t);
+                break;
+            }
+            remaining -= seg;
+            idx = next;
+            last = samples[idx];
+        }
+
+        if (external) return last;
+        if (InsideRegion(keep, last)) return last;
+        return ClosestOnRegionBoundary(keep, last);
+    }
+
+    /// <summary>True when <paramref name="elbow"/> is within <paramref name="minDist"/>
+    /// of another tree's trunk tip (the elbow of an existing T).</summary>
+    private static bool TooCloseToElbow(List<LightningTree> trees, Vector2 elbow, float minDist)
+    {
+        float s2 = minDist * minDist;
+        foreach (var t in trees)
+        {
+            if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+            var other = t.Branches[0].Centerline[^1];
+            if (Vector2.DistanceSquared(other, elbow) < s2) return true;
+        }
+        return false;
+    }
 
     /// <summary>Removes up to <paramref name="step"/> of arc length from the tip of
     /// every leaf branch (a branch nothing grows from). Emptied branches are removed

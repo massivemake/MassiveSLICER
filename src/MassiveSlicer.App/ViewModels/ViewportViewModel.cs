@@ -1353,6 +1353,113 @@ public sealed class ViewportViewModel : ViewModelBase
         set { if (SetField(ref _showMultiPlanarPlanes, value)) NotifyRenderNeeded(); }
     }
 
+    // ── Toolpath edit menu: paint brushes + line marking (preview view) ────────
+
+    private bool _isPaintEditOpen;
+    /// <summary>Expands the Edit toolbar in the Preview view. Realtime slicing is
+    /// PAUSED while the menu is open (edits accumulate); collapsing the menu (or
+    /// the Reslice button) fires the deferred re-slice.</summary>
+    public bool IsPaintEditOpen
+    {
+        get => _isPaintEditOpen;
+        set
+        {
+            if (!SetField(ref _isPaintEditOpen, value)) return;
+            if (!value)
+            {
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+            }
+            RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            NotifyRenderNeeded();
+        }
+    }
+
+    private void SetPaintTool(ref bool field, bool value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        if (field == value) return;
+        // Tools are mutually exclusive — turn the others off first.
+        if (value)
+        {
+            _paintBridgeActive = false;
+            _paintRemoveActive = false;
+            _paintLineBridgeActive = false;
+            _paintLineRemoveActive = false;
+            OnPropertyChanged(nameof(PaintBridgeActive));
+            OnPropertyChanged(nameof(PaintRemoveActive));
+            OnPropertyChanged(nameof(PaintLineBridgeActive));
+            OnPropertyChanged(nameof(PaintLineRemoveActive));
+        }
+        field = value;
+        OnPropertyChanged(name);
+        OnPropertyChanged(nameof(PaintBrushActive));
+        OnPropertyChanged(nameof(PaintLineToolActive));
+        NotifyRenderNeeded();
+    }
+
+    private bool _paintBridgeActive;
+    /// <summary>Brush: paint Bridge marks (fingers grow under painted beads).</summary>
+    public bool PaintBridgeActive
+    {
+        get => _paintBridgeActive;
+        set => SetPaintTool(ref _paintBridgeActive, value);
+    }
+
+    private bool _paintRemoveActive;
+    /// <summary>Brush: paint Remove marks (painted beads are deleted).</summary>
+    public bool PaintRemoveActive
+    {
+        get => _paintRemoveActive;
+        set => SetPaintTool(ref _paintRemoveActive, value);
+    }
+
+    private bool _paintLineBridgeActive;
+    /// <summary>Line tool: click one bead line to mark the whole contour as needing
+    /// support (Bridge marks along its length).</summary>
+    public bool PaintLineBridgeActive
+    {
+        get => _paintLineBridgeActive;
+        set => SetPaintTool(ref _paintLineBridgeActive, value);
+    }
+
+    private bool _paintLineRemoveActive;
+    /// <summary>Line tool: click one bead line to remove the whole contour from the
+    /// toolpath (Remove marks along its length).</summary>
+    public bool PaintLineRemoveActive
+    {
+        get => _paintLineRemoveActive;
+        set => SetPaintTool(ref _paintLineRemoveActive, value);
+    }
+
+    /// <summary>True while any paint tool is selected (camera drag disabled).</summary>
+    public bool PaintBrushActive =>
+        PaintBridgeActive || PaintRemoveActive || PaintLineBridgeActive || PaintLineRemoveActive;
+
+    /// <summary>True while a click-a-line tool is selected (click picks a contour).</summary>
+    public bool PaintLineToolActive => PaintLineBridgeActive || PaintLineRemoveActive;
+
+    private double _paintBrushRadiusMm = 15.0;
+    /// <summary>Brush radius in world millimetres. Right-click-drag horizontally
+    /// while a brush is active to resize; Alt+paint erases marks.</summary>
+    public double PaintBrushRadiusMm
+    {
+        get => _paintBrushRadiusMm;
+        set => SetField(ref _paintBrushRadiusMm, Math.Clamp(value, 3.0, 200.0));
+    }
+
+    /// <summary>Re-slices NOW with the accumulated paint edits, keeping the edit
+    /// menu open and slicing paused afterwards.</summary>
+    public RelayCommand ReslicePaintCommand => _reslicePaint ??= new RelayCommand(() =>
+    {
+        AdditiveSettings?.BumpPaintStamp();     // mark work pending even if unchanged
+        RealtimeSlicingPaused = false;          // pending fires (600 ms debounce)
+        if (IsPaintEditOpen)
+            RealtimeSlicingPaused = true;       // timer is already running — re-pause
+    });
+    private RelayCommand? _reslicePaint;
+
     private bool _isDevMode;
 
     /// <summary>When true, cell environment props (bed, stands, docks) can be picked and edited.</summary>
@@ -1498,6 +1605,19 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (SetField(ref _canMeshCleanup, value))
                 MeshCleanupCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _canCutTool;
+
+    /// <summary>True when the selection can be split with the Cut Tool.</summary>
+    public bool CanCutTool
+    {
+        get => _canCutTool;
+        set
+        {
+            if (SetField(ref _canCutTool, value))
+                CutToolCommand?.RaiseCanExecuteChanged();
         }
     }
 
@@ -1775,7 +1895,14 @@ public sealed class ViewportViewModel : ViewModelBase
         ExportKrlCommand?.RaiseCanExecuteChanged();
     }
 
-    internal void ResetScrubIndex(int max, Toolpath? toolpath)
+    /// <summary>
+    /// Sets the scrub slider range for a toolpath.
+    /// When <paramref name="preservePosition"/> is true (re-slice / update), keeps the
+    /// current move index clamped to the new range so the timeline does not jump to
+    /// the end. When false (first select / new toolpath), jumps to the end as before.
+    /// Does not fire <see cref="OnScrubIkRequested"/> — call ScrubIk separately if needed.
+    /// </summary>
+    internal void ResetScrubIndex(int max, Toolpath? toolpath, bool preservePosition = false)
     {
         if (_isPlaying)
         {
@@ -1787,12 +1914,21 @@ public sealed class ViewportViewModel : ViewModelBase
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
-        _toolpathScrubMax   = max;
+        int previous = _toolpathScrubIndex;
+        _toolpathScrubMax = Math.Max(0, max);
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
 
-        _toolpathScrubIndex = max;
-        _toolpathScrubText  = max.ToString();
+        int index;
+        if (toolpath is null || _toolpathScrubMax <= 0)
+            index = 0;
+        else if (preservePosition)
+            index = Math.Clamp(previous, 0, _toolpathScrubMax);
+        else
+            index = _toolpathScrubMax; // historical: land at end of path on first select
+
+        _toolpathScrubIndex = index;
+        _toolpathScrubText  = index.ToString();
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
@@ -1962,6 +2098,7 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand UngroupCommand              { get; }
     public RelayCommand ExplodeCommand              { get; }
     public RelayCommand MeshCleanupCommand          { get; }
+    public RelayCommand CutToolCommand              { get; }
     public RelayCommand SaveViewCommand             { get; }
     public RelayCommand SaveDevTransformCommand     { get; }
     public RelayCommand SaveAllDevTransformsCommand { get; }
@@ -2155,6 +2292,7 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnExplodeRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to open mesh cleanup on the selection.</summary>
     internal Action? OnMeshCleanupRequested { get; set; }
+    internal Action? OnCutToolRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
 
@@ -2781,6 +2919,7 @@ public sealed class ViewportViewModel : ViewModelBase
         UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
         ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
         MeshCleanupCommand    = new RelayCommand(() => OnMeshCleanupRequested?.Invoke(), () => CanMeshCleanup);
+        CutToolCommand        = new RelayCommand(() => OnCutToolRequested?.Invoke(), () => CanCutTool);
         SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
         SaveDevTransformCommand = new RelayCommand(
             () => OnSaveDevTransformRequested?.Invoke(),

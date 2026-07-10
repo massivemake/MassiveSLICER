@@ -79,7 +79,7 @@ public static class AngledPlanarSlicer
         //    frame is constant across layers, so propagation works unchanged).
         List<List<List<Vector2>>>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (settings.InfillPattern == InfillPattern.LightningBridge)
+        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             lightningCache = new(steps.Count);
@@ -97,7 +97,22 @@ public static class AngledPlanarSlicer
             var meshTester = new Lightning.MeshInsideTester(meshes);
             lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
                 solidAt: (li, p) => meshTester.IsInside(
-                    normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y));
+                    normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
+                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, steps.Count,
+                    li => (normal * steps[li], normal, u, v)));
+            // Generator oracles: SolidAt probes both sides of the plane (fresh
+            // islands have material only above their first plane); SolidAtPlane
+            // probes exactly at it (a real contour's interior is solid there).
+            for (int li = 0; li < steps.Count; li++)
+            {
+                int cap = li;
+                lightningPlan.Layers[li].SolidAt = p =>
+                    meshTester.IsInside(normal * (steps[cap] - 0.4f * heights[cap]) + u * p.X + v * p.Y)
+                    || meshTester.IsInside(normal * (steps[cap] + 0.4f * heights[cap]) + u * p.X + v * p.Y);
+                lightningPlan.Layers[li].SolidAtPlane = p =>
+                    meshTester.IsInside(normal * steps[cap] + u * p.X + v * p.Y);
+            }
         }
 
         for (int si = 0; si < steps.Count; si++)
@@ -121,6 +136,9 @@ public static class AngledPlanarSlicer
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);
         }
+
+        if (settings.PaintMarks.Count > 0)
+            ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
 
         return toolpath;
     }
@@ -228,7 +246,7 @@ public static class AngledPlanarSlicer
         //    top-down finger plan across the (slowly rotating) frame stack.
         List<List<List<Vector2>>>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (settings.InfillPattern == InfillPattern.LightningBridge)
+        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             var dedupedMeshes = meshes;
@@ -250,7 +268,24 @@ public static class AngledPlanarSlicer
             lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings, frames,
                 solidAt: (li, p) => meshTester.IsInside(
                     march[li].Origin - march[li].Normal * (0.4f * layerH)
-                    + march[li].U * p.X + march[li].V * p.Y));
+                    + march[li].U * p.X + march[li].V * p.Y),
+                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, march.Count,
+                    li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V)));
+            // Generator oracles: SolidAt probes both sides of the plane (fresh
+            // islands have material only above their first plane); SolidAtPlane
+            // probes exactly at it (a real contour's interior is solid there).
+            for (int li = 0; li < march.Count; li++)
+            {
+                int cap = li;
+                lightningPlan.Layers[li].SolidAt = p =>
+                    meshTester.IsInside(march[cap].Origin - march[cap].Normal * (0.4f * layerH)
+                        + march[cap].U * p.X + march[cap].V * p.Y)
+                    || meshTester.IsInside(march[cap].Origin + march[cap].Normal * (0.4f * layerH)
+                        + march[cap].U * p.X + march[cap].V * p.Y);
+                lightningPlan.Layers[li].SolidAtPlane = p =>
+                    meshTester.IsInside(march[cap].Origin + march[cap].U * p.X + march[cap].V * p.Y);
+            }
         }
 
         Vector3 nPrev = default; float dPrev = 0f; bool hasPrev = false;
@@ -294,6 +329,9 @@ public static class AngledPlanarSlicer
 
             nPrev = normal; dPrev = planeD; hasPrev = true;
         }
+
+        if (settings.PaintMarks.Count > 0)
+            ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
 
         return toolpath;
     }
@@ -479,7 +517,7 @@ public static class AngledPlanarSlicer
             Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
 
             int firstInfillMove = layer.Moves.Count;
-            if (settings.InfillPattern == InfillPattern.LightningBridge)
+            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
                     settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject);
             else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)

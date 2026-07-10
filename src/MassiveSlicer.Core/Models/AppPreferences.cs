@@ -178,8 +178,8 @@ public sealed class AppPreferences
     /// <summary>Lightning Bridge: sacrificial external fins under outward overhangs.</summary>
     public bool LightningExteriorOverhangs { get; set; }
 
-    /// <summary>Formbound Buttress: minimum solid ramp thickness in bead multiples.</summary>
-    public double LightningRampMinBeads { get; set; } = 2.5;
+    /// <summary>Formbound Buttress: horizontal support bar length (mm), single bead.</summary>
+    public double LightningButtressBarMm { get; set; } = 40.0;
 
     /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
     public bool LightningPreferInteriorMouths { get; set; } = true;
@@ -282,6 +282,11 @@ public sealed class AppPreferences
 
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
+
+    /// <summary>Toolpath paint marks as [x, y, z, radius, kind] where kind is
+    /// (float)PaintMarkKind — Bridge marks grow Formbound fingers under painted
+    /// beads, Remove marks delete them.</summary>
+    public List<float[]> PaintMarks { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";

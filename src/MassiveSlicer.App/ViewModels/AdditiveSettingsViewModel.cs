@@ -311,6 +311,42 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public IReadOnlyList<SeamGuidePoint> BuildSeamGuideList() => [.. SeamGuides];
 
+    // ── Toolpath paint marks (brush tool) ──────────────────────────────────────
+
+    /// <summary>World-space brush dabs painted on the toolpath (Bridge = grow
+    /// fingers under the beads; Remove = delete the beads). Persist with the
+    /// workspace; survive re-slices because they are world-space spheres.</summary>
+    public List<Core.Models.PaintMark> PaintMarks { get; } = [];
+
+    /// <summary>Bumped when a paint stroke commits — registered as a realtime
+    /// re-slice trigger.</summary>
+    public int PaintStamp
+    {
+        get => _paintStamp;
+        private set => SetField(ref _paintStamp, value);
+    }
+    private int _paintStamp;
+
+    internal void BumpPaintStamp() => PaintStamp++;
+
+    public void SetPaintMarks(IEnumerable<Core.Models.PaintMark> marks)
+    {
+        PaintMarks.Clear();
+        PaintMarks.AddRange(marks);
+        BumpPaintStamp();
+    }
+
+    public IReadOnlyList<Core.Models.PaintMark> BuildPaintMarkList() => [.. PaintMarks];
+
+    /// <summary>Clears every painted mark (both kinds) and re-slices.</summary>
+    public RelayCommand ClearPaintMarksCommand => _clearPaintMarks ??= new RelayCommand(() =>
+    {
+        if (PaintMarks.Count == 0) return;
+        PaintMarks.Clear();
+        BumpPaintStamp();
+    });
+    private RelayCommand? _clearPaintMarks;
+
     /// <summary>Opens the viewport seam guide editor.</summary>
     public RelayCommand OpenSeamEditorCommand { get; }
 
@@ -827,7 +863,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     // -- Infill pattern -------------------------------------------------------
 
-    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Formbound Bridge"];
+    public string[] InfillPatternOptions { get; } =
+        ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Formbound Bridge", "Formbound Buttress"];
 
     private string _infillPattern = "None";
 
@@ -841,13 +878,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowInfillControls));
                 OnPropertyChanged(nameof(ShowLightningControls));
+                OnPropertyChanged(nameof(ShowButtressControls));
             }
         }
     }
 
     public bool ShowInfillControls => InfillPattern != "None";
 
-    public bool ShowLightningControls => InfillPattern is "Formbound Bridge" or "Lightning Bridge";
+    public bool ShowLightningControls => InfillPattern is "Formbound Bridge" or "Lightning Bridge" or "Formbound Buttress";
+
+    public bool ShowButtressControls => InfillPattern is "Formbound Buttress";
 
     private double _lightningOverhangDeg = 30.0;
     /// <summary>Max unsupported overhang angle for lightning finger growth (deg).</summary>
@@ -895,6 +935,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _lightningExteriorOverhangs;
         set => SetField(ref _lightningExteriorOverhangs, value);
+    }
+
+    private double _lightningButtressBarMm = 40.0;
+    /// <summary>Formbound Buttress: single-bead horizontal support bar length (mm).</summary>
+    public double LightningButtressBarMm
+    {
+        get => _lightningButtressBarMm;
+        set => SetField(ref _lightningButtressBarMm, Math.Clamp(value, 5.0, 500.0));
+    }
+
+    private bool _lightningPreferInteriorMouths = true;
+    /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
+    public bool LightningPreferInteriorMouths
+    {
+        get => _lightningPreferInteriorMouths;
+        set => SetField(ref _lightningPreferInteriorMouths, value);
     }
 
     private double _infillSpacingMm = 0.0;

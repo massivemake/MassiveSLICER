@@ -80,6 +80,25 @@ public class AngledFuselageLikeTest
         var inner = OuterProfile.Select(p => (MathF.Max(p.r - 10f, 2f), p.z)).ToArray();
         Revolve(tris, inner);
 
+        // Cap the wall ends with annular rings so the wall encloses volume — real
+        // exports are closed solids, and the mesh-truth oracle (vertical-ray
+        // parity) reads an open surface as having no material at all.
+        void CapRing(float rIn, float rOut, float z, int segments = 48)
+        {
+            for (int i = 0; i < segments; i++)
+            {
+                float a0 = MathF.Tau * i / segments, a1 = MathF.Tau * (i + 1) / segments;
+                var i0 = new Vector3(rIn * MathF.Cos(a0), rIn * MathF.Sin(a0), z);
+                var i1 = new Vector3(rIn * MathF.Cos(a1), rIn * MathF.Sin(a1), z);
+                var o0 = new Vector3(rOut * MathF.Cos(a0), rOut * MathF.Sin(a0), z);
+                var o1 = new Vector3(rOut * MathF.Cos(a1), rOut * MathF.Sin(a1), z);
+                tris.AddRange([i0, i1, o1]);
+                tris.AddRange([i0, o1, o0]);
+            }
+        }
+        CapRing(inner[0].Item1, OuterProfile[0].r, OuterProfile[0].z);
+        CapRing(inner[^1].Item1, OuterProfile[^1].r, OuterProfile[^1].z);
+
         // Interior diaphragm: a thin wall crossing the hollow void, welded conceptually
         // to the inner hull (slices into strip contours that must keep printing).
         Box(tris, new Vector3(-80f, -3.25f, 80f), new Vector3(80f, 3.25f, 240f));

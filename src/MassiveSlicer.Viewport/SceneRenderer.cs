@@ -719,6 +719,19 @@ public sealed class SceneRenderer : IDisposable
     private int _spineCount;
     private SpineRenderer? _guideGizmo;
     private int _guideGizmoCount;
+    private PaintOverlayRenderer? _paintOverlay;
+    private int _paintOverlayCount;
+
+    /// <summary>Toolpath paint overlay: coloured LINE SEGMENTS (two entries per
+    /// segment) — mark spheres, brush cursor circle, hovered-line highlight.
+    /// Empty list hides it. Must be called on the GL thread.</summary>
+    public void SetPaintOverlay(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _paintOverlayCount = points.Count;
+        if (points.Count < 2) return;
+        _paintOverlay ??= new PaintOverlayRenderer();
+        _paintOverlay.Update(points);
+    }
 
     /// <summary>Shows the Multi-Planar guide planes (base/middle/top). Empty list hides
     /// them. <paramref name="selected"/> highlights the plane being rotated.</summary>
@@ -1082,6 +1095,13 @@ public sealed class SceneRenderer : IDisposable
         {
             GL.Disable(EnableCap.DepthTest);
             _guideGizmo.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        if (_paintOverlayCount >= 2 && _paintOverlay is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _paintOverlay.Draw(mvp);
             GL.Enable(EnableCap.DepthTest);
         }
 
@@ -1742,6 +1762,7 @@ _planePreview?.Dispose();
         foreach (var gp in _guidePlanes) gp.Dispose();
 _spine?.Dispose();
         _guideGizmo?.Dispose();
+        _paintOverlay?.Dispose();
         _seamGuides?.Dispose();
         _boundaryLowMarkers?.Dispose();
         _boundaryHighMarkers?.Dispose();
