@@ -1379,6 +1379,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 ShowExtrusionMoves = false;
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
             NotifyRenderNeeded();
         }
     }
@@ -3767,8 +3768,16 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool HasToolpathStats
     {
         get => _hasToolpathStats;
-        set => SetField(ref _hasToolpathStats, value);
+        set
+        {
+            if (SetField(ref _hasToolpathStats, value))
+                OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
+        }
     }
+
+    /// <summary>Stats + cost hide while the Edit menu is open — the numbers are
+    /// stale mid-edit (slicing is paused) and the boxes crowd the editing HUD.</summary>
+    public bool ShowToolpathStatsOverlay => HasToolpathStats && !IsPaintEditOpen;
 
     private string _statsTime = "";
     public string StatsTime

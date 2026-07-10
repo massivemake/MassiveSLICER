@@ -944,7 +944,7 @@
                     Spacing="6"
                     ZIndex="32">
             <!-- Toolpath stats -->
-            <Border IsVisible="{Binding HasToolpathStats}"
+            <Border IsVisible="{Binding ShowToolpathStatsOverlay}"
                     Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
@@ -969,7 +969,7 @@
             </Border>
 
             <!-- Cost — collapsed by default so it never shows on screen shares / client demos -->
-            <Border IsVisible="{Binding HasToolpathStats}"
+            <Border IsVisible="{Binding ShowToolpathStatsOverlay}"
                     Background="{DynamicResource Bg2}"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
