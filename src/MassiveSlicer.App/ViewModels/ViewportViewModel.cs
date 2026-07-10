@@ -1372,6 +1372,12 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintLineBridgeActive = false;
                 PaintLineRemoveActive = false;
             }
+            else if (_viewMode == "Preview")
+            {
+                // Edit mode needs the printed-bead surface so white-bead feedback is visible.
+                ShowBead = true;
+                ShowExtrusionMoves = false;
+            }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
             NotifyRenderNeeded();
         }
@@ -1621,6 +1627,65 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _isCutToolActive;
+    private CutToolDialogViewModel? _cutToolSession;
+
+    /// <summary>True while the interactive Cut Tool (ghost plane + gizmo) is open.</summary>
+    public bool IsCutToolActive
+    {
+        get => _isCutToolActive;
+        private set
+        {
+            if (SetField(ref _isCutToolActive, value))
+            {
+                OnPropertyChanged(nameof(ShowCutToolPanel));
+                CutToolCommand?.RaiseCanExecuteChanged();
+                CancelCutToolCommand?.RaiseCanExecuteChanged();
+                PerformCutToolCommand?.RaiseCanExecuteChanged();
+                CutToolNormalXCommand?.RaiseCanExecuteChanged();
+                CutToolNormalYCommand?.RaiseCanExecuteChanged();
+                CutToolNormalZCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Overlay panel visibility (same as <see cref="IsCutToolActive"/>).</summary>
+    public bool ShowCutToolPanel => _isCutToolActive;
+
+    /// <summary>Live cut-plane / connector parameters for the floating panel.</summary>
+    public CutToolDialogViewModel? CutToolSession
+    {
+        get => _cutToolSession;
+        private set => SetField(ref _cutToolSession, value);
+    }
+
+    public RelayCommand? CancelCutToolCommand { get; private set; }
+    public RelayCommand? PerformCutToolCommand { get; private set; }
+    public RelayCommand? CutToolNormalZCommand { get; private set; }
+    public RelayCommand? CutToolNormalYCommand { get; private set; }
+    public RelayCommand? CutToolNormalXCommand { get; private set; }
+
+    internal Action? OnCancelCutToolRequested { get; set; }
+    internal Action? OnPerformCutToolRequested { get; set; }
+
+    /// <summary>Enter interactive cut-tool mode with a plane session (viewport wires gizmo).</summary>
+    internal void BeginCutToolSession(CutToolDialogViewModel session)
+    {
+        CutToolSession = session;
+        IsCutToolActive = true;
+        // Prefer translate gizmo so the plane can be moved immediately.
+        if (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale)
+            ActiveGizmoModeInternal = GizmoMode.Translate;
+        NotifyRenderNeeded();
+    }
+
+    internal void EndCutToolSession()
+    {
+        CutToolSession = null;
+        IsCutToolActive = false;
+        NotifyRenderNeeded();
+    }
+
     private bool _isToolpathSelected;
 
     /// <summary>True when the active toolpath node is the current selection.</summary>
@@ -1741,6 +1806,8 @@ public sealed class ViewportViewModel : ViewModelBase
     private string _toolpathScrubText = "0";
     /// <summary>Guards against the index↔text two-way binding feedback loop.</summary>
     private bool   _scrubSyncing;
+    /// <summary>Exclusive end move index per layer (prefix sums) for O(log n) layer lookup.</summary>
+    private int[]? _scrubLayerEnds;
 
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
@@ -1751,6 +1818,7 @@ public sealed class ViewportViewModel : ViewModelBase
             if (SetField(ref _toolpathScrubIndex, value))
             {
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
                 // Keep the editable text box in sync unless we're already being
@@ -1789,6 +1857,7 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
             }
@@ -1823,6 +1892,57 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>The static " / N" suffix shown to the right of the editable index box.</summary>
     public string ToolpathScrubMaxLabel
         => _toolpathScrubMax > 0 ? $" / {_toolpathScrubMax}" : string.Empty;
+
+    /// <summary>
+    /// Current layer (1-based) and total layers for the scrubbed toolpath.
+    /// Empty when no toolpath / no layers.
+    /// </summary>
+    public string ToolpathScrubLayerLabel
+    {
+        get
+        {
+            int total = _scrubLayerEnds?.Length ?? ActiveScrubToolpath?.Layers.Count ?? 0;
+            if (total <= 0) return string.Empty;
+            int cur = GetScrubLayerIndex() + 1; // 1-based for humans
+            return $"Layer {cur} / {total}";
+        }
+    }
+
+    /// <summary>0-based layer index for the current scrub move.</summary>
+    private int GetScrubLayerIndex()
+    {
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            return 0;
+        int idx = Math.Clamp(_toolpathScrubIndex, 0, Math.Max(0, _toolpathScrubMax));
+        int last = _scrubLayerEnds.Length - 1;
+        if (idx >= _scrubLayerEnds[last]) return last;
+        // Binary search: first layer whose exclusive end is > idx.
+        int lo = 0, hi = last;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (idx < _scrubLayerEnds[mid]) hi = mid;
+            else lo = mid + 1;
+        }
+        return lo;
+    }
+
+    private void RebuildScrubLayerEnds(Toolpath? toolpath)
+    {
+        if (toolpath is null || toolpath.Layers.Count == 0)
+        {
+            _scrubLayerEnds = null;
+            return;
+        }
+        var ends = new int[toolpath.Layers.Count];
+        int acc = 0;
+        for (int i = 0; i < toolpath.Layers.Count; i++)
+        {
+            acc += toolpath.Layers[i].Moves.Count;
+            ends[i] = acc;
+        }
+        _scrubLayerEnds = ends;
+    }
 
     /// <summary>
     /// Resets the scrubber to position 0 and records the active toolpath without
@@ -1892,6 +2012,8 @@ public sealed class ViewportViewModel : ViewModelBase
     internal void ReplaceScrubToolpathInPlace(Toolpath toolpath)
     {
         ActiveScrubToolpath = toolpath;
+        RebuildScrubLayerEnds(toolpath);
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
         ExportKrlCommand?.RaiseCanExecuteChanged();
     }
 
@@ -1911,6 +2033,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPlaybackToggled?.Invoke(false);
         }
         ActiveScrubToolpath = toolpath;
+        RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
@@ -1932,6 +2055,7 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
     }
@@ -1944,6 +2068,7 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         if (!SetField(ref _toolpathScrubIndex, index)) return;
         OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
         _scrubSyncing     = true;
@@ -2919,7 +3044,12 @@ public sealed class ViewportViewModel : ViewModelBase
         UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
         ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
         MeshCleanupCommand    = new RelayCommand(() => OnMeshCleanupRequested?.Invoke(), () => CanMeshCleanup);
-        CutToolCommand        = new RelayCommand(() => OnCutToolRequested?.Invoke(), () => CanCutTool);
+        CutToolCommand        = new RelayCommand(() => OnCutToolRequested?.Invoke(), () => CanCutTool && !IsCutToolActive);
+        CancelCutToolCommand  = new RelayCommand(() => OnCancelCutToolRequested?.Invoke(), () => IsCutToolActive);
+        PerformCutToolCommand = new RelayCommand(() => OnPerformCutToolRequested?.Invoke(), () => IsCutToolActive);
+        CutToolNormalZCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(0, 0, 1), () => IsCutToolActive);
+        CutToolNormalYCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(0, 1, 0), () => IsCutToolActive);
+        CutToolNormalXCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(1, 0, 0), () => IsCutToolActive);
         SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
         SaveDevTransformCommand = new RelayCommand(
             () => OnSaveDevTransformRequested?.Invoke(),

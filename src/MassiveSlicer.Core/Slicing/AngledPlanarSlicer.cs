@@ -140,15 +140,18 @@ public static class AngledPlanarSlicer
         if (settings.PaintMarks.Count > 0)
             ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
 
+        if (lightningPlan is not null)
+            toolpath.FormboundStats = lightningPlan.ToStats();
+
         return toolpath;
     }
 
     /// <summary>
-    /// Multi-Planar slicing: the cutting plane's tilt interpolates through three guide
-    /// planes — a base angle at the bottom of the part, a middle angle at half height,
-    /// and a top angle at the top — rotating a little between every layer (all tilts
-    /// about Y, like <see cref="SliceSettings.TiltAngle"/>). Because consecutive planes
-    /// are not parallel, each layer is a wedge: per-move <see cref="ToolpathMove.HeightScale"/>
+    /// Multi-Planar slicing: the cutting plane's tilt interpolates through the guide
+    /// plane stack (height % → angle). Outside the first/last guide the angle
+    /// <b>holds</b> and keeps projecting along that same tilt until the mesh is fully
+    /// covered — end guides never truncate the stack. Because consecutive planes are
+    /// not parallel, each layer is a wedge: per-move <see cref="ToolpathMove.HeightScale"/>
     /// records the local thickness relative to the nominal layer height so export can
     /// scale extrusion RPM and the preview can draw the true bead height. The per-layer
     /// tilt change is clamped so the thin side never drops below a quarter layer.
@@ -179,7 +182,8 @@ public static class AngledPlanarSlicer
 
         float layerH = MathF.Max(settings.LayerHeight, 0.1f);
 
-        // Guide stack, sorted by height; constant tilt outside the ends.
+        // Guide stack, sorted by height. First/last angles hold and project past
+        // those heights — guides only shape the tilt, they do not start/stop the cut.
         var guides = (settings.MultiPlanarPlanes is { Count: >= 2 } g
                 ? g.OrderBy(pl => pl.HeightPct).ToArray()
                 : [new MultiPlanarPlane(0f, 0f), new MultiPlanarPlane(100f, 30f)]);
@@ -191,6 +195,7 @@ public static class AngledPlanarSlicer
         float ThetaAt(float f)
         {
             float pct = f * 100f;
+            // Below first guide → hold first angle (project past the bottom guide).
             if (pct <= guides[0].HeightPct) return guides[0].AngleDeg * MathF.PI / 180f;
             for (int k = 1; k < guides.Length; k++)
             {
@@ -200,6 +205,7 @@ public static class AngledPlanarSlicer
                 float a = guides[k - 1].AngleDeg + (guides[k].AngleDeg - guides[k - 1].AngleDeg) * t;
                 return a * MathF.PI / 180f;
             }
+            // Above last guide → hold last angle (project past the top guide).
             return guides[^1].AngleDeg * MathF.PI / 180f;
         }
 
@@ -219,13 +225,53 @@ public static class AngledPlanarSlicer
         //    0.75·layerH per layer at the far edge — under the lightning planner's
         //    support radius, which is what lets its cross-layer propagation work on
         //    a slowly rotating frame stack.
+        //
+        //    Z range is padded by lever·tan(max|θ|) so a tilted first/last plane
+        //    still reaches the high/low corners of the AABB. March continues with
+        //    the held end angles until the plane no longer intersects the mesh —
+        //    never stopping at a guide height or at raw zMax alone.
         var march = new List<(float H, float Theta, Vector3 Normal, float PlaneD, Vector3 Origin, Vector3 U, Vector3 V)>();
         {
-            float h0 = zMin + settings.FirstLayerHeight;
+            float maxAbsTheta = 0f;
+            foreach (var gp in guides)
+                maxAbsTheta = MathF.Max(maxAbsTheta, MathF.Abs(gp.AngleDeg) * MathF.PI / 180f);
+            float zPad = lever * MathF.Tan(MathF.Min(maxAbsTheta, 75f * MathF.PI / 180f))
+                       + layerH * 2f;
+
+            var aabbMin = new Vector3(xMin, yMin, zMin);
+            var aabbMax = new Vector3(xMax, yMax, zMax);
+
+            // Does infinite plane n·x = planeD intersect the mesh AABB?
+            static bool PlaneHitsAabb(Vector3 n, float planeD, Vector3 bmin, Vector3 bmax)
+            {
+                // Min/max of n·x over the box = sum of min/max contributions per axis.
+                float tMin = 0f, tMax = 0f;
+                if (n.X >= 0f) { tMin += n.X * bmin.X; tMax += n.X * bmax.X; }
+                else           { tMin += n.X * bmax.X; tMax += n.X * bmin.X; }
+                if (n.Y >= 0f) { tMin += n.Y * bmin.Y; tMax += n.Y * bmax.Y; }
+                else           { tMin += n.Y * bmax.Y; tMax += n.Y * bmin.Y; }
+                if (n.Z >= 0f) { tMin += n.Z * bmin.Z; tMax += n.Z * bmax.Z; }
+                else           { tMin += n.Z * bmax.Z; tMax += n.Z * bmin.Z; }
+                const float eps = 1e-3f;
+                return planeD >= tMin - eps && planeD <= tMax + eps;
+            }
+
+            // Start below the mesh so the first held angle can still cut the low
+            // corner under tilt; first-layer offset matches the classic bottom pad.
+            float h0 = zMin - zPad + MathF.Max(settings.FirstLayerHeight, layerH * 0.5f);
+            float hCeil = zMax + zPad + layerH * 4f;
             float thetaWalk = ThetaAt(0f);
             var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
-            while (h0 < zMax - 1e-4f)
+            bool seenHit = false;
+            int emptyAfterHit = 0;
+            const int emptyStop = 3; // a few empty planes past the mesh → done
+            int safety = 0;
+            const int maxLayers = 200_000;
+
+            while (h0 < hCeil && safety++ < maxLayers)
             {
+                // Height fraction for guide interpolation is relative to the mesh
+                // body only — outside [zMin,zMax] f clamps so end angles hold.
                 float f = Math.Clamp((h0 - zMin) / (zMax - zMin), 0f, 1f);
                 float theta = Math.Clamp(ThetaAt(f), thetaWalk - maxStepRad, thetaWalk + maxStepRad);
                 var normal = axisX
@@ -233,9 +279,25 @@ public static class AngledPlanarSlicer
                     : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
                 var anchor = new Vector3(cx, cy, h0);
                 float planeD = Vector3.Dot(anchor, normal);
-                var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
-                var v = Vector3.Cross(normal, u);
-                march.Add((h0, theta, normal, planeD, anchor, u, v));
+                bool hits = PlaneHitsAabb(normal, planeD, aabbMin, aabbMax);
+
+                if (hits)
+                {
+                    seenHit = true;
+                    emptyAfterHit = 0;
+                    var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
+                    var v = Vector3.Cross(normal, u);
+                    march.Add((h0, theta, normal, planeD, anchor, u, v));
+                }
+                else if (seenHit)
+                {
+                    // Past the mesh along this stack — stop after a few empties so a
+                    // grazing miss mid-part doesn't abort early.
+                    emptyAfterHit++;
+                    if (emptyAfterHit >= emptyStop) break;
+                }
+                // else: still approaching the mesh from below — keep walking
+
                 thetaWalk = theta;
                 h0 += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
             }
@@ -332,6 +394,9 @@ public static class AngledPlanarSlicer
 
         if (settings.PaintMarks.Count > 0)
             ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
+
+        if (lightningPlan is not null)
+            toolpath.FormboundStats = lightningPlan.ToStats();
 
         return toolpath;
     }

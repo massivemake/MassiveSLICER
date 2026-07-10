@@ -149,6 +149,9 @@ public static class PlanarSlicer
         if (settings.PaintMarks.Count > 0)
             ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
 
+        if (lightningPlan is not null)
+            toolpath.FormboundStats = lightningPlan.ToStats();
+
         return toolpath;
     }
 

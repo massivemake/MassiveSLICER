@@ -49,11 +49,11 @@ public static class ThermalSimulator
     /// <summary>Combined convection + linearised radiation film coefficient (W/m²·K).</summary>
     private const float FilmCoeffWM2K = 12f;
 
-    /// <summary>Interface must stay this far above Tg for polymer chain diffusion (bonding).</summary>
-    private const float BondMarginC = 10f;
+    /// <summary>Default bond margin above Tg when the material preset does not override it.</summary>
+    public const float DefaultBondMarginC = 10f;
 
-    /// <summary>Above Tg by this much the previous layer is too soft to carry a bead (sag).</summary>
-    private const float SagMarginC = 45f;
+    /// <summary>Default sag margin above Tg when the material preset does not override it.</summary>
+    public const float DefaultSagMarginC = 45f;
 
     /// <summary>Safe robot speed clamp for the recommendation (mm/s).</summary>
     private const float MinSpeedMmS = 1f, MaxSpeedMmS = 250f;
@@ -89,8 +89,12 @@ public static class ThermalSimulator
         float tDep = settings.ThermalDepositTempC;
         float tAmb = settings.ThermalAmbientTempC;
         float tg   = settings.ThermalGlassTransitionC;
-        float tBond = tg + BondMarginC;
-        float tSag  = tg + SagMarginC;
+        float bondMargin = settings.ThermalBondMarginC > 0f
+            ? settings.ThermalBondMarginC : DefaultBondMarginC;
+        float sagMargin = settings.ThermalSagMarginC > 0f
+            ? settings.ThermalSagMarginC : DefaultSagMarginC;
+        float tBond = tg + bondMargin;
+        float tSag  = tg + sagMargin;
 
         var warnings = new List<string>();
         if (tDep <= tSag + 5f)

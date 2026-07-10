@@ -258,7 +258,7 @@
                             <!-- Multi-Planar: guide-plane stack -->
                             <StackPanel IsVisible="{Binding Additive.ShowMultiPlanarControls}" Spacing="2" Margin="0,2,0,2">
                                 <TextBlock Margin="8,0,8,2" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                           Text="The slicing plane's tilt interpolates through the guide planes below as the print climbs. Layers become wedges — extrusion RPM follows the local thickness automatically. Click a plane in the viewport and drag: horizontal rotates, vertical slides its height."/>
+                                           Text="The slicing plane's tilt interpolates through the guide planes below as the print climbs. The first and last angles keep projecting past those guides until the whole mesh is sliced — guides shape tilt, they do not start or stop the cut. Layers become wedges — extrusion RPM follows local thickness. Click a plane in the viewport and drag: horizontal rotates, vertical slides its height."/>
                                 <Grid Margin="8,0,8,2" ColumnDefinitions="*,Auto">
                                     <TextBlock Grid.Column="0" Text="Tilt axis" Classes="LabelMuted" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">

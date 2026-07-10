@@ -42,6 +42,32 @@ public sealed class MaterialPreset
     /// <summary>Material cost in USD per pound.</summary>
     public double CostPerLb { get; set; } = 5.0;
 
+    // -- Thermomechanical simulation thresholds ----------------------------
+    // Used by ThermalSimulator: safe layer-time window between sag (too hot /
+    // soft previous layer) and bond (interface cooled below fusion temp).
+
+    /// <summary>
+    /// Glass-transition (bonding-relevant) temperature in °C.
+    /// <c>0</c> = auto-look up from <see cref="MaterialType"/> family.
+    /// </summary>
+    public double GlassTransitionC { get; set; } = 0;
+
+    /// <summary>
+    /// Bonding threshold = Tg + this margin (°C). The interlayer must stay at
+    /// or above this temperature for polymer chain diffusion (fusion).
+    /// Default 10.
+    /// </summary>
+    public double ThermalBondMarginC { get; set; } = 10;
+
+    /// <summary>
+    /// Sag threshold = Tg + this margin (°C). Above this, the previous layer is
+    /// still too soft to carry a new bead. Default 45.
+    /// </summary>
+    public double ThermalSagMarginC { get; set; } = 45;
+
+    /// <summary>Ambient / build-environment temperature (°C) for the cooling model. Default 30.</summary>
+    public double ThermalAmbientC { get; set; } = 30;
+
     // -- Calibration provenance --------------------------------------------
 
     /// <summary>Date of the last purge-and-weigh calibration (yyyy-MM-dd), or empty if never.</summary>

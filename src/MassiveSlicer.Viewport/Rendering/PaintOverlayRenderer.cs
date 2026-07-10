@@ -39,7 +39,11 @@ public sealed class PaintOverlayRenderer : IDisposable
     public void Update(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
     {
         _count = points.Count - points.Count % 2;
-        if (_count < 2) return;
+        if (_count < 2)
+        {
+            _count = 0;
+            return;
+        }
 
         var data = new float[_count * 6];
         for (int i = 0; i < _count; i++)
@@ -65,7 +69,10 @@ public sealed class PaintOverlayRenderer : IDisposable
         if (_disposed || _count < 2 || _vao == 0) return;
         _shader.Use();
         _shader.SetMatrix4("uMVP", ref mvp);
-        GL.LineWidth(3f);
+        // Wider lines for selection/hover feedback (macOS may clamp; thick polylines
+        // in UpdatePaintOverlay also offset in world space as a fallback).
+        GL.Disable(EnableCap.DepthTest);
+        GL.LineWidth(6f);
         GL.BindVertexArray(_vao);
         GL.DrawArrays(PrimitiveType.Lines, 0, _count);
         GL.BindVertexArray(0);
