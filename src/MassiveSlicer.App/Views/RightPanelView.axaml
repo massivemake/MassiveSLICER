@@ -1061,25 +1061,29 @@
 
                             <StackPanel IsVisible="{Binding Additive.ShowInfillControls}">
 
-                                <Grid Margin="8,2,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="80"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Grid width (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Centre-to-centre distance between fill lines — the grid cell width for Grid / Ghost Mesh Grid. Leave 0 to use the bead width."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
-                                </Grid>
+                                <!-- Line-based fills only (Rectilinear/Grid/Triangle/Ghost Mesh):
+                                     Formbound patterns are demand-driven and ignore these. -->
+                                <StackPanel IsVisible="{Binding Additive.ShowGridControls}">
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Grid width (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Centre-to-centre distance between fill lines — the grid cell width for Grid / Ghost Mesh Grid. Leave 0 to use the bead width."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
+                                    </Grid>
 
-                                <Grid Margin="8,2,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="80"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Base angle of fill lines in degrees. 0 = parallel to X axis. Grid and Ghost Mesh rotate +90° every layer; Triangle rotates +60° every layer."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
-                                </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Base angle of fill lines in degrees. 0 = parallel to X axis. Grid and Ghost Mesh rotate +90° every layer; Triangle rotates +60° every layer."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
+                                    </Grid>
+                                </StackPanel>
 
                                 <StackPanel IsVisible="{Binding Additive.ShowLightningControls}">
                                     <Grid Margin="8,2,8,4">
