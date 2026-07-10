@@ -33,7 +33,7 @@ public sealed class LightningLayerPlan
     public HashSet<int> DroppedTrees { get; init; } = [];
 }
 
-/// <summary>One finger tree rooted on a region boundary.</summary>
+/// <summary>One finger / buttress tree rooted on a region boundary.</summary>
 public sealed class LightningTree
 {
     /// <summary>Stable lineage id — survives per-layer cloning, so one tree can be
@@ -51,9 +51,21 @@ public sealed class LightningTree
     /// attach to an earlier branch's node (tree merging).</summary>
     public List<LightningBranch> Branches { get; } = [];
 
+    /// <summary>
+    /// Formbound Buttress: closed solid ramp polygon (plane-local) for this layer —
+    /// multi-bead pad grown from the mouth. Null for dual-wall Formbound Bridge fingers.
+    /// </summary>
+    public List<Vector2>? Solid;
+
     public LightningTree Clone()
     {
-        var t = new LightningTree { Id = Id, Anchor = Anchor, External = External };
+        var t = new LightningTree
+        {
+            Id = Id,
+            Anchor = Anchor,
+            External = External,
+            Solid = Solid is null ? null : new List<Vector2>(Solid),
+        };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))
             {

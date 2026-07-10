@@ -181,6 +181,62 @@ public class MultiPlanarSlicerTest
         }
     }
 
+    /// <summary>Regression: an aggressive reversing plane stack (like the Drone V52
+    /// setup) makes the plane frame rotate fast enough that plane-local coordinates
+    /// drift several mm per layer. The planner must compare layers in physical space —
+    /// otherwise it hallucinates unsupported arcs along whole edges, spawns a new
+    /// finger row every layer, and the merged slits eat the perimeter wall.</summary>
+    [Fact]
+    public void AggressiveReversingStackKeepsThePerimeter()
+    {
+        var mesh = Cylinder(r: 150f, h: 400f);
+        SliceSettings S(InfillPattern pattern) => new()
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = 6f,
+            InfillPattern = pattern, LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true, LightningAnchorExterior = true,
+            MultiPlanarPlanes = [new(0f, 0f), new(60f, 45f), new(80f, -30f)],
+        };
+
+        var reference = AngledPlanarSlicer.SliceMultiPlanar([mesh], S(InfillPattern.None));
+        var lightning = AngledPlanarSlicer.SliceMultiPlanar([mesh], S(InfillPattern.LightningBridge));
+        Assert.Equal(reference.Layers.Count, lightning.Layers.Count);
+
+        // Every point of the plain perimeter must have printed material nearby in the
+        // Formbound slice. Finger mouths notch the wall ~1 bead wide, so 2×bead of
+        // slack is generous — the bug produced 40–60 mm losses.
+        float allowance = 2f * 6f;
+        float worst = 0f; int badLayers = 0; float worstZ = 0f;
+        for (int li = 0; li < reference.Layers.Count; li++)
+        {
+            var walls = lightning.Layers[li].Moves
+                .Where(m => m.Kind == MoveKind.Extrude).ToList();
+            if (walls.Count == 0) continue;
+            float layerWorst = 0f;
+            foreach (var pm in reference.Layers[li].Moves)
+            {
+                if (pm.Kind != MoveKind.Extrude || pm.IsLayerStitch) continue;
+                var mid = (pm.From + pm.To) * 0.5f;
+                float best = float.MaxValue;
+                foreach (var w in walls)
+                {
+                    var ab = w.To - w.From;
+                    float len2 = ab.LengthSquared();
+                    float t = len2 < 1e-9f ? 0f
+                        : Math.Clamp(Vector3.Dot(mid - w.From, ab) / len2, 0f, 1f);
+                    float d = (mid - (w.From + ab * t)).Length();
+                    if (d < best) best = d;
+                    if (best < allowance) break;
+                }
+                if (best > layerWorst) layerWorst = best;
+            }
+            if (layerWorst > allowance) badLayers++;
+            if (layerWorst > worst) { worst = layerWorst; worstZ = reference.Layers[li].Z; }
+        }
+        Assert.True(badLayers == 0,
+            $"perimeter lost on {badLayers} layers, worst gap {worst:0.#} mm at z={worstZ:0.#}");
+    }
+
     [Fact]
     public void ConsecutivePlanesNeverCrossInsideThePart()
     {

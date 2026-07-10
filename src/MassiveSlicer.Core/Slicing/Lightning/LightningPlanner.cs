@@ -16,13 +16,35 @@ namespace MassiveSlicer.Core.Slicing.Lightning;
 /// </summary>
 public static class LightningPlanner
 {
+    /// <summary>True for Formbound Bridge (dual-wall) or Formbound Buttress (solid ramps).</summary>
+    public static bool IsFormboundPattern(InfillPattern p) =>
+        p is InfillPattern.LightningBridge or InfillPattern.FormboundButtress;
+
+    /// <summary>True when the pattern builds multi-bead solid ramp polygons.</summary>
+    public static bool IsButtressPattern(InfillPattern p) =>
+        p == InfillPattern.FormboundButtress;
+
     /// <param name="fillPolysPerLayer">Closed fill polygons per layer, bottom-up,
     /// plane-local 2D (outer CCW / holes CW as produced by the slicers).</param>
     /// <param name="layerHeights">Height of each layer (adaptive-aware).</param>
+    /// <param name="frames">Per-layer plane frames for slicers whose frame ROTATES
+    /// between layers (Multi-Planar). When set, everything inherited or compared
+    /// across layers is remapped through world space into the receiving layer's
+    /// frame — plane-local coordinates of the same physical point can drift by
+    /// several mm per layer on a rotating stack, which would otherwise read as
+    /// phantom unsupported arcs (and spawn a fresh finger row every layer).</param>
+    /// <param name="solidAt">Mesh-truth oracle: (layerIndex, planeLocalPoint) → is
+    /// there REAL material there? Grazing cuts over pocket rims emit the rim curve
+    /// without its host wall, and 2D contour parity can only read that as a solid
+    /// island — new-finger demand is vetoed when the mesh says the claimed solid
+    /// is void (otherwise each 1–2 layer phantom seeds a ladder of bridging for
+    /// dozens of layers under geometry that doesn't exist; Drone V52, 2026-07-09).</param>
     public static LightningPlan Build(
         IReadOnlyList<List<List<Vector2>>> fillPolysPerLayer,
         IReadOnlyList<float> layerHeights,
-        SliceSettings settings)
+        SliceSettings settings,
+        IReadOnlyList<(Vector3 Origin, Vector3 U, Vector3 V)>? frames = null,
+        Func<int, Vector2, bool>? solidAt = null)
     {
         int n = fillPolysPerLayer.Count;
         var plan = new LightningPlan(n);
@@ -33,6 +55,9 @@ public static class LightningPlanner
         float spacing = settings.LightningBranchSpacingMm > 0f
             ? settings.LightningBranchSpacingMm
             : 4f * bead;
+        bool  buttress = IsButtressPattern(settings.InfillPattern);
+        float minBeads = MathF.Max(settings.LightningRampMinBeads, 1f);
+        bool  preferInterior = settings.LightningPreferInteriorMouths;
 
         float MaxStep(int i) => MathF.Min(MathF.Max(layerHeights[i], 0.1f) * tanA, 0.5f * bead);
 
@@ -74,14 +99,45 @@ public static class LightningPlanner
             // (holes / inner walls — notch hidden inside the part) and/or the outer
             // perimeter (notch visible outside). After Union normalization, outers
             // have positive area and holes negative.
-            var anchorPaths = new PathsD();
+            // Formbound Buttress with prefer-interior: try holes first; exterior is
+            // only used as fallback when a tip cannot reach any interior anchor.
+            var anchorInterior = new PathsD();
+            var anchorExterior = new PathsD();
             foreach (var path in region)
             {
                 bool isOuter = Clipper.Area(path) > 0;
-                if (isOuter ? settings.LightningAnchorExterior : settings.LightningAnchorInterior)
-                    anchorPaths.Add(path);
+                if (isOuter)
+                {
+                    if (settings.LightningAnchorExterior) anchorExterior.Add(path);
+                }
+                else if (settings.LightningAnchorInterior)
+                    anchorInterior.Add(path);
             }
-            if (anchorPaths.Count == 0) continue;   // nowhere allowed to root
+            var anchorPaths = new PathsD();
+            if (buttress && preferInterior && anchorInterior.Count > 0)
+            {
+                foreach (var p in anchorInterior) anchorPaths.Add(p);
+                // Exterior kept as fallback per-tip below.
+            }
+            else
+            {
+                foreach (var p in anchorInterior) anchorPaths.Add(p);
+                foreach (var p in anchorExterior) anchorPaths.Add(p);
+            }
+            if (anchorPaths.Count == 0 && anchorExterior.Count == 0) continue;
+
+            // Frame remap (identity on constant-frame stacks): lift the plane-local
+            // point to world in the source layer's frame, project into the target's.
+            Vector2 Remap(int from, int to, Vector2 p)
+            {
+                if (frames is null || from == to) return p;
+                var fa = frames[from];
+                var fb = frames[to];
+                var w = fa.Origin + fa.U * p.X + fa.V * p.Y;
+                var rel = w - fb.Origin;
+                return new Vector2(Vector3.Dot(rel, fb.U), Vector3.Dot(rel, fb.V));
+            }
+            Vector2 Down(Vector2 p) => Remap(i + 1, i, p);
 
             // ── 1. Inherit the layer-above's trees with retracted tips ─────────
             float stepAbove = MaxStep(i + 1);
@@ -93,6 +149,13 @@ public static class LightningPlanner
             foreach (var above in plan.Layers[i + 1].Trees)
             {
                 var t = above.Clone();
+                if (frames is not null)
+                {
+                    t.Anchor = Down(t.Anchor);
+                    foreach (var b in t.Branches)
+                        for (int k = 0; k < b.Centerline.Count; k++)
+                            b.Centerline[k] = Down(b.Centerline[k]);
+                }
 
                 // Dangling check FIRST — before natural retraction-death can hide it.
                 // A tree that tapers out on this layer is only safe when its anchor
@@ -149,8 +212,16 @@ public static class LightningPlanner
 
             foreach (var path in regions[i + 1])
             {
+                // A boundary smaller than a couple of beads is unprintable junk —
+                // never worth a finger (grazing-cut specks at the very top).
+                if (Math.Abs(Clipper.Area(path)) < 4.0 * bead * bead) continue;
+
                 var samples = SamplePath(path, sampleStep);
                 if (samples.Count == 0) continue;
+                var rawSamples = frames is not null ? new List<Vector2>(samples) : samples;
+                if (frames is not null)
+                    for (int k = 0; k < samples.Count; k++)
+                        samples[k] = Down(samples[k]);
 
                 // Flag which boundary samples of the layer above lack support here.
                 var unsupported = new bool[samples.Count];
@@ -178,6 +249,31 @@ public static class LightningPlanner
                         int si = (start + (int)((k + 0.5f) * count / tipCount)) % samples.Count;
                         var sPt = samples[si];
 
+                        // Mesh-truth veto: pull a probe INSIDE the demanding solid
+                        // (layer i+1 frame) and ask the mesh whether material really
+                        // exists there. Parity phantoms fail; every real overhang —
+                        // closing domes, flanges, fast-sweeping tangent bands — passes,
+                        // because its claimed solid IS mesh material.
+                        if (solidAt is not null)
+                        {
+                            var raw  = rawSamples[si];
+                            var prev = rawSamples[(si - 1 + rawSamples.Count) % rawSamples.Count];
+                            var next = rawSamples[(si + 1) % rawSamples.Count];
+                            var tan  = next - prev;
+                            var nrm  = tan.LengthSquared() > 1e-9f
+                                ? Vector2.Normalize(new Vector2(-tan.Y, tan.X))
+                                : new Vector2(1f, 0f);
+                            if (!InsideRegion(regions[i + 1], raw + nrm * (0.6f * bead)))
+                                nrm = -nrm;
+                            var probe = raw + nrm * (2.5f * bead);
+                            if (!InsideRegion(regions[i + 1], probe))
+                                probe = raw + nrm * bead;
+                            if (!InsideRegion(regions[i + 1], probe))
+                                probe = raw + nrm * (0.6f * bead);
+
+                            if (!solidAt(i + 1, probe)) continue;
+                        }
+
                         bool external = !InsideRegion(region, sPt);
 
                         // Interior demand: tip goes right under the unsupported arc, kept
@@ -187,42 +283,74 @@ public static class LightningPlanner
                             ? sPt
                             : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
 
-                        if (TooCloseToExisting(layerPlan.Trees, tip, spacing * 0.5f)) continue;
+                        // Buttress: wider cluster radius so fewer mouths cover more demand.
+                        float clusterR = buttress ? spacing : spacing * 0.5f;
+                        if (TooCloseToExisting(layerPlan.Trees, tip, clusterR)) continue;
 
-                        var anchor = ClosestOnRegionBoundary(external ? region : anchorPaths, tip);
+                        // Prefer attaching to an existing tree (shared mouth) when the tip
+                        // is closer to that tree than to a new boundary cut — especially
+                        // for Buttress multi-bead pads that can fan under a cluster.
+                        bool enableTreeMerging = buttress;
+                        var (nearTree, nearBranch, nearNode, distToTree) = enableTreeMerging
+                            ? NearestCenterlineNode(layerPlan.Trees, tip)
+                            : (null, 0, 0, float.MaxValue);
+
+                        Vector2 anchor;
+                        if (external)
+                            anchor = ClosestOnRegionBoundary(region, tip);
+                        else
+                        {
+                            // Interior-first: try preferred anchor set, then exterior fallback.
+                            anchor = ClosestOnRegionBoundary(
+                                anchorPaths.Count > 0 ? anchorPaths : anchorExterior, tip);
+                            if (buttress && preferInterior && anchorInterior.Count > 0
+                                && anchorExterior.Count > 0)
+                            {
+                                var aIn  = ClosestOnRegionBoundary(anchorInterior, tip);
+                                var aOut = ClosestOnRegionBoundary(anchorExterior, tip);
+                                bool inOk  = SegmentInsideRegion(region, aIn, tip, bead);
+                                bool outOk = SegmentInsideRegion(region, aOut, tip, bead);
+                                if (inOk) anchor = aIn;
+                                else if (outOk) anchor = aOut;
+                                else continue;
+                            }
+                        }
+
                         if (Vector2.Distance(anchor, tip) < bead) continue;   // wall covers it
                         // Reject fingers whose centerline would cross a void (a chord
                         // over a ring's hole) — the slit can't realize them.
                         if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
 
-                // Merge: root on the nearest existing centerline when that is closer
-                // than the boundary (child branch), else start a new tree.
-                // DISABLED for now: a trunk cannot retract while any child lives, so
-                // chained branches outlive their support depth and reach the bed.
-                // Re-enabling needs depth-aware retraction (retract the longest
-                // root-to-leaf arc, not each leaf independently).
-                const bool enableTreeMerging = false;
-                var (tree, branch, node, distToTree) = enableTreeMerging
-                    ? NearestCenterlineNode(layerPlan.Trees, tip)
-                    : (null, 0, 0, float.MaxValue);
-                if (tree is not null && distToTree < Vector2.Distance(anchor, tip)
-                    && distToTree >= bead)
-                {
-                    var junction = tree.Branches[branch].Centerline[node];
-                    tree.Branches.Add(new LightningBranch([junction, tip])
-                    {
-                        ParentBranch = branch,
-                        ParentNode   = node,
-                    });
-                }
-                else
-                {
-                    var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
-                    t.Branches.Add(new LightningBranch([anchor, tip]));
-                    layerPlan.Trees.Add(t);
-                }
+                        float distToBoundary = Vector2.Distance(anchor, tip);
+                        if (nearTree is not null && distToTree < distToBoundary
+                            && distToTree >= bead * 0.5f
+                            && (external || SegmentInsideRegion(region,
+                                    nearTree.Branches[nearBranch].Centerline[nearNode], tip, bead)))
+                        {
+                            var junction = nearTree.Branches[nearBranch].Centerline[nearNode];
+                            nearTree.Branches.Add(new LightningBranch([junction, tip])
+                            {
+                                ParentBranch = nearBranch,
+                                ParentNode   = nearNode,
+                            });
+                        }
+                        else
+                        {
+                            var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
+                            t.Branches.Add(new LightningBranch([anchor, tip]));
+                            layerPlan.Trees.Add(t);
+                        }
                     }
                 }
+            }
+
+            // Formbound Buttress: derive multi-bead solid polygons from each tree's
+            // centerlines so the generator can notch + fill continuous ramps.
+            if (buttress)
+            {
+                foreach (var t in layerPlan.Trees)
+                    t.Solid = BuildButtressSolid(t, region, core, bead, minBeads,
+                        settings.LightningTipLoopRadiusMm);
             }
 
             // ── 3. Straightening: nudge interior nodes toward the root–tip chord,
@@ -443,6 +571,21 @@ public static class LightningPlanner
             kept.Add(path);
             keptBounds.Add(b);
         }
+
+        // Orphan holes: a CW contour hosted by NO outer is tangent-band junk — the
+        // rim curve of a pocket whose outer wall collapsed at this plane (grazing
+        // cut). The parity union below would flip it into a phantom SOLID island,
+        // which then gets printed as a wall and grows support fingers under it
+        // (Drone V52 bug, 2026-07-09: a 10,000 mm² phantom seeded a 70-layer ladder
+        // of bridging under geometry that doesn't exist). Real holes always sit
+        // inside an outer; anything fully outside every outer is dropped. Vertices
+        // ON an outer's curve count as hosted (twin-tolerance safety).
+        // NOTE (2026-07-09): grazing-cut phantom islands (a pocket rim whose outer
+        // wall collapsed at this plane) CANNOT be told apart from real geometry
+        // here — parity-composed layers (fuselage half-loops) make orientation and
+        // containment both unreliable. They are handled cross-layer instead: the
+        // planner's persistence veto refuses to grow fingers under solids that
+        // vanish within a couple of layers.
 
         // Parity (EvenOdd) union: winding-agnostic, so corrupted contour orientations
         // don't matter, and doubly-covered areas cancel. That is the physically right
