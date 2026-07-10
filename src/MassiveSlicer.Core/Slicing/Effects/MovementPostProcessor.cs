@@ -38,7 +38,8 @@ public static class MovementPostProcessor
                 }
 
                 var hopStart = move.From;
-                if (doWipe && lastExtrude is not null && !lastExtrude.IsLayerStitch)
+                if (doWipe && lastExtrude is not null && !lastExtrude.IsLayerStitch
+                    && !ShouldSkipWipeForTravel(move, layer, settings))
                 {
                     var wipeMoves = BuildWipeMoves(move.From, lastExtrude, settings).ToList();
                     foreach (var wipe in wipeMoves)
@@ -61,6 +62,20 @@ public static class MovementPostProcessor
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// When <see cref="SliceSettings.WipeSkipShortTravels"/> is on, skip wipe for
+    /// travels shorter than twice the layer height (tiny jumps between beads).
+    /// </summary>
+    private static bool ShouldSkipWipeForTravel(
+        ToolpathMove travel, ToolpathLayer layer, SliceSettings settings)
+    {
+        if (!settings.WipeSkipShortTravels) return false;
+        float layerH = layer.Height > 0.05f ? layer.Height : MathF.Max(settings.LayerHeight, 0.1f);
+        float threshold = 2f * layerH;
+        float len = Vector3.Distance(travel.From, travel.To);
+        return len < threshold;
     }
 
     private static IEnumerable<ToolpathMove> BuildWipeMoves(

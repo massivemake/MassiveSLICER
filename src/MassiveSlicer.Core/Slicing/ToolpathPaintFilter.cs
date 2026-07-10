@@ -71,7 +71,8 @@ public static class ToolpathPaintFilter
     public static IReadOnlyList<IReadOnlyList<Vector2>>? ProjectBridgeMarks(
         IReadOnlyList<PaintMark> marks,
         int layerCount,
-        Func<int, (Vector3 Origin, Vector3 Normal, Vector3 U, Vector3 V)> frameOf)
+        Func<int, (Vector3 Origin, Vector3 Normal, Vector3 U, Vector3 V)> frameOf,
+        float halfBandMm)
     {
         var bridges = marks.Where(m => m.Kind == PaintMarkKind.Bridge).ToList();
         if (bridges.Count == 0) return null;
@@ -83,8 +84,12 @@ public static class ToolpathPaintFilter
             List<Vector2>? pts = null;
             foreach (var m in bridges)
             {
+                // A mark demands support on ITS OWN plane only (support grows
+                // BELOW it via the planner) — smearing across the mark's whole
+                // sphere planted fingers on planes ABOVE the painted bead, which
+                // printed as little arches ON TOP of it.
                 float sd = Vector3.Dot(m.Center - f.Origin, f.Normal);
-                if (MathF.Abs(sd) > m.Radius) continue;
+                if (MathF.Abs(sd) > halfBandMm) continue;
                 var rel = m.Center - sd * f.Normal - f.Origin;
                 (pts ??= []).Add(new Vector2(Vector3.Dot(rel, f.U), Vector3.Dot(rel, f.V)));
             }

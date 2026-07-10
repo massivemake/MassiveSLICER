@@ -2816,6 +2816,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WipeLengthMm            = copy.WipeLengthMm;
         live.WipeRampMm              = copy.WipeRampMm;
         live.WipeSpeed               = copy.WipeSpeed;
+        live.WipeSkipShortTravels    = copy.WipeSkipShortTravels;
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
@@ -3100,6 +3101,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WipeLengthMm            = p.WipeLengthMm;
         add.WipeRampMm              = p.WipeRampMm;
         add.WipeSpeed               = p.WipeSpeed;
+        add.WipeSkipShortTravels    = p.WipeSkipShortTravels;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
@@ -3355,6 +3357,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeLengthMm            = add.WipeLengthMm;
         p.WipeRampMm              = add.WipeRampMm;
         p.WipeSpeed               = add.WipeSpeed;
+        p.WipeSkipShortTravels    = add.WipeSkipShortTravels;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;

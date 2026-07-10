@@ -100,7 +100,8 @@ public static class AngledPlanarSlicer
                     normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
                 manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
                     settings.PaintMarks, steps.Count,
-                    li => (normal * steps[li], normal, u, v)));
+                    li => (normal * steps[li], normal, u, v),
+                    halfBandMm: settings.LayerHeight * 0.6f));
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
@@ -333,7 +334,8 @@ public static class AngledPlanarSlicer
                     + march[li].U * p.X + march[li].V * p.Y),
                 manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
                     settings.PaintMarks, march.Count,
-                    li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V)));
+                    li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V),
+                    halfBandMm: settings.LayerHeight * 0.6f));
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
