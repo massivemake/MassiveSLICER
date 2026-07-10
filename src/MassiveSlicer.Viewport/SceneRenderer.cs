@@ -422,7 +422,7 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowOrientationPreview  { get; set; } = false;
 
     /// <summary>
-    /// Scrubber move index applied to the selected toolpath renderer.
+    /// Scrubber move index applied to the active scrub toolpath renderer.
     /// int.MaxValue (default) means render the full toolpath.
     /// </summary>
     public int ToolpathActiveScrubIndex { get; set; } = int.MaxValue;
@@ -430,6 +430,26 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Lower bound of the layer window (edit mode): moves below this index
     /// are hidden — pair with <see cref="ToolpathActiveScrubIndex"/> for a range.</summary>
     public int ToolpathActiveScrubStart { get; set; }
+
+    /// <summary>
+    /// Toolpath node that owns the live scrub / layer isolation window. Applied even
+    /// when the mesh (or TCP) is selected so the dual-slider still hides layers.
+    /// </summary>
+    public SceneNode? ToolpathActiveScrubNode { get; set; }
+
+    /// <summary>
+    /// When true, draw a point at every extrude bead (edit Point mode) instead of
+    /// only contour start/end seams.
+    /// </summary>
+    public bool ShowAllPathPoints { get; set; }
+
+    /// <summary>
+    /// Path edit mode: centre-lines use depth-cued width (near ~2.5x) and opacity fade.
+    /// </summary>
+    public bool ShowDepthAwareLines { get; set; }
+
+    private int _viewportWidthPx;
+    private int _viewportHeightPx;
 
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode
@@ -726,21 +746,26 @@ public sealed class SceneRenderer : IDisposable
     private PaintOverlayRenderer? _paintOverlay;
     private int _paintOverlayCount;
 
-    /// <summary>Toolpath paint overlay: coloured LINE SEGMENTS (two entries per
-    /// segment) — mark spheres, brush cursor circle, hovered-line highlight.
-    /// Empty list hides it. Must be called on the GL thread.</summary>
-    public void SetPaintOverlay(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    /// <summary>
+    /// Toolpath paint overlay: line segments (mark spheres / path hover) plus
+    /// optional highlight points (Point-mode hover/select recolour). Either list
+    /// may be empty. Must be called on the GL thread.
+    /// </summary>
+    public void SetPaintOverlay(
+        IReadOnlyList<(Vector3 Pos, Vector3 Color)> segments,
+        IReadOnlyList<(Vector3 Pos, Vector3 Color)>? highlightPoints = null)
     {
-        _paintOverlayCount = points.Count;
-        // Always update (or clear) so a previous sticky selection does not linger
-        // with a stale count/buffer after the edit menu is closed.
-        if (points.Count < 2)
+        int pts = highlightPoints?.Count ?? 0;
+        _paintOverlayCount = segments.Count + pts;
+        if (segments.Count < 2 && pts == 0)
         {
             _paintOverlayCount = 0;
+            // Keep renderer but clear buffers so nothing lingers after edit closes.
+            _paintOverlay?.Update([], null);
             return;
         }
         _paintOverlay ??= new PaintOverlayRenderer();
-        _paintOverlay.Update(points);
+        _paintOverlay.Update(segments, highlightPoints);
     }
 
     /// <summary>Shows the Multi-Planar guide planes (base/middle/top). Empty list hides
@@ -930,6 +955,9 @@ public sealed class SceneRenderer : IDisposable
         if (!_initialised || viewportWidth <= 0 || viewportHeight <= 0)
             return;
 
+        _viewportWidthPx  = viewportWidth;
+        _viewportHeightPx = viewportHeight;
+
         // Capture the currently bound FBO before we touch anything.
         // With OpenGlControlBase this is Avalonia's internal FBO; with Win32GlHost it's 0.
         GL.GetInteger(GetPName.DrawFramebufferBinding, out int outputFbo);
@@ -1051,9 +1079,14 @@ public sealed class SceneRenderer : IDisposable
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
+            // Sticky scrub / edit mode: apply the layer window to the scrubbed
+            // toolpath even when the mesh (or another node) is the selection.
+            bool applyScrub = isSelected
+                || (ToolpathActiveScrubNode is not null
+                    && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
-            int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
-            int scrubLo = isSelected ? ToolpathActiveScrubStart : 0;
+            int scrub = applyScrub ? ToolpathActiveScrubIndex : int.MaxValue;
+            int scrubLo = applyScrub ? ToolpathActiveScrubStart : 0;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
@@ -1063,7 +1096,10 @@ public sealed class SceneRenderer : IDisposable
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
                 eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity,
-                scrubStart: scrubLo);
+                scrubStart: scrubLo,
+                showAllPathPoints: ShowAllPathPoints,
+                showDepthLines: ShowDepthAwareLines,
+                viewportW: _viewportWidthPx, viewportH: _viewportHeightPx);
         }
 
         // Translucent helper geometry (effector range glow, …): depth-tested but not
@@ -1272,7 +1308,7 @@ public sealed class SceneRenderer : IDisposable
         // Sticky line selection, hover highlight, brush cursor, mark spheres.
         // Must live here (output FBO) — drawing into the scene FBO made highlights
         // vanish under cavity composite on some paths.
-        if (_paintOverlayCount >= 2 && _paintOverlay is not null)
+        if (_paintOverlayCount > 0 && _paintOverlay is not null)
         {
             GL.Clear(ClearBufferMask.DepthBufferBit);
             GL.Disable(EnableCap.DepthTest);
@@ -1596,12 +1632,28 @@ public sealed class SceneRenderer : IDisposable
         return best;
     }
 
+    /// <summary>
+    /// View × projection for the current camera and viewport aspect. Compute once per
+    /// pick/hover frame and pass into <see cref="ProjectToScreen(Vector3, Matrix4, float, float)"/>
+    /// — rebuilding matrices per move freezes 10k+ bead path picks.
+    /// </summary>
+    public Matrix4 GetViewProjectionMatrix(float vpW, float vpH)
+    {
+        if (vpW <= 0f || vpH <= 0f) return Matrix4.Identity;
+        float aspect = vpW / MathF.Max(1e-6f, vpH);
+        return Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+    }
+
     /// <summary>Projects a world-space point to viewport pixels (top-left origin).</summary>
     public Vector2 ProjectToScreen(Vector3 world, float vpW, float vpH)
+        => ProjectToScreen(world, GetViewProjectionMatrix(vpW, vpH), vpW, vpH);
+
+    /// <summary>
+    /// Fast path when the caller already has a view-projection matrix (path pick, hover).
+    /// </summary>
+    public Vector2 ProjectToScreen(Vector3 world, Matrix4 viewProj, float vpW, float vpH)
     {
         if (vpW <= 0f || vpH <= 0f) return new Vector2(float.NaN);
-        float aspect = vpW / vpH;
-        var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
         return WorldToScreen(world, viewProj, vpW, vpH);
     }
 
@@ -1609,10 +1661,12 @@ public sealed class SceneRenderer : IDisposable
     /// from the camera) so pickers can prefer the FRONT line among stacked beads
     /// that all project onto the same pixels.</summary>
     public Vector3 ProjectToScreenDepth(Vector3 world, float vpW, float vpH)
+        => ProjectToScreenDepth(world, GetViewProjectionMatrix(vpW, vpH), vpW, vpH);
+
+    /// <summary>Fast depth project with a precomputed view-projection matrix.</summary>
+    public Vector3 ProjectToScreenDepth(Vector3 world, Matrix4 viewProj, float vpW, float vpH)
     {
         if (vpW <= 0f || vpH <= 0f) return new Vector3(float.NaN);
-        float aspect = vpW / vpH;
-        var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
         var clip = new Vector4(world, 1f) * viewProj;
         if (clip.W <= 0f) return new Vector3(float.NaN);
         float invW = 1f / clip.W;

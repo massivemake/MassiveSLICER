@@ -56,9 +56,23 @@ public sealed class MainWindowViewModel : ViewModelBase
     private int _workspaceRestoreGeneration;
     private bool _cellSceneReady;
     private bool _applyingUndoRedo;
+    private bool _suppressWorkspaceDirty;
     private string _lastCommittedPrefsJson = "";
     private CancellationTokenSource? _settingsUndoDebounce;
     private string _lastProgressLogMessage = string.Empty;
+
+    /// <summary>Marks the open workspace as having unsaved changes (yellow status dot).</summary>
+    public void MarkWorkspaceDirty()
+    {
+        if (_suppressWorkspaceDirty || _applyingUndoRedo) return;
+        StatusBar.IsWorkspaceDirty = true;
+    }
+
+    /// <summary>Clears the unsaved flag after a successful save or open (green status dot).</summary>
+    public void ClearWorkspaceDirty()
+    {
+        StatusBar.IsWorkspaceDirty = false;
+    }
 
     private static readonly JsonSerializerOptions PrefsJsonOptions = new() { WriteIndented = false };
 
@@ -76,6 +90,17 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Toolbar.AttachUndoRedo(UndoRedo);
         Viewport.UndoRedo = UndoRedo;
+        // Any undoable edit (transform, settings, paint, delete…) marks the scene dirty.
+        UndoRedo.StateChanged += () =>
+        {
+            if (_suppressWorkspaceDirty) return;
+            // Clear stack on New/Open also fires StateChanged — only mark dirty when
+            // there is something on the stack (a real edit).
+            if (UndoRedo.CanUndo || UndoRedo.CanRedo)
+                MarkWorkspaceDirty();
+        };
+        Viewport.MarkWorkspaceDirty = MarkWorkspaceDirty;
+        Viewport.OnPaintEditModeChanged = open => RightPanel.ApplyPaintEditMode(open);
 
         // Give the viewport direct access to the robot panel so the render loop
         // can read joint angles for FK without a cross-tree binding.
@@ -2171,11 +2196,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
-        Viewport.ClearUserScene();
-        Viewport.Erp.ClearAttachment();
-        UndoRedo.Clear();
-        AppPreferences.LastWorkspacePath = null;
-        PreferencesLoader.Save(AppPreferences);
+        _suppressWorkspaceDirty = true;
+        try
+        {
+            Viewport.ClearUserScene();
+            Viewport.Erp.ClearAttachment();
+            UndoRedo.Clear();
+            AppPreferences.LastWorkspacePath = null;
+            PreferencesLoader.Save(AppPreferences);
+            StatusBar.FileStatus = "Untitled";
+            ClearWorkspaceDirty();
+        }
+        finally
+        {
+            _suppressWorkspaceDirty = false;
+        }
 
         // Reset to a fresh cell: rebuild the active cell scene (robot/bed back to home pose).
         // Falls back to the first discovered cell if none is active.
@@ -2298,6 +2333,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        MarkWorkspaceDirty();
         // Inspect BEFORE enqueuing: AddImportNode hands the node to the GL upload thread,
         // which clears PendingMesh once uploaded -- for small meshes that can happen before
         // the inspector runs, making it report 0 verts. Summarize while the mesh is intact.
@@ -2634,6 +2670,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             RecordRecentWorkspace(path);
             Viewport.Erp.RefreshWorkspaceCandidates();
             PreferencesLoader.Save(AppPreferences);
+            StatusBar.FileStatus = Path.GetFileName(path);
+            ClearWorkspaceDirty();
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
@@ -2664,13 +2702,16 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void ApplyWorkspaceState(WorkspaceDocument doc, string workspacePath)
     {
         _applyingUndoRedo = true;
+        _suppressWorkspaceDirty = true;
         try
         {
             ApplyWorkspaceStateCore(doc, workspacePath);
+            ClearWorkspaceDirty();
         }
         finally
         {
             _applyingUndoRedo = false;
+            _suppressWorkspaceDirty = false;
             PersistSettings();
             _lastCommittedPrefsJson = CapturePrefsJson();
         }
@@ -2692,6 +2733,12 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         if (doc.Camera is { } camera)
             Viewport.ApplyCameraState?.Invoke(camera);
+
+        // Queue UI session restore (edit mode / tool / layer isolation). Applied once
+        // pending toolpath uploads finish so the scrub range and nodes exist.
+        Viewport.PendingUiSession = doc.UiSession;
+        if (doc.UiSession is not null && Viewport.PendingToolpath.IsEmpty)
+            Viewport.RequestApplyPendingUiSession?.Invoke();
 
         AppPreferences.LastWorkspacePath = workspacePath;
         RecordRecentWorkspace(workspacePath);

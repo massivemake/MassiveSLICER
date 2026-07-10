@@ -50,12 +50,17 @@ internal static class WorkspaceService
             RightPanelTab  = rightPanel.ActiveTab.ToString(),
             Settings       = ClonePreferences(prefs),
             Erp            = viewport.Erp.CurrentAttachment,
+            UiSession      = CaptureUiSession(viewport),
         };
 
         var state = new WorkspaceCaptureState { Document = doc };
 
         string meshDir = WorkspaceLoader.MeshesDirFor(savePath);
         Directory.CreateDirectory(meshDir);
+
+        string? scrubModelName = null;
+        string? scrubToolpathName = null;
+        var activeScrub = viewport.ActiveScrubToolpath;
 
         foreach (var item in viewport.EnumerateUserModelItems())
         {
@@ -92,6 +97,14 @@ internal static class WorkspaceService
                 if (viewport.GetToolpathSnapshot?.Invoke(child.Node) is not { } snap)
                     continue;
 
+                if (activeScrub is not null
+                    && (ReferenceEquals(snap.Smoothed, activeScrub)
+                        || ReferenceEquals(snap.Raw, activeScrub)))
+                {
+                    scrubModelName = node.Name;
+                    scrubToolpathName = child.Node.Name;
+                }
+
                 var tpEntry = new WorkspaceToolpathEntry
                 {
                     Name           = child.Node.Name,
@@ -113,7 +126,38 @@ internal static class WorkspaceService
             doc.Models.Add(entry);
         }
 
+        if (doc.UiSession is not null)
+        {
+            doc.UiSession.ScrubModelName = scrubModelName;
+            doc.UiSession.ScrubToolpathName = scrubToolpathName;
+        }
+
         return state;
+    }
+
+    /// <summary>Snapshots edit mode, paint tools, view mode, and layer isolation window.</summary>
+    private static WorkspaceUiSession CaptureUiSession(ViewModels.ViewportViewModel viewport)
+    {
+        return new WorkspaceUiSession
+        {
+            ViewMode                 = viewport.ViewMode,
+            IsPaintEditOpen          = viewport.IsPaintEditOpen,
+            PaintHandActive          = viewport.PaintHandActive,
+            PaintBoxSelectActive     = viewport.PaintBoxSelectActive,
+            PaintBridgeActive        = viewport.PaintBridgeActive,
+            PaintRemoveActive        = viewport.PaintRemoveActive,
+            PaintLineBridgeActive    = viewport.PaintLineBridgeActive,
+            PaintLineRemoveActive    = viewport.PaintLineRemoveActive,
+            PaintSelectGranularity   = viewport.PaintSelectGranularity,
+            PaintPickFilter          = viewport.PaintPickFilter,
+            PaintBrushRadiusMm       = viewport.PaintBrushRadiusMm,
+            ToolpathScrubIndex       = viewport.ToolpathScrubIndex,
+            ToolpathScrubLowIndex    = viewport.ToolpathScrubLowIndex,
+            ToolpathScrubLayerHigh   = viewport.ToolpathScrubLayerHigh,
+            ToolpathScrubLayerLow    = viewport.ToolpathScrubLayerLow,
+            IsScrubSessionActive     = viewport.IsScrubSessionActive,
+            SelectToolpath           = viewport.IsToolpathSelected,
+        };
     }
 
     /// <summary>Serializes captured toolpaths and writes the workspace file (safe on a worker thread).</summary>

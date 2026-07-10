@@ -61,6 +61,11 @@ public partial class OutlinerItemView : UserControl
                 mvm.Viewport.OnOutlinerSelectRequested?.Invoke(item.Node);
             }
 
+            // Double-click an outliner row: frame that node in the viewport and
+            // make it the orbit centre (same as F / viewport double-click).
+            if (e.ClickCount >= 2 && !shiftHeld && !ctrlHeld)
+                mvm.Viewport.OnFocusRequested?.Invoke();
+
             e.Handled = true;
         }
         else if (point.Properties.IsRightButtonPressed)

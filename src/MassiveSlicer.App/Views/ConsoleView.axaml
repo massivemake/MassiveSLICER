@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:MassiveSlicer.ViewModels;assembly=MassiveSlicer.App"
+             xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.ConsoleView"
              x:CompileBindings="False"
              x:DataType="vm:ConsoleViewModel"
@@ -17,6 +18,47 @@
         <Style Selector="SelectableTextBlock.error">
             <Setter Property="Foreground" Value="#ff6b6b"/>
             <Setter Property="SelectionForegroundBrush" Value="{DynamicResource TextPrimary}"/>
+        </Style>
+
+        <!-- History row: full-line highlight so you know which line you're copying -->
+        <Style Selector="Border.ConsoleHistoryRow">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="4,2,2,2"/>
+            <Setter Property="Margin" Value="0,0,0,1"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+        </Style>
+        <Style Selector="Border.ConsoleHistoryRow:pointerover">
+            <Setter Property="Background" Value="{DynamicResource Bg3}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Border1}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <!-- Flash after click-to-copy -->
+        <Style Selector="Border.ConsoleHistoryRow.copied">
+            <Setter Property="Background" Value="{DynamicResource AccentMuted}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource Accent}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+
+        <!-- Per-line copy: quiet until row hover -->
+        <Style Selector="Button.ConsoleCopy">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="MinWidth" Value="22"/>
+            <Setter Property="MinHeight" Value="18"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Opacity" Value="0.28"/>
+            <Setter Property="VerticalAlignment" Value="Top"/>
+            <Setter Property="ToolTip.Tip" Value="Copy line"/>
+        </Style>
+        <Style Selector="Border.ConsoleHistoryRow:pointerover Button.ConsoleCopy">
+            <Setter Property="Opacity" Value="0.9"/>
+        </Style>
+        <Style Selector="Button.ConsoleCopy:pointerover">
+            <Setter Property="Opacity" Value="1"/>
+            <Setter Property="Background" Value="{DynamicResource Bg4}"/>
         </Style>
 
         <!-- Autocomplete suggestions — dark row highlight + light text (not green-on-green) -->
@@ -145,12 +187,24 @@
             <ItemsControl ItemsSource="{Binding History}" Margin="0,0,0,6">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate x:DataType="vm:ConsoleHistoryEntry">
-                        <SelectableTextBlock Text="{Binding DisplayLine}"
-                                   TextWrapping="Wrap"
-                                   Margin="0,0,0,3"
-                                   FontFamily="Consolas,Courier New,monospace"
-                                   FontSize="11"
-                                   Classes.error="{Binding IsError}"/>
+                        <Border Classes="ConsoleHistoryRow">
+                            <Grid ColumnDefinitions="*,Auto">
+                                <SelectableTextBlock Grid.Column="0"
+                                           Text="{Binding DisplayLine}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,1,4,1"
+                                           FontFamily="Consolas,Courier New,monospace"
+                                           FontSize="11"
+                                           Classes.error="{Binding IsError}"/>
+                                <Button Grid.Column="1"
+                                        Classes="ConsoleCopy"
+                                        Tag="{Binding}"
+                                        Click="OnCopyLineClick">
+                                    <ia:Icon Value="mdi-content-copy" FontSize="11"
+                                             Foreground="{DynamicResource TextSecondary}"/>
+                                </Button>
+                            </Grid>
+                        </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>

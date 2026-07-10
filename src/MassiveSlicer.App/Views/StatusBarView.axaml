@@ -7,10 +7,19 @@
             BorderBrush="{DynamicResource Border1}"
             BorderThickness="0,1,0,0">
         <Grid Margin="8,0">
-            <TextBlock Text="{Binding FileStatus}"
-                       VerticalAlignment="Center"
-                       HorizontalAlignment="Left"
-                       Classes="LabelMuted"/>
+            <!-- Left: save-status dot + filename -->
+            <StackPanel Orientation="Horizontal"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Spacing="6">
+                <Ellipse Width="8" Height="8"
+                         Fill="{Binding SaveStatusDotBrush}"
+                         VerticalAlignment="Center"
+                         ToolTip.Tip="{Binding SaveStatusTooltip}"/>
+                <TextBlock Text="{Binding FileStatus}"
+                           VerticalAlignment="Center"
+                           Classes="LabelMuted"/>
+            </StackPanel>
             <TextBlock Text="{Binding BuildLabel}"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Center"

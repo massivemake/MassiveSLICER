@@ -14,7 +14,9 @@
     <!-- Individual floating cards — no sidebar container. -->
     <StackPanel>
 
-    <Expander Classes="StepCard" IsExpanded="True">
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="ROBOT CELL" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -47,7 +49,9 @@
                 
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="True">
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="IMPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -106,7 +110,126 @@
                 <!-- Viewport tab -->
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="False">
+
+    <!-- Edit mode: SELECTION below OUTLINER (robot/import/viewport cards hide while open) -->
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+        <Expander.Header>
+            <TextBlock Text="SELECTION" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,4,10,10" Spacing="8">
+
+            <!-- ACTIVE SELECTION -->
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="ACTIVE SELECTION"
+                           FontSize="10" FontWeight="SemiBold" Opacity="0.65"
+                           VerticalAlignment="Center" LetterSpacing="0.5"/>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="6,3" Margin="0,0,4,0"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Clear selection">
+                    <ia:Icon Value="mdi-refresh" FontSize="13"/>
+                </Button>
+                <Button Grid.Column="2" Classes="ToolbarButton" Padding="6,3"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Deselect all">
+                    <ia:Icon Value="mdi-delete-outline" FontSize="13"/>
+                </Button>
+            </Grid>
+
+            <Border Background="{DynamicResource Bg3}" CornerRadius="6" Padding="10,8"
+                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                <StackPanel Spacing="2">
+                    <TextBlock FontSize="12" FontWeight="SemiBold"
+                               Text="{Binding DataContext.Viewport.PaintActiveSelectionSummary,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                    <TextBlock FontSize="10" Opacity="0.6"
+                               Text="{Binding DataContext.Viewport.PaintSelectionLabel,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Selected items list -->
+            <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto"
+                          IsVisible="{Binding DataContext.Viewport.HasPaintSelection,
+                                      RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <ItemsControl ItemsSource="{Binding DataContext.Viewport.PaintSelectionItems,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{DynamicResource Bg3}" CornerRadius="4"
+                                    Padding="8,5" Margin="0,0,0,3"
+                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Grid.Column="0" Spacing="1">
+                                        <TextBlock Text="{Binding Title}" FontSize="11" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Detail}" FontSize="10" Opacity="0.6"
+                                                   FontFamily="Consolas,Courier New,monospace"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
+                                            Command="{Binding RemoveCommand}"
+                                            ToolTip.Tip="Remove from selection">
+                                        <ia:Icon Value="mdi-close" FontSize="12" Foreground="#ff8a8a"/>
+                                    </Button>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- ADD FILTER -->
+            <TextBlock Text="ADD FILTER" FontSize="10" FontWeight="SemiBold"
+                       Opacity="0.65" LetterSpacing="0.5" Margin="0,4,0,0"/>
+            <TextBlock Text="Tool path type" FontSize="10" Opacity="0.55" Margin="0,2,0,2"/>
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding DataContext.Viewport.PaintPickFilterOptions,
+                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                      SelectedItem="{Binding DataContext.Viewport.PaintPickFilter,
+                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                     Mode=TwoWay}"
+                      ToolTip.Tip="What hover / click / box may pick"/>
+
+            <!-- OPTIONS -->
+            <TextBlock Text="OPTIONS" FontSize="10" FontWeight="SemiBold"
+                       Opacity="0.65" LetterSpacing="0.5" Margin="0,6,0,0"/>
+            <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                <TextBlock Grid.Column="0" Text="Mode" FontSize="11" VerticalAlignment="Center"
+                           Opacity="0.75" Margin="0,0,10,0"/>
+                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding DataContext.Viewport.PaintModificationModeOptions,
+                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                          SelectedItem="{Binding DataContext.Viewport.PaintModificationMode,
+                                         RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                         Mode=TwoWay}"
+                          ToolTip.Tip="Support = Formbound marks · Remove = delete selected paths"/>
+            </Grid>
+            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.5" Margin="0,4,0,0"
+                       Text="Select paths or points in the viewport, choose Support or Remove, then Apply to create markers for the Modifications panel."/>
+
+            <!-- Actions -->
+            <Grid ColumnDefinitions="*,*" Margin="0,8,0,0" ColumnSpacing="8">
+                <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Content="Close"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Clear the current selection"/>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="10,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Content="Apply"
+                        Command="{Binding DataContext.Viewport.ApplyPaintModificationCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Apply Support or Remove marks to the selection"/>
+            </Grid>
+        </StackPanel>
+    </Expander>
+
+    <Expander Classes="StepCard" IsExpanded="False"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="ROBOT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -646,7 +769,9 @@
                 </ScrollViewer>
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="False">
+    <Expander Classes="StepCard" IsExpanded="False"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="VIEWPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>

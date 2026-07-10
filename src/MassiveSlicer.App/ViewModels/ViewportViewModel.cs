@@ -1322,6 +1322,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
     internal UndoRedoService? UndoRedo { get; set; }
 
+    /// <summary>Marks the open .mass as having unsaved changes (status-bar yellow dot).</summary>
+    internal Action? MarkWorkspaceDirty { get; set; }
+
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
 
@@ -1371,17 +1374,57 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintRemoveActive = false;
                 PaintLineBridgeActive = false;
                 PaintLineRemoveActive = false;
+                // Restore normal toolpath display when leaving edit.
+                ToolpathLineOpacity = 1f;
             }
             else if (_viewMode == "Preview")
             {
-                // Edit mode needs the printed-bead surface so white-bead feedback is visible.
-                ShowBead = true;
-                ShowExtrusionMoves = false;
+                // Path / Point granularity owns the display hierarchy while editing.
+                ApplyPaintEditDisplayMode();
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
             OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
             OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+            OnPaintEditModeChanged?.Invoke(value);
             NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Notifies the right panel to swap workflow cards for edit-mode cards.</summary>
+    internal Action<bool>? OnPaintEditModeChanged { get; set; }
+
+    /// <summary>Closes paint edit mode (EXIT EDIT MODE floating card).</summary>
+    public RelayCommand ExitPaintEditCommand => _exitPaintEdit ??= new RelayCommand(() =>
+        IsPaintEditOpen = false);
+    private RelayCommand? _exitPaintEdit;
+
+    /// <summary>
+    /// Path granularity → centre-line only (no fat beads).
+    /// Point granularity → every bead midpoint as a point; lines grayed + thin.
+    /// (SceneRenderer.ShowAllPathPoints is set from the viewport each frame.)
+    /// </summary>
+    internal void ApplyPaintEditDisplayMode()
+    {
+        if (!IsPaintEditOpen || _viewMode != "Preview") return;
+        if (PaintPointGranularityActive)
+        {
+            // Points hierarchy: all bead points; centre-lines stay readable (thicker in
+            // the renderer when ShowAllPathPoints is on).
+            ShowBead = false;
+            ShowExtrusionMoves = true;
+            ShowTravelMoves = false;
+            // Seam-only overlay off — ShowAllPathPoints draws every extrude midpoint.
+            ShowSeam = false;
+            ToolpathLineOpacity = 0.65f;
+        }
+        else
+        {
+            // Line / path view: clean centre-lines only.
+            ShowBead = false;
+            ShowExtrusionMoves = true;
+            ShowTravelMoves = false;
+            ShowSeam = false;
+            ToolpathLineOpacity = 1f;
         }
     }
 
@@ -1489,7 +1532,10 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     private bool _paintBoxSelectActive;
-    /// <summary>Box/marquee select: drag a rectangle, every path inside joins the selection.</summary>
+    /// <summary>
+    /// Region select tool armed (square marquee or lasso — see
+    /// <see cref="PaintRegionSelectMode"/>). Long-press the toolbar icon to switch mode.
+    /// </summary>
     public bool PaintBoxSelectActive
     {
         get => _paintBoxSelectActive;
@@ -1505,8 +1551,45 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintLineRemoveActive = false;
             }
             OnPropertyChanged(nameof(PaintPathSelectActive));
+            OnPropertyChanged(nameof(PaintRegionSelectIcon));
+            OnPropertyChanged(nameof(PaintRegionSelectToolTip));
             NotifyRenderNeeded();
         }
+    }
+
+    /// <summary>"Square" (marquee) or "Lasso". Toggled by long-pressing the region-select icon.</summary>
+    private string _paintRegionSelectMode = "Square";
+    public string PaintRegionSelectMode
+    {
+        get => _paintRegionSelectMode;
+        set
+        {
+            if (!SetField(ref _paintRegionSelectMode, value is "Lasso" ? "Lasso" : "Square")) return;
+            OnPropertyChanged(nameof(PaintRegionSelectIsLasso));
+            OnPropertyChanged(nameof(PaintRegionSelectIcon));
+            OnPropertyChanged(nameof(PaintRegionSelectToolTip));
+            NotifyRenderNeeded();
+        }
+    }
+
+    public bool PaintRegionSelectIsLasso => PaintRegionSelectMode == "Lasso";
+    public bool PaintRegionSelectIsSquare => !PaintRegionSelectIsLasso;
+
+    public string PaintRegionSelectIcon =>
+        PaintRegionSelectIsLasso ? "mdi-lasso" : "mdi-selection";
+
+    public string PaintRegionSelectToolTip =>
+        PaintRegionSelectIsLasso
+            ? "Lasso select — drag a freehand loop. Long-press icon for square marquee."
+            : "Square select — drag a rectangle. Long-press icon for lasso.";
+
+    /// <summary>Cycle Square ↔ Lasso (long-press on the region-select button).</summary>
+    public void TogglePaintRegionSelectMode()
+    {
+        PaintRegionSelectMode = PaintRegionSelectIsLasso ? "Square" : "Lasso";
+        // Arm the tool if it was off so the mode change is immediately usable.
+        if (!PaintBoxSelectActive)
+            PaintBoxSelectActive = true;
     }
 
     /// <summary>Default click-a-path select mode (no other tool armed).</summary>
@@ -1533,12 +1616,105 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (SetField(ref _paintSelectionCount, value))
+            {
                 OnPropertyChanged(nameof(PaintSelectionLabel));
+                OnPropertyChanged(nameof(HasPaintSelection));
+            }
         }
     }
 
-    public string PaintSelectionLabel =>
-        PaintSelectionCount == 1 ? "1 path selected" : $"{PaintSelectionCount} paths selected";
+    public bool HasPaintSelection => PaintSelectionCount > 0;
+
+    public string PaintSelectionLabel
+    {
+        get
+        {
+            if (PaintSelectionCount == 0) return "0 paths selected";
+            if (PaintPointGranularityActive)
+                return PaintSelectionCount == 1
+                    ? "1 point selected"
+                    : $"{PaintSelectionCount} points selected";
+            return PaintSelectionCount == 1
+                ? "1 path selected"
+                : $"{PaintSelectionCount} paths selected";
+        }
+    }
+
+    /// <summary>Rows for the selection popup (layer / span list with per-item remove).</summary>
+    public ObservableCollection<PaintSelectionListItem> PaintSelectionItems { get; } = [];
+
+    /// <summary>Applied paint modifications (Support/Remove) — reselectable from MODIFICATIONS.</summary>
+    public ObservableCollection<PaintModificationListItem> PaintModifications { get; } = [];
+
+    public bool HasPaintModifications => PaintModifications.Count > 0;
+
+    public string PaintModificationsSummary =>
+        PaintModifications.Count == 0
+            ? "No modifications yet"
+            : $"{PaintModifications.Count} modification(s)";
+
+    /// <summary>Viewport reselects / deletes a stored modification by id.</summary>
+    internal Action<Guid>? OnPaintModificationSelectRequested;
+    internal Action<Guid>? OnPaintModificationDeleteRequested;
+    internal Action? OnPaintModificationsClearRequested;
+
+    public RelayCommand ClearPaintModificationsCommand => _clearPaintMods ??= new RelayCommand(() =>
+        OnPaintModificationsClearRequested?.Invoke());
+    private RelayCommand? _clearPaintMods;
+
+    internal void SetPaintModifications(IReadOnlyList<(Guid Id, bool IsSupport, string Title, string Detail)> rows)
+    {
+        PaintModifications.Clear();
+        foreach (var r in rows)
+        {
+            var id = r.Id;
+            PaintModifications.Add(new PaintModificationListItem
+            {
+                Id = id,
+                IsSupport = r.IsSupport,
+                KindLabel = r.IsSupport ? "Support" : "Remove",
+                Title = r.Title,
+                Detail = r.Detail,
+                SelectCommand = new RelayCommand(() => OnPaintModificationSelectRequested?.Invoke(id)),
+                DeleteCommand = new RelayCommand(() => OnPaintModificationDeleteRequested?.Invoke(id)),
+            });
+        }
+        OnPropertyChanged(nameof(HasPaintModifications));
+        OnPropertyChanged(nameof(PaintModificationsSummary));
+    }
+
+    /// <summary>
+    /// Replaces the popup list from the viewport's live selection. Call after any
+    /// paint select / deselect / box-select change. Wires each row's RemoveCommand.
+    /// </summary>
+    internal void SetPaintSelectionItems(IReadOnlyList<(int LayerIndex, int MoveStart, int MoveCount, float LayerZ, bool IsPoint, string Title, string Detail)> rows)
+    {
+        PaintSelectionItems.Clear();
+        foreach (var r in rows)
+        {
+            int li = r.LayerIndex, ms = r.MoveStart, mc = r.MoveCount;
+            PaintSelectionItems.Add(new PaintSelectionListItem
+            {
+                LayerIndex = li,
+                MoveStart  = ms,
+                MoveCount  = mc,
+                LayerZ     = r.LayerZ,
+                IsPoint    = r.IsPoint,
+                Title      = r.Title,
+                Detail     = r.Detail,
+                RemoveCommand = new RelayCommand(() =>
+                    OnPaintDeselectItemRequested?.Invoke(li, ms, mc)),
+            });
+        }
+        PaintSelectionCount = rows.Count;
+        OnPropertyChanged(nameof(PaintSelectionLabel));
+        OnPropertyChanged(nameof(HasPaintSelection));
+        OnPropertyChanged(nameof(PaintActiveSelectionSummary));
+        ApplyPaintModificationCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Viewport removes one entry identified by layer + span.</summary>
+    internal Action<int, int, int>? OnPaintDeselectItemRequested;
 
     private string _paintSelectGranularity = "Path";
     /// <summary>Selection granularity: "Path" picks a whole contour section per
@@ -1551,6 +1727,9 @@ public sealed class ViewportViewModel : ViewModelBase
             if (!SetField(ref _paintSelectGranularity, value)) return;
             OnPropertyChanged(nameof(PaintPathGranularityActive));
             OnPropertyChanged(nameof(PaintPointGranularityActive));
+            OnPropertyChanged(nameof(PaintSelectionLabel));
+            ApplyPaintEditDisplayMode();
+            NotifyRenderNeeded();
         }
     }
 
@@ -1575,7 +1754,40 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _paintPickFilter, value);
     }
 
-    /// <summary>Marquee rectangle (viewport logical px) while box-dragging.</summary>
+    /// <summary>Mark action for the left SELECTION panel Apply button.</summary>
+    public string[] PaintModificationModeOptions { get; } = ["Support", "Remove"];
+
+    private string _paintModificationMode = "Support";
+    public string PaintModificationMode
+    {
+        get => _paintModificationMode;
+        set => SetField(ref _paintModificationMode, value ?? "Support");
+    }
+
+    /// <summary>Summary for ACTIVE SELECTION (e.g. layer numbers).</summary>
+    public string PaintActiveSelectionSummary
+    {
+        get
+        {
+            if (PaintSelectionItems.Count == 0)
+                return "Nothing selected";
+            if (PaintSelectionItems.Count == 1)
+                return PaintSelectionItems[0].Title;
+            var layers = PaintSelectionItems.Select(i => i.LayerNumber).Distinct().OrderBy(n => n).ToList();
+            if (layers.Count <= 4)
+                return $"{PaintSelectionCount} items · layers {string.Join(", ", layers)}";
+            return $"{PaintSelectionCount} items · layers {layers.First()}…{layers.Last()}";
+        }
+    }
+
+    public RelayCommand ApplyPaintModificationCommand => _applyPaintMod ??= new RelayCommand(() =>
+    {
+        bool support = !string.Equals(PaintModificationMode, "Remove", StringComparison.OrdinalIgnoreCase);
+        OnPaintApplyRequested?.Invoke(support);
+    }, () => HasPaintSelection);
+    private RelayCommand? _applyPaintMod;
+
+    /// <summary>Marquee rectangle (viewport logical px) while square-dragging.</summary>
     private bool _paintMarqueeVisible;
     public bool PaintMarqueeVisible { get => _paintMarqueeVisible; set => SetField(ref _paintMarqueeVisible, value); }
     private double _paintMarqueeX, _paintMarqueeY, _paintMarqueeW, _paintMarqueeH;
@@ -1583,6 +1795,16 @@ public sealed class ViewportViewModel : ViewModelBase
     public double PaintMarqueeY { get => _paintMarqueeY; set => SetField(ref _paintMarqueeY, value); }
     public double PaintMarqueeW { get => _paintMarqueeW; set => SetField(ref _paintMarqueeW, value); }
     public double PaintMarqueeH { get => _paintMarqueeH; set => SetField(ref _paintMarqueeH, value); }
+
+    /// <summary>Lasso polyline (viewport logical px) while freehand-dragging.</summary>
+    private bool _paintLassoVisible;
+    public bool PaintLassoVisible
+    {
+        get => _paintLassoVisible;
+        set => SetField(ref _paintLassoVisible, value);
+    }
+
+    public ObservableCollection<Avalonia.Point> PaintLassoPoints { get; } = [];
 
     /// <summary>View hooks: the viewport owns the selection list.</summary>
     internal Action? OnPaintDeselectRequested;
@@ -1990,7 +2212,8 @@ public sealed class ViewportViewModel : ViewModelBase
     public int ToolpathScrubLayerCount =>
         Math.Max(1, _scrubLayerEnds?.Length ?? ActiveScrubToolpath?.Layers.Count ?? 1);
 
-    /// <summary>Upper bound in LAYER units (1-based). Maps to the move scrub.</summary>
+    /// <summary>Upper bound in LAYER units (1-based). Maps to the move scrub
+    /// (show moves through the end of this layer). Round-trips with the dual slider.</summary>
     public double ToolpathScrubLayerHigh
     {
         get
@@ -2001,9 +2224,23 @@ public sealed class ViewportViewModel : ViewModelBase
         set
         {
             if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
-            int layer = Math.Clamp((int)Math.Round(value), 1, _scrubLayerEnds.Length);
-            ToolpathScrubIndex = _scrubLayerEnds[layer - 1];
-            OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+            int n = _scrubLayerEnds.Length;
+            int layer = Math.Clamp((int)Math.Round(value), 1, n);
+            // Keep at least one layer of window above the low handle.
+            int lowLayer = (int)Math.Round(ToolpathScrubLayerLow);
+            if (layer <= lowLayer) layer = Math.Min(n, lowLayer + 1);
+            // Exclusive end of this layer = show all of its moves.
+            int newIdx = _scrubLayerEnds[layer - 1];
+            if (newIdx != _toolpathScrubIndex)
+                ToolpathScrubIndex = newIdx;
+            else
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+            // Re-clamp low if high dropped under it (move index).
+            if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+            {
+                int lo = Math.Max(0, layer - 2);
+                ToolpathScrubLowIndex = lo < 0 ? 0 : (layer <= 1 ? 0 : _scrubLayerEnds[layer - 2]);
+            }
         }
     }
 
@@ -2013,16 +2250,22 @@ public sealed class ViewportViewModel : ViewModelBase
         get
         {
             if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return 1;
+            // First layer whose exclusive end is still above the low move cut.
             int idx = 0;
-            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex) idx++;
-            return idx + 1;
+            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex)
+                idx++;
+            return Math.Min(_scrubLayerEnds.Length, idx + 1);
         }
         set
         {
             if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
-            int layer = Math.Clamp((int)Math.Round(value), 1, _scrubLayerEnds.Length);
-            ToolpathScrubLowIndex = layer <= 1 ? 0 : _scrubLayerEnds[layer - 2];
-            OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+            int n = _scrubLayerEnds.Length;
+            int layer = Math.Clamp((int)Math.Round(value), 1, n);
+            int highLayer = (int)Math.Round(ToolpathScrubLayerHigh);
+            if (layer >= highLayer) layer = Math.Max(1, highLayer - 1);
+            // Start of this layer in move units (end of previous).
+            int newLow = layer <= 1 ? 0 : _scrubLayerEnds[layer - 2];
+            ToolpathScrubLowIndex = newLow;
         }
     }
 
@@ -2032,8 +2275,17 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _toolpathScrubIndex;
         set
         {
-            if (SetField(ref _toolpathScrubIndex, value))
+            int clamped = Math.Clamp(value, 0, Math.Max(0, _toolpathScrubMax));
+            if (SetField(ref _toolpathScrubIndex, clamped))
             {
+                // Keep the lower window bound strictly under the upper scrub.
+                if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+                {
+                    _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+                    OnPropertyChanged(nameof(ToolpathScrubLowIndex));
+                    OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+                    OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+                }
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
@@ -2041,10 +2293,10 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
                 // Keep the editable text box in sync unless we're already being
                 // called from ToolpathScrubText's setter (avoids a re-entry loop).
-                if (!_scrubSyncing && _toolpathScrubText != value.ToString())
+                if (!_scrubSyncing && _toolpathScrubText != clamped.ToString())
                 {
                     _scrubSyncing = true;
-                    ToolpathScrubText = value.ToString();
+                    ToolpathScrubText = clamped.ToString();
                     _scrubSyncing = false;
                 }
                 // Pause playback if the user manually moves the scrubber.
@@ -2056,7 +2308,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 }
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected || _isScrubSessionActive)
-                    OnScrubIkRequested?.Invoke(value);
+                    OnScrubIkRequested?.Invoke(clamped);
                 // Always repaint: the IK callback only repaints on a successful solve,
                 // so without this the viewport freezes when scrubbing through
                 // unreachable poses.
@@ -2127,20 +2379,27 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    /// <summary>0-based layer index for the current scrub move.</summary>
+    /// <summary>
+    /// 0-based layer index for the current scrub move.
+    /// <see cref="_toolpathScrubIndex"/> is treated as an exclusive end (show moves
+    /// <c>[0, index)</c>), so when index equals a layer's exclusive end we report
+    /// that layer — not the next one. Keeps the LAYERS dual-slider high handle from
+    /// fighting TwoWay bindings and snapping when dragged.
+    /// </summary>
     private int GetScrubLayerIndex()
     {
         if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
             return 0;
         int idx = Math.Clamp(_toolpathScrubIndex, 0, Math.Max(0, _toolpathScrubMax));
         int last = _scrubLayerEnds.Length - 1;
+        if (idx <= 0) return 0;
         if (idx >= _scrubLayerEnds[last]) return last;
-        // Binary search: first layer whose exclusive end is > idx.
+        // First layer whose exclusive end is ≥ idx.
         int lo = 0, hi = last;
         while (lo < hi)
         {
             int mid = (lo + hi) >> 1;
-            if (idx < _scrubLayerEnds[mid]) hi = mid;
+            if (_scrubLayerEnds[mid] >= idx) hi = mid;
             else lo = mid + 1;
         }
         return lo;
@@ -2151,16 +2410,24 @@ public sealed class ViewportViewModel : ViewModelBase
         if (toolpath is null || toolpath.Layers.Count == 0)
         {
             _scrubLayerEnds = null;
-            return;
         }
-        var ends = new int[toolpath.Layers.Count];
-        int acc = 0;
-        for (int i = 0; i < toolpath.Layers.Count; i++)
+        else
         {
-            acc += toolpath.Layers[i].Moves.Count;
-            ends[i] = acc;
+            var ends = new int[toolpath.Layers.Count];
+            int acc = 0;
+            for (int i = 0; i < toolpath.Layers.Count; i++)
+            {
+                acc += toolpath.Layers[i].Moves.Count;
+                ends[i] = acc;
+            }
+            _scrubLayerEnds = ends;
         }
-        _scrubLayerEnds = ends;
+        // Dual-slider Maximum/High/Low bind these — must notify after every rebuild.
+        OnPropertyChanged(nameof(ToolpathScrubLayerCount));
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
     }
 
     /// <summary>
@@ -2232,7 +2499,6 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         ActiveScrubToolpath = toolpath;
         RebuildScrubLayerEnds(toolpath);
-        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
         ExportKrlCommand?.RaiseCanExecuteChanged();
     }
 
@@ -2271,10 +2537,21 @@ public sealed class ViewportViewModel : ViewModelBase
 
         _toolpathScrubIndex = index;
         _toolpathScrubText  = index.ToString();
+        // Full stack on first select: low at bed, high at top layer.
+        if (!preservePosition || toolpath is null)
+            _toolpathScrubLowIndex = 0;
+        else if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+            _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
         OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerCount));
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLowIndex));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
     }
@@ -3827,6 +4104,91 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Consumed on the GL thread; does not create a new outliner entry.
     /// </summary>
     public ConcurrentQueue<PendingToolpathEntry> PendingToolpathReplace { get; } = new();
+
+    /// <summary>
+    /// UI session (edit mode / tools / layer isolation) to re-apply after workspace
+    /// toolpaths finish uploading. Set by workspace restore; consumed by the viewport
+    /// once <see cref="PendingToolpath"/> is empty.
+    /// </summary>
+    internal WorkspaceUiSession? PendingUiSession { get; set; }
+
+    /// <summary>Wired by the viewport: re-select scrub toolpath + apply pending UI session.</summary>
+    internal Action? RequestApplyPendingUiSession { get; set; }
+
+    /// <summary>
+    /// Applies pure ViewModel pieces of a saved UI session (view mode, edit tools).
+    /// Scrub node selection and move indices are applied by the viewport code-behind.
+    /// </summary>
+    internal void ApplyUiSessionViewState(WorkspaceUiSession session)
+    {
+        if (!string.IsNullOrWhiteSpace(session.ViewMode))
+            ViewMode = session.ViewMode;
+
+        if (!string.IsNullOrWhiteSpace(session.PaintSelectGranularity))
+            PaintSelectGranularity = session.PaintSelectGranularity;
+        if (!string.IsNullOrWhiteSpace(session.PaintPickFilter))
+            PaintPickFilter = session.PaintPickFilter;
+        if (session.PaintBrushRadiusMm > 0)
+            PaintBrushRadiusMm = session.PaintBrushRadiusMm;
+
+        // Open edit first so tool mutual-exclusion and display modes apply correctly.
+        IsPaintEditOpen = session.IsPaintEditOpen;
+        if (session.IsPaintEditOpen)
+        {
+            PaintHandActive = false;
+            PaintBoxSelectActive = false;
+            PaintBridgeActive = false;
+            PaintRemoveActive = false;
+            PaintLineBridgeActive = false;
+            PaintLineRemoveActive = false;
+
+            if (session.PaintHandActive)
+                PaintHandActive = true;
+            else if (session.PaintBoxSelectActive)
+                PaintBoxSelectActive = true;
+            else if (session.PaintBridgeActive)
+                PaintBridgeActive = true;
+            else if (session.PaintRemoveActive)
+                PaintRemoveActive = true;
+            else if (session.PaintLineBridgeActive)
+                PaintLineBridgeActive = true;
+            else if (session.PaintLineRemoveActive)
+                PaintLineRemoveActive = true;
+            // else: path-select is the implicit default when no other tool is armed
+
+            ApplyPaintEditDisplayMode();
+        }
+    }
+
+    /// <summary>
+    /// Restores the isolated layer window after the scrub toolpath is armed.
+    /// Prefers exact move indices; falls back to saved layer numbers when the
+    /// move count differs.
+    /// </summary>
+    internal void ApplyUiSessionScrubWindow(WorkspaceUiSession session)
+    {
+        if (ToolpathScrubMax <= 0) return;
+
+        int high = session.ToolpathScrubIndex;
+        int low = session.ToolpathScrubLowIndex;
+
+        // If saved move indices look out of range, map from layer numbers instead.
+        if (high > ToolpathScrubMax || high < 0
+            || (session.ToolpathScrubLayerHigh > 0 && high == 0 && session.ToolpathScrubLayerHigh > 1))
+        {
+            if (session.ToolpathScrubLayerHigh > 0)
+                ToolpathScrubLayerHigh = session.ToolpathScrubLayerHigh;
+            if (session.ToolpathScrubLayerLow > 0)
+                ToolpathScrubLayerLow = session.ToolpathScrubLayerLow;
+            return;
+        }
+
+        high = Math.Clamp(high, 0, ToolpathScrubMax);
+        low = Math.Clamp(low, 0, Math.Max(0, high - 1));
+        // High first so the low clamp has the correct ceiling.
+        ToolpathScrubIndex = high;
+        ToolpathScrubLowIndex = low;
+    }
 
     /// <summary>Returns live toolpath data for a scene node (wired by the viewport).</summary>
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
