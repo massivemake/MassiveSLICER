@@ -1599,6 +1599,23 @@ public sealed class SceneRenderer : IDisposable
         return WorldToScreen(world, viewProj, vpW, vpH);
     }
 
+    /// <summary>ProjectToScreen plus view depth (clip-space W — larger = farther
+    /// from the camera) so pickers can prefer the FRONT line among stacked beads
+    /// that all project onto the same pixels.</summary>
+    public Vector3 ProjectToScreenDepth(Vector3 world, float vpW, float vpH)
+    {
+        if (vpW <= 0f || vpH <= 0f) return new Vector3(float.NaN);
+        float aspect = vpW / vpH;
+        var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+        var clip = new Vector4(world, 1f) * viewProj;
+        if (clip.W <= 0f) return new Vector3(float.NaN);
+        float invW = 1f / clip.W;
+        return new Vector3(
+            (clip.X * invW * 0.5f + 0.5f) * vpW,
+            (1f - (clip.Y * invW * 0.5f + 0.5f)) * vpH,
+            clip.W);
+    }
+
     /// <summary>Intersects <paramref name="ray"/> with the build-plate plane at <see cref="BedZ"/>.</summary>
     public bool TryPickBed(Ray ray, out Vector3 hit)
     {

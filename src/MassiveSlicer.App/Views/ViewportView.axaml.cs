@@ -5375,6 +5375,13 @@ public partial class ViewportView : UserControl
         int scrubLimit = GetPaintScrubMoveLimit();
 
         const float pickPx = 30f;
+        const float tightPx = 9f;
+        // Same tiered rule as the line picker: within the tight radius the FRONT
+        // bead wins (depth bucketed); the wide ring is a nearest-on-screen fallback.
+        const float depthBucket = 12f;
+        long t1Bucket = long.MaxValue;
+        float t1Screen = float.MaxValue;
+        (System.Numerics.Vector3, TkVector3)? t1Hit = null;
         float bestD = pickPx;
         (System.Numerics.Vector3, TkVector3)? hit = null;
         foreach (var (node, tp) in _toolpathByNode)
@@ -5399,13 +5406,23 @@ public partial class ViewportView : UserControl
                     var world = TransformPoint(
                         new TkVector3(mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
                     var wp = new TkVector3(world.X, world.Y, world.Z);
-                    var p = _renderer.ProjectToScreen(wp, vpW, vpH);
+                    var p = _renderer.ProjectToScreenDepth(wp, vpW, vpH);
                     if (float.IsNaN(p.X)) continue;
                     float d = MathF.Sqrt((p.X - mx) * (p.X - mx) + (p.Y - my) * (p.Y - my));
+                    if (d <= tightPx)
+                    {
+                        long bucket = (long)(p.Z / depthBucket);
+                        if (bucket < t1Bucket || (bucket == t1Bucket && d < t1Screen))
+                        {
+                            t1Bucket = bucket;
+                            t1Screen = d;
+                            t1Hit = (mid, wp);
+                        }
+                    }
                     if (d < bestD) { bestD = d; hit = (mid, wp); }
                 }
         }
-        return hit;
+        return t1Hit ?? hit;
     }
 
     /// <summary>Paints (or Alt-erases) one brush dab at the toolpath bead under the
@@ -5468,6 +5485,21 @@ public partial class ViewportView : UserControl
         var rayD = ray.Direction;
         int scrubLimit = GetPaintScrubMoveLimit();
 
+        // Tier 1 — TIGHT radius (the line under the cursor): the FRONT candidate
+        // wins. Depth is bucketed to ~2 beads so pixel jitter along one line can't
+        // flip the pick; screen distance breaks ties inside a bucket. Without this
+        // the old nearest-on-screen rule grabbed far-side / other-layer lines that
+        // happened to project a pixel closer than the hovered bead's centerline.
+        const float tightPx = 9f;
+        float depthBucket = MathF.Max(beadMm * 2f, 4f);
+        long t1Bucket = long.MaxValue;
+        float t1Screen = float.MaxValue;
+        ToolpathLayer? t1Layer = null;
+        int t1Move = -1, t1Global = -1;
+        System.Numerics.Vector3 t1Origin = default;
+        TkMatrix4 t1Wt = TkMatrix4.Identity;
+
+        // Tier 2 — forgiving ring out to pickPx: nearest on screen, depth tie-break.
         float bestScreenD = pickPx;
         float bestRayT = float.MaxValue;
         ToolpathLayer? bestLayer = null;
@@ -5508,6 +5540,22 @@ public partial class ViewportView : UserControl
                     float dist3 = DistanceRayToSegment(rayO, rayD, wFrom, wTo, out float rayT);
                     if (rayT < 0f || dist3 > looseRayDist) continue;
 
+                    if (screenD <= tightPx)
+                    {
+                        long bucket = (long)(rayT / depthBucket);
+                        if (bucket < t1Bucket
+                            || (bucket == t1Bucket && screenD < t1Screen))
+                        {
+                            t1Bucket = bucket;
+                            t1Screen = screenD;
+                            t1Layer = layer;
+                            t1Move = i;
+                            t1Global = globalMove;
+                            t1Origin = origin;
+                            t1Wt = wt;
+                        }
+                    }
+
                     // Prefer closer to the cursor in 2D; then closer to the camera.
                     bool better = screenD < bestScreenD - 0.5f
                         || (MathF.Abs(screenD - bestScreenD) <= 0.5f && rayT < bestRayT);
@@ -5524,6 +5572,15 @@ public partial class ViewportView : UserControl
             }
         }
 
+        // The tight front pick trumps the forgiving ring whenever it exists.
+        if (t1Layer is not null)
+        {
+            bestLayer = t1Layer;
+            bestMove = t1Move;
+            bestGlobal = t1Global;
+            bestOrigin = t1Origin;
+            bestWt = t1Wt;
+        }
         if (bestLayer is null || bestMove < 0) return null;
         // Do not expand the section into moves the scrub has not revealed yet.
         int layerStartGlobal = bestGlobal - bestMove;
