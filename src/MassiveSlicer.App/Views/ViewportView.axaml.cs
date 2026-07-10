@@ -899,9 +899,12 @@ public partial class ViewportView : UserControl
             _renderer.ShowBead          = vm.ShowBead;
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
-            _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
-                ? vm.ToolpathScrubIndex
-                : int.MaxValue;
+            // Scrub hides not-yet-printed moves whenever a scrub session is live
+            // (selection or sticky timeline), matching what the user can see.
+            _renderer.ToolpathActiveScrubIndex =
+                (vm.IsToolpathSelected || vm.IsScrubSessionActive)
+                    ? vm.ToolpathScrubIndex
+                    : int.MaxValue;
             // Edit mode: force pure-white beads so the whole toolpath reads as
             // "editable" and paint/selection highlights stand out against it.
             if (vm.IsPaintEditOpen)
@@ -2163,9 +2166,11 @@ public partial class ViewportView : UserControl
             {
                 if (pbVm.PaintLineToolActive || !pbVm.PaintBrushActive)
                 {
-                    // Line tool active → mark/unmark; edit open with no tool → select only.
+                    // Line tool active → mark/unmark; edit open with no tool → select
+                    // only. Shift accumulates: earlier picks stay highlighted.
                     TryPaintLineAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
-                        applyMarks: pbVm.PaintLineToolActive);
+                        applyMarks: pbVm.PaintLineToolActive,
+                        additive: mods.HasFlag(KeyModifiers.Shift));
                     if (_paintStrokeChanged)
                     {
                         _paintStrokeChanged = false;
@@ -2956,6 +2961,7 @@ public partial class ViewportView : UserControl
             WipeLengthMm = (float)s.WipeLengthMm,
             WipeRampMm   = (float)s.WipeRampMm,
             WipeSpeed    = (float)(s.WipeSpeed / 1000.0),
+            WipeSkipShortTravels = s.WipeSkipShortTravels,
             FlowRate     = (float)(s.SelectedPreset?.FlowRate ?? 0.463),
             ResumeRampEnabled          = s.ResumeRampEnabled,
             ResumeRampStartSpeedMps    = (float)(s.ResumeRampStartSpeed / 1000.0),
@@ -5162,6 +5168,9 @@ public partial class ViewportView : UserControl
     private List<TkVector3>? _paintHoverLine;   // contour a line tool would pick
     private List<TkVector3>? _paintSelectedLine; // last clicked contour (sticky highlight)
     private TkVector3 _paintSelectedColor = new(1f, 0.55f, 0.08f); // amber = selected
+    // Shift+click accumulates: previous selections stay lit so multiple lines can
+    // be marked in one editing pass.
+    private readonly List<(List<TkVector3> Pts, TkVector3 Color)> _paintMultiLines = [];
     private DateTime _paintHoverAt = DateTime.MinValue;
     /// <summary>Stable id of the sticky selection — used for console feedback + undo.</summary>
     private PaintLineId? _paintSelectedId;
@@ -5227,6 +5236,14 @@ public partial class ViewportView : UserControl
                 m.Center.X - origin.X, m.Center.Y - origin.Y, m.Center.Z - origin.Z), wt);
             AddMarkSphere(segs, new TkVector3(w.X, w.Y, w.Z), m.Radius,
                 m.Kind == Core.Models.PaintMarkKind.Bridge ? cBridge : cRemove);
+        }
+
+        // Shift-accumulated earlier picks stay lit.
+        foreach (var (mpts, mcol) in _paintMultiLines)
+        {
+            if (mpts.Count < 2) continue;
+            float mr = MathF.Max(2f, (float)(vm.AdditiveSettings?.BeadWidth ?? 6) * 0.35f);
+            AddThickPolyline(segs, mpts, mcol, radiusMm: mr);
         }
 
         // Sticky selection (last clicked contour) — thick coloured tube so it reads
@@ -5318,13 +5335,44 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>
+    /// Pointer position and size in the same space as the GL host (DIP), so picks
+    /// line up with the rendered beads regardless of parent chrome / DPI.
+    /// </summary>
+    private (float mx, float my, float vpW, float vpH) GetGlPickViewport(Avalonia.Point posOnViewport)
+    {
+        // Convert from ViewportView space → GlCanvas space (they usually match, but
+        // any inset/scale must not drift the ray vs the painted beads).
+        var inGl = this.TranslatePoint(posOnViewport, GlCanvas) ?? posOnViewport;
+        float mx = (float)inGl.X;
+        float my = (float)inGl.Y;
+        float vpW = (float)Math.Max(1.0, GlCanvas.Bounds.Width);
+        float vpH = (float)Math.Max(1.0, GlCanvas.Bounds.Height);
+        return (mx, my, vpW, vpH);
+    }
+
+    /// <summary>
+    /// Global move index at which the active scrub hides further geometry
+    /// (moves with index ≥ this are not drawn and must not be pickable).
+    /// <see cref="int.MaxValue"/> = no scrub limit.
+    /// </summary>
+    private int GetPaintScrubMoveLimit()
+    {
+        if (DataContext is not ViewportViewModel vm) return int.MaxValue;
+        if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return int.MaxValue;
+        if (vm.ToolpathScrubMax <= 0) return int.MaxValue;
+        // ScrubCount uses cumulative[scrubIndex]: vertices for moves [0, scrubIndex).
+        // Match that — at scrub S, move S and above are not yet printed.
+        return Math.Clamp(vm.ToolpathScrubIndex, 0, vm.ToolpathScrubMax);
+    }
+
     /// <summary>Nearest visible extrude-bead midpoint under the cursor: raw
     /// toolpath coordinates (for marks) + display world (for the cursor circle).</summary>
     private (System.Numerics.Vector3 Raw, TkVector3 World)? PickBeadUnderCursor(Avalonia.Point pos)
     {
-        float mx = (float)pos.X, my = (float)pos.Y;
-        float vpW = (float)GlCanvas.Bounds.Width;
-        float vpH = (float)GlCanvas.Bounds.Height;
+        var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
+        if (vpW <= 1f || vpH <= 1f) return null;
+        int scrubLimit = GetPaintScrubMoveLimit();
 
         const float pickPx = 30f;
         float bestD = pickPx;
@@ -5333,14 +5381,18 @@ public partial class ViewportView : UserControl
         {
             if (!node.Visible) continue;
             _toolpathOriginByNode.TryGetValue(node, out var origin);
-            var wt = node.WorldTransform;
+            // Match SceneRenderer toolpath draw (LocalTransform * worldMVP).
+            var wt = node.LocalTransform;
             int total = 0;
             foreach (var l in tp.Layers) total += l.Moves.Count;
             int stride = Math.Max(1, total / 80000);
+            int globalMove = 0;
             int k = 0;
             foreach (var layer in tp.Layers)
                 foreach (var mv in layer.Moves)
                 {
+                    int gi = globalMove++;
+                    if (gi >= scrubLimit) continue;
                     if (k++ % stride != 0) continue;
                     if (mv.Kind != MoveKind.Extrude) continue;
                     var mid = (mv.From + mv.To) * 0.5f;
@@ -5394,33 +5446,33 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>Nearest local path <em>section</em> under the cursor (not the whole
-    /// layer contour). Uses a camera pick ray + 3D ray–segment distance so geometry
-    /// in front of the camera wins over distant beads that only align in 2D. Then
-    /// expands to a contiguous run (Formbound/lightning full finger; wall until corner).</summary>
+    /// layer contour). Screen-space proximity is the primary gate (cursor must sit on
+    /// the bead), with 3D ray depth as a tie-break so front geometry wins. Timeline
+    /// scrub hides not-yet-printed moves — those are not pickable.</summary>
     private (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt)?
         PickSpanUnderCursor(Avalonia.Point pos)
     {
-        float mx = (float)pos.X, my = (float)pos.Y;
-        float vpW = (float)GlCanvas.Bounds.Width;
-        float vpH = (float)GlCanvas.Bounds.Height;
+        var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
         if (vpW <= 1f || vpH <= 1f) return null;
 
         float beadMm = (float)(DataContext is ViewportViewModel vmb
             ? (vmb.AdditiveSettings?.BeadWidth ?? 6) : 6);
         if (beadMm < 0.5f) beadMm = 6f;
-        // World-space pick radius around the ray (bead half-width + slack).
-        float maxRayDist = beadMm * 1.75f;
-        float looseRayDist = beadMm * 4f; // fallback when nothing is snug on the ray
+        // Screen pick radius: beads are a few mm wide; ~28–40 px is a comfortable target.
+        float pickPx = MathF.Max(28f, MathF.Min(48f, beadMm * 4f));
+        // Soft world gate only to ignore absurdly distant near-misses along the ray.
+        float looseRayDist = beadMm * 6f;
 
         var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
         var rayO = ray.Origin;
         var rayD = ray.Direction;
+        int scrubLimit = GetPaintScrubMoveLimit();
 
+        float bestScreenD = pickPx;
         float bestRayT = float.MaxValue;
-        float bestDist = float.MaxValue;
-        bool bestIsTight = false;
         ToolpathLayer? bestLayer = null;
         int bestMove = -1;
+        int bestGlobal = -1;
         System.Numerics.Vector3 bestOrigin = default;
         TkMatrix4 bestWt = TkMatrix4.Identity;
 
@@ -5428,12 +5480,15 @@ public partial class ViewportView : UserControl
         {
             if (!node.Visible) continue;
             _toolpathOriginByNode.TryGetValue(node, out var origin);
-            var wt = node.WorldTransform;
+            // Match draw path: toolpath MVP uses LocalTransform, not full WorldTransform.
+            var wt = node.LocalTransform;
+            int globalMove = 0;
             foreach (var layer in tp.Layers)
             {
                 var moves = layer.Moves;
-                for (int i = 0; i < moves.Count; i++)
+                for (int i = 0; i < moves.Count; i++, globalMove++)
                 {
+                    if (globalMove >= scrubLimit) continue;
                     var mv = moves[i];
                     if (mv.Kind != MoveKind.Extrude) continue;
                     if (mv.IsLayerStitch || mv.IsLayerChange) continue;
@@ -5444,29 +5499,25 @@ public partial class ViewportView : UserControl
                     var wFrom = new Vector3(nFrom.X, nFrom.Y, nFrom.Z);
                     var wTo = new Vector3(nTo.X, nTo.Y, nTo.Z);
 
-                    float dist = DistanceRayToSegment(rayO, rayD, wFrom, wTo, out float rayT);
-                    if (rayT < 0f || dist > looseRayDist) continue;
+                    var sA = _renderer.ProjectToScreen(wFrom, vpW, vpH);
+                    var sB = _renderer.ProjectToScreen(wTo, vpW, vpH);
+                    if (float.IsNaN(sA.X) || float.IsNaN(sB.X)) continue;
+                    float screenD = DistPointToSegment2D(mx, my, sA.X, sA.Y, sB.X, sB.Y);
+                    if (screenD > pickPx) continue;
 
-                    bool tight = dist <= maxRayDist;
-                    // Prefer: (1) any tight hit over loose, (2) front-most along the ray,
-                    // (3) smaller perpendicular distance as tie-break.
-                    bool better;
-                    if (tight && !bestIsTight)
-                        better = true;
-                    else if (tight == bestIsTight)
-                    {
-                        better = rayT < bestRayT - 0.5f
-                              || (MathF.Abs(rayT - bestRayT) <= 0.5f && dist < bestDist);
-                    }
-                    else
-                        better = false;
+                    float dist3 = DistanceRayToSegment(rayO, rayD, wFrom, wTo, out float rayT);
+                    if (rayT < 0f || dist3 > looseRayDist) continue;
 
+                    // Prefer closer to the cursor in 2D; then closer to the camera.
+                    bool better = screenD < bestScreenD - 0.5f
+                        || (MathF.Abs(screenD - bestScreenD) <= 0.5f && rayT < bestRayT);
                     if (!better) continue;
-                    bestIsTight = tight;
+
+                    bestScreenD = screenD;
                     bestRayT = rayT;
-                    bestDist = dist;
                     bestLayer = layer;
                     bestMove = i;
+                    bestGlobal = globalMove;
                     bestOrigin = origin;
                     bestWt = wt;
                 }
@@ -5474,8 +5525,23 @@ public partial class ViewportView : UserControl
         }
 
         if (bestLayer is null || bestMove < 0) return null;
-        var section = ExpandLocalSection(bestLayer, bestMove, beadMm);
+        // Do not expand the section into moves the scrub has not revealed yet.
+        int layerStartGlobal = bestGlobal - bestMove;
+        int maxMoveInLayer = scrubLimit == int.MaxValue
+            ? bestLayer.Moves.Count - 1
+            : Math.Min(bestLayer.Moves.Count - 1, scrubLimit - 1 - layerStartGlobal);
+        var section = ExpandLocalSection(bestLayer, bestMove, beadMm, maxMoveInLayer);
         return (bestLayer, section, bestOrigin, bestWt);
+    }
+
+    private static float DistPointToSegment2D(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay;
+        float len2 = abx * abx + aby * aby;
+        float t = len2 < 1e-12f ? 0f : Math.Clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0f, 1f);
+        float cx = ax + t * abx, cy = ay + t * aby;
+        float dx = px - cx, dy = py - cy;
+        return MathF.Sqrt(dx * dx + dy * dy);
     }
 
     /// <summary>Shortest distance from ray (origin + t·dir, t≥0) to segment AB.
@@ -5534,11 +5600,16 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>Grow a contiguous section around <paramref name="hitMove"/>.</summary>
-    private static ContourSpan ExpandLocalSection(ToolpathLayer layer, int hitMove, float beadMm)
+    /// <param name="maxMoveInclusive">Last move index that may be included (scrub limit).</param>
+    private static ContourSpan ExpandLocalSection(
+        ToolpathLayer layer, int hitMove, float beadMm, int maxMoveInclusive = int.MaxValue)
     {
         var moves = layer.Moves;
         if (hitMove < 0 || hitMove >= moves.Count)
             return new ContourSpan(0, 0, false, -1);
+        int hiCap = Math.Min(moves.Count - 1, maxMoveInclusive);
+        if (hitMove > hiCap) hitMove = hiCap;
+        if (hiCap < 0) return new ContourSpan(0, 0, false, -1);
 
         // Snap hit onto nearest extrude if needed.
         int hit = hitMove;
@@ -5548,8 +5619,8 @@ public partial class ViewportView : UserControl
             for (int d = 0; d < moves.Count; d++)
             {
                 int a = hitMove - d, b = hitMove + d;
-                if (a >= 0 && moves[a].Kind == MoveKind.Extrude) { found = a; break; }
-                if (b < moves.Count && moves[b].Kind == MoveKind.Extrude) { found = b; break; }
+                if (a >= 0 && a <= hiCap && moves[a].Kind == MoveKind.Extrude) { found = a; break; }
+                if (b <= hiCap && moves[b].Kind == MoveKind.Extrude) { found = b; break; }
             }
             if (found < 0) return new ContourSpan(hitMove, 1, false, -1);
             hit = found;
@@ -5577,7 +5648,7 @@ public partial class ViewportView : UserControl
             lenLo += seg;
             lo = prev;
         }
-        while (hi + 1 < moves.Count)
+        while (hi + 1 <= hiCap)
         {
             int next = hi + 1;
             if (!CanJoinSection(moves, hi, next, lightning, gapTol, minCornerDot)) break;
@@ -5713,7 +5784,7 @@ public partial class ViewportView : UserControl
     /// broadcasts identity to the console, and (when <paramref name="applyMarks"/>) lays
     /// Bridge/Remove marks along it. Edit menu open with no tool → select-only.</summary>
     private void TryPaintLineAt(ViewportViewModel vm, Avalonia.Point pos, bool erase,
-        bool applyMarks = true)
+        bool applyMarks = true, bool additive = false)
     {
         // Selection highlight works even without AdditiveSettings; marks need it.
         if (PickSpanUnderCursor(pos) is not { } pickHit)
@@ -5743,6 +5814,15 @@ public partial class ViewportView : UserControl
         var prevPoly = _paintSelectedLine is { } pp ? new List<TkVector3>(pp) : null;
         var prevColor = _paintSelectedColor;
         var prevId = _paintSelectedId;
+
+        // Shift keeps earlier picks lit (multi-line marking); a plain click starts over.
+        if (additive)
+        {
+            if (prevPoly is not null)
+                _paintMultiLines.Add((prevPoly, prevColor));
+        }
+        else
+            _paintMultiLines.Clear();
 
         _paintHoverLine = poly;
         _paintSelectedLine = poly;

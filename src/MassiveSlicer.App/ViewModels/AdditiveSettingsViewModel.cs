@@ -1312,6 +1312,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
+    private bool _wipeSkipShortTravels;
+
+    /// <summary>
+    /// Skip wipe before travels shorter than 2× the layer height
+    /// (avoids wipe on tiny gaps between nearby beads).
+    /// </summary>
+    public bool WipeSkipShortTravels
+    {
+        get => _wipeSkipShortTravels;
+        set => SetField(ref _wipeSkipShortTravels, value);
+    }
+
     private bool _resumeRampEnabled;
 
     /// <summary>Stepped speed/RPM ramp after each travel before full extrusion resumes.</summary>

@@ -658,7 +658,43 @@ public static class LightningPlanner
             //       layer above. The user explicitly asked for support under these
             //       beads — geometric sanity checks only, no spacing thinning, no
             //       mesh veto, and external fins allowed regardless of the setting.
-            if (manualDemand is not null && manualDemand.Count > i + 1)
+            if (manualDemand is not null && manualDemand.Count > i + 1
+                && manualDemand[i + 1].Count > 0 && buttress)
+            {
+                // Buttress: painted marks form RUNS along the painted line; route
+                // them through the T builder so the bars follow the run and the
+                // line is supported across its FULL width — a lone hairpin per dab
+                // is not a landing pad.
+                var mRun = new List<Vector2>(manualDemand[i + 1].Count);
+                foreach (var mp in manualDemand[i + 1]) mRun.Add(Down(mp));
+                float mStep = bead * 3f;
+                float mBar = MathF.Max(barLen, bead * 5f);
+                float mCover = bead * 0.75f;
+                float mSide = MathF.Max(6f * bead, barLen);
+                int runStart2 = 0;
+                for (int k = 1; k <= mRun.Count; k++)
+                {
+                    bool split = k == mRun.Count
+                        || Vector2.Distance(mRun[k], mRun[k - 1]) > bead * 8f;
+                    if (!split) continue;
+                    var run = mRun.GetRange(runStart2, k - runStart2);
+                    runStart2 = k;
+                    for (int si = 0; si < run.Count; si++)
+                    {
+                        var pt = run[si];
+                        if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
+                            continue;   // wall below already carries it
+                        if (CoveredBySameSide(layerPlan.Trees, pt, mCover, mSide, region))
+                            continue;
+                        // No mesh veto (user override): solidAt null passes always.
+                        TryAddButtressAt(run, si, mStep, run.Count, 0,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            preferInterior, settings, bead, mBar, mCover, mSide,
+                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], run);
+                    }
+                }
+            }
+            else if (manualDemand is not null && manualDemand.Count > i + 1)
                 foreach (var mPt in manualDemand[i + 1])
                 {
                     var pt = Down(mPt);
@@ -667,17 +703,30 @@ public static class LightningPlanner
                     if (NearAnyCenterline(layerPlan.Trees, pt, spacing * 0.4f))
                         continue;   // a finger is already headed there
 
-                    bool external = !InsideRegion(region, pt);
-                    var tip = external
-                        ? pt
-                        : InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt);
-                    var anchor = external
-                        ? ClosestOnRegionBoundary(region, tip)
-                        : ClosestOnRegionBoundary(anchorPaths, tip);
+                    // Same three-way space rules as automatic demand: painted beads
+                    // over a modeled void get CAVITY tubes (union into the hole,
+                    // anchored on the cavity wall) — the old external-fin routing
+                    // died in the generator's multi-crossing bite guard, so painted
+                    // lines produced nothing on hollow parts.
+                    var mSpace = ClassifyPoint(region, envelope, pt);
+                    bool external = mSpace == DemandSpace.Exterior;
+                    bool cavity   = mSpace == DemandSpace.Cavity;
+                    var tip = mSpace == DemandSpace.Interior
+                        ? (InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt))
+                        : pt;
+                    var anchor = mSpace == DemandSpace.Interior
+                        ? ClosestOnRegionBoundary(anchorPaths, tip)
+                        : ClosestOnRegionBoundary(region, tip);
                     if (Vector2.Distance(anchor, tip) < bead) continue;
-                    if (!external && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+                    if (mSpace == DemandSpace.Interior
+                        && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+                    if (cavity && !SegmentInsideVoid(region, anchor, tip, bead)) continue;
 
-                    var t = new LightningTree { Id = nextTreeId++, Anchor = anchor, External = external };
+                    var t = new LightningTree
+                    {
+                        Id = nextTreeId++, Anchor = anchor,
+                        External = external, Cavity = cavity,
+                    };
                     t.Branches.Add(new LightningBranch([anchor, tip]));
                     layerPlan.Trees.Add(t);
                 }

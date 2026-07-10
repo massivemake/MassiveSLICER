@@ -266,6 +266,8 @@ public sealed class AppPreferences
     public double WipeLengthMm { get; set; } = 10.0;
     public double WipeRampMm { get; set; } = 5.0;
     public double WipeSpeed { get; set; } = 120.0;
+    /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
+    public bool WipeSkipShortTravels { get; set; }
     public double ExtrusionStartWaitSec { get; set; }
     public double ExtrusionResumeWaitSec { get; set; }
 

@@ -41,6 +41,12 @@ public sealed class SliceSettings
     /// </summary>
     public float WipeRampMm { get; init; } = 5f;
 
+    /// <summary>
+    /// When true, skip wipe insertion before travels shorter than
+    /// <c>2 ×</c> the layer height (short gaps do not get a wipe).
+    /// </summary>
+    public bool WipeSkipShortTravels { get; init; }
+
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
 

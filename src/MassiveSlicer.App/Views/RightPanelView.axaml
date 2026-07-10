@@ -384,7 +384,8 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
                             </Grid>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
+                    </Expander>
+                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -396,40 +397,52 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ZHopMm}"/>
                             </Grid>
 
-                            <TextBlock Text="Wipe" Classes="LabelMuted" Margin="8,4,8,2"/>
-                            <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
-                                      ItemsSource="{Binding Additive.WipeModeOptions}"
-                                      SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
-                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
+                            <!-- Nested Wipe settings -->
+                            <Expander Classes="SectionExpander" Header="WIPE" IsExpanded="False" Margin="0,4,0,2">
+                                <StackPanel Margin="0,2,0,4">
+                                    <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding Additive.WipeModeOptions}"
+                                              SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
+                                              ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
+                                    </Grid>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp (e.g. 35 length, -1.5 ramp)."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp (e.g. 35 length, -1.5 ramp)."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
+                                    </Grid>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Linear speed for wipe extrusion moves. Can differ from travel speed."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeSpeed}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Linear speed for wipe extrusion moves. Can differ from travel speed."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeSpeed}"/>
+                                    </Grid>
+
+                                    <CheckBox Content="Ignore wipe on short travels"
+                                              Margin="8,4,8,2"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.WipeSkipShortTravels, Mode=TwoWay}"
+                                              ToolTip.Tip="Do not insert a wipe when the following travel is shorter than 2× the layer height. Useful for tiny gaps between nearby beads where a full wipe is unnecessary."/>
+                                    <TextBlock Text="Threshold = 2 × layer height"
+                                               Classes="LabelMuted" FontSize="10" Margin="24,0,8,4" Opacity="0.75"/>
+                                </StackPanel>
+                            </Expander>
 
                             <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Start wait (s)" VerticalAlignment="Center" Classes="LabelMuted"

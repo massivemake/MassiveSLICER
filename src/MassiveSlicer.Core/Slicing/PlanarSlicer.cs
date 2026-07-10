@@ -89,7 +89,8 @@ public static class PlanarSlicer
                     new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])),
                 manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
                     settings.PaintMarks, zPositions.Length,
-                    li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY)));
+                    li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY),
+                    halfBandMm: settings.LayerHeight * 0.6f));
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).

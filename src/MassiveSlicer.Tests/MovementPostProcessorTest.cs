@@ -93,4 +93,67 @@ public class MovementPostProcessorTest
         Assert.Equal(wipeEnd.Y, liftUp.To.Y, 0.01f);
         Assert.Equal(wipeEnd.Z + 5f, liftUp.To.Z, 0.01f);
     }
+
+    [Fact]
+    public void Apply_skips_wipe_on_short_travel_when_enabled()
+    {
+        // Layer height 3 mm → short-travel threshold = 6 mm.
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        // 4 mm travel — under 2× layer height.
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(54, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(54, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        // 20 mm travel — over threshold, still gets a wipe.
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(120, 0, 10), MoveKind.Travel));
+
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var settings = new SliceSettings
+        {
+            LayerHeight          = 3f,
+            WipeMode             = WipeMode.Retrace,
+            WipeLengthMm         = 8f,
+            WipeRampMm           = 0f,
+            WipeSkipShortTravels = true,
+        };
+
+        var result = MovementPostProcessor.Apply(tp, settings);
+        var moves  = result.Layers[0].Moves;
+        int wipeCount = moves.Count(m => m.IsWipe);
+
+        // Only the long travel should get a wipe (one full-length segment).
+        Assert.Equal(1, wipeCount);
+        // Wipe appears after the second extrude, before the long travel.
+        int longTravelIdx = moves.FindIndex(m =>
+            m.Kind == MoveKind.Travel && Vector3.Distance(m.From, m.To) > 15f);
+        int wipeIdx = moves.FindIndex(m => m.IsWipe);
+        Assert.True(wipeIdx >= 0 && wipeIdx < longTravelIdx);
+    }
+
+    [Fact]
+    public void Apply_short_travel_still_wipes_when_skip_disabled()
+    {
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(54, 0, 10), MoveKind.Travel));
+
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var settings = new SliceSettings
+        {
+            LayerHeight          = 3f,
+            WipeMode             = WipeMode.Retrace,
+            WipeLengthMm         = 8f,
+            WipeRampMm           = 0f,
+            WipeSkipShortTravels = false,
+        };
+
+        var result = MovementPostProcessor.Apply(tp, settings);
+        Assert.True(result.Layers[0].Moves.Exists(m => m.IsWipe));
+    }
 }
