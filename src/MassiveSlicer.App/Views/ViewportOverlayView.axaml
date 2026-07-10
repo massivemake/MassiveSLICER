@@ -185,46 +185,6 @@
                     <ia:Icon Value="mdi-pencil" FontSize="15"/>
                 </ToggleButton>
 
-                <StackPanel Orientation="Vertical" Spacing="2"
-                            IsVisible="{Binding IsPaintEditOpen}">
-                    <ToggleButton Classes="ToolbarButton" Padding="7"
-                                  IsChecked="{Binding PaintBridgeActive, Mode=TwoWay}"
-                                  Classes.active="{Binding PaintBridgeActive}"
-                                  ToolTip.Tip="Bridge brush — paint beads that need support; Formbound fingers grow beneath them. Right-drag resizes the brush, Alt+paint erases.">
-                        <ia:Icon Value="mdi-brush" FontSize="15"/>
-                    </ToggleButton>
-                    <ToggleButton Classes="ToolbarButton" Padding="7"
-                                  IsChecked="{Binding PaintRemoveActive, Mode=TwoWay}"
-                                  Classes.active="{Binding PaintRemoveActive}"
-                                  ToolTip.Tip="Remove brush — painted beads are deleted from the toolpath (artifacts, mistakes, unwanted geometry). Right-drag resizes the brush, Alt+paint erases.">
-                        <ia:Icon Value="mdi-eraser" FontSize="15"/>
-                    </ToggleButton>
-                    <ToggleButton Classes="ToolbarButton" Padding="7"
-                                  IsChecked="{Binding PaintLineBridgeActive, Mode=TwoWay}"
-                                  Classes.active="{Binding PaintLineBridgeActive}"
-                                  ToolTip.Tip="Line support — click a bead line to mark the whole contour as needing support. Alt-click unmarks it.">
-                        <ia:Icon Value="mdi-vector-polyline-plus" FontSize="15"/>
-                    </ToggleButton>
-                    <ToggleButton Classes="ToolbarButton" Padding="7"
-                                  IsChecked="{Binding PaintLineRemoveActive, Mode=TwoWay}"
-                                  Classes.active="{Binding PaintLineRemoveActive}"
-                                  ToolTip.Tip="Line remove — click a bead line to delete the whole contour from the toolpath. Alt-click unmarks it.">
-                        <ia:Icon Value="mdi-vector-polyline-minus" FontSize="15"/>
-                    </ToggleButton>
-                    <Button Classes="ToolbarButton" Padding="7"
-                            Command="{Binding AdditiveSettings.ClearPaintMarksCommand}"
-                            ToolTip.Tip="Clear all painted marks">
-                        <ia:Icon Value="mdi-broom" FontSize="15"/>
-                    </Button>
-                    <TextBlock Text="{Binding PaintBrushRadiusMm, StringFormat='{}{0:0} mm'}"
-                               FontSize="10" HorizontalAlignment="Center" Foreground="#AAAAAA"
-                               IsVisible="{Binding PaintBrushActive}"/>
-                    <Button Classes="ToolbarButton" Padding="7"
-                            Command="{Binding ReslicePaintCommand}"
-                            ToolTip.Tip="Re-slice now with the accumulated edits (menu stays open)">
-                        <ia:Icon Value="mdi-refresh" FontSize="15"/>
-                    </Button>
-                </StackPanel>
             </StackPanel>
         </Border>
 
@@ -1256,7 +1216,7 @@
                 <Button Classes="ToolbarButton" Padding="7"
                         Command="{Binding SelectPathToolCommand}"
                         Classes.active="{Binding PaintPathSelectActive}"
-                        ToolTip.Tip="Path select — click a bead line to select it; Shift adds more">
+                        ToolTip.Tip="Select — click to select; Shift adds more">
                     <ia:Icon Value="mdi-cursor-default-outline" FontSize="15"/>
                 </Button>
                 <ToggleButton Classes="ToolbarButton" Padding="7"
@@ -1268,10 +1228,28 @@
 
                 <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
 
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SetPathGranularityCommand}"
+                        Classes.active="{Binding PaintPathGranularityActive}"
+                        ToolTip.Tip="Path selection — a click selects the whole path section">
+                    <ia:Icon Value="mdi-chart-timeline-variant" FontSize="15"/>
+                </Button>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SetPointGranularityCommand}"
+                        Classes.active="{Binding PaintPointGranularityActive}"
+                        ToolTip.Tip="Point selection — a click selects the single bead under the cursor">
+                    <ia:Icon Value="mdi-dots-hexagon" FontSize="15"/>
+                </Button>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <ia:Icon Value="mdi-filter-variant" FontSize="15" Foreground="#7B8CFF"
+                         VerticalAlignment="Center"
+                         ToolTip.Tip="Filter selection — what hover / click / box may pick"/>
                 <ComboBox ItemsSource="{Binding PaintPickFilterOptions}"
                           SelectedItem="{Binding PaintPickFilter, Mode=TwoWay}"
                           MinWidth="104" FontSize="11" VerticalAlignment="Center"
-                          ToolTip.Tip="Selection filter — what hover / click / box may pick"/>
+                          ToolTip.Tip="Filter selection — what hover / click / box may pick"/>
 
                 <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
 
@@ -1285,6 +1263,19 @@
                 <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Remove"
                         Command="{Binding ApplyRemoveSelectionCommand}"
                         ToolTip.Tip="Delete every selected path from the toolpath"/>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding AdditiveSettings.ClearPaintMarksCommand}"
+                        ToolTip.Tip="Clear all painted marks">
+                    <ia:Icon Value="mdi-broom" FontSize="15"/>
+                </Button>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding ReslicePaintCommand}"
+                        ToolTip.Tip="Re-slice now with the accumulated edits">
+                    <ia:Icon Value="mdi-refresh" FontSize="15"/>
+                </Button>
             </StackPanel>
         </Border>
 

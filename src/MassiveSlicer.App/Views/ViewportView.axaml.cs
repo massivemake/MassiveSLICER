@@ -5772,7 +5772,10 @@ public partial class ViewportView : UserControl
         int maxMoveInLayer = scrubLimit == int.MaxValue
             ? bestLayer.Moves.Count - 1
             : Math.Min(bestLayer.Moves.Count - 1, scrubLimit - 1 - layerStartGlobal);
-        var section = ExpandLocalSection(bestLayer, bestMove, beadMm, maxMoveInLayer);
+        // Point granularity: the single bead under the cursor, not a section.
+        bool pointGran = vmPick?.PaintSelectGranularity == "Point";
+        var section = ExpandLocalSection(bestLayer, bestMove,
+            pointGran ? beadMm * 0.25f : beadMm, maxMoveInLayer);
         return (bestLayer, section, bestOrigin, bestWt);
     }
 
