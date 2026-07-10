@@ -3082,6 +3082,10 @@ public partial class ViewportView : UserControl
             }
             Pct(75);
 
+            // Effects/post-processors rebuild the toolpath and drop FormboundStats —
+            // capture now and re-stamp on the results so the console report survives.
+            var fbStats = tp.FormboundStats;
+
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
             tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
@@ -3117,6 +3121,8 @@ public partial class ViewportView : UserControl
             ThermalSimulator.StampLayerTemps(smoothed, settings);
             Pct(100);
 
+            smoothed.FormboundStats ??= fbStats;
+            raw.FormboundStats ??= fbStats;
             return (smoothed, raw);
         });
 
@@ -3291,7 +3297,11 @@ public partial class ViewportView : UserControl
         }
         // Planner diagnostics (demand / coverage / inherit) — was stdout-only before.
         if (tp.FormboundStats is { } stats)
+        {
             Log(stats.ToLogLine());
+            foreach (var line in stats.UncoveredLog)
+                Log(line);
+        }
         Log($"[formbound] emit: {lightningMoves} lightning bead segment(s) / {tp.Layers.Count} layer(s) " +
             $"(bar={settings.LightningButtressBarMm:0.#}mm)");
     }

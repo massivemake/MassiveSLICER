@@ -641,8 +641,11 @@ public static class LightningPlanner
                         {
                             layerUncovered++;
                             if (uncoveredTotal + layerUncovered <= 12)
-                                System.Console.WriteLine(
-                                    $"[formbound] UNCOVERED layer {i + 1} at ({pt.X:0.#},{pt.Y:0.#})");
+                            {
+                                var line = $"[formbound] UNCOVERED layer {i + 1} at ({pt.X:0.#},{pt.Y:0.#})";
+                                plan.UncoveredLog.Add(line);   // app console via FormboundStats
+                                System.Console.WriteLine(line);
+                            }
                         }
                     }
                 }
