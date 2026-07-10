@@ -108,6 +108,47 @@ public sealed class RightPanelViewModel : ViewModelBase
         set => SetField(ref _stepToolpathExpanded, value);
     }
 
+    private bool _stepPatternExpanded;
+    /// <summary>Step 3 PATTERN AND TEXTURE card expansion.</summary>
+    public bool StepPatternExpanded
+    {
+        get => _stepPatternExpanded;
+        set => SetField(ref _stepPatternExpanded, value);
+    }
+
+    private bool _stepModificationsExpanded = true;
+    /// <summary>Edit-mode MODIFICATIONS card (visible only while paint edit is open).</summary>
+    public bool StepModificationsExpanded
+    {
+        get => _stepModificationsExpanded;
+        set => SetField(ref _stepModificationsExpanded, value);
+    }
+
+    private bool _stepCreateModificationExpanded = true;
+    /// <summary>Edit-mode CREATE MODIFICATION card (visible only while paint edit is open).</summary>
+    public bool StepCreateModificationExpanded
+    {
+        get => _stepCreateModificationExpanded;
+        set => SetField(ref _stepCreateModificationExpanded, value);
+    }
+
+    /// <summary>
+    /// Entering paint edit collapses workflow cards 1–4 and expands the modification cards.
+    /// Leaving edit hides the modification cards (visibility is bound to IsPaintEditOpen).
+    /// </summary>
+    public void ApplyPaintEditMode(bool editOpen)
+    {
+        if (editOpen)
+        {
+            StepModelExpanded = false;
+            StepSliceExpanded = false;
+            StepPatternExpanded = false;
+            StepToolpathExpanded = false;
+            StepModificationsExpanded = true;
+            StepCreateModificationExpanded = true;
+        }
+    }
+
     private bool _globalSectionExpanded;
     /// <summary>GLOBAL section inside step 4 (home position + toolhead orientation).</summary>
     public bool GlobalSectionExpanded

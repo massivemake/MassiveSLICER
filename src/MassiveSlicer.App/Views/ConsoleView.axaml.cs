@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Input.Platform;
 using Avalonia.Interactivity;
 using MassiveSlicer.ViewModels;
 
@@ -12,6 +13,49 @@ public partial class ConsoleView : UserControl
         InitializeComponent();
         ConsoleInput.AddHandler(InputElement.KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
         DataContextChanged += OnDataContextChanged;
+    }
+
+    /// <summary>Copies that history line's full text (without the ▶ command prefix).</summary>
+    private async void OnCopyLineClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: ConsoleHistoryEntry entry } btn) return;
+        var top = TopLevel.GetTopLevel(this);
+        if (top?.Clipboard is null) return;
+
+        // Prefer raw Text so shader logs paste cleanly; fall back to DisplayLine.
+        string text = string.IsNullOrEmpty(entry.Text) ? entry.DisplayLine : entry.Text;
+        await top.Clipboard.SetTextAsync(text);
+
+        // Highlight the whole row so it's obvious which line was copied.
+        var row = FindAncestorBorder(btn);
+        if (row is not null)
+        {
+            row.Classes.Add("copied");
+            _ = ClearCopiedHighlightAsync(row);
+        }
+
+        ToolTip.SetTip(btn, "Copied!");
+        _ = ResetCopyTipAsync(btn);
+    }
+
+    private static Border? FindAncestorBorder(Control from)
+    {
+        for (var p = from.Parent; p is not null; p = p.Parent)
+            if (p is Border b && b.Classes.Contains("ConsoleHistoryRow"))
+                return b;
+        return null;
+    }
+
+    private static async System.Threading.Tasks.Task ClearCopiedHighlightAsync(Border row)
+    {
+        await System.Threading.Tasks.Task.Delay(700);
+        row.Classes.Remove("copied");
+    }
+
+    private static async System.Threading.Tasks.Task ResetCopyTipAsync(Control btn)
+    {
+        await System.Threading.Tasks.Task.Delay(900);
+        ToolTip.SetTip(btn, "Copy line");
     }
 
     private void OnDataContextChanged(object? sender, EventArgs e)

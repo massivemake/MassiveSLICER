@@ -25,6 +25,65 @@ public sealed class WorkspaceDocument
 
     /// <summary>ERP project/lead this workspace is attached to, or null.</summary>
     public ErpAttachment? Erp { get; set; }
+
+    /// <summary>
+    /// Viewport UI session at save time (edit mode, tools, layer isolation, scrub).
+    /// Restored on open so the file reopens exactly where the user left off.
+    /// Null on workspaces saved before this field existed.
+    /// </summary>
+    public WorkspaceUiSession? UiSession { get; set; }
+}
+
+/// <summary>
+/// Transient UI state captured with a workspace so reopen restores edit mode,
+/// selected paint/path tools, and the isolated layer window.
+/// </summary>
+public sealed class WorkspaceUiSession
+{
+    /// <summary>Body / Toolpath / Speed / RPM / Preview.</summary>
+    public string ViewMode { get; set; } = "Body";
+
+    /// <summary>Whether the toolpath Edit toolbar was open.</summary>
+    public bool IsPaintEditOpen { get; set; }
+
+    public bool PaintHandActive { get; set; }
+    public bool PaintBoxSelectActive { get; set; }
+    public bool PaintBridgeActive { get; set; }
+    public bool PaintRemoveActive { get; set; }
+    public bool PaintLineBridgeActive { get; set; }
+    public bool PaintLineRemoveActive { get; set; }
+
+    /// <summary>"Path" or "Point".</summary>
+    public string PaintSelectGranularity { get; set; } = "Path";
+
+    /// <summary>"All", "Formbound", or "Perimeter".</summary>
+    public string PaintPickFilter { get; set; } = "All";
+
+    public double PaintBrushRadiusMm { get; set; } = 15.0;
+
+    /// <summary>Exclusive upper scrub move index (high handle / top of layer window).</summary>
+    public int ToolpathScrubIndex { get; set; }
+
+    /// <summary>Lower scrub move index (low handle / bottom of isolated window).</summary>
+    public int ToolpathScrubLowIndex { get; set; }
+
+    /// <summary>1-based layer high (redundant with move index; used if move count shifts).</summary>
+    public double ToolpathScrubLayerHigh { get; set; }
+
+    /// <summary>1-based layer low.</summary>
+    public double ToolpathScrubLayerLow { get; set; } = 1;
+
+    /// <summary>Timeline scrub session was live (toolpath armed even if not selected).</summary>
+    public bool IsScrubSessionActive { get; set; }
+
+    /// <summary>True when the toolpath node itself was the viewport selection.</summary>
+    public bool SelectToolpath { get; set; }
+
+    /// <summary>Parent model name for the scrubbed toolpath.</summary>
+    public string? ScrubModelName { get; set; }
+
+    /// <summary>Outliner / node name of the scrubbed toolpath.</summary>
+    public string? ScrubToolpathName { get; set; }
 }
 
 /// <summary>Reference to the ERP Project/Lead (and optional element) a workspace belongs to.</summary>

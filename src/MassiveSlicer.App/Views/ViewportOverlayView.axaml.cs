@@ -1,11 +1,16 @@
 using System;
 using Avalonia.Controls;
+using Avalonia.Input;
+using Avalonia.Threading;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Views;
 
 public partial class ViewportOverlayView : UserControl
 {
+    private DispatcherTimer? _regionSelectLongPress;
+    private bool _regionSelectLongPressFired;
+
     public ViewportOverlayView()
     {
         InitializeComponent();
@@ -29,6 +34,45 @@ public partial class ViewportOverlayView : UserControl
                     UpdateBottomDockMargin();
             };
         DataContextChanged += (_, _) => UpdateBottomDockMargin();
+
+        // Long-press region-select icon → toggle Square ↔ Lasso.
+        RegionSelectButton.AddHandler(PointerPressedEvent, OnRegionSelectPointerPressed, handledEventsToo: true);
+        RegionSelectButton.AddHandler(PointerReleasedEvent, OnRegionSelectPointerReleased, handledEventsToo: true);
+        RegionSelectButton.AddHandler(PointerCaptureLostEvent, OnRegionSelectCaptureLost, handledEventsToo: true);
+    }
+
+    private void OnRegionSelectPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!e.GetCurrentPoint(RegionSelectButton).Properties.IsLeftButtonPressed) return;
+        _regionSelectLongPressFired = false;
+        _regionSelectLongPress?.Stop();
+        _regionSelectLongPress = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        _regionSelectLongPress.Tick += (_, _) =>
+        {
+            _regionSelectLongPress?.Stop();
+            _regionSelectLongPressFired = true;
+            if (DataContext is ViewportViewModel vm)
+                vm.TogglePaintRegionSelectMode();
+        };
+        _regionSelectLongPress.Start();
+    }
+
+    private void OnRegionSelectPointerReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _regionSelectLongPress?.Stop();
+        _regionSelectLongPress = null;
+        // Long-press already toggled mode — keep the tool armed (toggle button may have
+        // flipped off then on; force active so a long-press never leaves the tool off).
+        if (_regionSelectLongPressFired && DataContext is ViewportViewModel vm)
+            vm.PaintBoxSelectActive = true;
+        _regionSelectLongPressFired = false;
+    }
+
+    private void OnRegionSelectCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        _regionSelectLongPress?.Stop();
+        _regionSelectLongPress = null;
+        _regionSelectLongPressFired = false;
     }
 
     private void UpdateBottomDockMargin()

@@ -28,8 +28,134 @@
                               HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,0,0,8">
 
+                    <!-- Edit mode cards (hidden outside paint edit) -->
+                    <Button Classes="StepCard"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Padding="10,10"
+                            Margin="0,0,0,6"
+                            IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExitPaintEditCommand}"
+                            ToolTip.Tip="Leave toolpath edit mode and resume the normal workflow cards">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                <ia:Icon Value="mdi-exit-to-app" FontSize="11"
+                                         Foreground="{DynamicResource AccentHover}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Text="EXIT EDIT MODE" FontSize="12" LetterSpacing="2"
+                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepModificationsExpanded, Mode=TwoWay}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <ia:Icon Value="mdi-pencil-ruler" FontSize="11"
+                                             Foreground="{DynamicResource AccentHover}"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="MODIFICATIONS" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="8,0,8,8" Spacing="6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                                       Text="Applied Support / Remove markers. Click a row to reselect it in the viewport; trash removes its marks. Reslice to bake into the toolpath."/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" FontSize="11" Opacity="0.85" VerticalAlignment="Center"
+                                           Text="{Binding $parent[Window].DataContext.Viewport.PaintModificationsSummary}"/>
+                                <Button Grid.Column="1" Classes="ToolbarButton" Padding="8,3" FontSize="10"
+                                        Content="Clear all"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ClearPaintModificationsCommand}"
+                                        ToolTip.Tip="Remove every modification and paint mark"/>
+                            </Grid>
+
+                            <TextBlock FontSize="10" Opacity="0.55"
+                                       IsVisible="{Binding !$parent[Window].DataContext.Viewport.HasPaintModifications}"
+                                       Text="No modifications yet — select paths and Apply from the SELECTION panel."/>
+
+                            <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                                          IsVisible="{Binding $parent[Window].DataContext.Viewport.HasPaintModifications}">
+                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.PaintModifications}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource Bg3}"
+                                                    CornerRadius="6" Padding="8,6" Margin="0,0,0,4"
+                                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                                <Grid ColumnDefinitions="*,Auto,Auto">
+                                                    <Button Grid.Column="0"
+                                                            Background="Transparent" BorderThickness="0"
+                                                            Padding="0" HorizontalContentAlignment="Left"
+                                                            Command="{Binding SelectCommand}"
+                                                            ToolTip.Tip="Reselect this modification in the viewport">
+                                                        <StackPanel Spacing="2">
+                                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                <Border CornerRadius="3" Padding="5,1"
+                                                                        Background="#3322AABB">
+                                                                    <TextBlock Text="{Binding KindLabel}"
+                                                                               FontSize="9" FontWeight="Bold"
+                                                                               Foreground="{Binding KindColor}"/>
+                                                                </Border>
+                                                                <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource TextPrimary}"
+                                                                           VerticalAlignment="Center"/>
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding Detail}" FontSize="10"
+                                                                       Opacity="0.6"
+                                                                       FontFamily="Consolas,Courier New,monospace"/>
+                                                        </StackPanel>
+                                                    </Button>
+                                                    <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
+                                                            Margin="4,0,0,0" VerticalAlignment="Center"
+                                                            Command="{Binding SelectCommand}"
+                                                            ToolTip.Tip="Reselect">
+                                                        <ia:Icon Value="mdi-cursor-default-click" FontSize="13"/>
+                                                    </Button>
+                                                    <Button Grid.Column="2" Classes="ToolbarButton" Padding="5"
+                                                            Margin="2,0,0,0" VerticalAlignment="Center"
+                                                            Command="{Binding DeleteCommand}"
+                                                            ToolTip.Tip="Delete this modification and its marks">
+                                                        <ia:Icon Value="mdi-delete-outline" FontSize="13"
+                                                                 Foreground="#ff8a8a"/>
+                                                    </Button>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Expander>
+
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepCreateModificationExpanded, Mode=TwoWay}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <ia:Icon Value="mdi-plus-box-outline" FontSize="11"
+                                             Foreground="{DynamicResource AccentHover}"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="CREATE MODIFICATION" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="8,0,8,8" Spacing="6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                                       Text="Use the viewport edit tools to select paths or points, then mark them for support or removal."/>
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                       Text="• Select tool — click paths (Shift to multi-select)&#x0a;• Lines / Points — choose section vs single bead&#x0a;• Support / Remove — apply marks to the selection&#x0a;• Reslice — rebuild the toolpath with those marks"/>
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 1 MODEL -->
-                    <Expander Classes="StepCard" IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -87,7 +213,9 @@
                     </Expander>
 
                     <!-- 2 SLICE -->
-                    <Expander Classes="StepCard" IsExpanded="{Binding StepSliceExpanded, Mode=TwoWay}">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepSliceExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -529,7 +657,9 @@
                                         
 
                     <!-- 3 PATTERN AND TEXTURE -->
-                    <Expander Classes="StepCard" IsExpanded="False">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepPatternExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -1150,7 +1280,9 @@
                     </Expander>
 
                     <!-- 4 TOOLPATH -->
-                    <Expander Classes="StepCard" IsExpanded="{Binding StepToolpathExpanded, Mode=TwoWay}">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepToolpathExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -1665,7 +1797,8 @@
                                         
 
                     <!-- Other workflows (tab bar was removed; steps are the panel home) -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4"
+                                IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}">
                         <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                         <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
                                 Foreground="{DynamicResource TextSecondary}" BorderThickness="0"

@@ -30,8 +30,14 @@ public sealed class OrbitCamera
 
     // -- Projection --------------------------------------------------------
 
-    /// <summary>Vertical field of view in degrees.</summary>
+    /// <summary>Vertical field of view in degrees (perspective only).</summary>
     public float FovDegrees { get; set; } = 85f;
+
+    /// <summary>
+    /// When true, uses an orthographic projection sized so the view matches the
+    /// perspective frustum at the current <see cref="Radius"/>.
+    /// </summary>
+    public bool IsOrthographic { get; set; }
 
     /// <summary>Near clip plane distance in mm.</summary>
     public float NearClip { get; set; } = 1f;
@@ -85,14 +91,29 @@ public sealed class OrbitCamera
         return Matrix4.LookAt(eye, Target, up);
     }
 
-    /// <summary>Returns the perspective projection matrix for the given viewport aspect ratio.</summary>
-    /// <param name="aspectRatio">Viewport width divided by height.</param>
+    /// <summary>
+    /// Projection matrix for the given viewport aspect ratio — perspective or
+    /// orthographic depending on <see cref="IsOrthographic"/>.
+    /// </summary>
     public Matrix4 GetProjectionMatrix(float aspectRatio)
-        => Matrix4.CreatePerspectiveFieldOfView(
-               MathHelper.DegreesToRadians(FovDegrees),
-               aspectRatio,
-               NearClip,
-               FarClip);
+    {
+        if (!IsOrthographic)
+        {
+            return Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(FovDegrees),
+                aspectRatio,
+                NearClip,
+                FarClip);
+        }
+
+        // Match the perspective frustum height at the focus distance so switching
+        // ortho/persp does not jump scale.
+        float halfH = Math.Max(1f, Radius)
+            * MathF.Tan(MathHelper.DegreesToRadians(FovDegrees) * 0.5f);
+        float halfW = halfH * Math.Max(0.01f, aspectRatio);
+        return Matrix4.CreateOrthographicOffCenter(
+            -halfW, halfW, -halfH, halfH, NearClip, FarClip);
+    }
 
     // -- Picking -----------------------------------------------------------
 
