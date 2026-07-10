@@ -1235,6 +1235,94 @@
             </Grid>
         </Border>
 
+        <!-- Edit-mode selection toolbar — sits above the timeline. Hand = navigate,
+             pointer = click-a-path select (shift accumulates), box = marquee select.
+             Filter narrows what is pickable; Support / Remove apply marks to every
+             selected path (slicing stays paused until Reslice / collapse). -->
+        <Border IsVisible="{Binding IsPaintEditOpen}"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,86" ZIndex="16"
+                Background="#D9191919" CornerRadius="8"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="8,5">
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding PaintHandActive, Mode=TwoWay}"
+                              Classes.active="{Binding PaintHandActive}"
+                              ToolTip.Tip="Navigate — clicks do nothing, camera as normal">
+                    <ia:Icon Value="mdi-hand-back-right-outline" FontSize="15"/>
+                </ToggleButton>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SelectPathToolCommand}"
+                        Classes.active="{Binding PaintPathSelectActive}"
+                        ToolTip.Tip="Path select — click a bead line to select it; Shift adds more">
+                    <ia:Icon Value="mdi-cursor-default-outline" FontSize="15"/>
+                </Button>
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding PaintBoxSelectActive, Mode=TwoWay}"
+                              Classes.active="{Binding PaintBoxSelectActive}"
+                              ToolTip.Tip="Box select — drag a rectangle; every path inside joins the selection">
+                    <ia:Icon Value="mdi-selection" FontSize="15"/>
+                </ToggleButton>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <ComboBox ItemsSource="{Binding PaintPickFilterOptions}"
+                          SelectedItem="{Binding PaintPickFilter, Mode=TwoWay}"
+                          MinWidth="104" FontSize="11" VerticalAlignment="Center"
+                          ToolTip.Tip="Selection filter — what hover / click / box may pick"/>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <TextBlock Text="{Binding PaintSelectionLabel}" FontSize="11"
+                           Foreground="#AAAAAA" VerticalAlignment="Center" MinWidth="96"/>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Deselect"
+                        Command="{Binding DeselectPaintCommand}"/>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Support"
+                        Command="{Binding ApplySupportSelectionCommand}"
+                        ToolTip.Tip="Mark every selected path for Formbound support"/>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Remove"
+                        Command="{Binding ApplyRemoveSelectionCommand}"
+                        ToolTip.Tip="Delete every selected path from the toolpath"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Edit-mode LAYERS window — right edge. Two handles focus the visible
+             toolpath onto a layer band: TOP slider = upper bound (the timeline's
+             scrub), BOTTOM slider = lower bound (hides everything beneath). -->
+        <Border IsVisible="{Binding IsPaintEditOpen}"
+                HorizontalAlignment="Right" VerticalAlignment="Center"
+                Margin="0,0,8,0" ZIndex="16"
+                Background="#D9191919" CornerRadius="8"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="6,8">
+            <StackPanel Spacing="4" HorizontalAlignment="Center">
+                <TextBlock Text="LAYERS" FontSize="10" FontWeight="Bold"
+                           Foreground="#AAAAAA" HorizontalAlignment="Center"/>
+                <TextBlock Text="{Binding ToolpathScrubLayerLabel}" FontSize="10"
+                           Foreground="#DDDDDD" HorizontalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" Spacing="0" HorizontalAlignment="Center">
+                    <Slider Orientation="Vertical" Height="260" Width="22"
+                            Minimum="0" Maximum="{Binding ToolpathScrubMax}"
+                            Value="{Binding ToolpathScrubIndex, Mode=TwoWay}"
+                            ToolTip.Tip="Top of the layer window"/>
+                    <Slider Orientation="Vertical" Height="260" Width="22"
+                            Minimum="0" Maximum="{Binding ToolpathScrubMax}"
+                            Value="{Binding ToolpathScrubLowIndex, Mode=TwoWay}"
+                            ToolTip.Tip="Bottom of the layer window — hides everything beneath"/>
+                </StackPanel>
+                <TextBlock Text="{Binding ToolpathScrubLowLayerLabel, StringFormat='from layer {0}'}"
+                           FontSize="10" Foreground="#DDDDDD" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Box-select marquee -->
+        <Canvas IsVisible="{Binding PaintMarqueeVisible}" ZIndex="40" IsHitTestVisible="False">
+            <Border Canvas.Left="{Binding PaintMarqueeX}" Canvas.Top="{Binding PaintMarqueeY}"
+                    Width="{Binding PaintMarqueeW}" Height="{Binding PaintMarqueeH}"
+                    BorderBrush="#80B7FF" BorderThickness="1" Background="#2280B7FF"/>
+        </Canvas>
+
         <!-- Horizontal timeline — Preview view only, while a scrub session is live
              (stays up when the TCP is selected for keyframe adjustments) -->
         <Border x:Name="PlaybackTimelineBar"

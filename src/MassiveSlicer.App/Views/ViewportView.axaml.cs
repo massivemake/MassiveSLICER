@@ -905,6 +905,10 @@ public partial class ViewportView : UserControl
                 (vm.IsToolpathSelected || vm.IsScrubSessionActive)
                     ? vm.ToolpathScrubIndex
                     : int.MaxValue;
+            _renderer.ToolpathActiveScrubStart =
+                (vm.IsToolpathSelected || vm.IsScrubSessionActive)
+                    ? vm.ToolpathScrubLowIndex
+                    : 0;
             // Edit mode: force pure-white beads so the whole toolpath reads as
             // "editable" and paint/selection highlights stand out against it.
             if (vm.IsPaintEditOpen)
@@ -2264,6 +2268,15 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
+        {
+            pbxVm.PaintMarqueeX = Math.Min(pos.X, _paintBoxStart.X);
+            pbxVm.PaintMarqueeY = Math.Min(pos.Y, _paintBoxStart.Y);
+            pbxVm.PaintMarqueeW = Math.Abs(pos.X - _paintBoxStart.X);
+            pbxVm.PaintMarqueeH = Math.Abs(pos.Y - _paintBoxStart.Y);
+            e.Handled = true;
+            return;
+        }
         if (_paintResizing && DataContext is ViewportViewModel prVm)
         {
             prVm.PaintBrushRadiusMm =
@@ -2284,7 +2297,7 @@ public partial class ViewportView : UserControl
             && phVm.ViewMode == "Preview"
             && (phVm.PaintBrushActive || phVm.IsPaintEditOpen)
             && !_isOrbiting && !_isPanning)
-            UpdatePaintHover(phVm, pos);
+            if (!phVm.PaintHandActive) UpdatePaintHover(phVm, pos);
 
         if (_gizmoDragAxis != GizmoAxis.None)
         {
@@ -2360,6 +2373,24 @@ public partial class ViewportView : UserControl
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
 
+        if (_paintBoxDragging)
+        {
+            _paintBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel boxVm)
+            {
+                boxVm.PaintMarqueeVisible = false;
+                var rect = new Avalonia.Rect(
+                    Math.Min(pt.Position.X, _paintBoxStart.X),
+                    Math.Min(pt.Position.Y, _paintBoxStart.Y),
+                    Math.Abs(pt.Position.X - _paintBoxStart.X),
+                    Math.Abs(pt.Position.Y - _paintBoxStart.Y));
+                if (rect.Width > 4 && rect.Height > 4)
+                    SelectSpansInRect(boxVm, rect);
+            }
+            e.Handled = true;
+            return;
+        }
         if (_paintStroking || _paintResizing)
         {
             _paintStroking = false;
@@ -3892,6 +3923,8 @@ public partial class ViewportView : UserControl
                     ScheduleRealtimeSlice(vm);
             };
         vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+        vm.OnPaintDeselectRequested = () => DeselectPaintSelection(vm);
+        vm.OnPaintApplyRequested = support => ApplyPaintSelection(vm, support);
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
@@ -5171,6 +5204,12 @@ public partial class ViewportView : UserControl
     // Shift+click accumulates: previous selections stay lit so multiple lines can
     // be marked in one editing pass.
     private readonly List<(List<TkVector3> Pts, TkVector3 Color)> _paintMultiLines = [];
+    // Box-select marquee drag state.
+    private bool _paintBoxDragging;
+    private Avalonia.Point _paintBoxStart;
+    // The actionable edit selection: picks the toolbar's Support/Remove apply to.
+    private readonly List<(ToolpathLayer Layer, ContourSpan Span,
+        System.Numerics.Vector3 Origin, TkMatrix4 Wt, List<TkVector3> World)> _paintSelection = [];
     private DateTime _paintHoverAt = DateTime.MinValue;
     /// <summary>Stable id of the sticky selection — used for console feedback + undo.</summary>
     private PaintLineId? _paintSelectedId;
@@ -5366,6 +5405,15 @@ public partial class ViewportView : UserControl
         return Math.Clamp(vm.ToolpathScrubIndex, 0, vm.ToolpathScrubMax);
     }
 
+    /// <summary>Lower bound of the layer window — moves below it are hidden and
+    /// therefore not pickable.</summary>
+    private int GetPaintScrubMoveStart()
+    {
+        if (DataContext is not ViewportViewModel vm) return 0;
+        if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return 0;
+        return Math.Max(0, vm.ToolpathScrubLowIndex);
+    }
+
     /// <summary>Nearest visible extrude-bead midpoint under the cursor: raw
     /// toolpath coordinates (for marks) + display world (for the cursor circle).</summary>
     private (System.Numerics.Vector3 Raw, TkVector3 World)? PickBeadUnderCursor(Avalonia.Point pos)
@@ -5373,6 +5421,7 @@ public partial class ViewportView : UserControl
         var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
         if (vpW <= 1f || vpH <= 1f) return null;
         int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
 
         const float pickPx = 30f;
         const float tightPx = 9f;
@@ -5399,9 +5448,10 @@ public partial class ViewportView : UserControl
                 foreach (var mv in layer.Moves)
                 {
                     int gi = globalMove++;
-                    if (gi >= scrubLimit) continue;
+                    if (gi >= scrubLimit || gi < scrubStart0) continue;
                     if (k++ % stride != 0) continue;
                     if (mv.Kind != MoveKind.Extrude) continue;
+                    if (DataContext is ViewportViewModel bpVm && !PaintPickAllowed(mv, bpVm)) continue;
                     var mid = (mv.From + mv.To) * 0.5f;
                     var world = TransformPoint(
                         new TkVector3(mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
@@ -5462,6 +5512,139 @@ public partial class ViewportView : UserControl
         _paintStrokeChanged = true;
     }
 
+    /// <summary>Clears the actionable edit selection and its highlights.</summary>
+    private void DeselectPaintSelection(ViewportViewModel vm)
+    {
+        _paintSelection.Clear();
+        _paintMultiLines.Clear();
+        _paintSelectedLine = null;
+        _paintSelectedId = null;
+        vm.PaintSelectionCount = 0;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Toolbar Support/Remove: lays marks along EVERY selected path.
+    /// Slicing stays paused (edit mode) — Reslice or collapse fires the rebuild.</summary>
+    private void ApplyPaintSelection(ViewportViewModel vm, bool support)
+    {
+        if (vm.AdditiveSettings is not { } add || _paintSelection.Count == 0) return;
+        var kind = support ? Core.Models.PaintMarkKind.Bridge : Core.Models.PaintMarkKind.Remove;
+        int added = 0;
+        foreach (var sel in _paintSelection)
+            added += MarkPickedSpanDabs(add, sel.Layer, sel.Span, kind);
+        // Re-tint highlights to the action colour so the state reads at a glance.
+        var col = support ? new TkVector3(0.2f, 0.9f, 1f) : new TkVector3(1f, 0.45f, 0.15f);
+        for (int i = 0; i < _paintMultiLines.Count; i++)
+            _paintMultiLines[i] = (_paintMultiLines[i].Pts, col);
+        _paintSelectedColor = col;
+        if (added > 0) add.BumpPaintStamp();
+        LogPaintConsole($"[edit] {(support ? "support" : "remove")} applied to "
+            + $"{_paintSelection.Count} path(s), {added} mark(s)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Lays Bridge/Remove dabs along one picked span (raw toolpath coords).
+    /// Returns how many marks were added.</summary>
+    private int MarkPickedSpanDabs(
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        ToolpathLayer layer, ContourSpan span, Core.Models.PaintMarkKind kind)
+    {
+        float bead = (float)add.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        float dabRadius = kind == Core.Models.PaintMarkKind.Bridge ? bead * 1.5f : bead * 1.2f;
+        float spacing   = kind == Core.Models.PaintMarkKind.Bridge ? bead * 3f : bead * 1.5f;
+        float accum = spacing;
+        int added = 0;
+        for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[span.Start + i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            accum += System.Numerics.Vector3.Distance(mv.From, mv.To);
+            if (accum < spacing) continue;
+            accum = 0f;
+            var mid = (mv.From + mv.To) * 0.5f;
+            bool covered = false;
+            foreach (var m in add.PaintMarks)
+                if (m.Kind == kind
+                    && System.Numerics.Vector3.Distance(m.Center, mid) < dabRadius * 0.5f)
+                { covered = true; break; }
+            if (covered) continue;
+            add.PaintMarks.Add(new Core.Models.PaintMark(mid, dabRadius, kind));
+            added++;
+        }
+        return added;
+    }
+
+    /// <summary>Box select: every visible path with a sampled point inside the
+    /// screen rectangle joins the selection (scrub window + pick filter apply).</summary>
+    private void SelectSpansInRect(ViewportViewModel vm, Avalonia.Rect rect)
+    {
+        var (rx, ry, vpW, vpH) = GetGlPickViewport(new Avalonia.Point(rect.X, rect.Y));
+        if (vpW <= 1f || vpH <= 1f) return;
+        var (rx2, ry2, _, _) = GetGlPickViewport(new Avalonia.Point(rect.Right, rect.Bottom));
+        float x0 = MathF.Min(rx, rx2), x1 = MathF.Max(rx, rx2);
+        float y0 = MathF.Min(ry, ry2), y1 = MathF.Max(ry, ry2);
+
+        int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
+        int before = _paintSelection.Count;
+        var selCol = new TkVector3(1f, 0.55f, 0.08f);
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            var wt = node.LocalTransform;
+            int globalMove = 0;
+            foreach (var layer in tp.Layers)
+            {
+                foreach (var span in layer.Contours)
+                {
+                    if (span.Count < 2 || span.Start < 0
+                        || span.Start + span.Count > layer.Moves.Count) continue;
+                    int spanGlobal = globalMove + span.Start;
+                    if (spanGlobal >= scrubLimit || spanGlobal < scrubStart0) continue;
+                    if (_paintSelection.Any(sel =>
+                        ReferenceEquals(sel.Layer, layer) && sel.Span.Start == span.Start)) continue;
+
+                    int stride = Math.Max(1, span.Count / 48);
+                    for (int i = 0; i < span.Count; i += stride)
+                    {
+                        var mv = layer.Moves[span.Start + i];
+                        if (mv.Kind != MoveKind.Extrude) continue;
+                        if (!PaintPickAllowed(mv, vm)) break;
+                        var mid = (mv.From + mv.To) * 0.5f;
+                        var world = TransformPoint(new TkVector3(
+                            mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
+                        var sp = _renderer.ProjectToScreen(
+                            new TkVector3(world.X, world.Y, world.Z), vpW, vpH);
+                        if (float.IsNaN(sp.X)) continue;
+                        if (sp.X < x0 || sp.X > x1 || sp.Y < y0 || sp.Y > y1) continue;
+
+                        var poly = SpanWorldPolyline((layer, span, origin, wt));
+                        _paintSelection.Add((layer, span, origin, wt, poly));
+                        _paintMultiLines.Add((poly, selCol));
+                        break;
+                    }
+                }
+                globalMove += layer.Moves.Count;
+            }
+        }
+        vm.PaintSelectionCount = _paintSelection.Count;
+        if (_paintSelection.Count != before)
+            LogPaintConsole($"[edit] box select → {_paintSelection.Count} path(s)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Pick filter from the toolbar: what hover/click/box may select.</summary>
+    private static bool PaintPickAllowed(ToolpathMove mv, ViewportViewModel vm) =>
+        vm.PaintPickFilter switch
+        {
+            "Formbound" => mv.IsLightning,
+            "Perimeter" => !mv.IsLightning,
+            _ => true,
+        };
+
     /// <summary>Nearest local path <em>section</em> under the cursor (not the whole
     /// layer contour). Screen-space proximity is the primary gate (cursor must sit on
     /// the bead), with 3D ray depth as a tie-break so front geometry wins. Timeline
@@ -5472,8 +5655,8 @@ public partial class ViewportView : UserControl
         var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
         if (vpW <= 1f || vpH <= 1f) return null;
 
-        float beadMm = (float)(DataContext is ViewportViewModel vmb
-            ? (vmb.AdditiveSettings?.BeadWidth ?? 6) : 6);
+        var vmPick = DataContext as ViewportViewModel;
+        float beadMm = (float)(vmPick?.AdditiveSettings?.BeadWidth ?? 6);
         if (beadMm < 0.5f) beadMm = 6f;
         // Screen pick radius: beads are a few mm wide; ~28–40 px is a comfortable target.
         float pickPx = MathF.Max(28f, MathF.Min(48f, beadMm * 4f));
@@ -5484,6 +5667,7 @@ public partial class ViewportView : UserControl
         var rayO = ray.Origin;
         var rayD = ray.Direction;
         int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
 
         // Tier 1 — TIGHT radius (the line under the cursor): the FRONT candidate
         // wins. Depth is bucketed to ~2 beads so pixel jitter along one line can't
@@ -5520,10 +5704,11 @@ public partial class ViewportView : UserControl
                 var moves = layer.Moves;
                 for (int i = 0; i < moves.Count; i++, globalMove++)
                 {
-                    if (globalMove >= scrubLimit) continue;
+                    if (globalMove >= scrubLimit || globalMove < scrubStart0) continue;
                     var mv = moves[i];
                     if (mv.Kind != MoveKind.Extrude) continue;
                     if (mv.IsLayerStitch || mv.IsLayerChange) continue;
+                    if (vmPick is not null && !PaintPickAllowed(mv, vmPick)) continue;
                     var nFrom = TransformPoint(
                         new TkVector3(mv.From.X - origin.X, mv.From.Y - origin.Y, mv.From.Z - origin.Z), wt);
                     var nTo = TransformPoint(
@@ -5885,6 +6070,14 @@ public partial class ViewportView : UserControl
         _paintSelectedLine = poly;
         _paintSelectedColor = newColor;
         _paintSelectedId = id;
+
+        // Actionable selection list: replace on plain click, accumulate on shift.
+        if (!additive) _paintSelection.Clear();
+        bool dupPick = _paintSelection.Any(sel =>
+            ReferenceEquals(sel.Layer, pickHit.Layer) && sel.Span.Start == pickHit.Span.Start);
+        if (!dupPick)
+            _paintSelection.Add((pickHit.Layer, pickHit.Span, pickHit.Origin, pickHit.Wt, poly));
+        vm.PaintSelectionCount = _paintSelection.Count;
 
         int markDelta = 0;
         if (applyMarks && vm.AdditiveSettings is { } add)
