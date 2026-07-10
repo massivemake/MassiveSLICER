@@ -1380,9 +1380,17 @@ public sealed class ViewportViewModel : ViewModelBase
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
             OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
             NotifyRenderNeeded();
         }
     }
+
+    /// <summary>
+    /// Multi-Planar "Planes" toggle — hidden in toolpath Edit mode so it does not
+    /// crowd the paint / line-select HUD.
+    /// </summary>
+    public bool ShowMultiPlanarPlanesButton =>
+        !IsPaintEditOpen && (AdditiveSettings?.ShowMultiPlanarControls ?? false);
 
     private void SetPaintTool(ref bool field, bool value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
     {
@@ -1531,6 +1539,31 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public string PaintSelectionLabel =>
         PaintSelectionCount == 1 ? "1 path selected" : $"{PaintSelectionCount} paths selected";
+
+    private string _paintSelectGranularity = "Path";
+    /// <summary>Selection granularity: "Path" picks a whole contour section per
+    /// click; "Point" picks the single bead under the cursor.</summary>
+    public string PaintSelectGranularity
+    {
+        get => _paintSelectGranularity;
+        set
+        {
+            if (!SetField(ref _paintSelectGranularity, value)) return;
+            OnPropertyChanged(nameof(PaintPathGranularityActive));
+            OnPropertyChanged(nameof(PaintPointGranularityActive));
+        }
+    }
+
+    public bool PaintPathGranularityActive  => PaintSelectGranularity == "Path";
+    public bool PaintPointGranularityActive => PaintSelectGranularity == "Point";
+
+    public RelayCommand SetPathGranularityCommand => _setPathGran ??= new RelayCommand(() =>
+        PaintSelectGranularity = "Path");
+    private RelayCommand? _setPathGran;
+
+    public RelayCommand SetPointGranularityCommand => _setPointGran ??= new RelayCommand(() =>
+        PaintSelectGranularity = "Point");
+    private RelayCommand? _setPointGran;
 
     public string[] PaintPickFilterOptions { get; } = ["All", "Formbound", "Perimeter"];
 
@@ -3802,7 +3835,30 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
-    public AdditiveSettingsViewModel? AdditiveSettings { get; set; }
+    private AdditiveSettingsViewModel? _additiveSettings;
+    public AdditiveSettingsViewModel? AdditiveSettings
+    {
+        get => _additiveSettings;
+        set
+        {
+            if (ReferenceEquals(_additiveSettings, value)) return;
+            if (_additiveSettings is not null)
+                _additiveSettings.PropertyChanged -= OnAdditiveSettingsPropertyChanged;
+            _additiveSettings = value;
+            if (_additiveSettings is not null)
+                _additiveSettings.PropertyChanged += OnAdditiveSettingsPropertyChanged;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+        }
+    }
+
+    private void OnAdditiveSettingsPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(AdditiveSettingsViewModel.ShowMultiPlanarControls)
+            or nameof(AdditiveSettingsViewModel.Method)
+            or nameof(AdditiveSettingsViewModel.SelectedPreset))
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+    }
 
     /// <summary>Subtractive (relief milling) settings, wired from the right panel.</summary>
     public SubtractiveSettingsViewModel? SubtractiveSettings { get; set; }
