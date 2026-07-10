@@ -47,14 +47,131 @@
             </StackPanel>
         </Border>
 
-        <!-- Toolpath EDIT menu — left edge, Preview view only. The pencil expands
-             the tool stack; realtime slicing PAUSES while the menu is open (edits
-             accumulate) and the deferred re-slice fires when it collapses or when
-             the Reslice button is pressed. Brushes: left-drag paints, Alt erases,
-             right-drag resizes. Line tools: click one bead line to mark the whole
-             contour as supported (bridge) / removed; Alt-click unmarks it. -->
+        <!-- Cut Tool — interactive floating panel (ghost plane + RGB gizmo in viewport) -->
+        <Border IsVisible="{Binding ShowCutToolPanel}"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,52,0,0" ZIndex="20"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                CornerRadius="8" Padding="12,10"
+                Width="280" MaxHeight="520"
+                Opacity="0.96">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="500">
+                <StackPanel Spacing="6">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <ia:Icon Value="mdi-content-cut" FontSize="15" Foreground="{DynamicResource Accent}"/>
+                            <TextBlock Text="Cut Tool" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" Classes="ToolbarButton" Padding="4,2"
+                                Command="{Binding CancelCutToolCommand}"
+                                ToolTip.Tip="Cancel cut tool">
+                            <ia:Icon Value="mdi-close" FontSize="13"/>
+                        </Button>
+                    </Grid>
+
+                    <TextBlock Text="{Binding CutToolSession.ModelName}" FontSize="11" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                               Text="Drag the gizmo to move / rotate the cut plane. Use Move (G) or Rotate (R) tools."/>
+
+                    <TextBlock Text="CUT PLANE" Classes="SectionHeader" Margin="0,4,0,0"/>
+
+                    <Grid ColumnDefinitions="*,90">
+                        <TextBlock Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"
+                                   ToolTip.Tip="Offset along the plane normal from world origin"/>
+                        <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                 Text="{Binding CutToolSession.Height, Mode=TwoWay}"/>
+                    </Grid>
+
+                    <TextBlock Text="Normal" Classes="LabelMuted" FontSize="10" Margin="0,2,0,0"/>
+                    <Grid ColumnDefinitions="*,*,*">
+                        <StackPanel Grid.Column="0" Margin="0,0,3,0">
+                            <TextBlock Text="X" FontSize="9" Classes="LabelMuted" Foreground="#E05555"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalX, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="1.5,0">
+                            <TextBlock Text="Y" FontSize="9" Classes="LabelMuted" Foreground="#55C055"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalY, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="3,0,0,0">
+                            <TextBlock Text="Z" FontSize="9" Classes="LabelMuted" Foreground="#5580E0"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalZ, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Content="XY (Z↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalZCommand}"/>
+                        <Button Content="XZ (Y↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalYCommand}"/>
+                        <Button Content="YZ (X↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalXCommand}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Place both halves on the cut"
+                              IsChecked="{Binding CutToolSession.PlaceOnCut, Mode=TwoWay}"
+                              FontSize="11" Margin="0,4,0,0"/>
+
+                    <TextBlock Text="CONNECTORS" Classes="SectionHeader" Margin="0,6,0,0"/>
+                    <CheckBox Content="Formbound tabs + bolt lugs"
+                              IsChecked="{Binding CutToolSession.AddConnectors, Mode=TwoWay}" FontSize="11"/>
+
+                    <StackPanel IsVisible="{Binding CutToolSession.AddConnectors}" Spacing="4" Margin="0,2,0,0">
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Spacing" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.ConnectorSpacing, Mode=TwoWay}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Tab W / D / H" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabWidth, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabDepth, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabHeight, Mode=TwoWay}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Bolt / Lug Ø" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                         Text="{Binding CutToolSession.BoltDiameter, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                         Text="{Binding CutToolSession.BoltLugDiameter, Mode=TwoWay}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Min corner R" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.MinCornerRadius, Mode=TwoWay}"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6" Margin="0,10,0,0">
+                        <Button Content="Cancel" Classes="ToolbarButton" Padding="12,5" FontSize="11"
+                                Command="{Binding CancelCutToolCommand}"/>
+                        <Button Content="Perform cut" Classes="AccentButton" Padding="12,5" FontSize="11"
+                                Command="{Binding PerformCutToolCommand}"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Toolpath EDIT menu — left edge of the viewport (inside the panel-clearance
+             margin), Preview view only. The pencil expands the tool stack; realtime
+             slicing PAUSES while the menu is open (edits accumulate) and the deferred
+             re-slice fires when it collapses or when the Reslice button is pressed.
+             Brushes: left-drag paints, Alt erases, right-drag resizes. Line tools:
+             click one bead line to mark the whole contour as supported (bridge) /
+             removed; Alt-click unmarks it. -->
         <Border HorizontalAlignment="Left" VerticalAlignment="Center"
-                Margin="336,0,0,0" ZIndex="15"
+                Margin="8,0,0,0" ZIndex="15"
                 Background="#B3222222" CornerRadius="6"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                 Padding="3"
@@ -1210,6 +1327,12 @@
                                        FontSize="10"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
+                        <TextBlock Text="{Binding ToolpathScrubLayerLabel}"
+                                   Classes="Readout"
+                                   FontSize="9"
+                                   HorizontalAlignment="Right"
+                                   Opacity="0.85"
+                                   ToolTip.Tip="Current layer / total layers"/>
                     </StackPanel>
                     <Button Classes="ToolbarButton" Padding="6,4" VerticalAlignment="Center"
                             Command="{Binding SimExportVideoCommand}"

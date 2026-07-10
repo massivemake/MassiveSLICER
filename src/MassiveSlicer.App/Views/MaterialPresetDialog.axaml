@@ -5,7 +5,7 @@
         x:Class="MassiveSlicer.App.Views.MaterialPresetDialog"
         x:CompileBindings="False"
         Title="Material Preset"
-        Width="400" Height="640"
+        Width="420" Height="760"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="None"
         CanResize="False"
@@ -161,6 +161,66 @@
                         <TextBlock Grid.Column="0" Text="Cost ($/lb)" Classes="LabelMuted" VerticalAlignment="Center"/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox"
                                    Text="{Binding CostPerLb, Mode=TwoWay, StringFormat={}{0:F2}}"/>
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>
+
+                    <!-- Thermomechanical simulation thresholds -->
+                    <TextBlock Text="THERMOMECHANICAL" Classes="SectionHeader" Margin="0,0,0,6"/>
+
+                    <TextBlock Classes="LabelMuted" TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.85"
+                               Text="Thresholds for the Thermal view and Adaptive Speed recommendations. Bond / sag limits frame the safe interlayer temperature window used by the analytical cooling model."/>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Glass transition Tg (°C)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Bonding-relevant Tg. Leave 0 to auto-fill from material type (ABS≈105, PC≈145, PEI≈217…)."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding GlassTransitionC, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                   ToolTip.Tip="0 = auto from material type"/>
+                    </Grid>
+                    <TextBlock Text="{Binding GlassTransitionHint}"
+                               Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                               Opacity="0.75" Margin="0,-2,0,6"/>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Bond margin (°C)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Bond threshold = Tg + this. Interface cooler than bond limit → weak fusion. Default 10."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding ThermalBondMarginC, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Sag margin (°C)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Sag threshold = Tg + this. Previous layer hotter than sag limit → too soft for a new bead. Default 45."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding ThermalSagMarginC, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                    </Grid>
+
+                    <TextBlock Text="{Binding ThermalThresholdsHint}"
+                               Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                               Opacity="0.85" Margin="0,0,0,6"/>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Ambient (°C)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Build-environment / chamber ambient temperature for the Newton cooling model."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding ThermalAmbientC, Mode=TwoWay, StringFormat={}{0:F0}}"/>
                     </Grid>
 
                     <Border Height="1" Background="{DynamicResource Border1}" Margin="0,10,0,10"/>

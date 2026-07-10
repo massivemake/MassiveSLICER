@@ -308,22 +308,37 @@ public static class LightningGenerator
 
                 // Bite guard (slit body only — tip discs may legitimately graze the
                 // band when the loop radius exceeds the core inset).
+                // Interior fingers MUST notch the perimeter; a slit with no band
+                // intersection is a free-floating dual-wall island (floating diagonal).
                 var body = tipLoopRadius > 0f
                     ? BuildTreeSlit(tree, region, beadWidth, 0f)
                     : slit;
                 var bite = Clipper.Intersect(boundaryBand, body, FillRule.NonZero);
-                if (CountOuters(bite) > 1) { plan.DroppedTrees.Add(tree.Id); continue; }
+                if (!tree.External && !tree.Cavity)
+                {
+                    bool hasBite = false;
+                    foreach (var p in bite)
+                        if (Math.Abs(Clipper.Area(p)) > beadWidth * beadWidth * 0.05)
+                        { hasBite = true; break; }
+                    if (!hasBite) { plan.DroppedTrees.Add(tree.Id); continue; }
+                }
+                // Cavity tubes legitimately touch the band at BOTH ends (wall mouth +
+                // island landing) — the multi-crossing rule is for interior slits.
+                if (!tree.Cavity && CountOuters(bite) > 1)
+                { plan.DroppedTrees.Add(tree.Id); continue; }
 
                 PathsD candidate;
-                if (tree.External)
+                if (tree.External || tree.Cavity)
                 {
-                    // Sacrificial fin OUTSIDE the part: add the bump instead of
-                    // notching. The boundary detours outward around it — still one loop.
+                    // Fin (outside the part) or cavity tube (inside a modeled void):
+                    // ADD the bump instead of notching. The boundary detours around
+                    // it — still one continuous loop.
                     candidate = Clipper.Union(result, slit, FillRule.NonZero);
                     candidate = Clipper.SimplifyPaths(candidate, 0.05, false);
-                    // Guard: a fin bridging to another island would merge outers
-                    // (changes topology unexpectedly) — drop that lineage.
-                    if (CountOuters(candidate) < outerCount) { plan.DroppedTrees.Add(tree.Id); continue; }
+                    // Sacrificial fins must not merge separate islands (unexpected
+                    // topology change); cavity CONNECTORS exist to do exactly that.
+                    if (tree.External && CountOuters(candidate) < outerCount)
+                    { plan.DroppedTrees.Add(tree.Id); continue; }
                 }
                 else
                 {
@@ -338,6 +353,9 @@ public static class LightningGenerator
                 if (candidate.Count == 0) { plan.DroppedTrees.Add(tree.Id); continue; }
 
                 result = candidate;
+                // Later guards must judge against CURRENT topology (a connector may
+                // have legitimately merged islands).
+                outerCount = CountOuters(result);
             }
 
             // Converging fingers (inherited lineages drifting together — common on
@@ -548,9 +566,14 @@ public static class LightningGenerator
 
             var first2 = new Vector2((float)path[start].x, (float)path[start].y);
             var first  = P(first2);
+            int entryTravel = -1;
             if (runningEnd is { } prev && Vector3.Distance(prev, first) > 0.01f)
+            {
+                entryTravel = layer.Moves.Count;
                 layer.Moves.Add(new ToolpathMove(prev, first, MoveKind.Travel));
+            }
 
+            int extrudeStart = layer.Moves.Count;
             var cur  = first;
             var cur2 = first2;   // plane-local twin of cur — tagging must use plane space
             for (int k = 1; k <= path.Count; k++)
@@ -566,6 +589,12 @@ public static class LightningGenerator
             if (Vector3.DistanceSquared(cur, first) > 1e-6f)
                 layer.Moves.Add(new ToolpathMove(cur, first, MoveKind.Extrude)
                     { IsLightning = IsLightningSeg(cur2, first2) });
+
+            int extrudeCount = layer.Moves.Count - extrudeStart;
+            // Record contour so line-pick / seam tools can select whole loops
+            // (Formbound Bridge/Buttress previously emitted moves without Contours).
+            if (extrudeCount > 0)
+                layer.Contours.Add(new ContourSpan(extrudeStart, extrudeCount, Closed: true, entryTravel));
 
             runningEnd = first;
         }

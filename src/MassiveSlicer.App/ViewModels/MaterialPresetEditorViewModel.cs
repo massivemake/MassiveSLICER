@@ -31,6 +31,8 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         {
             if (!SetField(ref _materialType, value)) return;
             TryAutoUpdateName();
+            OnPropertyChanged(nameof(GlassTransitionHint));
+            OnPropertyChanged(nameof(ThermalThresholdsHint));
         }
     }
 
@@ -97,6 +99,74 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     {
         get => _costPerLb;
         set => SetField(ref _costPerLb, Math.Max(0, value));
+    }
+
+    // -- Thermomechanical simulation thresholds ------------------------------
+
+    private double _glassTransitionC;
+    /// <summary>Tg (°C). 0 = auto from material type family.</summary>
+    public double GlassTransitionC
+    {
+        get => _glassTransitionC;
+        set
+        {
+            if (SetField(ref _glassTransitionC, Math.Clamp(value, 0, 400)))
+                OnPropertyChanged(nameof(GlassTransitionHint));
+        }
+    }
+
+    private double _thermalBondMarginC = 10;
+    public double ThermalBondMarginC
+    {
+        get => _thermalBondMarginC;
+        set
+        {
+            if (SetField(ref _thermalBondMarginC, Math.Clamp(value, 1, 80)))
+                OnPropertyChanged(nameof(ThermalThresholdsHint));
+        }
+    }
+
+    private double _thermalSagMarginC = 45;
+    public double ThermalSagMarginC
+    {
+        get => _thermalSagMarginC;
+        set
+        {
+            if (SetField(ref _thermalSagMarginC, Math.Clamp(value, 5, 120)))
+                OnPropertyChanged(nameof(ThermalThresholdsHint));
+        }
+    }
+
+    private double _thermalAmbientC = 30;
+    public double ThermalAmbientC
+    {
+        get => _thermalAmbientC;
+        set => SetField(ref _thermalAmbientC, Math.Clamp(value, -20, 120));
+    }
+
+    /// <summary>Live readout of the family Tg when GlassTransitionC is 0 (auto).</summary>
+    public string GlassTransitionHint
+    {
+        get
+        {
+            float autoTg = MassiveSlicer.Core.Slicing.Effects.ThermalSimulator.GlassTransitionC(MaterialType);
+            if (_glassTransitionC > 0)
+                return $"Using override Tg = {_glassTransitionC:0.#} °C (auto for {MaterialType} would be {autoTg:0} °C).";
+            return $"Auto Tg for {MaterialType} = {autoTg:0} °C (set a value to override).";
+        }
+    }
+
+    public string ThermalThresholdsHint
+    {
+        get
+        {
+            float tg = _glassTransitionC > 0
+                ? (float)_glassTransitionC
+                : MassiveSlicer.Core.Slicing.Effects.ThermalSimulator.GlassTransitionC(MaterialType);
+            float bond = tg + (float)_thermalBondMarginC;
+            float sag  = tg + (float)_thermalSagMarginC;
+            return $"Safe window: bond ≥ {bond:0} °C (Tg+{_thermalBondMarginC:0}), sag ≤ {sag:0} °C (Tg+{_thermalSagMarginC:0}).";
+        }
     }
 
     // -- Purge-and-weigh calibration -----------------------------------------
@@ -190,34 +260,45 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     public MaterialPreset ToPreset() => new()
     {
-        Name            = Name.Trim().Length > 0 ? Name.Trim() : $"{MaterialType} - {Color}",
-        MaterialType    = MaterialType,
-        Color           = Color,
-        Temperature1    = Temperature1,
-        Temperature2    = Temperature2,
-        Temperature3    = Temperature3,
-        FlowRate        = FlowRate,
-        FlowRateHf      = FlowRateHf,
-        MaterialDensity = MaterialDensity,
-        CostPerLb       = CostPerLb,
-        CalibratedOn    = CalibratedOn,
-        CalibrationNote = CalibrationNote,
+        Name               = Name.Trim().Length > 0 ? Name.Trim() : $"{MaterialType} - {Color}",
+        MaterialType       = MaterialType,
+        Color              = Color,
+        Temperature1       = Temperature1,
+        Temperature2       = Temperature2,
+        Temperature3       = Temperature3,
+        FlowRate           = FlowRate,
+        FlowRateHf         = FlowRateHf,
+        MaterialDensity    = MaterialDensity,
+        CostPerLb          = CostPerLb,
+        GlassTransitionC   = GlassTransitionC,
+        ThermalBondMarginC = ThermalBondMarginC,
+        ThermalSagMarginC  = ThermalSagMarginC,
+        ThermalAmbientC    = ThermalAmbientC,
+        CalibratedOn       = CalibratedOn,
+        CalibrationNote    = CalibrationNote,
     };
 
     public void LoadFrom(MaterialPreset p)
     {
         _expectedAutoName = p.Name;
-        Name            = p.Name;
-        MaterialType    = p.MaterialType;
-        Color           = p.Color;
-        Temperature1    = p.Temperature1;
-        Temperature2    = p.Temperature2;
-        Temperature3    = p.Temperature3;
-        FlowRate        = p.FlowRate;
-        FlowRateHf      = p.FlowRateHf;
-        MaterialDensity = p.MaterialDensity;
-        CostPerLb       = p.CostPerLb;
-        CalibratedOn    = p.CalibratedOn;
-        CalibrationNote = p.CalibrationNote;
+        Name               = p.Name;
+        MaterialType       = p.MaterialType;
+        Color              = p.Color;
+        Temperature1       = p.Temperature1;
+        Temperature2       = p.Temperature2;
+        Temperature3       = p.Temperature3;
+        FlowRate           = p.FlowRate;
+        FlowRateHf         = p.FlowRateHf;
+        MaterialDensity    = p.MaterialDensity;
+        CostPerLb          = p.CostPerLb;
+        GlassTransitionC   = p.GlassTransitionC;
+        ThermalBondMarginC = p.ThermalBondMarginC > 0 ? p.ThermalBondMarginC : 10;
+        ThermalSagMarginC  = p.ThermalSagMarginC > 0 ? p.ThermalSagMarginC : 45;
+        // Model default is 30; ambient can be 0 °C if the user set it.
+        ThermalAmbientC    = p.ThermalAmbientC;
+        CalibratedOn       = p.CalibratedOn;
+        CalibrationNote    = p.CalibrationNote;
+        OnPropertyChanged(nameof(GlassTransitionHint));
+        OnPropertyChanged(nameof(ThermalThresholdsHint));
     }
 }

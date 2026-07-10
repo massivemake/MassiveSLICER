@@ -7,7 +7,7 @@ public static class ToolpathClone
 {
     public static Toolpath Copy(Toolpath source)
     {
-        var copy = new Toolpath();
+        var copy = new Toolpath { FormboundStats = source.FormboundStats };
         foreach (var layer in source.Layers)
         {
             var layerCopy = new ToolpathLayer(layer.Index, layer.Z)

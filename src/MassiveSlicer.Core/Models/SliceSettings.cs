@@ -325,6 +325,12 @@ public sealed class SliceSettings
     /// <summary>Material density (g/cm³) for the thermal mass.</summary>
     public float ThermalDensityGmCc { get; init; } = 1.05f;
 
+    /// <summary>Bonding limit = Tg + this margin (°C). Default 10.</summary>
+    public float ThermalBondMarginC { get; init; } = 10f;
+
+    /// <summary>Sag limit = Tg + this margin (°C). Default 45.</summary>
+    public float ThermalSagMarginC { get; init; } = 45f;
+
     // -- Overhang orientation -----------------------------------------------------
 
     /// <summary>

@@ -728,7 +728,13 @@ public sealed class SceneRenderer : IDisposable
     public void SetPaintOverlay(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
     {
         _paintOverlayCount = points.Count;
-        if (points.Count < 2) return;
+        // Always update (or clear) so a previous sticky selection does not linger
+        // with a stale count/buffer after the edit menu is closed.
+        if (points.Count < 2)
+        {
+            _paintOverlayCount = 0;
+            return;
+        }
         _paintOverlay ??= new PaintOverlayRenderer();
         _paintOverlay.Update(points);
     }
@@ -1098,12 +1104,8 @@ public sealed class SceneRenderer : IDisposable
             GL.Enable(EnableCap.DepthTest);
         }
 
-        if (_paintOverlayCount >= 2 && _paintOverlay is not null)
-        {
-            GL.Disable(EnableCap.DepthTest);
-            _paintOverlay.Draw(mvp);
-            GL.Enable(EnableCap.DepthTest);
-        }
+        // Paint overlay is drawn AFTER the composite pass (see below) so selection
+        // highlights are never flattened into the cavity/composite shader.
 
         // -- Cavity normal prepass (world normals for screen/world cavity) -----
         if (_cavity is not null && CavityEnabled)
@@ -1258,6 +1260,21 @@ public sealed class SceneRenderer : IDisposable
                     _sensorAxes.Draw(sensorModel * mvp);
             }
             GL.Enable(EnableCap.CullFace);
+        }
+
+        // -- Paint overlay (always on top of composite / cavity) --------------
+        // Sticky line selection, hover highlight, brush cursor, mark spheres.
+        // Must live here (output FBO) — drawing into the scene FBO made highlights
+        // vanish under cavity composite on some paths.
+        if (_paintOverlayCount >= 2 && _paintOverlay is not null)
+        {
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _paintOverlay.Draw(mvp);
+            GL.Disable(EnableCap.Blend);
+            GL.Enable(EnableCap.DepthTest);
         }
 
         // -- Seam guide pass (always on top) -----------------------------------
