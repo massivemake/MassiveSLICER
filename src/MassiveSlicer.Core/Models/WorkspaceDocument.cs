@@ -82,6 +82,12 @@ public sealed class WorkspaceUiSession
     /// </summary>
     public List<WorkspacePaintModification> PaintModifications { get; set; } = [];
 
+    /// <summary>Robot joint pose [A1..A6, E1] (KRL degrees) at save time.</summary>
+    public double[]? RobotJoints { get; set; }
+
+    /// <summary>Sim-timeline camera keyframes: [percent, azimuth, elevation, radius, targetX, targetY, targetZ].</summary>
+    public List<double[]>? SimCameraKeyframes { get; set; }
+
     /// <summary>Exclusive upper scrub move index (high handle / top of layer window).</summary>
     public int ToolpathScrubIndex { get; set; }
 

@@ -108,4 +108,10 @@ public partial class ViewportOverlayView : UserControl
         if (DataContext is ViewportViewModel vm)
             vm.JumpToValidationIssue();
     }
+
+    private void OnSimTimelineSliderDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e)
+    {
+        if (DataContext is ViewportViewModel vm)
+            vm.AddSimCameraKeyframeCommand.Execute(null);
+    }
 }

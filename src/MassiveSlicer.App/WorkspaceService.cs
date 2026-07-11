@@ -163,6 +163,10 @@ internal static class WorkspaceService
             ToolpathScrubLayerLow    = viewport.ToolpathScrubLayerLow,
             IsScrubSessionActive     = viewport.IsScrubSessionActive,
             SelectToolpath           = viewport.IsToolpathSelected,
+            RobotJoints              = viewport.Robot is { } robot
+                ? [robot.A1, robot.A2, robot.A3, robot.A4, robot.A5, robot.A6, robot.E1]
+                : null,
+            SimCameraKeyframes       = viewport.CaptureSimCameraKeyframes(),
         };
     }
 
