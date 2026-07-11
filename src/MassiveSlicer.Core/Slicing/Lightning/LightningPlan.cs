@@ -74,6 +74,14 @@ public sealed class LightningLayerPlan
     /// <summary>Tree ids removed mid-emission — shared across ALL layers of the plan.</summary>
     public HashSet<int> DroppedTrees { get; init; } = [];
 
+    /// <summary>
+    /// Preferred perimeter loop-start (seam) in plane-local XY. Set from the paint
+    /// bridge ColumnFoot (target mid) so every layer opens the contour at the same
+    /// place as the buttress mouth — a wandering seam that lands on the notch can
+    /// look like a broken / reset column.
+    /// </summary>
+    public Vector2? SeamPinXY { get; set; }
+
     /// <summary>Mesh-truth oracle in THIS layer's plane-local frame (the same lift
     /// the planner used), probing just below OR above the plane — set by the slicer
     /// after planning. Used to verify recovered single-bead walls (a real wall has
@@ -115,6 +123,13 @@ public sealed class LightningTree
     /// disconnected; below the island it retracts like a normal column.</summary>
     public bool Connector;
 
+    /// <summary>
+    /// Paint-driven column: single perimeter mouth under a bridge target / support
+    /// paint job. May branch off itself, but the planner must never birth a second
+    /// perimeter mouth for this lineage.
+    /// </summary>
+    public bool PaintColumn;
+
     /// <summary>Branch 0 is the trunk (starts at <see cref="Anchor"/>); later branches
     /// attach to an earlier branch's node. Formbound Buttress uses trunk = wall approach
     /// and two leaf branches = the horizontal support bar (T morph).</summary>
@@ -125,7 +140,7 @@ public sealed class LightningTree
         var t = new LightningTree
         {
             Id = Id, Anchor = Anchor, External = External,
-            Cavity = Cavity, Connector = Connector,
+            Cavity = Cavity, Connector = Connector, PaintColumn = PaintColumn,
         };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))

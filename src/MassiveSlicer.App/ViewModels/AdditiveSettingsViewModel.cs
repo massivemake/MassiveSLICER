@@ -289,6 +289,12 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     private string _seamMode = "Normal";
 
+    /// <summary>
+    /// Normal = closed loops / standard seams.
+    /// Zig-zag = single-skin open wall: longest face only (no back panel), reverse
+    /// direction every layer (end of line → Z up → reverse).
+    /// Spiral = vase mode continuous Z.
+    /// </summary>
     public string SeamMode
     {
         get => _seamMode;
@@ -688,6 +694,179 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         get => _baseDataIndex;
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
+
+    // -- X-Bracing Wall ----------------------------------------------------------
+
+    private bool _xBracingEnabled;
+    /// <summary>Cut dual-wall X braces into the perimeter for structural back-support.</summary>
+    public bool XBracingEnabled
+    {
+        get => _xBracingEnabled;
+        set
+        {
+            if (SetField(ref _xBracingEnabled, value))
+            {
+                OnPropertyChanged(nameof(ShowXBracingControls));
+                OnPropertyChanged(nameof(ShowXBracingPlanarControls));
+                OnPropertyChanged(nameof(ShowXBracingCylinderControls));
+            }
+        }
+    }
+
+    public bool ShowXBracingControls => XBracingEnabled;
+
+    public string[] XBracingProjectionTypeOptions { get; } = ["Planar", "Cylinder"];
+
+    private string _xBracingProjectionType = "Planar";
+    /// <summary>Planar = oriented plane; Cylinder = radial from a vertical cylinder on the bed.</summary>
+    public string XBracingProjectionType
+    {
+        get => _xBracingProjectionType;
+        set
+        {
+            if (SetField(ref _xBracingProjectionType, value is "Cylinder" ? "Cylinder" : "Planar"))
+            {
+                OnPropertyChanged(nameof(ShowXBracingPlanarControls));
+                OnPropertyChanged(nameof(ShowXBracingCylinderControls));
+                // When the cylinder is put into the scene, centre it on the print bed
+                // (not the robot / world origin).
+                if (XBracingProjectionType == "Cylinder")
+                    PlaceCylinderAtPrintBedCenter(keepDiameter: true);
+            }
+        }
+    }
+
+    public bool ShowXBracingPlanarControls => XBracingEnabled && XBracingProjectionType != "Cylinder";
+    public bool ShowXBracingCylinderControls => XBracingEnabled && XBracingProjectionType == "Cylinder";
+
+    private double _xBracingDepthMm = 50.0;
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    public double XBracingDepthMm
+    {
+        get => _xBracingDepthMm;
+        set => SetField(ref _xBracingDepthMm, Math.Clamp(value, 5.0, 500.0));
+    }
+
+    private double _xBracingSpanMm = 120.0;
+    /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
+    public double XBracingSpanMm
+    {
+        get => _xBracingSpanMm;
+        set => SetField(ref _xBracingSpanMm, Math.Clamp(value, 20.0, 2000.0));
+    }
+
+    private double _xBracingAngleDeg = 30.0;
+    /// <summary>Brace angle from vertical (deg). Lower = more printable.</summary>
+    public double XBracingAngleDeg
+    {
+        get => _xBracingAngleDeg;
+        set => SetField(ref _xBracingAngleDeg, Math.Clamp(value, 10.0, 60.0));
+    }
+
+    private bool _xBracingExtendEdges = true;
+    /// <summary>Partial X cells on left/right ends (never top/bottom of the part).</summary>
+    public bool XBracingExtendEdges
+    {
+        get => _xBracingExtendEdges;
+        set => SetField(ref _xBracingExtendEdges, value);
+    }
+
+    private double _xBracingPlaneTiltY;
+    /// <summary>
+    /// Orientable brace plane: tilt about Y (°). Hairpins grow perpendicular to this
+    /// plane (along its normal projected into the layer). 0/0 = horizontal — falls
+    /// back to path left-normal.
+    /// </summary>
+    public double XBracingPlaneTiltY
+    {
+        get => _xBracingPlaneTiltY;
+        set => SetField(ref _xBracingPlaneTiltY, Math.Clamp(value, -90.0, 90.0));
+    }
+
+    private double _xBracingPlaneTiltX;
+    /// <summary>Brace plane tilt about X (°). See <see cref="XBracingPlaneTiltY"/>.</summary>
+    public double XBracingPlaneTiltX
+    {
+        get => _xBracingPlaneTiltX;
+        set => SetField(ref _xBracingPlaneTiltX, Math.Clamp(value, -90.0, 90.0));
+    }
+
+    public RelayCommand FlipXBracingPlaneCommand => _flipXBracingPlane ??= new RelayCommand(() =>
+    {
+        // Negating both tilts flips the plane normal (brace direction).
+        XBracingPlaneTiltY = -XBracingPlaneTiltY;
+        XBracingPlaneTiltX = -XBracingPlaneTiltX;
+    });
+    private RelayCommand? _flipXBracingPlane;
+
+    public RelayCommand ResetXBracingPlaneCommand => _resetXBracingPlane ??= new RelayCommand(() =>
+    {
+        XBracingPlaneTiltY = 0;
+        XBracingPlaneTiltX = 0;
+    });
+    private RelayCommand? _resetXBracingPlane;
+
+    private double _xBracingCylinderDiameterMm = 200.0;
+    /// <summary>Cylinder projection diameter (mm). Height follows the model AABB.</summary>
+    public double XBracingCylinderDiameterMm
+    {
+        get => _xBracingCylinderDiameterMm;
+        set => SetField(ref _xBracingCylinderDiameterMm, Math.Clamp(value, 10.0, 20000.0));
+    }
+
+    private double _xBracingCylinderX;
+    /// <summary>Cylinder axis X on the bed (mm, world).</summary>
+    public double XBracingCylinderX
+    {
+        get => _xBracingCylinderX;
+        set => SetField(ref _xBracingCylinderX, value);
+    }
+
+    private double _xBracingCylinderY;
+    /// <summary>Cylinder axis Y on the bed (mm, world).</summary>
+    public double XBracingCylinderY
+    {
+        get => _xBracingCylinderY;
+        set => SetField(ref _xBracingCylinderY, value);
+    }
+
+    private bool _xBracingCylinderFlipDirection;
+    /// <summary>
+    /// Default off: braces pull toward the cylinder axis.
+    /// On: braces radiate outward from the axis.
+    /// </summary>
+    public bool XBracingCylinderFlipDirection
+    {
+        get => _xBracingCylinderFlipDirection;
+        set => SetField(ref _xBracingCylinderFlipDirection, value);
+    }
+
+    /// <summary>
+    /// Resolves print-bed surface centre XY in world mm (from the active cell).
+    /// Wired by MainWindowViewModel; null when no cell is loaded.
+    /// </summary>
+    public Func<(double X, double Y)?>? ResolvePrintBedCenterXY { get; set; }
+
+    /// <summary>Places the brace cylinder on the print-bed centre (not robot origin).</summary>
+    public void PlaceCylinderAtPrintBedCenter(bool keepDiameter = false)
+    {
+        if (ResolvePrintBedCenterXY?.Invoke() is { } c)
+        {
+            XBracingCylinderX = c.X;
+            XBracingCylinderY = c.Y;
+        }
+        else
+        {
+            // No cell yet — leave XY as-is rather than forcing robot origin.
+        }
+        if (!keepDiameter)
+            XBracingCylinderDiameterMm = 200;
+        XBracingCylinderFlipDirection = false;
+    }
+
+    public RelayCommand ResetXBracingCylinderCommand => _resetXBracingCylinder ??= new RelayCommand(() =>
+        PlaceCylinderAtPrintBedCenter(keepDiameter: false));
+    private RelayCommand? _resetXBracingCylinder;
 
     // -- Wave effect -------------------------------------------------------------
 

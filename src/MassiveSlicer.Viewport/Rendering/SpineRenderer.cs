@@ -12,6 +12,7 @@ public sealed class SpineRenderer : IDisposable
 {
     private int _vao, _vbo, _count;
     private bool _disposed;
+    private PrimitiveType _primitive = PrimitiveType.LineStrip;
 
     private readonly Shader _shader;
 
@@ -35,6 +36,22 @@ public sealed class SpineRenderer : IDisposable
 
     /// <summary>Uploads the polyline. Must be called on the GL thread.</summary>
     public void Update(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _primitive = PrimitiveType.LineStrip;
+        Upload(points);
+    }
+
+    /// <summary>
+    /// Uploads independent line segments as interleaved A,B pairs (count must be even).
+    /// Used for wireframe cages (e.g. X-bracing cylinder).
+    /// </summary>
+    public void UpdateSegments(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _primitive = PrimitiveType.Lines;
+        Upload(points);
+    }
+
+    private void Upload(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
     {
         _count = points.Count;
         if (_count < 2) return;
@@ -65,7 +82,7 @@ public sealed class SpineRenderer : IDisposable
         _shader.SetMatrix4("uMVP", ref mvp);
         GL.LineWidth(4f);
         GL.BindVertexArray(_vao);
-        GL.DrawArrays(PrimitiveType.LineStrip, 0, _count);
+        GL.DrawArrays(_primitive, 0, _count);
         GL.BindVertexArray(0);
         GL.LineWidth(1f);
     }

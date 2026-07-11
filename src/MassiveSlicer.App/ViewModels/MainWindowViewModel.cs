@@ -147,6 +147,16 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.AdditiveSettings = RightPanel.Additive;
         Viewport.SubtractiveSettings = RightPanel.Subtractive;
 
+        // X-bracing cylinder is placed on the print-bed centre (ImportSurfaceCenter),
+        // not the robot / world origin.
+        RightPanel.Additive.ResolvePrintBedCenterXY = () =>
+        {
+            var cell = Viewport.ActiveCell;
+            if (cell?.Bed is null) return null;
+            var c = cell.Bed.ImportSurfaceCenter(cell.Robot.WorldPosition);
+            return (c.X, c.Y);
+        };
+
         // Load persisted material presets and restore the last selection.
         foreach (var preset in MaterialPresetsLoader.Load())
             RightPanel.Additive.MaterialPresets.Add(preset);
@@ -2908,6 +2918,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningPreferInteriorMouths  = copy.LightningPreferInteriorMouths;
         live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
+        live.XBracingEnabled        = copy.XBracingEnabled;
+        live.XBracingDepthMm        = copy.XBracingDepthMm;
+        live.XBracingSpanMm         = copy.XBracingSpanMm;
+        live.XBracingAngleDeg       = copy.XBracingAngleDeg;
+        live.XBracingExtendEdges    = copy.XBracingExtendEdges;
+        live.XBracingPlaneTiltY     = copy.XBracingPlaneTiltY;
+        live.XBracingPlaneTiltX     = copy.XBracingPlaneTiltX;
+        live.XBracingProjectionType = copy.XBracingProjectionType;
+        live.XBracingCylinderDiameterMm = copy.XBracingCylinderDiameterMm;
+        live.XBracingCylinderX      = copy.XBracingCylinderX;
+        live.XBracingCylinderY      = copy.XBracingCylinderY;
+        live.XBracingCylinderFlipDirection = copy.XBracingCylinderFlipDirection;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -3094,6 +3116,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         add.MultiPlanarAxisX = p.MultiPlanarAxisX;
         add.BumpMultiPlanarStamp();
+        add.XBracingEnabled     = p.XBracingEnabled;
+        add.XBracingDepthMm     = p.XBracingDepthMm;
+        add.XBracingSpanMm      = p.XBracingSpanMm;
+        add.XBracingAngleDeg    = p.XBracingAngleDeg;
+        add.XBracingExtendEdges = p.XBracingExtendEdges;
+        add.XBracingPlaneTiltY  = p.XBracingPlaneTiltY;
+        add.XBracingPlaneTiltX  = p.XBracingPlaneTiltX;
+        add.XBracingProjectionType = p.XBracingProjectionType is "Cylinder" ? "Cylinder" : "Planar";
+        add.XBracingCylinderDiameterMm = p.XBracingCylinderDiameterMm;
+        add.XBracingCylinderX   = p.XBracingCylinderX;
+        add.XBracingCylinderY   = p.XBracingCylinderY;
+        add.XBracingCylinderFlipDirection = p.XBracingCylinderFlipDirection;
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -3167,7 +3201,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             .Where(a => a is { Length: >= 5 })
             .Select(a => new PaintMark(
                 new System.Numerics.Vector3(a[0], a[1], a[2]), a[3],
-                a[4] >= 1f ? PaintMarkKind.Remove : PaintMarkKind.Bridge)));
+                a[4] >= 1f ? PaintMarkKind.Remove : PaintMarkKind.Bridge,
+                a.Length >= 6 ? (PaintBridgeRole)(int)a[5] : PaintBridgeRole.None)));
         add.CurvedBoundarySourceDisplay = p.CurvedBoundarySource switch
         {
             "Viewport Pick" => "Viewport Pick",
@@ -3364,6 +3399,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
             .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
+        p.XBracingEnabled      = add.XBracingEnabled;
+        p.XBracingDepthMm      = add.XBracingDepthMm;
+        p.XBracingSpanMm       = add.XBracingSpanMm;
+        p.XBracingAngleDeg     = add.XBracingAngleDeg;
+        p.XBracingExtendEdges  = add.XBracingExtendEdges;
+        p.XBracingPlaneTiltY   = add.XBracingPlaneTiltY;
+        p.XBracingPlaneTiltX   = add.XBracingPlaneTiltX;
+        p.XBracingProjectionType = add.XBracingProjectionType;
+        p.XBracingCylinderDiameterMm = add.XBracingCylinderDiameterMm;
+        p.XBracingCylinderX    = add.XBracingCylinderX;
+        p.XBracingCylinderY    = add.XBracingCylinderY;
+        p.XBracingCylinderFlipDirection = add.XBracingCylinderFlipDirection;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;
@@ -3420,7 +3467,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
             .ToList();
         p.PaintMarks = add.PaintMarks
-            .Select(m => new[] { m.Center.X, m.Center.Y, m.Center.Z, m.Radius, (float)m.Kind })
+            .Select(m => new[] {
+                m.Center.X, m.Center.Y, m.Center.Z, m.Radius,
+                (float)m.Kind, (float)m.BridgeRole })
             .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;

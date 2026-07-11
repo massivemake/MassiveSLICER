@@ -564,13 +564,43 @@ public static class LightningGenerator
             .ToList();
         if (ordered.Count == 0) return;
 
+        // Preferred perimeter start: paint bridge target (ColumnFoot) locked for the
+        // whole stack, else live PaintColumn mouth. Keeps the seam on the buttress
+        // instead of drifting into the notch and looking like a broken column.
+        Vector2? seamPin = plan?.SeamPinXY;
+        if (seamPin is null && plan is not null)
+        {
+            foreach (var t in plan.Trees)
+            {
+                if (plan.DroppedTrees.Contains(t.Id)) continue;
+                if (!t.PaintColumn) continue;
+                seamPin = t.Anchor;
+                break;
+            }
+        }
+
         Vector3? runningEnd = layer.Moves.Count > 0 ? layer.Moves[^1].To : null;
+        bool outerSeamPinned = false;
 
         foreach (var path in ordered)
         {
-            // Start each loop at the vertex nearest the running end position.
+            // Outer loops: pin start to the bridge seam. Holes / secondary islands
+            // still chain from the running end so travel stays short.
+            bool isOuter = Clipper.Area(path) > 0;
             int start = 0;
-            if (runningEnd is { } re)
+            if (isOuter && !outerSeamPinned && seamPin is { } pin)
+            {
+                float bd2 = float.MaxValue;
+                for (int i = 0; i < path.Count; i++)
+                {
+                    float dx = (float)path[i].x - pin.X;
+                    float dy = (float)path[i].y - pin.Y;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < bd2) { bd2 = d2; start = i; }
+                }
+                outerSeamPinned = true;
+            }
+            else if (runningEnd is { } re)
             {
                 float bd2 = float.MaxValue;
                 for (int i = 0; i < path.Count; i++)

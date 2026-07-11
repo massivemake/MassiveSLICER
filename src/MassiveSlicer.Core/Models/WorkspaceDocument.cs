@@ -61,6 +61,27 @@ public sealed class WorkspaceUiSession
 
     public double PaintBrushRadiusMm { get; set; } = 15.0;
 
+    /// <summary>"Square" or "Lasso" region-select mode.</summary>
+    public string PaintRegionSelectMode { get; set; } = "Square";
+
+    /// <summary>"Support" or "Remove".</summary>
+    public string PaintModificationMode { get; set; } = "Support";
+
+    /// <summary>"Formbound Buttress" or "Formbound Bridge".</summary>
+    public string PaintSupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>Show Support/Remove paint marker spheres in the viewport.</summary>
+    public bool ShowPaintMarkers { get; set; } = true;
+
+    /// <summary>Show bead mesh while edit mode is open.</summary>
+    public bool PaintShowBeads { get; set; }
+
+    /// <summary>
+    /// Applied MODIFICATIONS list (reselectable Support/Remove entries with optional
+    /// bridge targets). Null/empty when none or workspaces saved before this field.
+    /// </summary>
+    public List<WorkspacePaintModification> PaintModifications { get; set; } = [];
+
     /// <summary>Exclusive upper scrub move index (high handle / top of layer window).</summary>
     public int ToolpathScrubIndex { get; set; }
 
@@ -84,6 +105,49 @@ public sealed class WorkspaceUiSession
 
     /// <summary>Outliner / node name of the scrubbed toolpath.</summary>
     public string? ScrubToolpathName { get; set; }
+}
+
+/// <summary>
+/// One applied paint modification for workspace save/restore.
+/// Layer spans are re-bound by index/Z after the toolpath reloads.
+/// </summary>
+public sealed class WorkspacePaintModification
+{
+    public Guid Id { get; set; }
+    /// <summary>"Bridge" or "Remove" (<see cref="PaintMarkKind"/> name).</summary>
+    public string Kind { get; set; } = "Bridge";
+
+    public int LayerIndex { get; set; }
+    public float LayerZ { get; set; }
+    public int SpanStart { get; set; }
+    public int SpanCount { get; set; }
+    public bool SpanClosed { get; set; }
+    public int SpanEntryTravelIndex { get; set; } = -1;
+
+    /// <summary>Mark centres as [x,y,z].</summary>
+    public List<float[]> MarkCenters { get; set; } = [];
+
+    public string Title { get; set; } = "";
+    public string Detail { get; set; } = "";
+    public bool IsExpanded { get; set; }
+
+    /// <summary>"Formbound Buttress" or "Formbound Bridge".</summary>
+    public string SupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>World highlight polyline [x,y,z] points.</summary>
+    public List<float[]> WorldPoints { get; set; } = [];
+
+    // ── Optional bridge target ───────────────────────────────────────────────
+    public int? TargetLayerIndex { get; set; }
+    public float? TargetLayerZ { get; set; }
+    public int? TargetSpanStart { get; set; }
+    public int? TargetSpanCount { get; set; }
+    public bool TargetSpanClosed { get; set; }
+    public int TargetSpanEntryTravelIndex { get; set; } = -1;
+    public List<float[]> TargetMarkCenters { get; set; } = [];
+    public List<float[]> TargetWorldPoints { get; set; } = [];
+    public List<float[]> ScaffoldMarkCenters { get; set; } = [];
+    public int ScaffoldLayerCount { get; set; }
 }
 
 /// <summary>Reference to the ERP Project/Lead (and optional element) a workspace belongs to.</summary>

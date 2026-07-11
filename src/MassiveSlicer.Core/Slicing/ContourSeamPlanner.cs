@@ -146,12 +146,16 @@ public static class ContourSeamPlanner
 
             var contour = new List<Vector2>(chosen.Contour);
             List<Vector3>? normals = chosen.Normals?.ToList();
-            PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            bool reversed = zigZag && !chosen.IsClosed && (layerIndex % 2 == 1);
-            if (reversed) ReverseContour(contour, normals);
+            // Zig-zag open walls: force direction by layer parity only.
+            // Even → A→B, odd → B→A. EmitSingleContour iterates reversed when true —
+            // do NOT also ReverseContour() the list (that double-reverses to A→B).
+            // Skip travel-optimized reverse on open zig-zag paths for the same reason.
+            bool zigZagReverse = zigZag && !chosen.IsClosed && (layerIndex % 2 == 1);
+            if (chosen.IsClosed || !zigZag)
+                PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, reversed);
+            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, zigZagReverse);
         }
     }
 

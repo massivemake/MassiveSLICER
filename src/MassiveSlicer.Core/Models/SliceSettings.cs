@@ -156,6 +156,63 @@ public sealed class SliceSettings
     /// <summary>Minimum layer height used by adaptive slicing (mm). Must be ≤ LayerHeight.</summary>
     public float MinLayerHeight      { get; init; } = 1.0f;
 
+    // -- X-Bracing wall (structural notches) ------------------------------------
+
+    /// <summary>
+    /// When true, cut dual-wall X-bracing notches into the perimeter (Formbound-style
+    /// slits) for back-support on thin walls. Independent of infill pattern.
+    /// </summary>
+    public bool XBracingEnabled { get; init; }
+
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    public float XBracingDepthMm { get; init; } = 50f;
+
+    /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
+    public float XBracingSpanMm { get; init; } = 120f;
+
+    /// <summary>
+    /// Brace angle from vertical (deg). Smaller = more printable (shallower overhang
+    /// when built bottom-up). Typical 25–40°.
+    /// </summary>
+    public float XBracingAngleDeg { get; init; } = 30f;
+
+    /// <summary>
+    /// When true, place partial X cells at the left/right ends of the wall so braces
+    /// reach the vertical edges. Top and bottom of the part are never extended.
+    /// </summary>
+    public bool XBracingExtendEdges { get; init; } = true;
+
+    /// <summary>
+    /// Brace-direction plane tilt about Y (deg). Same convention as angled slice:
+    /// normal = (sin Y, −sin X · cos Y, cos X · cos Y). Hairpins grow along the
+    /// XY projection of this normal (perpendicular to the plane).
+    /// </summary>
+    public float XBracingPlaneTiltY { get; init; }
+
+    /// <summary>Brace-direction plane tilt about X (deg). See <see cref="XBracingPlaneTiltY"/>.</summary>
+    public float XBracingPlaneTiltX { get; init; }
+
+    /// <summary>
+    /// How brace direction is projected onto the surface:
+    /// <c>Planar</c> (default) or <c>Cylinder</c> (radial from a vertical cylinder).
+    /// </summary>
+    public string XBracingProjectionType { get; init; } = "Planar";
+
+    /// <summary>Cylinder projection diameter (mm). Height is taken from the part AABB.</summary>
+    public float XBracingCylinderDiameterMm { get; init; } = 200f;
+
+    /// <summary>Cylinder axis X on the bed (mm, world).</summary>
+    public float XBracingCylinderX { get; init; }
+
+    /// <summary>Cylinder axis Y on the bed (mm, world).</summary>
+    public float XBracingCylinderY { get; init; }
+
+    /// <summary>
+    /// When false (default), cylinder braces pull toward the axis.
+    /// When true, braces radiate outward from the axis.
+    /// </summary>
+    public bool XBracingCylinderFlipDirection { get; init; }
+
     // -- Wave effect --------------------------------------------------------------
 
     /// <summary>Which wave post-processing effect to apply after slicing. None = disabled.</summary>

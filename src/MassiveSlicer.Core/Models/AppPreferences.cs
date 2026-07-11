@@ -191,6 +191,42 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
+    /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
+    public bool XBracingEnabled { get; set; }
+
+    /// <summary>Brace depth into the wall from the perimeter (mm).</summary>
+    public double XBracingDepthMm { get; set; } = 50.0;
+
+    /// <summary>Horizontal span of one X cell (mm).</summary>
+    public double XBracingSpanMm { get; set; } = 120.0;
+
+    /// <summary>Brace angle from vertical (deg) — lower is more printable.</summary>
+    public double XBracingAngleDeg { get; set; } = 30.0;
+
+    /// <summary>Partial X cells on left/right wall ends (not top/bottom).</summary>
+    public bool XBracingExtendEdges { get; set; } = true;
+
+    /// <summary>X-bracing direction plane tilt about Y (deg).</summary>
+    public double XBracingPlaneTiltY { get; set; }
+
+    /// <summary>X-bracing direction plane tilt about X (deg).</summary>
+    public double XBracingPlaneTiltX { get; set; }
+
+    /// <summary>X-bracing projection: Planar or Cylinder.</summary>
+    public string XBracingProjectionType { get; set; } = "Planar";
+
+    /// <summary>Cylinder projection diameter (mm).</summary>
+    public double XBracingCylinderDiameterMm { get; set; } = 200.0;
+
+    /// <summary>Cylinder axis X on the bed (mm).</summary>
+    public double XBracingCylinderX { get; set; }
+
+    /// <summary>Cylinder axis Y on the bed (mm).</summary>
+    public double XBracingCylinderY { get; set; }
+
+    /// <summary>When true, cylinder braces radiate outward; default is pull toward axis.</summary>
+    public bool XBracingCylinderFlipDirection { get; set; }
+
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
 
@@ -285,9 +321,10 @@ public sealed class AppPreferences
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
 
-    /// <summary>Toolpath paint marks as [x, y, z, radius, kind] where kind is
-    /// (float)PaintMarkKind — Bridge marks grow Formbound fingers under painted
-    /// beads, Remove marks delete them.</summary>
+    /// <summary>Toolpath paint marks as [x, y, z, radius, kind, bridgeRole?] where
+    /// kind is (float)PaintMarkKind and optional bridgeRole is (float)PaintBridgeRole
+    /// (SupportBar / ColumnFoot). Bridge marks grow Formbound under painted beads;
+    /// Remove marks delete them.</summary>
     public List<float[]> PaintMarks { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>

@@ -733,6 +733,57 @@ public sealed class SceneRenderer : IDisposable
         _planePreview.Update(center.Value, normal.Value, size);
     }
 
+    private SpineRenderer? _cylinderPreview;
+    private int _cylinderPreviewCount;
+    private bool _cylinderPreviewSelected;
+
+    /// <summary>
+    /// Wireframe vertical cylinder for X-bracing cylinder projection.
+    /// Pass radius ≤ 0 to hide. Height is Z from <paramref name="zMin"/> to <paramref name="zMax"/>.
+    /// </summary>
+    public void SetCylinderPreview(Vector3 centerXY, float radius, float zMin, float zMax, bool selected = false)
+    {
+        _cylinderPreviewSelected = selected;
+        if (radius <= 1e-3f || zMax <= zMin + 1e-3f)
+        {
+            _cylinderPreviewCount = 0;
+            return;
+        }
+
+        var col = selected
+            ? new Vector3(1.0f, 0.85f, 0.15f)
+            : new Vector3(0.2f, 0.85f, 0.95f);
+        var pts = new List<(Vector3, Vector3)>(200);
+        const int segs = 48;
+        // Bottom + top rings as line segments, plus verticals every few steps.
+        for (int i = 0; i < segs; i++)
+        {
+            float a0 = MathF.Tau * i / segs;
+            float a1 = MathF.Tau * (i + 1) / segs;
+            var b0 = new Vector3(centerXY.X + radius * MathF.Cos(a0), centerXY.Y + radius * MathF.Sin(a0), zMin);
+            var b1 = new Vector3(centerXY.X + radius * MathF.Cos(a1), centerXY.Y + radius * MathF.Sin(a1), zMin);
+            var t0 = new Vector3(b0.X, b0.Y, zMax);
+            var t1 = new Vector3(b1.X, b1.Y, zMax);
+            pts.Add((b0, col)); pts.Add((b1, col));
+            pts.Add((t0, col)); pts.Add((t1, col));
+            if (i % 6 == 0)
+            {
+                pts.Add((b0, col)); pts.Add((t0, col));
+            }
+        }
+        // Axis cross at mid-height for pick/center cue.
+        float zMid = 0.5f * (zMin + zMax);
+        float cross = MathF.Min(radius * 0.25f, 40f);
+        pts.Add((new Vector3(centerXY.X - cross, centerXY.Y, zMid), col));
+        pts.Add((new Vector3(centerXY.X + cross, centerXY.Y, zMid), col));
+        pts.Add((new Vector3(centerXY.X, centerXY.Y - cross, zMid), col));
+        pts.Add((new Vector3(centerXY.X, centerXY.Y + cross, zMid), col));
+
+        _cylinderPreviewCount = pts.Count;
+        _cylinderPreview ??= new SpineRenderer();
+        _cylinderPreview.UpdateSegments(pts);
+    }
+
     // ── Multi-Planar guide planes + distortion spine ─────────────────────────
 
     private readonly List<PlanePreviewRenderer> _guidePlanes = [];
@@ -1121,6 +1172,13 @@ public sealed class SceneRenderer : IDisposable
 
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
+
+        if (_cylinderPreviewCount >= 2 && _cylinderPreview is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _cylinderPreview.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
 
         for (int gi = 0; gi < _guidePlaneData.Count && gi < _guidePlanes.Count; gi++)
         {
@@ -1852,9 +1910,10 @@ public sealed class SceneRenderer : IDisposable
         _bedBoundary?.Dispose();
         _gizmo?.Dispose();
         _backdrop?.Dispose();
-_planePreview?.Dispose();
+        _planePreview?.Dispose();
+        _cylinderPreview?.Dispose();
         foreach (var gp in _guidePlanes) gp.Dispose();
-_spine?.Dispose();
+        _spine?.Dispose();
         _guideGizmo?.Dispose();
         _paintOverlay?.Dispose();
         _seamGuides?.Dispose();

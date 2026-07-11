@@ -61,10 +61,20 @@ public partial class ViewportOverlayView : UserControl
     {
         _regionSelectLongPress?.Stop();
         _regionSelectLongPress = null;
-        // Long-press already toggled mode — keep the tool armed (toggle button may have
-        // flipped off then on; force active so a long-press never leaves the tool off).
-        if (_regionSelectLongPressFired && DataContext is ViewportViewModel vm)
-            vm.PaintBoxSelectActive = true;
+        // Long-press already toggled mode. ToggleButton still raises Click on release and
+        // would flip IsChecked off — suppress that and re-arm after input processing.
+        if (_regionSelectLongPressFired)
+        {
+            e.Handled = true;
+            _regionSelectLongPressFired = false;
+            // After ToggleButton Click (which may flip IsChecked) — re-arm tool.
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is ViewportViewModel vm)
+                    vm.PaintBoxSelectActive = true;
+            }, DispatcherPriority.Loaded);
+            return;
+        }
         _regionSelectLongPressFired = false;
     }
 

@@ -63,7 +63,7 @@
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,8" Spacing="6">
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Applied Support / Remove markers. Click a row to reselect it in the viewport; trash removes its marks. Reslice to bake into the toolpath."/>
+                                       Text="Click a modification to expand options. For Support, pick a second path/point on another layer to bridge Formbound scaffolding through the layers in between. Reslice to bake."/>
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" FontSize="11" Opacity="0.85" VerticalAlignment="Center"
                                            Text="{Binding $parent[Window].DataContext.Viewport.PaintModificationsSummary}"/>
@@ -73,11 +73,19 @@
                                         ToolTip.Tip="Remove every modification and paint mark"/>
                             </Grid>
 
+                            <!-- Active bridge-target pick banner -->
+                            <Border IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintBridgePicking}"
+                                    Background="#3322AABB" CornerRadius="5" Padding="8,6"
+                                    BorderBrush="#5533D6FF" BorderThickness="1">
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#99E8FF"
+                                           Text="{Binding $parent[Window].DataContext.Viewport.PaintBridgePickHint}"/>
+                            </Border>
+
                             <TextBlock FontSize="10" Opacity="0.55"
                                        IsVisible="{Binding !$parent[Window].DataContext.Viewport.HasPaintModifications}"
                                        Text="No modifications yet — select paths and Apply from the SELECTION panel."/>
 
-                            <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto"
+                            <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto"
                                           IsVisible="{Binding $parent[Window].DataContext.Viewport.HasPaintModifications}">
                                 <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.PaintModifications}">
                                     <ItemsControl.ItemTemplate>
@@ -85,44 +93,142 @@
                                             <Border Background="{DynamicResource Bg3}"
                                                     CornerRadius="6" Padding="8,6" Margin="0,0,0,4"
                                                     BorderBrush="{DynamicResource Border1}" BorderThickness="1">
-                                                <Grid ColumnDefinitions="*,Auto,Auto">
-                                                    <Button Grid.Column="0"
-                                                            Background="Transparent" BorderThickness="0"
-                                                            Padding="0" HorizontalContentAlignment="Left"
-                                                            Command="{Binding SelectCommand}"
-                                                            ToolTip.Tip="Reselect this modification in the viewport">
-                                                        <StackPanel Spacing="2">
-                                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                                <Border CornerRadius="3" Padding="5,1"
-                                                                        Background="#3322AABB">
-                                                                    <TextBlock Text="{Binding KindLabel}"
-                                                                               FontSize="9" FontWeight="Bold"
-                                                                               Foreground="{Binding KindColor}"/>
-                                                                </Border>
-                                                                <TextBlock Text="{Binding Title}" FontSize="11"
+                                                <StackPanel Spacing="6">
+                                                    <!-- Header row: expand / title / reselect / delete -->
+                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                                        <Button Grid.Column="0"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                Padding="0" HorizontalContentAlignment="Left"
+                                                                Command="{Binding ToggleExpandCommand}"
+                                                                ToolTip.Tip="Expand options and reselect in the viewport">
+                                                            <StackPanel Spacing="2">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <ia:Icon Value="{Binding ExpandChevron}" FontSize="12"
+                                                                             Opacity="0.7" VerticalAlignment="Center"/>
+                                                                    <Border CornerRadius="3" Padding="5,1"
+                                                                            Background="#3322AABB">
+                                                                        <TextBlock Text="{Binding KindLabel}"
+                                                                                   FontSize="9" FontWeight="Bold"
+                                                                                   Foreground="{Binding KindColor}"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource TextPrimary}"
+                                                                               VerticalAlignment="Center"
+                                                                               TextWrapping="NoWrap"/>
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding Detail}" FontSize="10"
+                                                                           Opacity="0.6"
+                                                                           FontFamily="Consolas,Courier New,monospace"/>
+                                                            </StackPanel>
+                                                        </Button>
+                                                        <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
+                                                                Margin="4,0,0,0" VerticalAlignment="Top"
+                                                                Command="{Binding SelectCommand}"
+                                                                ToolTip.Tip="Reselect anchors in viewport">
+                                                            <ia:Icon Value="mdi-cursor-default-click" FontSize="13"/>
+                                                        </Button>
+                                                        <Button Grid.Column="2" Classes="ToolbarButton" Padding="5"
+                                                                Margin="2,0,0,0" VerticalAlignment="Top"
+                                                                Command="{Binding DeleteCommand}"
+                                                                ToolTip.Tip="Delete this modification and its marks">
+                                                            <ia:Icon Value="mdi-delete-outline" FontSize="13"
+                                                                     Foreground="#ff8a8a"/>
+                                                        </Button>
+                                                    </Grid>
+
+                                                    <!-- Expanded options -->
+                                                    <StackPanel IsVisible="{Binding IsExpanded}" Spacing="6"
+                                                                Margin="4,0,0,2">
+                                                        <Border Height="1" Background="{DynamicResource Border1}"/>
+
+                                                        <!-- ANCHOR card -->
+                                                        <Border Background="#1A33D6FF" CornerRadius="6" Padding="8,7"
+                                                                BorderBrush="#5533D6FF" BorderThickness="1">
+                                                            <StackPanel Spacing="3">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <Border CornerRadius="3" Padding="5,1"
+                                                                            Background="#4433D6FF">
+                                                                        <TextBlock Text="ANCHOR" FontSize="9"
+                                                                                   FontWeight="Bold"
+                                                                                   Foreground="#99E8FF"
+                                                                                   LetterSpacing="0.8"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="Support selection"
+                                                                               FontSize="10" Opacity="0.65"
+                                                                               VerticalAlignment="Center"/>
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding AnchorSummary}" FontSize="11"
                                                                            FontWeight="SemiBold"
                                                                            Foreground="{DynamicResource TextPrimary}"
-                                                                           VerticalAlignment="Center"/>
+                                                                           FontFamily="Consolas,Courier New,monospace"
+                                                                           TextWrapping="Wrap"/>
                                                             </StackPanel>
-                                                            <TextBlock Text="{Binding Detail}" FontSize="10"
-                                                                       Opacity="0.6"
-                                                                       FontFamily="Consolas,Courier New,monospace"/>
+                                                        </Border>
+
+                                                        <!-- Support style (between Anchor and Target) -->
+                                                        <StackPanel IsVisible="{Binding IsSupport}" Spacing="4"
+                                                                    Margin="0,2,0,2">
+                                                            <TextBlock Text="SUPPORT STYLE" FontSize="9" Opacity="0.55"
+                                                                       LetterSpacing="0.8" FontWeight="SemiBold"/>
+                                                            <ComboBox HorizontalAlignment="Stretch"
+                                                                      ItemsSource="{Binding SupportTypeOptions}"
+                                                                      SelectedItem="{Binding SupportType, Mode=TwoWay}"
+                                                                      ToolTip.Tip="Revise Formbound style for this modification. Reslice to bake."/>
+                                                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                                                       Text="Change anytime — Reslice applies the new style to the toolpath."/>
                                                         </StackPanel>
-                                                    </Button>
-                                                    <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
-                                                            Margin="4,0,0,0" VerticalAlignment="Center"
-                                                            Command="{Binding SelectCommand}"
-                                                            ToolTip.Tip="Reselect">
-                                                        <ia:Icon Value="mdi-cursor-default-click" FontSize="13"/>
-                                                    </Button>
-                                                    <Button Grid.Column="2" Classes="ToolbarButton" Padding="5"
-                                                            Margin="2,0,0,0" VerticalAlignment="Center"
-                                                            Command="{Binding DeleteCommand}"
-                                                            ToolTip.Tip="Delete this modification and its marks">
-                                                        <ia:Icon Value="mdi-delete-outline" FontSize="13"
-                                                                 Foreground="#ff8a8a"/>
-                                                    </Button>
-                                                </Grid>
+
+                                                        <!-- BRIDGE TARGET card (Support only) -->
+                                                        <StackPanel IsVisible="{Binding IsSupport}" Spacing="4">
+                                                            <Border Background="#1A80B7FF" CornerRadius="6" Padding="8,7"
+                                                                    BorderBrush="#5580B7FF" BorderThickness="1">
+                                                                <StackPanel Spacing="3">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                        <Border CornerRadius="3" Padding="5,1"
+                                                                                Background="#4480B7FF">
+                                                                            <TextBlock Text="TARGET" FontSize="9"
+                                                                                       FontWeight="Bold"
+                                                                                       Foreground="#B3D9FF"
+                                                                                       LetterSpacing="0.8"/>
+                                                                        </Border>
+                                                                        <TextBlock Text="Bridge foot / column start"
+                                                                                   FontSize="10" Opacity="0.65"
+                                                                                   VerticalAlignment="Center"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Text="{Binding BridgeTargetLabel}" FontSize="11"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource TextPrimary}"
+                                                                               FontFamily="Consolas,Courier New,monospace"
+                                                                               TextWrapping="Wrap"/>
+                                                                    <TextBlock Text="{Binding ScaffoldSummary}" FontSize="10"
+                                                                               Opacity="0.7" TextWrapping="Wrap"
+                                                                               Margin="0,2,0,0"/>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                                                                <Button Grid.Column="0" Classes="ToolbarButton"
+                                                                        Padding="8,5" HorizontalAlignment="Stretch"
+                                                                        HorizontalContentAlignment="Center"
+                                                                        Content="{Binding PickBridgeButtonLabel}"
+                                                                        Command="{Binding PickBridgeTargetCommand}"
+                                                                        Classes.active="{Binding IsPickingBridgeTarget}"
+                                                                        ToolTip.Tip="Click a path or point on another layer for the column foot. One perimeter mouth; T opens at the anchor support line."/>
+                                                                <Button Grid.Column="1" Classes="ToolbarButton"
+                                                                        Padding="8,5" Margin="6,0,0,0"
+                                                                        Content="Clear"
+                                                                        IsVisible="{Binding HasBridgeTarget}"
+                                                                        Command="{Binding ClearBridgeTargetCommand}"
+                                                                        ToolTip.Tip="Remove bridge target"/>
+                                                            </Grid>
+                                                        </StackPanel>
+
+                                                        <TextBlock IsVisible="{Binding !IsSupport}"
+                                                                   TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                                                   Text="Remove marks delete beads under the anchor. Bridge/scaffold is only available on Support modifications."/>
+                                                    </StackPanel>
+                                                </StackPanel>
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
@@ -148,7 +254,7 @@
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
                                        Text="Use the viewport edit tools to select paths or points, then mark them for support or removal."/>
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                       Text="• Select tool — click paths (Shift to multi-select)&#x0a;• Lines / Points — choose section vs single bead&#x0a;• Support / Remove — apply marks to the selection&#x0a;• Reslice — rebuild the toolpath with those marks"/>
+                                       Text="• Select tool — click paths (Shift to multi-select)&#x0a;• Lines / Points — choose section vs single bead&#x0a;• Support / Remove — apply marks to the selection&#x0a;• Expand a Support mod → Pick bridge target on another layer for multi-layer scaffold&#x0a;• Reslice — bake Formbound buttress / removals into the toolpath"/>
                         </StackPanel>
                     </Expander>
 
@@ -451,11 +557,13 @@
                               IsVisible="{Binding Additive.ShowContourOffsetOption}">
                         <StackPanel Margin="0,2,0,6">
                             <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
-                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
                                 <ComboBox  Grid.Column="1"
                                            ItemsSource="{Binding Additive.SeamModeOptions}"
                                            SelectedItem="{Binding Additive.SeamMode, Mode=TwoWay}"
-                                           Width="90" FontSize="11"/>
+                                           Width="90" FontSize="11"
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
                             </Grid>
 
                             <TextBlock Text="LOCATION" Classes="LabelMuted" FontSize="10" Margin="8,6,8,2" LetterSpacing="1"/>
@@ -1002,6 +1110,121 @@
                                 <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
                                            VerticalAlignment="Center" Margin="4,0,8,0"/>
                             </Grid>
+
+                            <!-- X-Bracing Wall (collapsible group under EFFECTS) -->
+                            <Expander Classes="SectionExpander" Header="X-BRACING" IsExpanded="False"
+                                      Margin="0,4,0,2"
+                                      ToolTip.Tip="Structural X braces into the wall. Orient the brace plane so hairpins grow perpendicular to it (consistent direction across the surface).">
+                                <StackPanel Margin="0,2,0,4">
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Enable X-bracing"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.XBracingEnabled, Mode=TwoWay}"
+                                              ToolTip.Tip="Cut dual-wall / single-skin X braces (LFAM-style diagonal channels). Depth is a target ceiling; single-skin grows layer-by-layer with ≥60% support."/>
+
+                                    <StackPanel IsVisible="{Binding Additive.ShowXBracingControls}" Spacing="0">
+                                        <Grid Margin="8,4,8,4" ColumnDefinitions="*,140">
+                                            <TextBlock Grid.Column="0" Text="Projection type" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Planar: one oriented plane — braces go perpendicular to it. Cylinder: braces radiate outward from a vertical cylinder you place on the bed."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch" FontSize="11"
+                                                       ItemsSource="{Binding Additive.XBracingProjectionTypeOptions}"
+                                                       SelectedItem="{Binding Additive.XBracingProjectionType, Mode=TwoWay}"/>
+                                        </Grid>
+
+                                        <!-- Planar projection -->
+                                        <StackPanel IsVisible="{Binding Additive.ShowXBracingPlanarControls}">
+                                            <TextBlock Margin="8,2,8,2" Text="BRACE PLANE" Classes="LabelMuted"
+                                                       FontSize="9" LetterSpacing="1"/>
+                                            <TextBlock Margin="8,0,8,4" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                                       Text="Cyan plane in the viewport = brace direction. Tilt until it sits on the face — pins go straight into that face."/>
+
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Plane tilt Y (°)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingPlaneTiltY, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Slider Margin="10,0,10,4" Minimum="-90" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    Value="{Binding Additive.XBracingPlaneTiltY, Mode=TwoWay}"/>
+
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Plane tilt X (°)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingPlaneTiltX, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Slider Margin="10,0,10,4" Minimum="-90" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    Value="{Binding Additive.XBracingPlaneTiltX, Mode=TwoWay}"/>
+
+                                            <Grid Margin="8,2,8,6" ColumnDefinitions="*,6,*">
+                                                <Button Grid.Column="0" Content="Flip direction" HorizontalAlignment="Stretch" FontSize="11"
+                                                        Command="{Binding Additive.FlipXBracingPlaneCommand}"
+                                                        ToolTip.Tip="Reverse brace direction (flip the plane normal)."/>
+                                                <Button Grid.Column="2" Content="Reset plane" HorizontalAlignment="Stretch" FontSize="11"
+                                                        Command="{Binding Additive.ResetXBracingPlaneCommand}"
+                                                        ToolTip.Tip="Horizontal plane (0°/0°) — braces fall back to path left-normal."/>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- Cylinder projection -->
+                                        <StackPanel IsVisible="{Binding Additive.ShowXBracingCylinderControls}">
+                                            <TextBlock Margin="8,2,8,2" Text="BRACE CYLINDER" Classes="LabelMuted"
+                                                       FontSize="9" LetterSpacing="1"/>
+                                            <TextBlock Margin="8,0,8,4" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                                       Text="By default braces pull toward this vertical cylinder. Height matches the part. Click the cylinder in the viewport and drag on the bed to move it."/>
+
+                                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                           ToolTip.Tip="Cylinder diameter. Height is automatic from the model bounds."/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderDiameterMm, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Center X (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderX, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Center Y (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderY, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <CheckBox Margin="8,4,8,2"
+                                                      Content="Flip direction (radiate outward)"
+                                                      FontSize="11"
+                                                      IsChecked="{Binding Additive.XBracingCylinderFlipDirection, Mode=TwoWay}"
+                                                      ToolTip.Tip="Off (default): braces pull toward the cylinder axis. On: braces radiate outward from the axis."/>
+                                            <Button Margin="8,4,8,6" Content="Reset to bed center" HorizontalAlignment="Stretch" FontSize="11"
+                                                    Command="{Binding Additive.ResetXBracingCylinderCommand}"
+                                                    ToolTip.Tip="Move cylinder axis to the print bed centre (not the robot origin), reset diameter to 200 mm, and restore pull-toward."/>
+                                        </StackPanel>
+
+                                        <TextBlock Margin="8,6,8,2" Text="PATTERN" Classes="LabelMuted"
+                                                   FontSize="9" LetterSpacing="1"/>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="Depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Target how far each brace goes into the wall. Single-skin grows up to this over layers; dual-wall clamps to thickness."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingDepthMm, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="X span (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Horizontal size of one full X cell along the wall."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingSpanMm, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="Angle from vertical (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Diagonal lean of the X pattern (not the brace plane). Lower = more printable bottom-up."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingAngleDeg, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <CheckBox Margin="8,2,8,4"
+                                                  Content="Extend side edges"
+                                                  FontSize="11"
+                                                  IsChecked="{Binding Additive.XBracingExtendEdges, Mode=TwoWay}"
+                                                  ToolTip.Tip="Partial X cells at left/right wall ends. Top and bottom of the part are never extended."/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
 
                             <!-- Wave -->
                             <Grid Margin="8,2,8,4">

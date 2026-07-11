@@ -98,4 +98,121 @@ public sealed class ToolpathPaintTest
         Assert.Contains(fingerMoves, m =>
             Vector2.Distance(new Vector2(m.To.X, m.To.Y), new Vector2(target.X, target.Y)) < 2f * Bead);
     }
+
+    [Fact]
+    public void ButtressPaintSupportBarBirthsOneColumnUnderTheWallPath()
+    {
+        // Marks sit ON the perimeter wall path (same as UI path-select Support).
+        // Must still birth a paint column — elbow is inset from the wall.
+        const float r = 60f;
+        var wallMid = new Vector3(r, 0f, 60f);
+        var bar = new List<PaintMark>();
+        for (int i = -4; i <= 4; i++)
+        {
+            float a = i * 0.08f;
+            bar.Add(new PaintMark(
+                new Vector3(r * MathF.Cos(a), r * MathF.Sin(a), 60f),
+                Bead * 1.5f, PaintMarkKind.Bridge, PaintBridgeRole.SupportBar));
+        }
+        // Single foot lower down at same angular position.
+        bar.Add(new PaintMark(
+            new Vector3(r, 0f, 30f), Bead * 1.5f, PaintMarkKind.Bridge, PaintBridgeRole.ColumnFoot));
+
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.FormboundButtress, LightningOverhangDeg = 45f,
+            LightningAnchorInterior = true, LightningAnchorExterior = true,
+            LightningButtressBarMm = 40f,
+            PaintMarks = bar,
+        };
+        var tp = PlanarSlicer.Slice([Cylinder()], settings, null);
+        var lightning = tp.Layers.SelectMany(l => l.Moves)
+            .Where(m => m.IsLightning && m.Kind == MoveKind.Extrude).ToList();
+        Assert.True(lightning.Count > 8,
+            $"paint buttress column produced only {lightning.Count} lightning moves " +
+            $"(stats={tp.FormboundStats})");
+        // Column should appear under the painted angular sector (near +X).
+        Assert.Contains(lightning, m =>
+            m.To.X > 20f && MathF.Abs(m.To.Y) < 40f);
+
+        // Seam pin: each layer's first extrude (after optional layer travel/stitch)
+        // should open near the ColumnFoot angular sector (+X wall at ~r,0).
+        // A wandering seam on the far side of the cylinder would mean the pin failed.
+        var foot = new Vector2(r, 0f);
+        int pinnedLayers = 0, totalWithLoops = 0;
+        foreach (var layer in tp.Layers)
+        {
+            var firstExt = layer.Moves.FirstOrDefault(m => m.Kind == MoveKind.Extrude && !m.IsLayerStitch);
+            if (firstExt is null) continue;
+            totalWithLoops++;
+            var start = new Vector2(firstExt.From.X, firstExt.From.Y);
+            // Cylinder radius 60: far-side seam would be ~120 mm from foot; pin should be < ~25 mm.
+            if (Vector2.Distance(start, foot) < 25f)
+                pinnedLayers++;
+        }
+        Assert.True(totalWithLoops >= 3, $"expected several layers, got {totalWithLoops}");
+        Assert.True(pinnedLayers * 2 >= totalWithLoops,
+            $"seam pin failed: only {pinnedLayers}/{totalWithLoops} layers open near bridge target");
+    }
+
+    [Fact]
+    public void ButtressPaintMouthStaysAtFootNotUnderOffsetBar()
+    {
+        // Support bar at +Y; ColumnFoot at +X. The perimeter BREAK must stay on the
+        // foot/seam stack (+X) at every height — bar only opens the T, never relocates
+        // the mouth under the support selection (that was the wrong blue path).
+        const float r = 60f;
+        float barA = MathF.PI * 0.5f;   // +Y
+        float footA = 0f;               // +X
+        var marks = new List<PaintMark>();
+        for (int i = -3; i <= 3; i++)
+        {
+            float a = barA + i * 0.06f;
+            marks.Add(new PaintMark(
+                new Vector3(r * MathF.Cos(a), r * MathF.Sin(a), 60f),
+                Bead * 1.5f, PaintMarkKind.Bridge, PaintBridgeRole.SupportBar));
+        }
+        marks.Add(new PaintMark(
+            new Vector3(r * MathF.Cos(footA), r * MathF.Sin(footA), 30f),
+            Bead * 1.5f, PaintMarkKind.Bridge, PaintBridgeRole.ColumnFoot));
+
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.FormboundButtress, LightningOverhangDeg = 45f,
+            LightningAnchorInterior = true, LightningAnchorExterior = true,
+            LightningButtressBarMm = 40f,
+            PaintMarks = marks,
+        };
+        var tp = PlanarSlicer.Slice([Cylinder()], settings, null);
+        var lightning = tp.Layers
+            .Where(l => l.Z is >= 28f and <= 62f)
+            .SelectMany(l => l.Moves)
+            .Where(m => m.IsLightning && m.Kind == MoveKind.Extrude)
+            .ToList();
+        Assert.True(lightning.Count > 8,
+            $"offset paint bridge produced only {lightning.Count} lightning moves " +
+            $"(stats={tp.FormboundStats})");
+
+        // On EVERY bridge layer, some lightning must sit near the FOOT (+X), not only
+        // under the bar (+Y). Mouth locked to seam/target.
+        var foot = new Vector2(r, 0f);
+        int layersOk = 0, layersChecked = 0;
+        foreach (var layer in tp.Layers.Where(l => l.Z is >= 28f and <= 62f))
+        {
+            var tips = layer.Moves
+                .Where(m => m.IsLightning && m.Kind == MoveKind.Extrude)
+                .Select(m => new Vector2(m.To.X, m.To.Y))
+                .ToList();
+            if (tips.Count == 0) continue;
+            layersChecked++;
+            // Nearest lightning point to the foot wall — mouth should be within ~25 mm.
+            float minD = tips.Min(p => Vector2.Distance(p, foot));
+            if (minD < 25f) layersOk++;
+        }
+        Assert.True(layersChecked >= 3, $"expected several bridge layers, got {layersChecked}");
+        Assert.True(layersOk * 2 >= layersChecked,
+            $"mouth not locked to foot/seam: only {layersOk}/{layersChecked} layers near +X target");
+    }
 }

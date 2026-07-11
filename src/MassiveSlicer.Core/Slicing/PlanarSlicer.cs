@@ -67,7 +67,12 @@ public static class PlanarSlicer
         //    contours verbatim so plan and geometry cannot drift.
         List<(List<List<Vector2>> Contours, List<bool> Closed)>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+        // Zig-zag single-skin prints open faces only — skip Formbound/X dual-wall plans
+        // that would re-create a closed back panel.
+        bool needLightning = !settings.ZigZagSeam
+            && (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+                || settings.XBracingEnabled);
+        if (needLightning)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             lightningCache = new(zPositions.Length);
@@ -84,13 +89,35 @@ public static class PlanarSlicer
             // The oracle probes just BELOW the plane: the demanding solid occupies
             // the layer beneath it, and a grazing plane itself is ambiguous.
             var meshTester = new Lightning.MeshInsideTester(meshes);
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
-                solidAt: (li, p) => meshTester.IsInside(
-                    new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])),
-                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
-                    settings.PaintMarks, zPositions.Length,
-                    li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY),
-                    halfBandMm: settings.LayerHeight * 0.6f));
+            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+            {
+                lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
+                    solidAt: (li, p) => meshTester.IsInside(
+                        new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])),
+                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                        settings.PaintMarks, zPositions.Length,
+                        li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY),
+                        // Bead-scale band so wall-path marks always hit their layer plane.
+                        halfBandMm: MathF.Max(settings.LayerHeight * 0.75f, settings.BeadWidth * 0.75f)));
+            }
+            else
+                lightningPlan = new Lightning.LightningPlan(zPositions.Length);
+
+            if (settings.XBracingEnabled)
+            {
+                // Prefer fill polys; if a layer has no fill (open/surface shells),
+                // fall back to raw inset contours so freestanding wall panels still brace.
+                var polysForX = new List<List<List<Vector2>>>(zPositions.Length);
+                for (int zi = 0; zi < zPositions.Length; zi++)
+                {
+                    var fill = fillPolysPerLayer[zi];
+                    if (fill.Count > 0) polysForX.Add(fill);
+                    else polysForX.Add(lightningCache![zi].Contours);
+                }
+                Lightning.XBracingPlanner.Apply(
+                    lightningPlan, polysForX, zPositions, heights, settings);
+            }
+
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
@@ -105,6 +132,12 @@ public static class PlanarSlicer
             }
         }
 
+        // Cross-layer state for single-skin X hairpins (≥60% support from prior layer).
+        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState =
+            settings.XBracingEnabled && settings.ZigZagSeam
+                ? new Lightning.XBracingPlanner.OpenPathDetourState()
+                : null;
+
         for (int zi = 0; zi < zPositions.Length; zi++)
         {
             if ((zi & 15) == 0) progress?.Invoke(zi / (float)zPositions.Length);
@@ -114,7 +147,8 @@ public static class PlanarSlicer
             var layer         = new ToolpathLayer(idx++, z) { Height = z - prevZ };
             prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[zi],
-                lightningPlan:  lightningPlan?.Layers[zi]);
+                lightningPlan:  lightningPlan?.Layers[zi],
+                xDetourState:   xDetourState);
 
             if (layer.Moves.Count > 0)
             {
@@ -178,7 +212,8 @@ public static class PlanarSlicer
         ToolpathLayer layer,
         bool isLastLayer = false,
         (List<List<Vector2>> Contours, List<bool> Closed)? cachedContours = null,
-        Lightning.LightningLayerPlan? lightningPlan = null)
+        Lightning.LightningLayerPlan? lightningPlan = null,
+        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -190,7 +225,9 @@ public static class PlanarSlicer
         {
             // Lightning pre-pass already computed this layer's contours — reuse them
             // verbatim so the plan and the emitted geometry can never drift apart.
-            (insetContours, insetClosed) = cc;
+            // Clone lists: single-skin / X detours mutate contours in place.
+            insetContours = cc.Contours.Select(c => new List<Vector2>(c)).ToList();
+            insetClosed = new List<bool>(cc.Closed);
         }
         else
         {
@@ -202,7 +239,7 @@ public static class PlanarSlicer
         if (insetContours.Count == 0) return new List<ContourTrack>();
 
         return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
-            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan);
+            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, xDetourState);
     }
 
     /// <summary>
@@ -320,16 +357,69 @@ public static class PlanarSlicer
         List<List<Vector2>> insetContours, List<bool> insetClosed,
         List<(Vector2 pos, Vector3 normal)>? normalLookup,
         Vector2 seamOrigin, Vector2 seamDir, List<ContourTrack> prevTracks,
-        Lightning.LightningLayerPlan? lightningPlan)
+        Lightning.LightningLayerPlan? lightningPlan,
+        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+
+        // Zig-zag single-skin mode: closed wall loops print as ONE long open face
+        // (no back panel). Even layers A→B, odd layers B→A, lift between layers.
+        // Formbound dual-wall region emit would re-create a back panel — skip it.
+        // X-bracing uses open-path hairpin detours instead (see below).
+        bool singleSkinZigZag = settings.ZigZagSeam;
+        // Keep pre-extract wall rings so X hairpins can clamp depth to real thickness
+        // (75mm into a 25mm wall was shooting through as exterior spikes).
+        List<List<Vector2>>? wallRingsForX = null;
+        if (singleSkinZigZag)
+        {
+            if (settings.XBracingEnabled)
+            {
+                wallRingsForX = new List<List<Vector2>>(insetContours.Count);
+                for (int i = 0; i < insetContours.Count; i++)
+                {
+                    bool isClosed = i >= insetClosed.Count || insetClosed[i];
+                    wallRingsForX.Add(isClosed && insetContours[i].Count >= 3
+                        ? new List<Vector2>(insetContours[i])
+                        : new List<Vector2>());
+                }
+            }
+            ExtractSingleSkinOpenFaces(insetContours, insetClosed);
+        }
+
+        // Single-skin X-bracing: hairpin detours into the wall along the open path.
+        // Depth grows ≤ MaxStep/layer; each hairpin ≥60% supported by previous layer.
+        if (settings.XBracingEnabled && singleSkinZigZag)
+        {
+            // layer.Index == 0 is the first slice plane (on the bed). Do not use
+            // absolute world Z — the mesh bottom is usually zMin ≫ 0 on the cell bed.
+            int hp = Lightning.XBracingPlanner.ApplyOpenPathDetours(
+                insetContours, insetClosed, z, layer.Height, settings, xDetourState,
+                isBedLayer: layer.Index == 0,
+                wallSolidRings: wallRingsForX);
+            if (hp > 0 && layer.Index == 0 && xDetourState is not null)
+            {
+                float maxD = 0f;
+                foreach (var h in xDetourState.PrevList)
+                    maxD = MathF.Max(maxD, h.Depth);
+                System.Console.WriteLine(
+                    $"[x-bracing] zig-zag BED layer hairpins={hp} maxPinDepth={maxD:0.#} " +
+                    $"(want={settings.XBracingDepthMm:0.#} span={settings.XBracingSpanMm:0.#} z={z:0.#})");
+            }
+        }
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Surface mode fills across CLOSED boundary chains (open chains can't bound
         // a region, so layers without any closed chain keep their boundary paths).
-        if (settings.InfillPattern != InfillPattern.None)
+        // Zig-zag single-skin always takes the shell path below (never Formbound fill).
+        if (!singleSkinZigZag && settings.InfillPattern != InfillPattern.None)
         {
             var fillPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
+            // X-bracing / Formbound need a region; open surface shells often leave
+            // fillPolys empty — fall back to all inset contours so braces still emit.
+            if (fillPolys.Count == 0
+                && (settings.XBracingEnabled
+                    || Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)))
+                fillPolys = insetContours.Where(c => c.Count >= 3).ToList();
 
             if (fillPolys.Count > 0)
             {
@@ -344,7 +434,8 @@ public static class PlanarSlicer
                 float spacing = settings.InfillSpacingMm > 0f
                     ? settings.InfillSpacingMm
                     : settings.BeadWidth;
-                if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+                if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+                    || (settings.XBracingEnabled && lightningPlan is not null))
                     Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
                         settings.BeadWidth, settings.LightningTipLoopRadiusMm);
                 else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
@@ -352,6 +443,21 @@ public static class PlanarSlicer
                                                   insetStepMm: settings.BeadWidth);
                 else
                     InfillGenerator.Emit(fillPolys, z, layer, spacing, angle);
+                return new List<ContourTrack>();
+            }
+        }
+
+        // Shells + X-bracing (no zig-zag single-skin): notched perimeter via Lightning.
+        // Under zig-zag single-skin, X dual-wall would rebuild a back panel — skip.
+        if (!singleSkinZigZag && settings.XBracingEnabled && lightningPlan is not null)
+        {
+            var fillPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
+            if (fillPolys.Count == 0)
+                fillPolys = insetContours.Where(c => c.Count >= 3).ToList();
+            if (fillPolys.Count > 0)
+            {
+                Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm);
                 return new List<ContourTrack>();
             }
         }
@@ -373,6 +479,171 @@ public static class PlanarSlicer
 
         ContourSeamPlanner.EmitOptimizedContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
         return tracks;
+    }
+
+    /// <summary>
+    /// Zig-zag single-skin: each closed wall loop becomes the longest open face only
+    /// (front OR back, not both). Printing is one continuous line that reverses each
+    /// layer — end of line → Z hop → reverse direction.
+    /// </summary>
+    private static void ExtractSingleSkinOpenFaces(
+        List<List<Vector2>> contours, List<bool> closed)
+    {
+        for (int i = 0; i < contours.Count; i++)
+        {
+            if (i < closed.Count && !closed[i]) continue; // already open
+            var c = contours[i];
+            if (c.Count < 4) continue;
+
+            var face = LongestOpenFace(c);
+            if (face.Count < 2) continue;
+            // Orient so left-of-travel points into the original closed wall (for X hairpins).
+            OrientOpenFaceIntoPolygon(face, c);
+            contours[i] = face;
+            if (i < closed.Count) closed[i] = false;
+        }
+    }
+
+    /// <summary>
+    /// Reverse <paramref name="face"/> if needed so the left normal at mid-path
+    /// points into <paramref name="closedRing"/> (wall interior / thickness).
+    /// </summary>
+    private static void OrientOpenFaceIntoPolygon(List<Vector2> face, List<Vector2> closedRing)
+    {
+        if (face.Count < 2 || closedRing.Count < 3) return;
+        int mid = face.Count / 2;
+        var a = face[Math.Max(0, mid - 1)];
+        var b = face[Math.Min(face.Count - 1, mid + 1)];
+        var tan = b - a;
+        float tl = tan.Length();
+        if (tl < 1e-6f) return;
+        tan /= tl;
+        var left = new Vector2(-tan.Y, tan.X);
+        var probe = face[mid] + left * 2f;
+        if (!PointInPolygon(probe, closedRing))
+            face.Reverse();
+    }
+
+    /// <summary>Longest near-straight run of edges on a closed ring (one skin of a wall).</summary>
+    private static List<Vector2> LongestOpenFace(List<Vector2> closedRing)
+    {
+        int n = closedRing.Count;
+        // Drop duplicate closing vertex if present.
+        if (n > 2 && Dist2(closedRing[0], closedRing[^1]) < 1e-6f)
+            n--;
+        if (n < 3) return new List<Vector2>(closedRing);
+
+        float bestLen = -1f;
+        int bestI0 = 0, bestCount = n;
+
+        for (int start = 0; start < n; start++)
+        {
+            float runLen = 0f;
+            int count = 1;
+            for (int k = 0; k < n - 1; k++)
+            {
+                int i0 = (start + k) % n;
+                int i1 = (start + k + 1) % n;
+                int i2 = (start + k + 2) % n;
+                var t0 = closedRing[i1] - closedRing[i0];
+                var t1 = closedRing[i2] - closedRing[i1];
+                float l0 = t0.Length(), l1 = t1.Length();
+                runLen += l0;
+                count++;
+                float turn = 0f;
+                if (l0 > 1e-6f && l1 > 1e-6f)
+                    turn = MathF.Abs(MathF.Acos(Math.Clamp(Vector2.Dot(t0 / l0, t1 / l1), -1f, 1f)));
+                // Sharp corner (> ~35°) ends this face.
+                if (turn > 0.6f)
+                    break;
+            }
+            if (runLen > bestLen)
+            {
+                bestLen = runLen;
+                bestI0 = start;
+                bestCount = count;
+            }
+        }
+
+        // Prefer a face that is a real side of the wall, not the whole perimeter.
+        if (bestCount >= n - 1)
+        {
+            // Smooth loop (curved wall): take half the perimeter as one "skin"
+            // by projecting onto the dominant axis of the bounding box.
+            return LongestSkinByProjection(closedRing, n);
+        }
+
+        var face = new List<Vector2>(bestCount);
+        for (int k = 0; k < bestCount; k++)
+            face.Add(closedRing[(bestI0 + k) % n]);
+        return face;
+    }
+
+    /// <summary>
+    /// For smooth closed rings, pick the chain of vertices on the side of the
+    /// bounding-box long axis that forms one continuous outer skin.
+    /// </summary>
+    private static List<Vector2> LongestSkinByProjection(List<Vector2> ring, int n)
+    {
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            var p = ring[i];
+            if (p.X < minX) minX = p.X; if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y;
+        }
+        bool longInX = (maxX - minX) >= (maxY - minY);
+        // Side with larger average |offset| from center along the short axis =
+        // outer face of a thin wall (or pick max extent).
+        float mid = longInX ? 0.5f * (minY + maxY) : 0.5f * (minX + maxX);
+
+        // Walk the ring and find the longest contiguous run on the "high" side of mid.
+        // Try both high and low sides; keep the longer run.
+        List<Vector2> best = new();
+        foreach (bool high in new[] { true, false })
+        {
+            var runs = new List<List<Vector2>>();
+            List<Vector2>? cur = null;
+            for (int i = 0; i < n; i++)
+            {
+                var p = ring[i];
+                float v = longInX ? p.Y : p.X;
+                bool onSide = high ? v >= mid : v <= mid;
+                if (onSide)
+                {
+                    cur ??= new List<Vector2>();
+                    cur.Add(p);
+                }
+                else if (cur is not null)
+                {
+                    runs.Add(cur);
+                    cur = null;
+                }
+            }
+            if (cur is not null) runs.Add(cur);
+            // Merge wrap-around.
+            if (runs.Count >= 2
+                && (longInX ? ring[0].Y >= mid == high : ring[0].X >= mid == high)
+                && (longInX ? ring[n - 1].Y >= mid == high : ring[n - 1].X >= mid == high))
+            {
+                var merged = new List<Vector2>(runs[^1]);
+                merged.AddRange(runs[0]);
+                runs[0] = merged;
+                runs.RemoveAt(runs.Count - 1);
+            }
+            foreach (var r in runs)
+            {
+                float len = 0;
+                for (int k = 1; k < r.Count; k++)
+                    len += Vector2.Distance(r[k - 1], r[k]);
+                float bestLen = 0;
+                for (int k = 1; k < best.Count; k++)
+                    bestLen += Vector2.Distance(best[k - 1], best[k]);
+                if (len > bestLen) best = r;
+            }
+        }
+        return best.Count >= 2 ? best : ring.Take(n).ToList();
     }
 
     /// <summary>Surface mode fills across CLOSED boundary chains only.</summary>

@@ -45,7 +45,7 @@ public static class LightningPlanner
         SliceSettings settings,
         IReadOnlyList<(Vector3 Origin, Vector3 U, Vector3 V)>? frames = null,
         Func<int, Vector2, bool>? solidAt = null,
-        IReadOnlyList<IReadOnlyList<Vector2>>? manualDemand = null)
+        IReadOnlyList<ManualDemandLayer>? manualDemand = null)
     {
         int n = fillPolysPerLayer.Count;
         var plan = new LightningPlan(n);
@@ -73,6 +73,68 @@ public static class LightningPlanner
         int inheritSkips = 0;
         int inheritReseeds = 0;
         int auditExtensions = 0;
+        // Painted Bridge marks mean the user is steering support — do NOT also
+        // birth automatic geometric buttresses (those look like random start/stop
+        // columns away from the selection).
+        bool hasManualPaint = false;
+        if (manualDemand is not null)
+            for (int mi = 0; mi < manualDemand.Count && !hasManualPaint; mi++)
+                if (manualDemand[mi].HasAny) hasManualPaint = true;
+        // Exactly one paint-driven perimeter mouth for the whole stack.
+        int? paintColumnId = null;
+        // Fixed seam pin (bridge target / column mouth XY). Copied onto every layer
+        // after the walk so EmitLoops starts the perimeter at the same place as the
+        // buttress opens, layer after layer.
+        Vector2? paintSeamPin = null;
+        // Stack-level bridge aims (native layer frames). Column births under the
+        // SupportBar mid, then slides along Lerp(foot, bar, t) so intermediate
+        // layers interpolate Anchor → Target instead of staying under the bar.
+        Vector2? paintBarMid = null;
+        int paintBarLayer = -1;
+        Vector2? paintFootMid = null;
+        int paintFootLayer = -1;
+        if (manualDemand is not null)
+        {
+            for (int mi = 0; mi < manualDemand.Count; mi++)
+            {
+                var dem0 = manualDemand[mi];
+                if (dem0.SupportBar.Count > 0)
+                {
+                    var br = OrderDemandRun(dem0.SupportBar, p => p);
+                    if (br.Count > 0)
+                    {
+                        paintBarMid = br[MidIndexAlongRun(br)];
+                        paintBarLayer = mi;
+                    }
+                }
+                if (dem0.ColumnFoot.Count > 0)
+                {
+                    var fr = OrderDemandRun(dem0.ColumnFoot, p => p);
+                    if (fr.Count > 0)
+                    {
+                        paintFootMid = fr[MidIndexAlongRun(fr)];
+                        paintFootLayer = mi;
+                        paintSeamPin = paintFootMid; // prefer target for seam
+                    }
+                }
+            }
+            if (paintBarMid is { } bm0 && paintFootMid is { } fm0)
+            {
+                System.Console.WriteLine(
+                    $"[formbound] paint-bridge aims bar=L{paintBarLayer + 1}({bm0.X:0.#},{bm0.Y:0.#}) " +
+                    $"foot=L{paintFootLayer + 1}({fm0.X:0.#},{fm0.Y:0.#})");
+            }
+            else if (paintBarMid is { } bm1)
+            {
+                System.Console.WriteLine(
+                    $"[formbound] paint-bridge aims bar=L{paintBarLayer + 1}({bm1.X:0.#},{bm1.Y:0.#}) (no foot)");
+            }
+            else if (paintFootMid is { } fm1)
+            {
+                System.Console.WriteLine(
+                    $"[formbound] paint-bridge aims foot=L{paintFootLayer + 1}({fm1.X:0.#},{fm1.Y:0.#}) (no bar)");
+            }
+        }
         // Trees whose anchor lost its footing mid-descent (boundary swept away, e.g.
         // an angled-slicing notch) — removed from EVERY layer after the build so no
         // layer keeps a finger whose support column ends in mid-air below it.
@@ -199,14 +261,23 @@ public static class LightningPlanner
                 float reTol = frames is not null
                     ? MathF.Max(14f * bead, 10f * stepAbove)
                     : MathF.Max(4f * bead, 3f * stepAbove);
+                // Paint columns must track a moving aim XY across layers — never
+                // orphan for a large re-root (same as multi-planar snap).
+                bool isPaintCol = t.PaintColumn
+                    || (paintColumnId is int pcid && t.Id == pcid);
                 if (reDist > reTol)
                 {
-                    if (frames is null)
+                    if (frames is null && !isPaintCol)
                     {
                         orphaned.Add(t.Id);
                         continue;
                     }
-                    inheritSkips++; // forced multi-planar snap (column continues)
+                    inheritSkips++; // forced snap (column continues)
+                }
+                if (isPaintCol)
+                {
+                    t.PaintColumn = true;
+                    paintColumnId = t.Id;
                 }
 
                 t.Anchor = reAnchor;
@@ -308,8 +379,14 @@ public static class LightningPlanner
             //   unsupported solid (ledges / closing roofs). World-XY edge distance
             //   falsely flags every tilted-cylinder ellipse shift; pure Z-project
             //   zeros demand on continuous shells. Clipper difference is the fix.
+            //
+            // When the user has painted Bridge marks, skip automatic geometric
+            // births entirely — only inherit + manual demand (section 2b).
             float supportRadius = stepAbove + bead * 0.5f;
             float sampleStep = spacing * 0.25f;
+
+            if (hasManualPaint)
+                goto ManualDemandOnly;
 
             // Multi-planar: precompute "upper solid not covered by lower wall band".
             PathsD? multiDemandFootprint = null;
@@ -654,82 +731,213 @@ public static class LightningPlanner
                 uncoveredTotal += layerUncovered;
             }
 
-            // ── 2b. Manual demand: brush-painted Bridge marks projected onto the
-            //       layer above. The user explicitly asked for support under these
-            //       beads — geometric sanity checks only, no spacing thinning, no
-            //       mesh veto, and external fins allowed regardless of the setting.
-            if (manualDemand is not null && manualDemand.Count > i + 1
-                && manualDemand[i + 1].Count > 0 && buttress)
+            ManualDemandOnly:
+            // ── 2b. Paint-driven column (ONE perimeter mouth for the whole stack) ──
+            // ColumnFoot (bridge target) = the ONLY wall break / mouth / seam pin —
+            // stacked vertically on every layer. SupportBar only opens the T width
+            // at the support height; it must NEVER relocate the mouth to the bar.
             {
-                // Buttress: painted marks form RUNS along the painted line; route
-                // them through the T builder so the bars follow the run and the
-                // line is supported across its FULL width — a lone hairpin per dab
-                // is not a landing pad.
-                var mRun = new List<Vector2>(manualDemand[i + 1].Count);
-                foreach (var mp in manualDemand[i + 1]) mRun.Add(Down(mp));
-                float mStep = bead * 3f;
-                float mBar = MathF.Max(barLen, bead * 5f);
-                float mCover = bead * 0.75f;
-                float mSide = MathF.Max(6f * bead, barLen);
-                int runStart2 = 0;
-                for (int k = 1; k <= mRun.Count; k++)
+                var dem = (manualDemand is not null && manualDemand.Count > i + 1)
+                    ? manualDemand[i + 1] : null;
+                var barRun = dem is not null
+                    ? OrderDemandRun(dem.SupportBar, Down) : new List<Vector2>();
+                var footRun = dem is not null
+                    ? OrderDemandRun(dem.ColumnFoot, Down) : new List<Vector2>();
+
+                // Global foot in THIS layer's frame — preferred mouth + seam for all Z.
+                Vector2? globalFoot = null;
+                if (paintFootMid is { } gfm && paintFootLayer >= 0)
+                    globalFoot = Remap(paintFootLayer, i, gfm);
+                if (footRun.Count > 0)
                 {
-                    bool split = k == mRun.Count
-                        || Vector2.Distance(mRun[k], mRun[k - 1]) > bead * 8f;
-                    if (!split) continue;
-                    var run = mRun.GetRange(runStart2, k - runStart2);
-                    runStart2 = k;
-                    for (int si = 0; si < run.Count; si++)
+                    var fMid = footRun[MidIndexAlongRun(footRun)];
+                    paintSeamPin = fMid;
+                    globalFoot = fMid;
+                }
+                else if (globalFoot is { } gfPin)
+                    paintSeamPin = gfPin;
+
+                // Mouth aim: FOOT only. Bar is not an aim (that put the blue break
+                // under the support selection instead of the yellow seam stack).
+                Vector2? mouthAim = globalFoot;
+                if (mouthAim is null && footRun.Count > 0)
+                    mouthAim = footRun[MidIndexAlongRun(footRun)];
+                // Support-only paint (no target yet): fall back to bar mid.
+                if (mouthAim is null && barRun.Count > 0)
+                    mouthAim = barRun[MidIndexAlongRun(barRun)];
+                if (mouthAim is null && paintBarMid is { } gbm && paintBarLayer >= 0)
+                    mouthAim = Remap(paintBarLayer, i, gbm);
+
+                float barLenRun = 0f;
+                for (int j = 1; j < barRun.Count; j++)
+                    barLenRun += Vector2.Distance(barRun[j - 1], barRun[j]);
+                float mBar = barRun.Count > 0
+                    ? MathF.Max(barLen, MathF.Max(bead * 5f, barLenRun * 1.05f))
+                    : MathF.Max(barLen, bead * 5f);
+                // Wide same-side so T bars can reach a laterally offset support path
+                // while the mouth stays on the foot seam.
+                float mSide = MathF.Max(
+                    MathF.Max(24f * bead, barLen * 2f),
+                    barLenRun + 16f * bead);
+                float mCover = MathF.Max(bead * 2f, MathF.Max(barLenRun, bead * 4f) * 0.55f);
+                float mStep = bead * 2.5f;
+                float layerH = MathF.Max(i < layerHeights.Count ? layerHeights[i] : bead, 0.1f);
+                float maxAnchorDist = MathF.Max(2f * layerH, 24f * bead);
+                float stepI = MaxStep(i);
+
+                // Face the support bar when opening the T (mouth still at foot).
+                Vector2? barFace = null;
+                if (barRun.Count > 0)
+                    barFace = barRun[MidIndexAlongRun(barRun)];
+                else if (paintBarMid is { } gbm2 && paintBarLayer >= 0)
+                    barFace = Remap(paintBarLayer, i, gbm2);
+
+                // Locate the existing paint column on this layer (inherited).
+                LightningTree? paintTree = null;
+                if (paintColumnId is int pid)
+                    paintTree = layerPlan.Trees.FirstOrDefault(t => t.Id == pid);
+                if (paintTree is null)
+                    paintTree = layerPlan.Trees.FirstOrDefault(t => t.PaintColumn);
+
+                if (buttress && paintTree is not null)
+                {
+                    paintColumnId = paintTree.Id;
+                    paintTree.PaintColumn = true;
+                    paintTree.External = false;
+                    paintTree.Cavity = false;
+                    // Snap mouth fully onto the target/seam every layer (vertical stack).
+                    if (mouthAim is { } aim)
                     {
-                        var pt = run[si];
-                        if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
-                            continue;   // wall below already carries it
-                        if (CoveredBySameSide(layerPlan.Trees, pt, mCover, mSide, region))
-                            continue;
-                        // No mesh veto (user override): solidAt null passes always.
-                        TryAddButtressAt(run, si, mStep, run.Count, 0,
+                        if (SnapPaintMouthToAim(paintTree, aim, region, core, bead, mBar, stepI))
+                            auditExtensions++;
+                    }
+                    // Support layer only: grow T bars toward the bar run — mouth stays put.
+                    if (barRun.Count > 0)
+                    {
+                        foreach (var pt in barRun)
+                        {
+                            if (TryExtendExistingButtress(
+                                    layerPlan.Trees, pt, region, core,
+                                    bead, mBar, stepI, mCover, mSide))
+                                auditExtensions++;
+                        }
+                        // Re-snap mouth after extend in case growth drifted the root.
+                        if (mouthAim is { } aim2)
+                            SnapPaintMouthToAim(paintTree, aim2, region, core, bead, mBar, stepI);
+                    }
+                    // No second perimeter birth — ever.
+                }
+                else if (buttress && paintColumnId is null
+                         && dem is not null && dem.HasAny)
+                {
+                    // First (and only) perimeter mouth: at the TARGET (foot), never
+                    // at the support bar. Bar run only supplies T width + face.
+                    List<Vector2> birthRun;
+                    if (globalFoot is { } gfBirth)
+                        birthRun = [gfBirth];
+                    else if (footRun.Count > 0)
+                        birthRun = footRun;
+                    else
+                        birthRun = barRun; // support-only paint
+                    if (birthRun.Count > 0)
+                    {
+                        int bMid = MidIndexAlongRun(birthRun);
+                        // Face toward support so trunk/T open under the selection.
+                        Vector2? face = barFace ?? mouthAim;
+                        int treesBefore = layerPlan.Trees.Count;
+                        // Use barRun as the walk samples when present so halfBar
+                        // covers the full support path; mouth sample is still foot.
+                        var barSamples = barRun.Count > 0 ? barRun : birthRun;
+                        TryAddButtressAt(birthRun, bMid, mStep, birthRun.Count, 0,
                             region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                             preferInterior, settings, bead, mBar, mCover, mSide,
-                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], run);
+                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], barSamples,
+                            maxAnchorDist, face);
+                        if (layerPlan.Trees.Count > treesBefore)
+                        {
+                            var born = layerPlan.Trees[^1];
+                            born.PaintColumn = true;
+                            // Wall-path paint is often classified Exterior (marks sit on
+                            // the perimeter). Force interior so the mouth notches the wall.
+                            born.External = false;
+                            born.Cavity = false;
+                            paintColumnId = born.Id;
+                            paintSeamPin ??= globalFoot ?? born.Anchor;
+                            // Force mouth onto the target immediately after birth.
+                            if (mouthAim is { } aim0)
+                                SnapPaintMouthToAim(born, aim0, region, core, bead, mBar, stepI);
+                            // Open full T toward support bar samples when present.
+                            if (barRun.Count > 0)
+                            {
+                                foreach (var pt in barRun)
+                                    TryExtendExistingButtress(
+                                        layerPlan.Trees, pt, region, core,
+                                        bead, mBar, stepI, mCover, mSide);
+                                if (mouthAim is { } aim1)
+                                    SnapPaintMouthToAim(born, aim1, region, core, bead, mBar, stepI);
+                            }
+                            var mouth = born.Anchor;
+                            var ok = $"[formbound] paint-column BORN id={born.Id} layer={i} " +
+                                     $"barPts={barRun.Count} footPts={footRun.Count} " +
+                                     $"mouth=({mouth.X:0.#},{mouth.Y:0.#}) " +
+                                     $"aim={(mouthAim is { } aa ? $"({aa.X:0.#},{aa.Y:0.#})" : "none")} " +
+                                     $"seamPin=({(paintSeamPin?.X ?? 0):0.#},{(paintSeamPin?.Y ?? 0):0.#})";
+                            plan.UncoveredLog.Add(ok);
+                            System.Console.WriteLine(ok);
+                        }
+                        else
+                        {
+                            var fail = $"[formbound] paint-column BIRTH FAILED layer={i} " +
+                                       $"barPts={barRun.Count} footPts={footRun.Count} " +
+                                       $"noAnchor={PfNoAnchor} barReach={PfBarReach} " +
+                                       $"noFrame={PfNoFrame} covered={PfCovered}";
+                            plan.UncoveredLog.Add(fail);
+                            System.Console.WriteLine(fail);
+                        }
+                    }
+                }
+                else if (!buttress && dem is not null && dem.HasAny
+                         && paintColumnId is null
+                         && !layerPlan.Trees.Any(t => t.PaintColumn))
+                {
+                    // Formbound Bridge (non-buttress): ONE finger mouth only.
+                    var run = OrderDemandRun(
+                        dem.ColumnFoot.Count > 0 ? dem.ColumnFoot : dem.SupportBar, Down);
+                    if (run.Count > 0)
+                    {
+                        int midSi = MidIndexAlongRun(run);
+                        var pt = run[midSi];
+                        if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius
+                            && !NearAnyCenterline(layerPlan.Trees, pt, spacing * 0.4f))
+                        {
+                            var mSpace = ClassifyPoint(region, envelope, pt);
+                            bool external = mSpace == DemandSpace.Exterior;
+                            bool cavity   = mSpace == DemandSpace.Cavity;
+                            var tip = mSpace == DemandSpace.Interior
+                                ? (InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt))
+                                : pt;
+                            var anchor = mSpace == DemandSpace.Interior
+                                ? ClosestOnRegionBoundary(anchorPaths, tip)
+                                : ClosestOnRegionBoundary(region, tip);
+                            if (Vector2.Distance(anchor, tip) >= bead
+                                && (mSpace != DemandSpace.Interior
+                                    || SegmentInsideRegion(region, anchor, tip, bead))
+                                && (!cavity || SegmentInsideVoid(region, anchor, tip, bead)))
+                            {
+                                var t = new LightningTree
+                                {
+                                    Id = nextTreeId++, Anchor = anchor,
+                                    External = external, Cavity = cavity,
+                                    PaintColumn = true,
+                                };
+                                t.Branches.Add(new LightningBranch([anchor, tip]));
+                                layerPlan.Trees.Add(t);
+                                paintColumnId = t.Id;
+                            }
+                        }
                     }
                 }
             }
-            else if (manualDemand is not null && manualDemand.Count > i + 1)
-                foreach (var mPt in manualDemand[i + 1])
-                {
-                    var pt = Down(mPt);
-                    if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) <= supportRadius)
-                        continue;   // wall below already carries it
-                    if (NearAnyCenterline(layerPlan.Trees, pt, spacing * 0.4f))
-                        continue;   // a finger is already headed there
-
-                    // Same three-way space rules as automatic demand: painted beads
-                    // over a modeled void get CAVITY tubes (union into the hole,
-                    // anchored on the cavity wall) — the old external-fin routing
-                    // died in the generator's multi-crossing bite guard, so painted
-                    // lines produced nothing on hollow parts.
-                    var mSpace = ClassifyPoint(region, envelope, pt);
-                    bool external = mSpace == DemandSpace.Exterior;
-                    bool cavity   = mSpace == DemandSpace.Cavity;
-                    var tip = mSpace == DemandSpace.Interior
-                        ? (InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt))
-                        : pt;
-                    var anchor = mSpace == DemandSpace.Interior
-                        ? ClosestOnRegionBoundary(anchorPaths, tip)
-                        : ClosestOnRegionBoundary(region, tip);
-                    if (Vector2.Distance(anchor, tip) < bead) continue;
-                    if (mSpace == DemandSpace.Interior
-                        && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
-                    if (cavity && !SegmentInsideVoid(region, anchor, tip, bead)) continue;
-
-                    var t = new LightningTree
-                    {
-                        Id = nextTreeId++, Anchor = anchor,
-                        External = external, Cavity = cavity,
-                    };
-                    t.Branches.Add(new LightningBranch([anchor, tip]));
-                    layerPlan.Trees.Add(t);
-                }
 
             // ── 2d. Island connectors: a layer whose region splits into several
             //       outers must still print as ONE continuous line — no travel ever
@@ -816,6 +1024,27 @@ public static class LightningPlanner
             foreach (var lp in plan.Layers)
                 lp.Trees.RemoveAll(t => orphaned.Contains(t.Id));
 
+        // Propagate the fixed paint-bridge seam pin onto every layer. Prefer the
+        // ColumnFoot target; if we only ever saw a birth anchor, use that. When a
+        // layer has a live PaintColumn, EmitLoops can also fall back to its Anchor.
+        if (paintSeamPin is null && paintColumnId is int pinId)
+        {
+            for (int li = plan.Layers.Length - 1; li >= 0 && paintSeamPin is null; li--)
+            {
+                var t = plan.Layers[li].Trees.FirstOrDefault(x => x.Id == pinId || x.PaintColumn);
+                if (t is not null) paintSeamPin = t.Anchor;
+            }
+        }
+        if (paintSeamPin is { } pinXY)
+        {
+            foreach (var lp in plan.Layers)
+                lp.SeamPinXY = pinXY;
+            plan.UncoveredLog.Add(
+                $"[formbound] seam-pin=({pinXY.X:0.#},{pinXY.Y:0.#}) locked for {plan.Layers.Length} layers");
+            System.Console.WriteLine(
+                $"[formbound] seam-pin=({pinXY.X:0.#},{pinXY.Y:0.#}) locked for {plan.Layers.Length} layers");
+        }
+
         int live = 0;
         foreach (var lp in plan.Layers) live += lp.Trees.Count;
 
@@ -846,6 +1075,88 @@ public static class LightningPlanner
     }
 
     // -- Tree operations ---------------------------------------------------------
+
+    /// <summary>
+    /// Lock the paint-column mouth to the wall nearest <paramref name="aim"/>
+    /// (ColumnFoot / seam) and rebuild a short inward trunk. Used every layer so
+    /// the perimeter break stacks with the yellow seam, not under the support bar.
+    /// </summary>
+    private static bool SnapPaintMouthToAim(
+        LightningTree tree, Vector2 aim,
+        PathsD region, PathsD core,
+        float bead, float barLen, float maxStep)
+    {
+        tree.External = false;
+        tree.Cavity = false;
+        if (region.Count == 0) return false;
+
+        var prev = tree.Anchor;
+        var newAnchor = ClosestOnRegionBoundary(region, aim);
+        tree.Anchor = newAnchor;
+
+        if (!TryBoundaryFrame(region, newAnchor, out var tangent, out var inward))
+        {
+            if (tree.Branches.Count > 0 && tree.Branches[0].Centerline.Count > 0)
+                tree.Branches[0].Centerline[0] = newAnchor;
+            return Vector2.DistanceSquared(prev, newAnchor) > 1e-6f;
+        }
+
+        // Preserve prior trunk depth (within MaxStep), rebuild bars if any.
+        float prevDepth = MathF.Max(bead * 1.5f, maxStep * 2f);
+        float prevBarL = 0f, prevBarR = 0f;
+        Vector2 prevElbow = newAnchor + inward * prevDepth;
+        if (tree.Branches.Count > 0 && tree.Branches[0].Centerline.Count >= 2)
+        {
+            prevElbow = tree.Branches[0].Centerline[^1];
+            prevDepth = Vector2.Distance(tree.Branches[0].Centerline[0], prevElbow);
+            prevDepth = MathF.Max(bead * 0.75f, prevDepth);
+            for (int bi = 1; bi < tree.Branches.Count; bi++)
+            {
+                var br = tree.Branches[bi];
+                if (br.ParentBranch != 0 || br.Centerline.Count < 2) continue;
+                float bl = Vector2.Distance(br.Centerline[0], br.Centerline[^1]);
+                float side = Vector2.Dot(br.Centerline[^1] - prevElbow, tangent);
+                if (side < 0) prevBarL = MathF.Max(prevBarL, bl);
+                else prevBarR = MathF.Max(prevBarR, bl);
+            }
+        }
+
+        float wantDepth = MathF.Min(prevDepth, MathF.Max(barLen * 4f, bead * 12f));
+        wantDepth = MathF.Max(bead * 0.75f, wantDepth);
+        var elbow = newAnchor + inward * wantDepth;
+        if (!InsideRegion(core, elbow))
+            elbow = ClosestOnRegionBoundary(core, elbow);
+        if (!SegmentInsideRegion(region, newAnchor, elbow, bead))
+        {
+            elbow = newAnchor + inward * MathF.Max(bead * 0.75f, maxStep);
+            if (!InsideRegion(core, elbow))
+                elbow = ClosestOnRegionBoundary(core, elbow);
+            if (!SegmentInsideRegion(region, newAnchor, elbow, bead))
+            {
+                tree.Branches.Clear();
+                tree.Branches.Add(new LightningBranch([newAnchor, newAnchor + inward * bead * 0.5f]));
+                return true;
+            }
+        }
+
+        float halfBar = MathF.Max(barLen * 0.5f, bead * 2f);
+        tree.Branches.Clear();
+        tree.Branches.Add(new LightningBranch([newAnchor, elbow]));
+        if (prevBarL >= bead * 0.5f || prevBarR >= bead * 0.5f)
+        {
+            float reachL = MaxBarReach(elbow, -tangent,
+                MathF.Min(halfBar, MathF.Max(prevBarL, bead)), region, bead);
+            float reachR = MaxBarReach(elbow,  tangent,
+                MathF.Min(halfBar, MathF.Max(prevBarR, bead)), region, bead);
+            if (reachL >= bead * 0.5f)
+                tree.Branches.Add(new LightningBranch([elbow, elbow - tangent * reachL])
+                    { ParentBranch = 0, ParentNode = 1 });
+            if (reachR >= bead * 0.5f)
+                tree.Branches.Add(new LightningBranch([elbow, elbow + tangent * reachR])
+                    { ParentBranch = 0, ParentNode = 1 });
+        }
+        return true;
+    }
 
     private static bool PassesMeshVetoAt(
         Func<int, Vector2, bool>? solidAt,
@@ -991,6 +1302,14 @@ public static class LightningPlanner
 
     /// <summary>Try to place one Formbound Buttress T at sample <paramref name="si"/>.
     /// Returns false when mesh veto / topology / proximity rejects it.</summary>
+    /// <param name="maxAnchorDist">
+    /// Cap on wall-mouth distance from the demand mid (e.g. 2× layer height for
+    /// painted Bridge). <see cref="float.MaxValue"/> = no extra cap.
+    /// </param>
+    /// <param name="faceToward">
+    /// Optional aim point (support selection). Wall mouth is chosen so the trunk
+    /// faces this direction from the mid sample.
+    /// </param>
     private static bool TryAddButtressAt(
         List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
         PathsD region, PathsD envelope, PathsD core,
@@ -999,7 +1318,9 @@ public static class LightningPlanner
         float coverRadius, float sameSideMax,
         LightningLayerPlan layerPlan, ref int nextTreeId,
         Func<int, Vector2, bool>? solidAt, int layerAbove, PathsD regionAbove,
-        List<Vector2> rawSamples)
+        List<Vector2> rawSamples,
+        float maxAnchorDist = float.MaxValue,
+        Vector2? faceToward = null)
     {
         if (!PassesMeshVetoAt(solidAt, layerAbove, regionAbove, rawSamples, si, bead))
             return false;
@@ -1009,7 +1330,7 @@ public static class LightningPlanner
             region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
             preferInterior, settings.LightningAnchorInterior,
             settings.LightningAnchorExterior,
-            bead, barLen, nextTreeId);
+            bead, barLen, nextTreeId, maxAnchorDist, faceToward);
         if (tree is null) return false;
 
         // Proximity: same-side only. A T on the opposite wall of a channel must not
@@ -1084,16 +1405,18 @@ public static class LightningPlanner
     ///   wall ──► elbow ──┬── bar along run →
     ///                    └── bar along run ←
     /// </para>
-    /// Anchor search tries every allowed wall class (interior then exterior) and
-    /// picks the shortest valid approach so opposite sides of a cavity each get
-    /// their own mouth instead of all anchoring on one wall.
+    /// For painted Bridge demand: mouth is at the mid sample; wall break is the
+    /// closest valid perimeter point within <paramref name="maxAnchorDist"/> that
+    /// faces <paramref name="faceToward"/> (support selection).
     /// </summary>
     private static LightningTree? TryBuildButtressT(
         List<Vector2> samples, int si, float sampleStep, int runCount, int runStart,
         PathsD region, PathsD envelope, PathsD core,
         PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
         bool preferInterior, bool allowInterior, bool allowExterior,
-        float bead, float barLen, int id)
+        float bead, float barLen, int id,
+        float maxAnchorDist = float.MaxValue,
+        Vector2? faceToward = null)
     {
         // Birth = FULL support geometry at the TOP of the overhang column.
         // Lower layers inherit and RetractButtress by MaxStep so bottom-up print
@@ -1110,14 +1433,45 @@ public static class LightningPlanner
 
         var homeWall = ClosestOnRegionBoundary(region, sPt);
         float maxTrunk = MathF.Max(barLen * 12f, bead * 50f);
+        if (maxAnchorDist < float.MaxValue * 0.5f)
+            maxTrunk = MathF.Min(maxTrunk, MathF.Max(maxAnchorDist, bead * 2f));
 
-        // Elbow under demand sample (or projected into core).
+        // Elbow under demand sample (or projected into core) — mid of target/support line.
         Vector2 elbow = offMaterial
             ? sPt
             : InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt);
 
-        // Bar follows the UNSUPPORTED RUN (ledge edge) for full coverage of this sample's run.
+        // Paint marks sit ON the perimeter path. Elbow must sit a few beads INSIDE
+        // the solid so a short wall→elbow trunk is valid; otherwise every candidate
+        // is rejected as dElbow < bead/2 and the paint column never births.
+        bool paintBirth = maxAnchorDist < float.MaxValue * 0.5f;
+        if (!offMaterial && paintBirth
+            && Vector2.Distance(homeWall, elbow) < bead * 2.5f
+            && TryBoundaryFrame(region, homeWall, out _, out var inwardN))
+        {
+            var inset = homeWall + inwardN * MathF.Max(bead * 2.5f, bead * 2f);
+            if (InsideRegion(core, inset) || InsideRegion(region, inset))
+                elbow = InsideRegion(core, inset) ? inset : ClosestOnRegionBoundary(core, inset);
+            else
+                elbow = ClosestOnRegionBoundary(core, homeWall + inwardN * bead);
+        }
+
+        // Bar follows the UNSUPPORTED RUN (ledge edge). Prefer covering the full
+        // painted/unsupported run length when the caller passed barLen ≥ run length
+        // (manual Bridge demand does this so a selected path segment gets a full T).
         float halfBar = MathF.Max(barLen * 0.5f, bead * 2f);
+        // From this sample, also allow walking the remaining run distance so a
+        // mid-run birth opens a T that reaches both ends of the selected segment.
+        if (runCount > 1 && samples.Count > 0)
+        {
+            float toStart = 0f, toEnd = 0f;
+            for (int j = si - 1; j >= runStart; j--)
+                toStart += Vector2.Distance(samples[j + 1], samples[j]);
+            int runEnd = Math.Min(samples.Count - 1, runStart + runCount - 1);
+            for (int j = si; j < runEnd; j++)
+                toEnd += Vector2.Distance(samples[j], samples[j + 1]);
+            halfBar = MathF.Max(halfBar, MathF.Max(toStart, toEnd) + bead);
+        }
         var left  = WalkAlongRun(samples, si, runStart, runCount, sampleStep, -halfBar, keep, bead, offMaterial);
         var right = WalkAlongRun(samples, si, runStart, runCount, sampleStep,  halfBar, keep, bead, offMaterial);
 
@@ -1137,44 +1491,96 @@ public static class LightningPlanner
             right = ClampBarEnd(elbow, right, core, region, bead);
         }
 
+        // Preferred trunk direction: wall → elbow should face the support selection.
+        // faceToward is the support-side end of the painted/bridge run.
+        Vector2 faceDir = default;
+        bool hasFace = false;
+        if (faceToward is { } ft)
+        {
+            faceDir = ft - elbow;
+            float fl2 = faceDir.LengthSquared();
+            if (fl2 > 1e-8f)
+            {
+                faceDir /= MathF.Sqrt(fl2);
+                hasFace = true;
+            }
+        }
+
         var candidates = new List<Vector2>();
         void AddClosest(PathsD paths)
         {
             if (paths.Count == 0) return;
             candidates.Add(ClosestOnRegionBoundary(paths, elbow));
         }
+        void AddNearby(PathsD paths)
+        {
+            if (paths.Count == 0 || maxAnchorDist >= float.MaxValue * 0.5f) return;
+            CollectBoundaryCandidatesNear(paths, elbow, maxAnchorDist, bead, candidates);
+        }
         if (offMaterial)
+        {
             AddClosest(region);
+            AddNearby(region);
+        }
         else
         {
             if (preferInterior)
             {
-                if (allowInterior) AddClosest(anchorInterior);
-                if (allowExterior) AddClosest(anchorExterior);
+                if (allowInterior) { AddClosest(anchorInterior); AddNearby(anchorInterior); }
+                if (allowExterior) { AddClosest(anchorExterior); AddNearby(anchorExterior); }
             }
             else
             {
-                AddClosest(anchorPaths);
-                if (allowInterior) AddClosest(anchorInterior);
-                if (allowExterior) AddClosest(anchorExterior);
+                AddClosest(anchorPaths); AddNearby(anchorPaths);
+                if (allowInterior) { AddClosest(anchorInterior); AddNearby(anchorInterior); }
+                if (allowExterior) { AddClosest(anchorExterior); AddNearby(anchorExterior); }
             }
         }
         candidates.Add(homeWall);
+        AddNearby(region);
 
         Vector2 anchor = default;
         bool found = false;
         float bestScore = float.MaxValue;
-        foreach (var cand in candidates)
+        // Paint columns: allow longer wall reach — marks are on the path, wall is local.
+        float maxDist = paintBirth
+            ? MathF.Max(maxAnchorDist, MathF.Max(maxTrunk, bead * 20f))
+            : (maxAnchorDist < float.MaxValue * 0.5f ? maxAnchorDist : maxTrunk);
+        float minTrunk = paintBirth ? bead * 0.2f : bead * 0.5f;
+
+        void ScoreCandidates(bool enforceFace)
         {
-            float dElbow = Vector2.Distance(cand, elbow);
-            if (dElbow < bead * 0.5f) continue;
-            if (dElbow > maxTrunk) continue;
-            if (!offMaterial && !SegmentInsideRegion(region, cand, elbow, bead)) continue;
-            if (cavity && !SegmentInsideVoid(region, cand, elbow, bead)) continue;
-            float dHome = Vector2.Distance(cand, homeWall);
-            float score = dHome * 2f + dElbow;
-            if (score < bestScore) { bestScore = score; anchor = cand; found = true; }
+            foreach (var cand in candidates)
+            {
+                float dElbow = Vector2.Distance(cand, elbow);
+                if (dElbow < minTrunk) continue;
+                if (dElbow > maxDist) continue;
+                if (!offMaterial && !SegmentInsideRegion(region, cand, elbow, bead)) continue;
+                if (cavity && !SegmentInsideVoid(region, cand, elbow, bead)) continue;
+
+                var trunkDir = elbow - cand;
+                float tl2 = trunkDir.LengthSquared();
+                if (tl2 < 1e-10f) continue;
+                trunkDir /= MathF.Sqrt(tl2);
+
+                float faceAlign = 0f;
+                if (enforceFace && hasFace)
+                {
+                    faceAlign = Vector2.Dot(trunkDir, faceDir);
+                    // Soft facing for paint — hard reject only clear opposite walls.
+                    if (faceAlign < -0.5f) continue;
+                }
+
+                float score = dElbow - faceAlign * maxDist * 0.35f;
+                if (score < bestScore) { bestScore = score; anchor = cand; found = true; }
+            }
         }
+
+        // Prefer facing when requested; if that rejects every wall, retry without face
+        // so a paint column still births under the selection.
+        ScoreCandidates(enforceFace: hasFace);
+        if (!found && hasFace)
+            ScoreCandidates(enforceFace: false);
         if (!found) { PfNoAnchor++; return null; }
 
         // T at birth (full). RetractButtress shortens trunk+bars layer-by-layer going down.
@@ -1376,11 +1782,6 @@ public static class LightningPlanner
         return from + d * (maxStep / len);
     }
 
-    /// <summary>
-    /// Last-resort multi-planar recovery: wall → short inward trunk → bar along
-    /// wall tangent. Used when re-aim fails or remapped geometry crosses void so
-    /// we keep a printable mouth instead of orphaning the entire lineage.
-    /// </summary>
     /// <summary>One-layer recovery stub: only MaxStep deep from the wall (gradual growth).</summary>
     private static bool TryRebuildShortButtress(
         LightningTree tree, PathsD region, PathsD core, float bead, float barLen, float maxStep)
@@ -1686,6 +2087,101 @@ public static class LightningPlanner
         return outp;
     }
 
+    /// <summary>Index of the sample nearest the geometric midpoint of the run.</summary>
+    private static int MidIndexAlongRun(List<Vector2> run)
+    {
+        if (run.Count <= 1) return 0;
+        float total = 0f;
+        for (int j = 1; j < run.Count; j++)
+            total += Vector2.Distance(run[j - 1], run[j]);
+        if (total < 1e-6f) return run.Count / 2;
+        float half = total * 0.5f;
+        float acc = 0f;
+        for (int j = 1; j < run.Count; j++)
+        {
+            float seg = Vector2.Distance(run[j - 1], run[j]);
+            if (acc + seg >= half) return j;
+            acc += seg;
+        }
+        return run.Count / 2;
+    }
+
+    /// <summary>
+    /// Order projected manual-demand points into a continuous polyline via nearest-
+    /// neighbour chaining, starting from the <b>first</b> planted mark so the
+    /// support-selection end of a bridge ribbon stays at index 0 (facing aim).
+    /// </summary>
+    private static List<Vector2> OrderDemandRun(
+        IReadOnlyList<Vector2> raw, Func<Vector2, Vector2> map)
+    {
+        var pts = new List<Vector2>(raw.Count);
+        foreach (var p in raw) pts.Add(map(p));
+        if (pts.Count <= 2) return pts;
+
+        // Start at first planted mark (support selection / ribbon start), not min-X.
+        int start = 0;
+        var ordered = new List<Vector2>(pts.Count);
+        var used = new bool[pts.Count];
+        int cur = start;
+        for (int n = 0; n < pts.Count; n++)
+        {
+            ordered.Add(pts[cur]);
+            used[cur] = true;
+            int next = -1;
+            float best = float.MaxValue;
+            for (int j = 0; j < pts.Count; j++)
+            {
+                if (used[j]) continue;
+                float d = Vector2.DistanceSquared(pts[cur], pts[j]);
+                if (d < best) { best = d; next = j; }
+            }
+            if (next < 0) break;
+            cur = next;
+        }
+        return ordered;
+    }
+
+    /// <summary>
+    /// Boundary samples on <paramref name="paths"/> within <paramref name="maxDist"/>
+    /// of <paramref name="near"/> — used to pick the closest facing wall break for
+    /// painted Bridge mouths (2× layer height search).
+    /// </summary>
+    private static void CollectBoundaryCandidatesNear(
+        PathsD paths, Vector2 near, float maxDist, float bead, List<Vector2> into)
+    {
+        float max2 = maxDist * maxDist;
+        float step = MathF.Max(bead * 0.5f, maxDist / 12f);
+        foreach (var path in paths)
+        {
+            int cnt = path.Count;
+            if (cnt < 2) continue;
+            for (int i = 0; i < cnt; i++)
+            {
+                var a = new Vector2((float)path[i].x, (float)path[i].y);
+                var b = new Vector2((float)path[(i + 1) % cnt].x, (float)path[(i + 1) % cnt].y);
+                var ab = b - a;
+                float len = ab.Length();
+                if (len < 1e-6f)
+                {
+                    if (Vector2.DistanceSquared(near, a) <= max2) into.Add(a);
+                    continue;
+                }
+                // Closest point on this segment.
+                float t = Math.Clamp(Vector2.Dot(near - a, ab) / (len * len), 0f, 1f);
+                var c = a + ab * t;
+                if (Vector2.DistanceSquared(near, c) <= max2) into.Add(c);
+                // Extra samples along the segment for better facing choice.
+                int nSamp = Math.Max(1, (int)MathF.Ceiling(len / step));
+                for (int s = 0; s <= nSamp; s++)
+                {
+                    float u = s / (float)nSamp;
+                    var p = a + ab * u;
+                    if (Vector2.DistanceSquared(near, p) <= max2) into.Add(p);
+                }
+            }
+        }
+    }
+
     /// <summary>Walk ±arc length along the sample ring from <paramref name="si"/>,
     /// staying inside the run window when possible, and project onto <paramref name="keep"/>.</summary>
     private static Vector2 WalkAlongRun(
@@ -1694,10 +2190,19 @@ public static class LightningPlanner
     {
         int n = samples.Count;
         if (n == 0) return default;
+        // Single sample (e.g. paint mouth at ColumnFoot only): no arc to walk.
+        if (n == 1)
+        {
+            var only = samples[0];
+            if (external) return only;
+            if (InsideRegion(keep, only)) return only;
+            return ClosestOnRegionBoundary(keep, only);
+        }
         int dir = signedArc >= 0f ? 1 : -1;
         float remaining = MathF.Abs(signedArc);
         int idx = si;
         var last = samples[si];
+        int guard = n * 4 + 8; // never wrap forever on degenerate collinear runs
 
         // Prefer staying inside the unsupported run indices.
         bool InRun(int i)
@@ -1707,12 +2212,13 @@ public static class LightningPlanner
             return false;
         }
 
-        while (remaining > 0.01f)
+        while (remaining > 0.01f && guard-- > 0)
         {
             int next = (idx + dir + n * 4) % n;
             // Stop at run ends for finite runs (don't wrap into supported arc).
             if (runCount < n && !InRun(next))
                 break;
+            if (next == idx) break;
             float seg = Vector2.Distance(samples[idx], samples[next]);
             if (seg < 1e-6f) { idx = next; continue; }
             if (seg >= remaining)

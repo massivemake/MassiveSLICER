@@ -135,7 +135,7 @@ internal static class WorkspaceService
         return state;
     }
 
-    /// <summary>Snapshots edit mode, paint tools, view mode, and layer isolation window.</summary>
+    /// <summary>Snapshots edit mode, paint tools, markers UI, and layer isolation window.</summary>
     private static WorkspaceUiSession CaptureUiSession(ViewModels.ViewportViewModel viewport)
     {
         return new WorkspaceUiSession
@@ -151,6 +151,12 @@ internal static class WorkspaceService
             PaintSelectGranularity   = viewport.PaintSelectGranularity,
             PaintPickFilter          = viewport.PaintPickFilter,
             PaintBrushRadiusMm       = viewport.PaintBrushRadiusMm,
+            PaintRegionSelectMode    = viewport.PaintRegionSelectMode,
+            PaintModificationMode    = viewport.PaintModificationMode,
+            PaintSupportType         = viewport.PaintSupportType,
+            ShowPaintMarkers         = viewport.ShowPaintMarkers,
+            PaintShowBeads           = viewport.PaintShowBeads,
+            PaintModifications       = viewport.CapturePaintModifications?.Invoke() ?? [],
             ToolpathScrubIndex       = viewport.ToolpathScrubIndex,
             ToolpathScrubLowIndex    = viewport.ToolpathScrubLowIndex,
             ToolpathScrubLayerHigh   = viewport.ToolpathScrubLayerHigh,
