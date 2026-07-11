@@ -306,7 +306,9 @@ public sealed class ZigZagSingleSkinTest
                 foreach (var h in pins)
                 {
                     // Birth stubs don't need a parent; grown pins must catch previous.
-                    if (h.Depth <= maxStep * 1.15f) continue;
+                    // Planner minDepth is bead*0.35 — ribs entering through a side
+                    // edge mid-print are born at that depth (wall-supported bump).
+                    if (h.Depth <= MathF.Max(maxStep * 1.15f, Bead * 0.4f)) continue;
 
                     float best = 0f;
                     foreach (var p in prevPins)

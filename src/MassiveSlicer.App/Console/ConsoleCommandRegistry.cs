@@ -303,6 +303,37 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "tpdump",
+            Description = "Debug: dump the active toolpath moves to a CSV file",
+            Usage = "tpdump <path.csv>",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[tpdump] no active toolpath"); return; }
+                string path = string.IsNullOrWhiteSpace(args)
+                    ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "toolpath-dump.csv")
+                    : args.Trim();
+                var sb = new System.Text.StringBuilder("layer,z,kind,fx,fy,fz,tx,ty,tz\n");
+                for (int li = 0; li < tp.Layers.Count; li++)
+                {
+                    var lyr = tp.Layers[li];
+                    foreach (var m in lyr.Moves)
+                        sb.Append(li).Append(',').Append(lyr.Z.ToString("0.###")).Append(',')
+                          .Append(m.Kind).Append(',')
+                          .Append(m.From.X.ToString("0.###")).Append(',')
+                          .Append(m.From.Y.ToString("0.###")).Append(',')
+                          .Append(m.From.Z.ToString("0.###")).Append(',')
+                          .Append(m.To.X.ToString("0.###")).Append(',')
+                          .Append(m.To.Y.ToString("0.###")).Append(',')
+                          .Append(m.To.Z.ToString("0.###")).Append('\n');
+                }
+                System.IO.File.WriteAllText(path, sb.ToString());
+                ctx.Log($"[tpdump] {tp.Layers.Count} layer(s) → {path}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "effector",
             Description = "Toggle live effector point 1-3, or list active positions",
             Usage = "effector <1|2|3|list>",
