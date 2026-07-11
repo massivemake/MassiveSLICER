@@ -723,10 +723,16 @@ public static class AngledPlanarSlicer
 
     // Greedy nearest-endpoint walk — identical logic to PlanarSlicer.ChainByProximity.
     private static List<List<Vector2>> ChainByProximity(List<(Vector2 A, Vector2 B)> segs)
+        => ChainGrid(segs);
+
+    private static List<List<Vector2>> ChainGrid(List<(Vector2 A, Vector2 B)> segs)
     {
         int n = segs.Count;
         var used     = new bool[n];
         var contours = new List<List<Vector2>>();
+        // Endpoint spatial hash — the full O(n) scan per step made this O(n²),
+        // which never finished on dense Multi-Planar sections (V80 drone hang).
+        var grid = new SegmentEndpointGrid(segs);
 
         for (int start = 0; start < n; start++)
         {
@@ -737,20 +743,7 @@ public static class AngledPlanarSlicer
 
             while (true)
             {
-                var   tail = chain[^1];
-                float best = float.MaxValue;
-                int   bi   = -1;
-                bool  flip = false;
-
-                for (int i = 0; i < n; i++)
-                {
-                    if (used[i]) continue;
-                    float dA = Dist2(tail, segs[i].A);
-                    float dB = Dist2(tail, segs[i].B);
-                    if (dA < best) { best = dA; bi = i; flip = false; }
-                    if (dB < best) { best = dB; bi = i; flip = true;  }
-                }
-
+                int bi = grid.FindNearest(chain[^1], used, out bool flip, out float best);
                 if (bi < 0 || best > 1.0f) break;
 
                 used[bi] = true;
