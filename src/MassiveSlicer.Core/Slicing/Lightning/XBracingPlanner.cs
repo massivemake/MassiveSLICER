@@ -30,10 +30,18 @@ public static class XBracingPlanner
         public float ThetaSign { get; init; }
         /// <summary>World-stable into-wall unit (same every layer for this contour).</summary>
         public Vector2 InwardUnit { get; init; }
+        /// <summary>
+        /// This layer's coverage in the LOCKED world frame (U measured from the
+        /// locked origin/Theta0, NOT re-shifted per layer). On panels with slanted
+        /// or scalloped edges the covered U range moves with Z — the world-anchored
+        /// cell grid stays put and ribs enter/exit through the edges.
+        /// </summary>
+        public float UMin { get; init; }
+        public float UMax { get; init; }
 
         public float ThetaAt(float u)
         {
-            u = Math.Clamp(u, 0f, MathF.Max(Length, 0f));
+            u = Math.Clamp(u, UMin, MathF.Max(UMax, UMin));
             if (IsCylinder && Radius > 1e-3f)
                 return Theta0 + ThetaSign * (u / Radius);
             return 0f;
@@ -42,7 +50,7 @@ public static class XBracingPlanner
         /// <summary>Smooth along-wall sample (cylinder uses ref radius).</summary>
         public Vector2 PointAt(float u)
         {
-            u = Math.Clamp(u, 0f, MathF.Max(Length, 0f));
+            u = Math.Clamp(u, UMin, MathF.Max(UMax, UMin));
             if (IsCylinder && Radius > 1e-3f)
             {
                 float th = ThetaAt(u);
@@ -253,31 +261,38 @@ public static class XBracingPlanner
             float contourWant = solidCap;
             float contourBirth = onPrintBed ? contourWant : MathF.Min(contourWant, maxStep);
 
-            float baseLen = baseline.Length;
-            int nCells = extendEdges
-                ? Math.Max(1, (int)MathF.Ceiling(baseLen / span))
-                : Math.Max(1, (int)MathF.Floor(baseLen / span));
-            if (nCells < 1) nCells = 1;
+            // World-anchored cell grid: cells sit at absolute multiples of span in the
+            // LOCKED frame. On scalloped/slanted panels each layer covers a moving
+            // window [UMin, UMax] of that grid — diagonals stay world-straight and
+            // ribs enter/exit through the edges instead of sliding along them.
+            float covMin = baseline.UMin;
+            float covMax = baseline.UMax;
+            float edgeTol = bead * 1.0f;
+            int cStart = (int)MathF.Floor(covMin / span);
+            int cEnd = (int)MathF.Ceiling(covMax / span);
+            bool InCoverage(float uu) => uu >= covMin - edgeTol && uu <= covMax + edgeTol;
 
             // Sites: IdealMouth on straight baseline; PathMouth for perimeter stitch only.
             var sites = new List<(float U, Vector2 IdealMouth, Vector2 PathMouth, Vector2 Tip, int KeyA, int KeyB)>();
-            for (int c = 0; c < nCells; c++)
+            for (int c = cStart; c < cEnd; c++)
             {
                 float local0 = c * span;
-                if (!extendEdges && local0 + span > baseLen + 0.01f) break;
-                float cellSpan = MathF.Min(span, MathF.Max(baseLen - local0, bead * 5f));
-                if (cellSpan < bead * 4f) continue;
+                if (!extendEdges
+                    && (local0 < covMin - 0.01f || local0 + span > covMax + 0.01f))
+                    continue;
 
-                // Full-span diagonals on the straight baseline (cross-through X).
-                float uA = Math.Clamp(local0 + cellT * cellSpan, 0f, baseLen);
-                float uB = Math.Clamp(local0 + cellSpan - cellT * cellSpan, 0f, baseLen);
+                // Full-span diagonals on the WORLD cell (cross-through X). Never
+                // shrink the cell to this layer's coverage — that bends the diagonal.
+                float uA = local0 + cellT * span;
+                float uB = local0 + span - cellT * span;
                 int keyA = ci * 100_000 + c * 2 + 0;
                 int keyB = ci * 100_000 + c * 2 + 1;
                 float uSep = MathF.Abs(uA - uB);
 
                 if (uSep <= meetMergeS)
                 {
-                    float uMid = Math.Clamp(0.5f * (uA + uB), 0f, baseLen);
+                    float uMid = 0.5f * (uA + uB);
+                    if (!InCoverage(uMid)) continue; // rib exits through the edge
                     float meetBirth = MathF.Max(contourBirth, contourWant);
                     if (PlaceSupportedHairpin(
                             path, totalLen, baseline, keyA, keyB,
@@ -288,14 +303,14 @@ public static class XBracingPlanner
                 }
                 else
                 {
-                    if (PlaceSupportedHairpin(
+                    if (InCoverage(uA) && PlaceSupportedHairpin(
                             path, totalLen, baseline, keyA, keyA,
                             uA, contourWant, bead, maxStep, maxDs, maxLateral,
                             contourBirth, supportR, settings, state,
                             out var siteA, wallRing))
                         sites.Add((siteA.U, siteA.IdealMouth, siteA.PathMouth, siteA.Tip, keyA, keyA));
 
-                    if (PlaceSupportedHairpin(
+                    if (InCoverage(uB) && PlaceSupportedHairpin(
                             path, totalLen, baseline, keyB, keyB,
                             uB, contourWant, bead, maxStep, maxDs, maxLateral,
                             contourBirth, supportR, settings, state,
@@ -386,8 +401,9 @@ public static class XBracingPlanner
         List<Vector2>? wallRing = null)
     {
         site = default;
-        float baseLen = baseline.Length;
-        uIdeal = Math.Clamp(uIdeal, 0f, baseLen);
+        float uLo = baseline.UMin;
+        float uHi = MathF.Max(baseline.UMax, baseline.UMin);
+        uIdeal = Math.Clamp(uIdeal, uLo, uHi);
 
         // Same-key previous only — do NOT steal the other X leg's parent.
         Hairpin prev = default;
@@ -418,7 +434,7 @@ public static class XBracingPlanner
             float du = uIdeal - prev.S;
             if (MathF.Abs(du) > maxDs)
                 u = prev.S + MathF.Sign(du) * maxDs;
-            u = Math.Clamp(u, 0f, baseLen);
+            u = Math.Clamp(u, uLo, uHi);
         }
 
         // Mouth = real path point nearest baseline U; tip = mouth + grow × depth.
@@ -485,22 +501,22 @@ public static class XBracingPlanner
             // Free-edge lateral: lag U only — keep depth (no thrash, no stretch).
             if (Vector2.Distance(tip, prev.Tip) > maxLateral + 1e-3f)
             {
-                float uLo = prev.S;
-                float uHi = u;
+                float sLo = prev.S;
+                float sHi = u;
                 float uMinProg = prev.S + MathF.Sign(uIdeal - prev.S)
                     * MathF.Min(maxDs * 0.5f, MathF.Abs(uIdeal - prev.S) * 0.5f);
                 for (int i = 0; i < 12; i++)
                 {
-                    u = Math.Clamp(0.5f * (uLo + uHi), 0f, baseLen);
+                    u = Math.Clamp(0.5f * (sLo + sHi), uLo, uHi);
                     PlaceTip();
                     if (Vector2.Distance(tip, prev.Tip) > maxLateral)
-                        uHi = u;
+                        sHi = u;
                     else
-                        uLo = u;
+                        sLo = u;
                 }
-                u = Math.Clamp(uLo, 0f, baseLen);
+                u = Math.Clamp(sLo, uLo, uHi);
                 if (MathF.Abs(u - prev.S) < MathF.Abs(uMinProg - prev.S) - 1e-4f)
-                    u = Math.Clamp(uMinProg, 0f, baseLen);
+                    u = Math.Clamp(uMinProg, uLo, uHi);
                 // Hold parent depth if still overshooting after U lag.
                 depth = Math.Clamp(MathF.Max(depth, prev.Depth), minDepth, wantDepth);
                 PlaceTip();
@@ -514,7 +530,7 @@ public static class XBracingPlanner
                 float du = uNext - prev.S;
                 if (MathF.Abs(du) > maxDs)
                     uNext = prev.S + MathF.Sign(du) * maxDs;
-                uNext = Math.Clamp(uNext, 0f, baseLen);
+                uNext = Math.Clamp(uNext, uLo, uHi);
                 if (MathF.Abs(uNext - u) < 1e-4f) break;
                 u = uNext;
                 depth = Math.Clamp(MathF.Max(prev.Depth, MathF.Min(depth, wantDepth)), minDepth, wantDepth);
@@ -523,12 +539,19 @@ public static class XBracingPlanner
 
             if (SupportFraction(pathMouth, tip, prev.Mouth, prev.Tip, supportR) < MinSupportFraction * 0.85f)
             {
+                // Hold at the parent, never die: a rib that skips a layer leaves a
+                // gap and is reborn as a stub that takes ~wantDepth/maxStep layers
+                // to regrow — reference ribs are continuous. A pin held at prev's
+                // position/depth is supported by construction.
                 u = prev.S;
                 depth = Math.Clamp(MathF.Max(prev.Depth, MathF.Min(wantDepth, prev.Depth + maxStep)),
                     minDepth, wantDepth);
                 PlaceTip();
                 if (SupportFraction(pathMouth, tip, prev.Mouth, prev.Tip, supportR) < MinSupportFraction * 0.75f)
-                    return false;
+                {
+                    depth = Math.Clamp(prev.Depth, minDepth, wantDepth);
+                    PlaceTip();
+                }
             }
         }
 
@@ -536,7 +559,16 @@ public static class XBracingPlanner
         depth = Math.Clamp(depth, minDepth, wantDepth);
         tip = pathMouth + growDir * depth;
         float drawn = Vector2.Distance(pathMouth, tip);
-        if (drawn < minDepth * 0.9f) return false;
+        if (drawn < minDepth * 0.9f)
+        {
+            if (!hasPrev) return false;
+            // Degenerate placement — carry the parent pin forward verbatim (rib
+            // continuity beats one layer of march).
+            u = prev.S;
+            pathMouth = prev.Mouth;
+            tip = prev.Tip;
+            depth = prev.Depth;
+        }
 
         var hair = new Hairpin
         {
@@ -563,29 +595,19 @@ public static class XBracingPlanner
     {
         mouth = default;
         growDir = default;
-        u = Math.Clamp(u, 0f, MathF.Max(baseline.Length, 0f));
+        u = Math.Clamp(u, baseline.UMin, MathF.Max(baseline.UMax, baseline.UMin));
 
         // Baseline U only chooses where along the wall; mouth is always on the path.
-        float pathS;
-        if (baseline.IsCylinder && baseline.Radius > 1e-3f)
-        {
-            float th = baseline.ThetaAt(u);
-            var radial = new Vector2(MathF.Cos(th), MathF.Sin(th));
-            var sample = baseline.CylinderCenter + radial * baseline.Radius;
-            pathS = NearestArcS(path, totalLen, sample);
-        }
-        else
-        {
-            // Fold-free mapping: proportional arc length, oriented by the locked
-            // baseline unit. Nearest-point projection from the straight chord folds
-            // under crests/troughs of a wavy wall (two equidistant slopes) — the
-            // mouth would have to teleport across the bump, the support clamps veto
-            // the jump, and the diagonal march deadlocks at prev.S forever.
-            float frac = baseline.Length > 1e-6f ? u / baseline.Length : 0f;
-            bool rev = path.Count >= 2
-                && Vector2.Dot(path[^1] - path[0], baseline.Unit) < 0f;
-            pathS = Math.Clamp((rev ? 1f - frac : frac) * totalLen, 0f, totalLen);
-        }
+        // Both mappings INVERT the world coordinate along the path (first crossing
+        // walking a canonical direction): the rib mouth lands where the wall actually
+        // reaches the target angle/offset, so diagonals are world-straight and never
+        // fold under crests/troughs of a wavy wall (nearest-point projection folded —
+        // the mouth had to teleport across the bump, the support clamps vetoed it,
+        // and the march deadlocked; proportional arc length wandered with the waves).
+        float pathS = baseline.IsCylinder && baseline.Radius > 1e-3f
+            ? ArcSAtAngle(path, totalLen, baseline.CylinderCenter,
+                baseline.Theta0, baseline.ThetaAt(u) - baseline.Theta0)
+            : ArcSAtCoord(path, totalLen, baseline.Origin, baseline.Unit, u);
         mouth = PointAtArcOpen(path, totalLen, pathS);
 
         // Path left-normal (open face is oriented into the wall by ExtractSingleSkinOpenFaces).
@@ -627,6 +649,130 @@ public static class XBracingPlanner
         }
 
         return growDir.LengthSquared() > 0.5f;
+    }
+
+    /// <summary>
+    /// Arc length where the path's world coordinate along <paramref name="unit"/>
+    /// first crosses <paramref name="uTarget"/>. The walk always runs in +unit
+    /// direction (path order canonicalized) so zig-zag reversal picks the same
+    /// crossing every layer. Falls back to the vertex with the nearest coordinate.
+    /// </summary>
+    private static float ArcSAtCoord(
+        List<Vector2> path, float totalLen, Vector2 origin, Vector2 unit, float uTarget)
+    {
+        int n = path.Count;
+        if (n < 2 || totalLen < 1e-6f) return 0f;
+        bool rev = Vector2.Dot(path[^1] - path[0], unit) < 0f;
+
+        float acc = 0f;
+        float bestS = 0f, bestErr = float.MaxValue;
+        int i0 = rev ? n - 1 : 0;
+        int step = rev ? -1 : 1;
+        float cPrev = Vector2.Dot(path[i0] - origin, unit);
+        var pPrev = path[i0];
+        for (int k = 1; k < n; k++)
+        {
+            int i = i0 + step * k;
+            var p = path[i];
+            float c = Vector2.Dot(p - origin, unit);
+            float seg = Vector2.Distance(pPrev, p);
+            if (seg > 1e-8f)
+            {
+                if ((cPrev - uTarget) * (c - uTarget) <= 0f && MathF.Abs(c - cPrev) > 1e-8f)
+                {
+                    float t = Math.Clamp((uTarget - cPrev) / (c - cPrev), 0f, 1f);
+                    float sWalk = acc + seg * t;
+                    return rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
+                               : Math.Clamp(sWalk, 0f, totalLen);
+                }
+                float err = MathF.Abs(c - uTarget);
+                if (err < bestErr)
+                {
+                    bestErr = err;
+                    float sWalk = acc + seg;
+                    bestS = rev ? totalLen - sWalk : sWalk;
+                }
+                acc += seg;
+            }
+            cPrev = c;
+            pPrev = p;
+        }
+        // No crossing (target past an end) — nearest coordinate.
+        float e0 = MathF.Abs(Vector2.Dot(path[i0] - origin, unit) - uTarget);
+        if (e0 < bestErr) bestS = rev ? totalLen : 0f;
+        return Math.Clamp(bestS, 0f, totalLen);
+    }
+
+    /// <summary>
+    /// Arc length where the path's unwrapped CCW angle from <paramref name="th0"/>
+    /// first crosses <paramref name="dTarget"/> (radians, ≥ 0). Walk direction is
+    /// canonicalized to increasing angle so zig-zag reversal is invisible.
+    /// </summary>
+    private static float ArcSAtAngle(
+        List<Vector2> path, float totalLen, Vector2 center, float th0, float dTarget)
+    {
+        int n = path.Count;
+        if (n < 2 || totalLen < 1e-6f) return 0f;
+
+        static float Wrap(float a)
+        {
+            while (a > MathF.PI) a -= MathF.PI * 2f;
+            while (a <= -MathF.PI) a += MathF.PI * 2f;
+            return a;
+        }
+
+        // Unwrapped delta-from-th0 at every vertex, walking the path as stored.
+        var deltas = new float[n];
+        var thPrev = MathF.Atan2(path[0].Y - center.Y, path[0].X - center.X);
+        deltas[0] = Wrap(thPrev - th0); // coverage may start CW of th0 (negative delta)
+        for (int i = 1; i < n; i++)
+        {
+            var d = path[i] - center;
+            if (d.LengthSquared() < 1e-10f) { deltas[i] = deltas[i - 1]; continue; }
+            float th = MathF.Atan2(d.Y, d.X);
+            deltas[i] = deltas[i - 1] + Wrap(th - thPrev);
+            thPrev = th;
+        }
+
+        // Canonical direction: increasing angle.
+        bool rev = deltas[^1] < deltas[0];
+
+        float acc = 0f;
+        float bestS = 0f, bestErr = float.MaxValue;
+        int i0 = rev ? n - 1 : 0;
+        int step = rev ? -1 : 1;
+        float dPrev = deltas[i0];
+        var pPrev = path[i0];
+        for (int k = 1; k < n; k++)
+        {
+            int i = i0 + step * k;
+            var p = path[i];
+            float dc = deltas[i];
+            float seg = Vector2.Distance(pPrev, p);
+            if (seg > 1e-8f)
+            {
+                if ((dPrev - dTarget) * (dc - dTarget) <= 0f && MathF.Abs(dc - dPrev) > 1e-9f)
+                {
+                    float t = Math.Clamp((dTarget - dPrev) / (dc - dPrev), 0f, 1f);
+                    float sWalk = acc + seg * t;
+                    return rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
+                               : Math.Clamp(sWalk, 0f, totalLen);
+                }
+                float err = MathF.Abs(dc - dTarget);
+                if (err < bestErr)
+                {
+                    bestErr = err;
+                    float sWalk = acc + seg;
+                    bestS = rev ? totalLen - sWalk : sWalk;
+                }
+                acc += seg;
+            }
+            dPrev = dc;
+            pPrev = p;
+        }
+        float e0 = MathF.Abs(deltas[i0] - dTarget);
+        if (e0 < bestErr) bestS = rev ? totalLen : 0f;
+        return Math.Clamp(bestS, 0f, totalLen);
     }
 
     /// <summary>Left-of-travel unit normal on an open path (into wall after face orient).</summary>
@@ -930,25 +1076,29 @@ public static class XBracingPlanner
             {
                 // Keep locked Theta0/Sign/Inward; refresh center if user moved gizmo.
                 inward = lockData.InwardUnit.LengthSquared() > 0.5f ? lockData.InwardUnit : inward;
-                // Recompute span each layer from path but map into locked frame:
-                // U=0 at locked Theta0, length = current angular coverage from Theta0.
                 thLo = lockData.Theta0;
-                // Measure how far the path extends CCW from locked Theta0.
-                spanAbs = MeasureAngleCoverageFrom(path, c, thLo);
-                baseLen = MathF.Max(spanAbs * Ravg, Ravg * 0.1f);
             }
+
+            // Coverage window in the LOCKED frame (both ends — scalloped panels
+            // uncover/cover grid cells as Z changes).
+            MeasureAngleRangeFrom(path, c, thLo, out float dMin, out float dMax);
+            float covLo = dMin * Ravg;
+            float covHi = dMax * Ravg;
+            if (covHi - covLo < 1e-2f) return false;
 
             baseline = new StraightBaseline
             {
                 Origin = c + new Vector2(MathF.Cos(thLo), MathF.Sin(thLo)) * Ravg,
                 Unit = new Vector2(-MathF.Sin(thLo), MathF.Cos(thLo)),
-                Length = baseLen,
+                Length = covHi - covLo,
                 IsCylinder = true,
                 CylinderCenter = c,
                 Radius = Ravg,
                 Theta0 = thLo,
                 ThetaSign = 1f,
                 InwardUnit = inward,
+                UMin = covLo,
+                UMax = covHi,
             };
             return true;
         }
@@ -1005,12 +1155,12 @@ public static class XBracingPlanner
         }
         float plen = uMax - uMin;
         if (plen < 1e-3f) return false;
-        // Shift origin so U=0 is at uMin this layer (still same unit/inward).
-        var originShift = origin + unit * uMin;
+        // Origin stays LOCKED — the world cell grid must not follow this layer's
+        // leftmost point (slanted edges would bend every diagonal).
 
         baseline = new StraightBaseline
         {
-            Origin = originShift,
+            Origin = origin,
             Unit = unit,
             Length = plen,
             IsCylinder = false,
@@ -1019,6 +1169,8 @@ public static class XBracingPlanner
             Theta0 = 0f,
             ThetaSign = 1f,
             InwardUnit = inwardP,
+            UMin = uMin,
+            UMax = uMax,
         };
         return true;
     }
@@ -1040,6 +1192,47 @@ public static class XBracingPlanner
             prev = th;
         }
         return total;
+    }
+
+    /// <summary>
+    /// Angular coverage window of the path around <paramref name="center"/> relative
+    /// to locked <paramref name="th0"/>: continuous unwrap along the path, so slanted
+    /// panels report both how far CW (dMin, possibly negative) and CCW (dMax) they
+    /// reach this layer.
+    /// </summary>
+    private static void MeasureAngleRangeFrom(
+        List<Vector2> path, Vector2 center, float th0, out float dMin, out float dMax)
+    {
+        dMin = float.MaxValue;
+        dMax = float.MinValue;
+        float acc = 0f;
+        bool first = true;
+        float thPrev = 0f;
+        foreach (var pt in path)
+        {
+            var d = pt - center;
+            if (d.LengthSquared() < 1e-10f) continue;
+            float th = MathF.Atan2(d.Y, d.X);
+            if (first)
+            {
+                float a0 = th - th0;
+                while (a0 > MathF.PI) a0 -= MathF.PI * 2f;
+                while (a0 <= -MathF.PI) a0 += MathF.PI * 2f;
+                acc = a0;
+                first = false;
+            }
+            else
+            {
+                float step = th - thPrev;
+                while (step > MathF.PI) step -= MathF.PI * 2f;
+                while (step <= -MathF.PI) step += MathF.PI * 2f;
+                acc += step;
+            }
+            thPrev = th;
+            if (acc < dMin) dMin = acc;
+            if (acc > dMax) dMax = acc;
+        }
+        if (first) { dMin = 0f; dMax = 0f; }
     }
 
     /// <summary>
