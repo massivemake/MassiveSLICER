@@ -380,6 +380,63 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "robotset",
+            Description = "Debug: get/set a RobotPanelViewModel property by name (A1..A6, E1, ...)",
+            Usage = "robotset <property> [value]",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', 2);
+                var prop = typeof(ViewModels.RobotPanelViewModel).GetProperty(parts[0]);
+                if (prop is null) { ctx.LogError($"[robotset] no property '{parts[0]}'"); return; }
+                if (ctx.Main.Viewport.Robot is not { } robot)
+                {
+                    ctx.LogError("[robotset] no robot panel");
+                    return;
+                }
+                if (parts.Length > 1 && prop.CanWrite)
+                {
+                    object value = prop.PropertyType switch
+                    {
+                        var t when t == typeof(double) => double.Parse(parts[1]),
+                        var t when t == typeof(float)  => float.Parse(parts[1]),
+                        var t when t == typeof(int)    => int.Parse(parts[1]),
+                        var t when t == typeof(bool)   => bool.Parse(parts[1]),
+                        _                              => parts[1],
+                    };
+                    prop.SetValue(robot, value);
+                }
+                ctx.Log($"[robotset] {parts[0]} = {prop.GetValue(robot)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "simkey",
+            Description = "Sim-timeline camera keyframes: add at current %, clear, or list",
+            Usage = "simkey <add|clear|list>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "add":
+                        vp.AddSimCameraKeyframeCommand.Execute(null);
+                        ctx.Log($"[simkey] keyframe at {vp.SimTimelinePercent:0.#}% — now {vp.SimCameraKeyframeMarkers.Count} keyframe(s)");
+                        break;
+                    case "clear":
+                        vp.ClearSimCameraKeyframesCommand.Execute(null);
+                        ctx.Log("[simkey] cleared");
+                        break;
+                    default:
+                        ctx.Log($"[simkey] {vp.SimCameraKeyframeMarkers.Count} keyframe(s): "
+                            + string.Join(", ", vp.SimCameraKeyframeMarkers.Select(m => $"{m * 100:0.#}%")));
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "paint",
             Description = "Toolpath paint marks: bridge/remove dabs, list, clear",
             Usage = "paint <bridge|remove> <x> <y> <z> <radius> | paint list | paint clear",

@@ -3187,12 +3187,124 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(SimTimelineLabel));
                 if (ShowSimTimeline)
                     OnSimScrubRequested?.Invoke(_simTimelinePercent / 100.0);
+                // Camera keyframes drive the view only while the timeline is in
+                // motion (play or video export) — manual scrubbing leaves the
+                // camera alone so the user can compose the next keyframe.
+                if (_simPlaying || _simRecording)
+                    ApplySimCameraAt(_simTimelinePercent);
                 NotifyRenderNeeded();
             }
         }
     }
 
     public string SimTimelineLabel => $"{_simTimelinePercent:0}%";
+
+    // ── Sim-timeline camera keyframes ──────────────────────────────────────
+    // Double-click the slider (or the camera-plus button) to pin the current
+    // viewport camera at that timeline position. During play / video export the
+    // camera eases between pins, so the recording flies the shot.
+    private readonly List<(double Percent, CameraView View)> _simCameraKeys = [];
+
+    public bool HasSimCameraKeyframes => _simCameraKeys.Count > 0;
+
+    /// <summary>Normalized 0–1 marker positions for the timeline tick bar.</summary>
+    public IReadOnlyList<double> SimCameraKeyframeMarkers
+        => _simCameraKeys.Select(k => k.Percent / 100.0).ToList();
+
+    public RelayCommand AddSimCameraKeyframeCommand => _addSimCameraKeyframe ??= new RelayCommand(() =>
+    {
+        if (GetCameraState?.Invoke() is not { } view) return;
+        AddSimCameraKeyframe(_simTimelinePercent, view);
+    });
+    private RelayCommand? _addSimCameraKeyframe;
+
+    public RelayCommand ClearSimCameraKeyframesCommand => _clearSimCameraKeyframes ??= new RelayCommand(() =>
+    {
+        _simCameraKeys.Clear();
+        NotifySimCameraKeyframesChanged();
+    });
+    private RelayCommand? _clearSimCameraKeyframes;
+
+    internal void AddSimCameraKeyframe(double percent, CameraView view)
+    {
+        percent = Math.Clamp(percent, 0.0, 100.0);
+        // Re-keying near an existing pin replaces it (nudge-and-repin workflow).
+        _simCameraKeys.RemoveAll(k => Math.Abs(k.Percent - percent) < 1.5);
+        _simCameraKeys.Add((percent, view));
+        _simCameraKeys.Sort((a, b) => a.Percent.CompareTo(b.Percent));
+        NotifySimCameraKeyframesChanged();
+    }
+
+    private void NotifySimCameraKeyframesChanged()
+    {
+        OnPropertyChanged(nameof(HasSimCameraKeyframes));
+        OnPropertyChanged(nameof(SimCameraKeyframeMarkers));
+    }
+
+    /// <summary>Workspace persistence: [percent, azimuth, elevation, radius, tx, ty, tz].</summary>
+    internal List<double[]>? CaptureSimCameraKeyframes()
+        => _simCameraKeys.Count == 0
+            ? null
+            : _simCameraKeys
+                .Select(k => new[]
+                {
+                    k.Percent, k.View.Azimuth, k.View.Elevation, k.View.Radius,
+                    k.View.TargetX, k.View.TargetY, k.View.TargetZ,
+                })
+                .ToList();
+
+    internal void RestoreSimCameraKeyframes(List<double[]>? data)
+    {
+        _simCameraKeys.Clear();
+        if (data is not null)
+            foreach (var d in data)
+            {
+                if (d is not { Length: >= 7 }) continue;
+                _simCameraKeys.Add((Math.Clamp(d[0], 0.0, 100.0), new CameraView
+                {
+                    Azimuth = (float)d[1], Elevation = (float)d[2], Radius = (float)d[3],
+                    TargetX = (float)d[4], TargetY = (float)d[5], TargetZ = (float)d[6],
+                }));
+            }
+        _simCameraKeys.Sort((a, b) => a.Percent.CompareTo(b.Percent));
+        NotifySimCameraKeyframesChanged();
+    }
+
+    private void ApplySimCameraAt(double percent)
+    {
+        if (_simCameraKeys.Count == 0 || ApplyCameraState is null) return;
+        CameraView view;
+        if (percent <= _simCameraKeys[0].Percent || _simCameraKeys.Count == 1)
+            view = _simCameraKeys[0].View;
+        else if (percent >= _simCameraKeys[^1].Percent)
+            view = _simCameraKeys[^1].View;
+        else
+        {
+            int i = 0;
+            while (i < _simCameraKeys.Count - 2 && percent >= _simCameraKeys[i + 1].Percent) i++;
+            var (p0, a) = _simCameraKeys[i];
+            var (p1, b) = _simCameraKeys[i + 1];
+            float t = (float)Math.Clamp((percent - p0) / Math.Max(p1 - p0, 1e-6), 0.0, 1.0);
+            t = t * t * (3f - 2f * t); // ease in/out per segment
+            view = new CameraView
+            {
+                Azimuth   = LerpAngleDeg(a.Azimuth, b.Azimuth, t),
+                Elevation = a.Elevation + (b.Elevation - a.Elevation) * t,
+                Radius    = a.Radius + (b.Radius - a.Radius) * t,
+                TargetX   = a.TargetX + (b.TargetX - a.TargetX) * t,
+                TargetY   = a.TargetY + (b.TargetY - a.TargetY) * t,
+                TargetZ   = a.TargetZ + (b.TargetZ - a.TargetZ) * t,
+            };
+        }
+        ApplyCameraState(view);
+    }
+
+    /// <summary>Shortest-arc angle lerp in degrees (azimuth can wrap through ±180°).</summary>
+    private static float LerpAngleDeg(float a, float b, float t)
+    {
+        float d = ((b - a + 180f) % 360f + 360f) % 360f - 180f;
+        return a + d * t;
+    }
 
     public bool SimPlaying
     {

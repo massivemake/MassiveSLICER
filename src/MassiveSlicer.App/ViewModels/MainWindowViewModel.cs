@@ -2744,6 +2744,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (doc.Camera is { } camera)
             Viewport.ApplyCameraState?.Invoke(camera);
 
+        // Robot pose (incl. E1) saved with the workspace — reapply so the scene
+        // comes back exactly as it was. A restored scrub session may later re-pose
+        // A1–A6 from IK, which is correct; E1 sticks.
+        if (doc.UiSession?.RobotJoints is { Length: >= 7 } rj && Viewport.Robot is { } robotVm)
+        {
+            robotVm.A1 = rj[0]; robotVm.A2 = rj[1]; robotVm.A3 = rj[2];
+            robotVm.A4 = rj[3]; robotVm.A5 = rj[4]; robotVm.A6 = rj[5];
+            robotVm.E1 = rj[6];
+        }
+
+        Viewport.RestoreSimCameraKeyframes(doc.UiSession?.SimCameraKeyframes);
+
         // Queue UI session restore (edit mode / tool / layer isolation). Applied once
         // pending toolpath uploads finish so the scrub range and nodes exist.
         Viewport.PendingUiSession = doc.UiSession;
