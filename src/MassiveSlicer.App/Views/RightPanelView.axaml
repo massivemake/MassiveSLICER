@@ -1131,6 +1131,11 @@
                                                        SelectedItem="{Binding Additive.XBracingProjectionType, Mode=TwoWay}"/>
                                         </Grid>
 
+                                        <ToggleButton Margin="8,0,8,4" HorizontalAlignment="Stretch" FontSize="11"
+                                                      IsChecked="{Binding Additive.XBracingShowHelper, Mode=TwoWay}"
+                                                      Content="Show helper in viewport"
+                                                      ToolTip.Tip="Toggle the brace plane / cylinder guide in the viewport. Visual only — braces still use it while hidden."/>
+
                                         <!-- Planar projection -->
                                         <StackPanel IsVisible="{Binding Additive.ShowXBracingPlanarControls}">
                                             <TextBlock Margin="8,2,8,2" Text="BRACE PLANE" Classes="LabelMuted"

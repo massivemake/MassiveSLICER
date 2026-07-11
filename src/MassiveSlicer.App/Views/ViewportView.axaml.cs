@@ -648,7 +648,8 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.XBracingCylinderDiameterMm)
                                     or nameof(AdditiveSettingsViewModel.XBracingCylinderX)
                                     or nameof(AdditiveSettingsViewModel.XBracingCylinderY)
-                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderFlipDirection))
+                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderFlipDirection)
+                                    or nameof(AdditiveSettingsViewModel.XBracingShowHelper))
                     GlCanvas.RequestNextFrameRendering();
 
                 // Re-solve IK live when the toolhead orientation offset changes so the
@@ -9738,7 +9739,10 @@ public partial class ViewportView : UserControl
         }
 
         bool angled = vm.AdditiveSettings?.Method == SliceMethod.Angled;
-        bool xBrace = vm.AdditiveSettings is { XBracingEnabled: true } && !angled;
+        // Helper hidden → treat as no X-brace overlay (clears cylinder/plane/arrow);
+        // slicing still uses the projection, this is visual only.
+        bool xBrace = vm.AdditiveSettings is { XBracingEnabled: true, XBracingShowHelper: true }
+            && !angled;
         bool xBraceCyl = xBrace
             && string.Equals(vm.AdditiveSettings!.XBracingProjectionType, "Cylinder",
                 StringComparison.OrdinalIgnoreCase);
@@ -10135,6 +10139,8 @@ public partial class ViewportView : UserControl
     /// </summary>
     private bool TryBeginXBraceCylinderDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
     {
+        // Hidden helper can't be grabbed (and must not swallow clicks).
+        if (vm.AdditiveSettings is not { XBracingShowHelper: true }) return false;
         if (vm.AdditiveSettings is not { XBracingEnabled: true } s) return false;
         if (!string.Equals(s.XBracingProjectionType, "Cylinder", StringComparison.OrdinalIgnoreCase))
             return false;

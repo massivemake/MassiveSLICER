@@ -206,6 +206,9 @@ public sealed class AppPreferences
     /// <summary>Partial X cells on left/right wall ends (not top/bottom).</summary>
     public bool XBracingExtendEdges { get; set; } = true;
 
+    /// <summary>Show the brace plane / cylinder helper in the viewport.</summary>
+    public bool XBracingShowHelper { get; set; } = true;
+
     /// <summary>X-bracing direction plane tilt about Y (deg).</summary>
     public double XBracingPlaneTiltY { get; set; }
 
