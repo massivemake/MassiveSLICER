@@ -1341,6 +1341,56 @@
 
                 <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
 
+                <!-- Visibility menu: seams, toolpaths, travel, paint markers, beads… -->
+                <Button Classes="ToolbarButton" Padding="7"
+                        ToolTip.Tip="Visibility — seams, toolpaths, travel moves, paint markers, bead mesh…">
+                    <ia:Icon Value="mdi-eye-outline" FontSize="15"/>
+                    <Button.Flyout>
+                        <Flyout Placement="Top" ShowMode="Standard">
+                            <Border Background="{DynamicResource Bg2}"
+                                    BorderBrush="{DynamicResource Border1}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="10,8"
+                                    MinWidth="210">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="VISIBILITY"
+                                               Classes="LabelMuted"
+                                               FontSize="10"
+                                               LetterSpacing="1"
+                                               Margin="2,0,0,2"/>
+                                    <CheckBox Content="Toolpaths"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowExtrusionMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Print / extrusion centre-lines"/>
+                                    <CheckBox Content="Travel moves"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Rapid repositioning moves"/>
+                                    <CheckBox Content="Formbound bridges"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Formbound Bridge / Buttress support (orange)"/>
+                                    <CheckBox Content="Seam points"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowSeam, Mode=TwoWay}"
+                                              ToolTip.Tip="Layer seam start locations"/>
+                                    <CheckBox Content="Paint markers"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowPaintMarkers, Mode=TwoWay}"
+                                              ToolTip.Tip="Support / Remove paint dabs"/>
+                                    <CheckBox Content="Bead mesh"
+                                              FontSize="11"
+                                              IsChecked="{Binding PaintShowBeads, Mode=TwoWay}"
+                                              ToolTip.Tip="Solid extruded-bead preview"/>
+                                </StackPanel>
+                            </Border>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
                 <Button Classes="ToolbarButton" Padding="7"
                         Command="{Binding AdditiveSettings.ClearPaintMarksCommand}"
                         ToolTip.Tip="Clear all painted marks">
@@ -1383,12 +1433,12 @@
                     BorderBrush="#80B7FF" BorderThickness="1" Background="#2280B7FF"/>
         </Canvas>
 
-        <!-- Lasso freehand path -->
+        <!-- Lasso freehand path (Avalonia 12: StrokeJoin, not StrokeLineJoin) -->
         <Canvas IsVisible="{Binding PaintLassoVisible}" ZIndex="40" IsHitTestVisible="False">
             <Polyline Points="{Binding PaintLassoPoints}"
                       Stroke="#80B7FF" StrokeThickness="1.5"
                       Fill="#2280B7FF"
-                      StrokeLineJoin="Round" StrokeLineCap="Round"/>
+                      StrokeJoin="Round" StrokeLineCap="Round"/>
         </Canvas>
 
         <!-- Horizontal timeline — Preview view only, while a scrub session is live

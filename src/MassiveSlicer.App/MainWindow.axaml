@@ -9,6 +9,7 @@
         Icon="avares://MassiveSlicer.App/Assets/icon.ico"
         Height="900" Width="1440"
         MinHeight="600" MinWidth="900"
+        WindowState="Maximized"
         Background="{DynamicResource Bg0}">
 
     <Window.DataContext>

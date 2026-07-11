@@ -146,12 +146,27 @@ public static class ContourSeamPlanner
 
             var contour = new List<Vector2>(chosen.Contour);
             List<Vector3>? normals = chosen.Normals?.ToList();
-            PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            bool reversed = zigZag && !chosen.IsClosed && (layerIndex % 2 == 1);
-            if (reversed) ReverseContour(contour, normals);
+            // Zig-zag open walls: force direction by layer parity — but parity only
+            // ping-pongs if the SOURCE orientation is stable, and marching-squares
+            // chains come out in arbitrary direction per layer. Canonicalize first
+            // (endpoint with smaller X-then-Y counts as the start), then apply parity.
+            // EmitSingleContour iterates reversed when true — do NOT also
+            // ReverseContour() the list (that double-reverses to A→B).
+            // Skip travel-optimized reverse on open zig-zag paths for the same reason.
+            bool zigZagReverse = false;
+            if (zigZag && !chosen.IsClosed && contour.Count >= 2)
+            {
+                var e0 = contour[0];
+                var e1 = contour[^1];
+                bool flipped = e1.X < e0.X - 1e-6f
+                    || (MathF.Abs(e1.X - e0.X) <= 1e-6f && e1.Y < e0.Y - 1e-6f);
+                zigZagReverse = flipped ^ (layerIndex % 2 == 1);
+            }
+            if (chosen.IsClosed || !zigZag)
+                PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, reversed);
+            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, zigZagReverse);
         }
     }
 

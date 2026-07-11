@@ -79,7 +79,9 @@ public static class AngledPlanarSlicer
         //    frame is constant across layers, so propagation works unchanged).
         List<List<List<Vector2>>>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+        bool needLightning = Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+            || settings.XBracingEnabled;
+        if (needLightning)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             lightningCache = new(steps.Count);
@@ -95,13 +97,32 @@ public static class AngledPlanarSlicer
             // The oracle probes just BELOW the plane: the demanding solid occupies
             // the layer beneath it, and a grazing plane itself is ambiguous.
             var meshTester = new Lightning.MeshInsideTester(meshes);
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
-                solidAt: (li, p) => meshTester.IsInside(
-                    normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
-                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
-                    settings.PaintMarks, steps.Count,
-                    li => (normal * steps[li], normal, u, v),
-                    halfBandMm: settings.LayerHeight * 0.6f));
+            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+            {
+                lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
+                    solidAt: (li, p) => meshTester.IsInside(
+                        normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
+                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                        settings.PaintMarks, steps.Count,
+                        li => (normal * steps[li], normal, u, v),
+                        halfBandMm: MathF.Max(settings.LayerHeight * 0.75f, settings.BeadWidth * 0.75f)));
+            }
+            else
+                lightningPlan = new Lightning.LightningPlan(steps.Count);
+
+            if (settings.XBracingEnabled)
+            {
+                var polysForX = new List<List<List<Vector2>>>(steps.Count);
+                for (int si = 0; si < steps.Count; si++)
+                {
+                    var fill = fillPolysPerLayer[si];
+                    if (fill.Count > 0) polysForX.Add(fill);
+                    else polysForX.Add(lightningCache![si]);
+                }
+                Lightning.XBracingPlanner.Apply(
+                    lightningPlan, polysForX, steps, heights, settings);
+            }
+
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
@@ -305,11 +326,13 @@ public static class AngledPlanarSlicer
         }
         if (march.Count == 0) return toolpath;
 
-        // ── Formbound Bridge pre-pass: cache every plane's contours, then build the
-        //    top-down finger plan across the (slowly rotating) frame stack.
+        // ── Formbound / X-bracing pre-pass: cache every plane's contours, then build
+        //    the top-down finger plan across the (slowly rotating) frame stack.
         List<List<List<Vector2>>>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
-        if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+        bool needLightningMp = Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+            || settings.XBracingEnabled;
+        if (needLightningMp)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
             var dedupedMeshes = meshes;
@@ -328,14 +351,28 @@ public static class AngledPlanarSlicer
             // The oracle probes just BELOW the plane: the demanding solid occupies
             // the layer beneath it, and a grazing plane itself is ambiguous.
             var meshTester = new Lightning.MeshInsideTester(meshes);
-            lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings, frames,
-                solidAt: (li, p) => meshTester.IsInside(
-                    march[li].Origin - march[li].Normal * (0.4f * layerH)
-                    + march[li].U * p.X + march[li].V * p.Y),
-                manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
-                    settings.PaintMarks, march.Count,
-                    li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V),
-                    halfBandMm: settings.LayerHeight * 0.6f));
+            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+            {
+                lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings, frames,
+                    solidAt: (li, p) => meshTester.IsInside(
+                        march[li].Origin - march[li].Normal * (0.4f * layerH)
+                        + march[li].U * p.X + march[li].V * p.Y),
+                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                        settings.PaintMarks, march.Count,
+                        li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V),
+                        halfBandMm: MathF.Max(settings.LayerHeight * 0.75f, settings.BeadWidth * 0.75f)));
+            }
+            else
+                lightningPlan = new Lightning.LightningPlan(march.Count);
+
+            if (settings.XBracingEnabled)
+            {
+                var zProxy = new float[march.Count];
+                for (int i = 0; i < march.Count; i++) zProxy[i] = i * layerH;
+                Lightning.XBracingPlanner.Apply(
+                    lightningPlan, fillPolysPerLayer, zProxy, heights, settings);
+            }
+
             // Generator oracles: SolidAt probes both sides of the plane (fresh
             // islands have material only above their first plane); SolidAtPlane
             // probes exactly at it (a real contour's interior is solid there).
@@ -584,7 +621,8 @@ public static class AngledPlanarSlicer
             Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
 
             int firstInfillMove = layer.Moves.Count;
-            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+                || (settings.XBracingEnabled && lightningPlan is not null))
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
                     settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject);
             else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
@@ -598,6 +636,21 @@ public static class AngledPlanarSlicer
                 layer.Moves[i] = layer.Moves[i] with { Normal = normal };
 
             return new List<ContourTrack>();
+            }
+        }
+
+        if (settings.XBracingEnabled && lightningPlan is not null)
+        {
+            var fillPolys = FilterFillPolys(insetContours, settings.SlicingMode == SlicingMode.Surface);
+            if (fillPolys.Count > 0)
+            {
+                Vector3 UnprojectX(Vector2 p) => origin + p.X * u + p.Y * v;
+                int first = layer.Moves.Count;
+                Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, UnprojectX);
+                for (int i = first; i < layer.Moves.Count; i++)
+                    layer.Moves[i] = layer.Moves[i] with { Normal = normal };
+                return new List<ContourTrack>();
             }
         }
 

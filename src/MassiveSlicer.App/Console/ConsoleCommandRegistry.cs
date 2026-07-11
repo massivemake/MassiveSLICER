@@ -135,7 +135,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "erp",
-            Description = "ERP attachment: erp url <u> | token <t> | connect | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
+            Description = "ERP attachment: erp url <u> | token <t> | connect | expand | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
             Execute = (ctx, args) =>
             {
                 var erp = ctx.Main.Viewport.Erp;
@@ -145,6 +145,23 @@ public sealed class ConsoleCommandRegistry
                     case "url":     erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
                     case "token":   erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
                     case "connect": erp.ConnectCommand.Execute(null); break;
+                    case "expand":
+                    case "toggle":
+                        // Force-open the ERP dock (same as clicking the ERP button).
+                        try
+                        {
+                            erp.IsExpanded = true;
+                            ctx.Log($"[erp] expanded={erp.IsExpanded} attached='{erp.ToggleLabel}' " +
+                                    $"showAtt={erp.ShowAttachment} showSearch={erp.ShowSearch} " +
+                                    $"showSettings={erp.ShowSettings} candidates={erp.WorkspaceCandidates.Count} " +
+                                    $"pricing='{erp.PricingSummary}' status='{erp.Status}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            ctx.Log($"[erp] expand CRASHED: {ex}");
+                            throw;
+                        }
+                        break;
                     case "search":  erp.SearchText = parts.ElementAtOrDefault(1) ?? ""; break;
                     case "attach":
                     {
@@ -508,11 +525,24 @@ public sealed class ConsoleCommandRegistry
             Description = "Slice the selected mesh into toolpaths",
             Execute = (ctx, _) =>
             {
-                var slice = ctx.Main.Viewport.SliceCommand;
-                if (slice.CanExecute(null))
+                var vp = ctx.Main.Viewport;
+                // Console `select` can leave HasMeshSelected false if the outliner
+                // path didn't refresh flags — recover so automation can slice.
+                if (!vp.HasMeshSelected && vp.GetSelectedSceneNode?.Invoke() is { } sel
+                    && vp.FindUserMeshOutlinerItem(sel) is not null)
+                {
+                    vp.HasMeshSelected = true;
+                    vp.SliceCommand?.RaiseCanExecuteChanged();
+                }
+                var slice = vp.SliceCommand;
+                if (slice is not null && slice.CanExecute(null))
                 {
                     slice.Execute(null);
                     ctx.Log("[slice] slicing selected mesh...");
+                }
+                else if (vp.IsSlicing)
+                {
+                    ctx.LogError("Already slicing — wait for the current slice to finish.");
                 }
                 else
                 {

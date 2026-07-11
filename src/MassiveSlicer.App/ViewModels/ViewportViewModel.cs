@@ -1374,11 +1374,25 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintRemoveActive = false;
                 PaintLineBridgeActive = false;
                 PaintLineRemoveActive = false;
+                PaintBoxSelectActive = false;
+                PaintHandActive = false;
+                PaintBridgePickModificationId = null;
                 // Restore normal toolpath display when leaving edit.
                 ToolpathLineOpacity = 1f;
             }
             else if (_viewMode == "Preview")
             {
+                // Default to path-select with an unrestricted filter so click-to-select
+                // works immediately (Formbound/Perimeter filters often look "broken"
+                // when the user is aiming at wall paths).
+                PaintBoxSelectActive = false;
+                PaintHandActive = false;
+                if (!string.Equals(PaintPickFilter, "All", StringComparison.OrdinalIgnoreCase))
+                    PaintPickFilter = "All";
+                // Default support type for edit Apply; sync slice settings.
+                if (string.IsNullOrWhiteSpace(PaintSupportType))
+                    PaintSupportType = "Formbound Buttress";
+                ApplyPaintSupportTypeToSettings();
                 // Path / Point granularity owns the display hierarchy while editing.
                 ApplyPaintEditDisplayMode();
             }
@@ -1399,7 +1413,8 @@ public sealed class ViewportViewModel : ViewModelBase
     private RelayCommand? _exitPaintEdit;
 
     /// <summary>
-    /// Path granularity → centre-line only (no fat beads).
+    /// Path granularity → centre-line only (no fat beads) unless
+    /// <see cref="PaintShowBeads"/> is on.
     /// Point granularity → every bead midpoint as a point; lines grayed + thin.
     /// (SceneRenderer.ShowAllPathPoints is set from the viewport each frame.)
     /// </summary>
@@ -1410,7 +1425,7 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             // Points hierarchy: all bead points; centre-lines stay readable (thicker in
             // the renderer when ShowAllPathPoints is on).
-            ShowBead = false;
+            ShowBead = PaintShowBeads;
             ShowExtrusionMoves = true;
             ShowTravelMoves = false;
             // Seam-only overlay off — ShowAllPathPoints draws every extrude midpoint.
@@ -1419,12 +1434,46 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         else
         {
-            // Line / path view: clean centre-lines only.
-            ShowBead = false;
+            // Line / path view: clean centre-lines only (beads optional via toggle).
+            ShowBead = PaintShowBeads;
             ShowExtrusionMoves = true;
             ShowTravelMoves = false;
             ShowSeam = false;
             ToolpathLineOpacity = 1f;
+        }
+    }
+
+    // ── Edit-mode display toggles (eye menu: markers / beads / seams / …) ────
+
+    private bool _showPaintMarkers = true;
+    /// <summary>When true, Support/Remove paint mark spheres are drawn in the viewport.</summary>
+    public bool ShowPaintMarkers
+    {
+        get => _showPaintMarkers;
+        set
+        {
+            if (!SetField(ref _showPaintMarkers, value)) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _paintShowBeads;
+    /// <summary>
+    /// When true in edit mode, draw the full bead mesh on top of centre-lines.
+    /// Default off so path/point selection stays readable. Controlled from the
+    /// edit toolbar eye / Visibility menu.
+    /// </summary>
+    public bool PaintShowBeads
+    {
+        get => _paintShowBeads;
+        set
+        {
+            if (!SetField(ref _paintShowBeads, value)) return;
+            if (IsPaintEditOpen)
+            {
+                ShowBead = value;
+                NotifyRenderNeeded();
+            }
         }
     }
 
@@ -1653,31 +1702,101 @@ public sealed class ViewportViewModel : ViewModelBase
             ? "No modifications yet"
             : $"{PaintModifications.Count} modification(s)";
 
+    /// <summary>
+    /// When set, the next viewport path/point pick attaches as the bridge target
+    /// for this modification (multi-layer Formbound scaffold).
+    /// </summary>
+    private Guid? _paintBridgePickModificationId;
+    public Guid? PaintBridgePickModificationId
+    {
+        get => _paintBridgePickModificationId;
+        set
+        {
+            if (!SetField(ref _paintBridgePickModificationId, value)) return;
+            OnPropertyChanged(nameof(IsPaintBridgePicking));
+            OnPropertyChanged(nameof(PaintBridgePickHint));
+            // Refresh per-row picking flags without rebuilding the list.
+            foreach (var item in PaintModifications)
+                item.IsPickingBridgeTarget = value.HasValue && item.Id == value.Value;
+        }
+    }
+
+    public bool IsPaintBridgePicking => PaintBridgePickModificationId.HasValue;
+
+    public string PaintBridgePickHint =>
+        IsPaintBridgePicking
+            ? "Click a path or point on another layer to bridge — Escape to cancel."
+            : "";
+
     /// <summary>Viewport reselects / deletes a stored modification by id.</summary>
     internal Action<Guid>? OnPaintModificationSelectRequested;
     internal Action<Guid>? OnPaintModificationDeleteRequested;
     internal Action? OnPaintModificationsClearRequested;
+    internal Action<Guid>? OnPaintModificationPickBridgeRequested;
+    internal Action<Guid>? OnPaintModificationClearBridgeRequested;
+    internal Action<Guid>? OnPaintModificationToggleExpandRequested;
+    internal Action<Guid, string>? OnPaintModificationSupportTypeChanged;
 
     public RelayCommand ClearPaintModificationsCommand => _clearPaintMods ??= new RelayCommand(() =>
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
-    internal void SetPaintModifications(IReadOnlyList<(Guid Id, bool IsSupport, string Title, string Detail)> rows)
+    /// <summary>Row data for one applied modification (viewport → panel).</summary>
+    internal readonly record struct PaintModRow(
+        Guid Id,
+        bool IsSupport,
+        string Title,
+        string Detail,
+        string AnchorSummary,
+        bool HasBridgeTarget,
+        string BridgeTargetSummary,
+        int ScaffoldLayerCount,
+        int ScaffoldMarkCount,
+        bool KeepExpanded,
+        string SupportType);
+
+    internal void SetPaintModifications(IReadOnlyList<PaintModRow> rows)
     {
+        var expandedIds = PaintModifications
+            .Where(m => m.IsExpanded)
+            .Select(m => m.Id)
+            .ToHashSet();
+        var pickId = PaintBridgePickModificationId;
+
         PaintModifications.Clear();
         foreach (var r in rows)
         {
             var id = r.Id;
-            PaintModifications.Add(new PaintModificationListItem
+            var item = new PaintModificationListItem
             {
                 Id = id,
                 IsSupport = r.IsSupport,
                 KindLabel = r.IsSupport ? "Support" : "Remove",
                 Title = r.Title,
                 Detail = r.Detail,
+                AnchorSummary = r.AnchorSummary,
+                HasBridgeTarget = r.HasBridgeTarget,
+                BridgeTargetSummary = r.BridgeTargetSummary,
+                ScaffoldLayerCount = r.ScaffoldLayerCount,
+                ScaffoldMarkCount = r.ScaffoldMarkCount,
+                IsExpanded = r.KeepExpanded || expandedIds.Contains(id),
+                IsPickingBridgeTarget = pickId.HasValue && pickId.Value == id,
+                ToggleExpandCommand = new RelayCommand(() =>
+                    OnPaintModificationToggleExpandRequested?.Invoke(id)),
                 SelectCommand = new RelayCommand(() => OnPaintModificationSelectRequested?.Invoke(id)),
                 DeleteCommand = new RelayCommand(() => OnPaintModificationDeleteRequested?.Invoke(id)),
-            });
+                PickBridgeTargetCommand = new RelayCommand(() =>
+                    OnPaintModificationPickBridgeRequested?.Invoke(id)),
+                ClearBridgeTargetCommand = new RelayCommand(() =>
+                    OnPaintModificationClearBridgeRequested?.Invoke(id)),
+            };
+            // Init type first, then wire change handler (avoids apply-on-rebuild).
+            item.SupportType = string.IsNullOrWhiteSpace(r.SupportType)
+                ? "Formbound Buttress"
+                : r.SupportType;
+            item.SupportTypeChanged = (modId, type) =>
+                OnPaintModificationSupportTypeChanged?.Invoke(modId, type);
+            PaintModifications.Add(item);
         }
         OnPropertyChanged(nameof(HasPaintModifications));
         OnPropertyChanged(nameof(PaintModificationsSummary));
@@ -1761,7 +1880,49 @@ public sealed class ViewportViewModel : ViewModelBase
     public string PaintModificationMode
     {
         get => _paintModificationMode;
-        set => SetField(ref _paintModificationMode, value ?? "Support");
+        set
+        {
+            if (!SetField(ref _paintModificationMode, value ?? "Support")) return;
+            OnPropertyChanged(nameof(ShowPaintSupportTypePicker));
+        }
+    }
+
+    /// <summary>
+    /// Support strategy used when Mode = Support. Applied to additive infill so
+    /// Reslice grows the right Formbound style. Default: Formbound Buttress (T-column).
+    /// </summary>
+    public string[] PaintSupportTypeOptions { get; } =
+        ["Formbound Buttress", "Formbound Bridge"];
+
+    private string _paintSupportType = "Formbound Buttress";
+    public string PaintSupportType
+    {
+        get => _paintSupportType;
+        set
+        {
+            var v = value is "Formbound Bridge" ? "Formbound Bridge" : "Formbound Buttress";
+            if (!SetField(ref _paintSupportType, v)) return;
+            ApplyPaintSupportTypeToSettings();
+        }
+    }
+
+    public bool ShowPaintSupportTypePicker =>
+        string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Push the SELECTION support-type choice into slice settings.</summary>
+    public void ApplyPaintSupportTypeToSettings()
+    {
+        if (AdditiveSettings is null) return;
+        // Always push when Mode = Support. Also push when Bridge paint marks exist
+        // even if Mode was left on something else — otherwise Reslice bakes shells
+        // with InfillPattern=None and the buttress never appears.
+        bool supportMode = string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
+        bool hasBridgePaint = AdditiveSettings.PaintMarks.Any(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge);
+        if (!supportMode && !hasBridgePaint) return;
+        AdditiveSettings.InfillPattern = string.IsNullOrWhiteSpace(PaintSupportType)
+            ? "Formbound Buttress"
+            : PaintSupportType;
     }
 
     /// <summary>Summary for ACTIVE SELECTION (e.g. layer numbers).</summary>
@@ -1783,6 +1944,8 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ApplyPaintModificationCommand => _applyPaintMod ??= new RelayCommand(() =>
     {
         bool support = !string.Equals(PaintModificationMode, "Remove", StringComparison.OrdinalIgnoreCase);
+        if (support)
+            ApplyPaintSupportTypeToSettings();
         OnPaintApplyRequested?.Invoke(support);
     }, () => HasPaintSelection);
     private RelayCommand? _applyPaintMod;
@@ -1804,7 +1967,32 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _paintLassoVisible, value);
     }
 
-    public ObservableCollection<Avalonia.Point> PaintLassoPoints { get; } = [];
+    /// <summary>
+    /// Bound to overlay <c>Polyline.Points</c>. Reassigned (not mutated) so Avalonia
+    /// refreshes the stroke each sample while dragging.
+    /// </summary>
+    private Avalonia.Points _paintLassoPoints = new();
+    public Avalonia.Points PaintLassoPoints
+    {
+        get => _paintLassoPoints;
+        private set => SetField(ref _paintLassoPoints, value);
+    }
+
+    /// <summary>Replace lasso geometry from freehand samples (closes the loop for fill).</summary>
+    public void SetPaintLassoPoints(IReadOnlyList<Avalonia.Point> samples)
+    {
+        var pts = new Avalonia.Points();
+        for (int i = 0; i < samples.Count; i++)
+            pts.Add(samples[i]);
+        if (samples.Count >= 3)
+            pts.Add(samples[0]);
+        PaintLassoPoints = pts;
+    }
+
+    public void ClearPaintLassoPoints()
+    {
+        PaintLassoPoints = new Avalonia.Points();
+    }
 
     /// <summary>View hooks: the viewport owns the selection list.</summary>
     internal Action? OnPaintDeselectRequested;
@@ -1815,7 +2003,10 @@ public sealed class ViewportViewModel : ViewModelBase
     private RelayCommand? _deselectPaint;
 
     public RelayCommand ApplySupportSelectionCommand => _applySupportSel ??= new RelayCommand(() =>
-        OnPaintApplyRequested?.Invoke(true));
+    {
+        ApplyPaintSupportTypeToSettings();
+        OnPaintApplyRequested?.Invoke(true);
+    });
     private RelayCommand? _applySupportSel;
 
     public RelayCommand ApplyRemoveSelectionCommand => _applyRemoveSel ??= new RelayCommand(() =>
@@ -1823,15 +2014,18 @@ public sealed class ViewportViewModel : ViewModelBase
     private RelayCommand? _applyRemoveSel;
 
     /// <summary>Re-slices NOW with the accumulated paint edits, keeping the edit
-    /// menu open and slicing paused afterwards.</summary>
+    /// menu open and auto-slice paused afterwards.</summary>
     public RelayCommand ReslicePaintCommand => _reslicePaint ??= new RelayCommand(() =>
     {
-        AdditiveSettings?.BumpPaintStamp();     // mark work pending even if unchanged
-        RealtimeSlicingPaused = false;          // pending fires (600 ms debounce)
-        if (IsPaintEditOpen)
-            RealtimeSlicingPaused = true;       // timer is already running — re-pause
+        AdditiveSettings?.BumpPaintStamp();
+        // Must force a real bake — the old pause/unpause dance left edit mode paused
+        // so ScheduleRealtimeSlice only set a pending flag and never started a slice.
+        OnPaintResliceRequested?.Invoke();
     });
     private RelayCommand? _reslicePaint;
+
+    /// <summary>ViewportView: force RunRealtimeSliceAsync ignoring edit-mode pause.</summary>
+    internal Action? OnPaintResliceRequested { get; set; }
 
     private bool _isDevMode;
 
@@ -4115,6 +4309,12 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Wired by the viewport: re-select scrub toolpath + apply pending UI session.</summary>
     internal Action? RequestApplyPendingUiSession { get; set; }
 
+    /// <summary>Viewport captures the MODIFICATIONS list for workspace save.</summary>
+    internal Func<List<WorkspacePaintModification>>? CapturePaintModifications { get; set; }
+
+    /// <summary>Viewport rebuilds the MODIFICATIONS list after toolpath restore.</summary>
+    internal Action<IReadOnlyList<WorkspacePaintModification>>? RestorePaintModifications { get; set; }
+
     /// <summary>
     /// Applies pure ViewModel pieces of a saved UI session (view mode, edit tools).
     /// Scrub node selection and move indices are applied by the viewport code-behind.
@@ -4130,6 +4330,15 @@ public sealed class ViewportViewModel : ViewModelBase
             PaintPickFilter = session.PaintPickFilter;
         if (session.PaintBrushRadiusMm > 0)
             PaintBrushRadiusMm = session.PaintBrushRadiusMm;
+
+        if (!string.IsNullOrWhiteSpace(session.PaintRegionSelectMode))
+            PaintRegionSelectMode = session.PaintRegionSelectMode;
+        if (!string.IsNullOrWhiteSpace(session.PaintModificationMode))
+            PaintModificationMode = session.PaintModificationMode;
+        if (!string.IsNullOrWhiteSpace(session.PaintSupportType))
+            PaintSupportType = session.PaintSupportType;
+        ShowPaintMarkers = session.ShowPaintMarkers;
+        PaintShowBeads = session.PaintShowBeads;
 
         // Open edit first so tool mutual-exclusion and display modes apply correctly.
         IsPaintEditOpen = session.IsPaintEditOpen;
@@ -4156,8 +4365,13 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintLineRemoveActive = true;
             // else: path-select is the implicit default when no other tool is armed
 
+            ApplyPaintSupportTypeToSettings();
             ApplyPaintEditDisplayMode();
         }
+
+        // MODIFICATIONS list — after toolpath is armed (caller may re-invoke with layers ready).
+        if (session.PaintModifications is { Count: > 0 } mods)
+            RestorePaintModifications?.Invoke(mods);
     }
 
     /// <summary>
