@@ -80,6 +80,10 @@ public static class XBracingPlanner
         public Vector2 Origin { get; init; }
         public Vector2 Unit { get; init; }
         public Vector2 InwardUnit { get; init; }
+        /// <summary>Unwrap radius locked at first layer — per-layer average-radius
+        /// drift would rotate every target ray, sliding mouths in near-radial wall
+        /// regions (edge curls) even at fixed U.</summary>
+        public float Radius { get; init; }
     }
 
     /// <summary>Carries previous-layer hairpins so each new hairpin stays ≥60% supported.</summary>
@@ -537,6 +541,30 @@ public static class XBracingPlanner
                 PlaceTip();
             }
 
+            // World mouth-step cap: the angle/chord parameterization degenerates
+            // where the wall runs nearly radial to the brace cylinder (panel edge
+            // curls) — one maxDs step in U can slide the mouth several beads along
+            // the wall while the tip clamp never trips (the pin rotates around its
+            // tip). Cap the WORLD step so every pin lands on its parent regardless
+            // of parameterization stretch.
+            float mouthCap = MathF.Max(bead * 0.75f, maxDs);
+            if (Vector2.Distance(pathMouth, prev.Mouth) > mouthCap)
+            {
+                float mLo = prev.S, mHi = u;
+                for (int i = 0; i < 12; i++)
+                {
+                    u = Math.Clamp(0.5f * (mLo + mHi), uLo, uHi);
+                    PlaceTip();
+                    if (Vector2.Distance(pathMouth, prev.Mouth) > mouthCap)
+                        mHi = u;
+                    else
+                        mLo = u;
+                }
+                u = Math.Clamp(mLo, uLo, uHi);
+                depth = Math.Clamp(MathF.Max(depth, prev.Depth), minDepth, wantDepth);
+                PlaceTip();
+            }
+
             if (SupportFraction(pathMouth, tip, prev.Mouth, prev.Tip, supportR) < MinSupportFraction * 0.85f)
             {
                 // Hold at the parent, never die: a rib that skips a layer leaves a
@@ -569,6 +597,13 @@ public static class XBracingPlanner
             tip = prev.Tip;
             depth = prev.Depth;
         }
+
+        // Fold death: nearest-crossing continuity keeps a rib on its own bump, but
+        // when that bump vanishes under a sweeping fold even the nearest crossing
+        // teleports. A fin cannot teleport — end the rib here; a fresh stub regrows
+        // on the new bump at the overhang-limited rate.
+        if (hasPrev && Vector2.Distance(pathMouth, prev.Mouth) > bead * 1.2f)
+            return false;
 
         var hair = new Hairpin
         {
@@ -604,10 +639,11 @@ public static class XBracingPlanner
         // fold under crests/troughs of a wavy wall (nearest-point projection folded —
         // the mouth had to teleport across the bump, the support clamps vetoed it,
         // and the march deadlocked; proportional arc length wandered with the waves).
+        Vector2? near = prev is Hairpin pv && pv.Depth > 1e-4f ? pv.Mouth : null;
         float pathS = baseline.IsCylinder && baseline.Radius > 1e-3f
             ? ArcSAtAngle(path, totalLen, baseline.CylinderCenter,
-                baseline.Theta0, baseline.ThetaAt(u) - baseline.Theta0)
-            : ArcSAtCoord(path, totalLen, baseline.Origin, baseline.Unit, u);
+                baseline.Theta0, baseline.ThetaAt(u) - baseline.Theta0, near)
+            : ArcSAtCoord(path, totalLen, baseline.Origin, baseline.Unit, u, near);
         mouth = PointAtArcOpen(path, totalLen, pathS);
 
         // Path left-normal (open face is oriented into the wall by ExtractSingleSkinOpenFaces).
@@ -658,14 +694,20 @@ public static class XBracingPlanner
     /// crossing every layer. Falls back to the vertex with the nearest coordinate.
     /// </summary>
     private static float ArcSAtCoord(
-        List<Vector2> path, float totalLen, Vector2 origin, Vector2 unit, float uTarget)
+        List<Vector2> path, float totalLen, Vector2 origin, Vector2 unit, float uTarget,
+        Vector2? near = null)
     {
         int n = path.Count;
         if (n < 2 || totalLen < 1e-6f) return 0f;
         bool rev = Vector2.Dot(path[^1] - path[0], unit) < 0f;
 
+        // Sculpted walls can double back: the target coordinate may cross the path
+        // several times (folds). Collect ALL crossings; with a previous-layer mouth
+        // we pick the crossing nearest it (temporal continuity — a rib tracks its
+        // own bump as folds sweep past), otherwise the first along the wall.
         float acc = 0f;
         float bestS = 0f, bestErr = float.MaxValue;
+        float chosenS = -1f, chosenD = float.MaxValue;
         int i0 = rev ? n - 1 : 0;
         int step = rev ? -1 : 1;
         float cPrev = Vector2.Dot(path[i0] - origin, unit);
@@ -682,8 +724,18 @@ public static class XBracingPlanner
                 {
                     float t = Math.Clamp((uTarget - cPrev) / (c - cPrev), 0f, 1f);
                     float sWalk = acc + seg * t;
-                    return rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
-                               : Math.Clamp(sWalk, 0f, totalLen);
+                    float sHere = rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
+                                      : Math.Clamp(sWalk, 0f, totalLen);
+                    if (near is Vector2 nr)
+                    {
+                        var hit = pPrev + (p - pPrev) * t;
+                        float d = Vector2.DistanceSquared(hit, nr);
+                        if (d < chosenD) { chosenD = d; chosenS = sHere; }
+                    }
+                    else
+                    {
+                        return sHere; // first crossing
+                    }
                 }
                 float err = MathF.Abs(c - uTarget);
                 if (err < bestErr)
@@ -697,6 +749,7 @@ public static class XBracingPlanner
             cPrev = c;
             pPrev = p;
         }
+        if (chosenS >= 0f) return chosenS;
         // No crossing (target past an end) — nearest coordinate.
         float e0 = MathF.Abs(Vector2.Dot(path[i0] - origin, unit) - uTarget);
         if (e0 < bestErr) bestS = rev ? totalLen : 0f;
@@ -709,7 +762,8 @@ public static class XBracingPlanner
     /// canonicalized to increasing angle so zig-zag reversal is invisible.
     /// </summary>
     private static float ArcSAtAngle(
-        List<Vector2> path, float totalLen, Vector2 center, float th0, float dTarget)
+        List<Vector2> path, float totalLen, Vector2 center, float th0, float dTarget,
+        Vector2? near = null)
     {
         int n = path.Count;
         if (n < 2 || totalLen < 1e-6f) return 0f;
@@ -739,6 +793,7 @@ public static class XBracingPlanner
 
         float acc = 0f;
         float bestS = 0f, bestErr = float.MaxValue;
+        float chosenS = -1f, chosenD = float.MaxValue;
         int i0 = rev ? n - 1 : 0;
         int step = rev ? -1 : 1;
         float dPrev = deltas[i0];
@@ -755,8 +810,18 @@ public static class XBracingPlanner
                 {
                     float t = Math.Clamp((dTarget - dPrev) / (dc - dPrev), 0f, 1f);
                     float sWalk = acc + seg * t;
-                    return rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
-                               : Math.Clamp(sWalk, 0f, totalLen);
+                    float sHere = rev ? Math.Clamp(totalLen - sWalk, 0f, totalLen)
+                                      : Math.Clamp(sWalk, 0f, totalLen);
+                    if (near is Vector2 nr)
+                    {
+                        var hit = pPrev + (p - pPrev) * t;
+                        float d = Vector2.DistanceSquared(hit, nr);
+                        if (d < chosenD) { chosenD = d; chosenS = sHere; }
+                    }
+                    else
+                    {
+                        return sHere; // first crossing
+                    }
                 }
                 float err = MathF.Abs(dc - dTarget);
                 if (err < bestErr)
@@ -770,6 +835,7 @@ public static class XBracingPlanner
             dPrev = dc;
             pPrev = p;
         }
+        if (chosenS >= 0f) return chosenS;
         float e0 = MathF.Abs(deltas[i0] - dTarget);
         if (e0 < bestErr) bestS = rev ? totalLen : 0f;
         return Math.Clamp(bestS, 0f, totalLen);
@@ -947,18 +1013,14 @@ public static class XBracingPlanner
             var (s, _, depth, grow, along) = sorted[si];
             s = Math.Clamp(s, 0f, totalLen);
 
-            if (s > sCursor + 1e-4f)
-                AppendOpenPathRange(path, totalLen, sCursor, s, dst);
-
-            var mouthIn = PointAtArcOpen(path, totalLen, s);
+            var mouthA = PointAtArcOpen(path, totalLen, s);
             if (depth < 1e-4f || grow.LengthSquared() < 0.5f)
             {
-                sCursor = s;
+                if (s > sCursor + 1e-4f)
+                    AppendOpenPathRange(path, totalLen, sCursor, s, dst);
+                sCursor = MathF.Max(sCursor, s);
                 continue;
             }
-
-            // Re-base tip from the actual path entry — drawn length == planned depth.
-            var tipIn = mouthIn + grow * depth;
 
             var alongU = along;
             if (alongU.LengthSquared() < 1e-8f)
@@ -968,18 +1030,30 @@ public static class XBracingPlanner
             else
                 alongU = Vector2.UnitX;
 
-            // Dual-wall: second tip offset along baseline; same depth back to path.
-            var tipOut = tipIn + alongU * beadOff;
-            var mouthOutIdeal = tipOut - grow * depth;
-
-            float sOut = NearestArcS(path, totalLen, mouthOutIdeal);
-            if (sOut < s + beadOff * 0.25f)
-                sOut = Math.Clamp(s + beadOff, 0f, totalLen);
+            // Dual-wall pair anchored in WORLD space: the second wall sits one bead
+            // along the LOCKED baseline direction from the first — independent of
+            // this layer's path travel direction. Ordering the pair by PATH arc
+            // afterwards keeps the walk continuous. (Forcing the exit to come after
+            // the entry in path order flipped the pair's world side whenever the
+            // marching-squares chain direction flipped — a one-bead sawtooth
+            // overhang on every fin at random layers.)
+            float sB = NearestArcS(path, totalLen, mouthA + alongU * beadOff);
+            float sIn = MathF.Min(s, sB);
+            float sOut = MathF.Max(s, sB);
+            if (sOut - sIn < beadOff * 0.25f)
+                sOut = Math.Clamp(sIn + beadOff, 0f, totalLen);
             if (si + 1 < sorted.Count)
-                sOut = MathF.Min(sOut, MathF.Max(s + beadOff * 0.35f, sorted[si + 1].S - beadOff * 0.25f));
+                sOut = MathF.Min(sOut, MathF.Max(sIn + beadOff * 0.35f, sorted[si + 1].S - beadOff * 0.25f));
+            sIn = MathF.Max(sIn, sCursor);
             sOut = Math.Clamp(sOut, 0f, totalLen);
 
-            if (sOut <= s + 1e-3f)
+            if (sIn > sCursor + 1e-4f)
+                AppendOpenPathRange(path, totalLen, sCursor, sIn, dst);
+
+            var mouthIn = PointAtArcOpen(path, totalLen, sIn);
+            var tipIn = mouthIn + grow * depth;
+
+            if (sOut <= sIn + 1e-3f)
             {
                 var mouthOutTan = mouthIn + alongU * beadOff;
                 var tipOutTan = mouthOutTan + grow * depth;
@@ -987,7 +1061,7 @@ public static class XBracingPlanner
                 AddPt(tipIn);
                 AddPt(tipOutTan);
                 AddPt(mouthOutTan);
-                sCursor = s;
+                sCursor = MathF.Max(sCursor, sIn);
                 continue;
             }
 
@@ -1069,14 +1143,16 @@ public static class XBracingPlanner
                     Origin = c + new Vector2(MathF.Cos(thLo), MathF.Sin(thLo)) * Ravg,
                     Unit = new Vector2(-MathF.Sin(thLo), MathF.Cos(thLo)),
                     InwardUnit = inward,
+                    Radius = Ravg,
                 };
                 state.BaselineLocks[contourIndex] = lockData;
             }
             else
             {
-                // Keep locked Theta0/Sign/Inward; refresh center if user moved gizmo.
+                // Keep locked Theta0/Sign/Inward/Radius; refresh center if user moved gizmo.
                 inward = lockData.InwardUnit.LengthSquared() > 0.5f ? lockData.InwardUnit : inward;
                 thLo = lockData.Theta0;
+                if (lockData.Radius > 1e-2f) Ravg = lockData.Radius;
             }
 
             // Coverage window in the LOCKED frame (both ends — scalloped panels
