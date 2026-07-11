@@ -2923,6 +2923,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.XBracingSpanMm         = copy.XBracingSpanMm;
         live.XBracingAngleDeg       = copy.XBracingAngleDeg;
         live.XBracingExtendEdges    = copy.XBracingExtendEdges;
+        live.XBracingShowHelper     = copy.XBracingShowHelper;
         live.XBracingPlaneTiltY     = copy.XBracingPlaneTiltY;
         live.XBracingPlaneTiltX     = copy.XBracingPlaneTiltX;
         live.XBracingProjectionType = copy.XBracingProjectionType;
@@ -3121,6 +3122,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.XBracingSpanMm      = p.XBracingSpanMm;
         add.XBracingAngleDeg    = p.XBracingAngleDeg;
         add.XBracingExtendEdges = p.XBracingExtendEdges;
+        add.XBracingShowHelper = p.XBracingShowHelper;
         add.XBracingPlaneTiltY  = p.XBracingPlaneTiltY;
         add.XBracingPlaneTiltX  = p.XBracingPlaneTiltX;
         add.XBracingProjectionType = p.XBracingProjectionType is "Cylinder" ? "Cylinder" : "Planar";
@@ -3404,6 +3406,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.XBracingSpanMm       = add.XBracingSpanMm;
         p.XBracingAngleDeg     = add.XBracingAngleDeg;
         p.XBracingExtendEdges  = add.XBracingExtendEdges;
+        p.XBracingShowHelper   = add.XBracingShowHelper;
         p.XBracingPlaneTiltY   = add.XBracingPlaneTiltY;
         p.XBracingPlaneTiltX   = add.XBracingPlaneTiltX;
         p.XBracingProjectionType = add.XBracingProjectionType;

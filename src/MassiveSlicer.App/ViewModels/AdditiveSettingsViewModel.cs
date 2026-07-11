@@ -739,6 +739,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool ShowXBracingPlanarControls => XBracingEnabled && XBracingProjectionType != "Cylinder";
     public bool ShowXBracingCylinderControls => XBracingEnabled && XBracingProjectionType == "Cylinder";
 
+    private bool _xBracingShowHelper = true;
+    /// <summary>Show the brace plane / cylinder helper in the viewport (visual only).</summary>
+    public bool XBracingShowHelper
+    {
+        get => _xBracingShowHelper;
+        set => SetField(ref _xBracingShowHelper, value);
+    }
+
     private double _xBracingDepthMm = 50.0;
     /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
     public double XBracingDepthMm
