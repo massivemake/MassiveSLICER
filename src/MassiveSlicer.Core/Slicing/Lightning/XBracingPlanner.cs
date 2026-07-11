@@ -167,15 +167,21 @@ public static class XBracingPlanner
         cellH = MathF.Max(cellH, settings.LayerHeight * 4f);
 
         float idealDs = span * lh / cellH; // ≈ lh * tan(effective angle)
-        // Mouth track: follow ideal diagonal, small catch-up headroom.
-        float maxDs = MathF.Max(idealDs * 1.15f, lh * 0.35f);
+        // Mouth track: follow ideal diagonal. Catch-up headroom must comfortably
+        // exceed idealDs or a leg that lags once (curvature slowdown) can never
+        // rejoin its diagonal — the ideal keeps marching at idealDs per layer.
+        float maxDs = MathF.Max(idealDs * 1.6f, lh * 0.35f);
         maxDs = MathF.Min(maxDs, bead * 1.25f);
 
         // Tip free-edge: must be ≥ idealDs so constant-depth X is possible.
-        // Extra slack for cylinder growDir rotation (tip can move more than mouth).
+        // On CURVED walls growDir follows the local surface normal, so the tip
+        // sweeps depth·δθ per layer even when the mouth moves only idealDs —
+        // the budget is the physical bead-overlap bound (tip bead still lands on
+        // the previous tip bead), not the mouth step.
         float overBudget = MathF.Max(lh * tanOver * 0.85f, lh * 0.12f);
         float maxLateral = MathF.Max(idealDs * 1.12f, overBudget);
         maxLateral = MathF.Max(maxLateral, idealDs + lh * 0.15f);
+        maxLateral = MathF.Max(maxLateral, bead * 0.75f);
         maxLateral = MathF.Min(maxLateral, bead * 1.35f);
 
         // Support radius covers the designed mouth/tip step.
@@ -301,6 +307,11 @@ public static class XBracingPlanner
 
             // Resolve near-duplicate baseline U: keep deeper, re-register keys.
             // Always keep IdealMouth (never path stitch) so stack aim stays on the baseline.
+            // EXCEPT diverging twins: two legs sharing last layer's pin (cell-boundary
+            // "∨" vertex or post-cross split) that now straddle it are SUPPOSED to
+            // separate — re-merging them every layer pins the whole X lattice to the
+            // cell boundaries (legs can only escape 2·maxDs per layer, less than the
+            // merge window, so the merge erased their progress forever).
             sites.Sort((a, b) => a.U.CompareTo(b.U));
             for (int i = sites.Count - 1; i > 0; i--)
             {
@@ -308,6 +319,12 @@ public static class XBracingPlanner
 
                 var a = sites[i - 1];
                 var b = sites[i];
+
+                if (state.Prev.TryGetValue(a.KeyA, out var pa)
+                    && state.Prev.TryGetValue(b.KeyA, out var pb)
+                    && MathF.Abs(pa.S - pb.S) < 1e-3f
+                    && (a.U - pa.S) * (b.U - pb.S) < -1e-6f)
+                    continue; // diverging twins — let them split
                 float dA = Vector2.Distance(a.IdealMouth, a.Tip);
                 float dB = Vector2.Distance(b.IdealMouth, b.Tip);
                 var keep = dA >= dB ? a : b;
@@ -548,15 +565,27 @@ public static class XBracingPlanner
         growDir = default;
         u = Math.Clamp(u, 0f, MathF.Max(baseline.Length, 0f));
 
-        // Baseline sample only chooses where along the wall; mouth is always on the path.
-        var sample = baseline.PointAt(u);
+        // Baseline U only chooses where along the wall; mouth is always on the path.
+        float pathS;
         if (baseline.IsCylinder && baseline.Radius > 1e-3f)
         {
             float th = baseline.ThetaAt(u);
             var radial = new Vector2(MathF.Cos(th), MathF.Sin(th));
-            sample = baseline.CylinderCenter + radial * baseline.Radius;
+            var sample = baseline.CylinderCenter + radial * baseline.Radius;
+            pathS = NearestArcS(path, totalLen, sample);
         }
-        float pathS = NearestArcS(path, totalLen, sample);
+        else
+        {
+            // Fold-free mapping: proportional arc length, oriented by the locked
+            // baseline unit. Nearest-point projection from the straight chord folds
+            // under crests/troughs of a wavy wall (two equidistant slopes) — the
+            // mouth would have to teleport across the bump, the support clamps veto
+            // the jump, and the diagonal march deadlocks at prev.S forever.
+            float frac = baseline.Length > 1e-6f ? u / baseline.Length : 0f;
+            bool rev = path.Count >= 2
+                && Vector2.Dot(path[^1] - path[0], baseline.Unit) < 0f;
+            pathS = Math.Clamp((rev ? 1f - frac : frac) * totalLen, 0f, totalLen);
+        }
         mouth = PointAtArcOpen(path, totalLen, pathS);
 
         // Path left-normal (open face is oriented into the wall by ExtractSingleSkinOpenFaces).
