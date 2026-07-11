@@ -264,10 +264,10 @@ public static class KrlExporter
 
         // -- Initial approach -----------------------------------------------------
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-        sb.AppendLine(FormatLin(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0));
+        sb.AppendLine(FormatLin(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, LinE1(s)));
         // Exact stop at the touch-down point so the RPM-on TRIGGER fires at the
         // correct physical position (not inside a C_VEL blend zone).
-        sb.AppendLine(FormatLinExact(p0, a0, b0, c0));
+        sb.AppendLine(FormatLinExact(p0, a0, b0, c0, LinE1(s)));
         sb.AppendLine();
 
         Vector3 lastPos = p0;
@@ -316,7 +316,7 @@ public static class KrlExporter
                         var zHopSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
                         sb.AppendLine($"$VEL.CP = {zHopSpeed.ToString("F6", Inv)}");
                         var (za, zb, zc) = lastAbc;
-                        sb.AppendLine(FormatLinExact(to, za, zb, zc));
+                        sb.AppendLine(FormatLinExact(to, za, zb, zc, LinE1(s)));
                         lastPos = to;
                         needsRpmOn = true;
                         continue;
@@ -331,7 +331,7 @@ public static class KrlExporter
                     var travelSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
                     sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
                     var (ta, tb, tc) = lastAbc;
-                    sb.AppendLine(FormatLinExact(to, ta, tb, tc));
+                    sb.AppendLine(FormatLinExact(to, ta, tb, tc, LinE1(s)));
                     sb.AppendLine();
                     needsRpmOn = true;
                 }
@@ -359,7 +359,7 @@ public static class KrlExporter
                         sb.AppendLine(FormatDirectAnout4(
                             ResolveAnout4ExtrudeText(s, move.WipeRpmScale), "wipe"));
                         sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
-                        sb.AppendLine(FormatLin(to, ma, mb, mc));
+                        sb.AppendLine(FormatLin(to, ma, mb, mc, LinE1(s)));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
                         continue;
@@ -396,7 +396,7 @@ public static class KrlExporter
                         }
 
                         sb.AppendLine($"$VEL.CP = {speedMps.ToString("F6", Inv)}");
-                        sb.AppendLine(FormatLin(to, ma, mb, mc));
+                        sb.AppendLine(FormatLin(to, ma, mb, mc, LinE1(s)));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
                         lastExtrudeSpeedMps = speedMps;
@@ -435,7 +435,7 @@ public static class KrlExporter
                         sb.AppendLine($"$VEL.CP = {extrudeSpeedMps.ToString("F6", Inv)}");
                     }
 
-                    sb.AppendLine(FormatLin(to, ma, mb, mc));
+                    sb.AppendLine(FormatLin(to, ma, mb, mc, LinE1(s)));
                     lastExtrudeSpeedMps = extrudeSpeedMps;
                     lastExtrudeRpmScale = extrudeRpmScale;
                     lastAbc = (ma, mb, mc);
@@ -453,7 +453,7 @@ public static class KrlExporter
         else
             sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
-        sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc));
+        sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc, LinE1(s)));
         sb.AppendLine();
         WriteFooter(sb, s);
 
@@ -482,7 +482,7 @@ public static class KrlExporter
         var (a0, b0, c0) = KukaAbc(first.layer.PlaneNormal, s);
         var p0 = ToBase(first.move.From, s);
         sb.AppendLine($"$VEL.CP = {rapidV}");
-        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0));
+        sb.AppendLine(FormatLinExact(new Vector3(p0.X, p0.Y, p0.Z + s.ApproachZMm), a0, b0, c0, LinE1(s)));
         sb.AppendLine();
 
         foreach (var layer in toolpath.Layers)
@@ -499,14 +499,14 @@ public static class KrlExporter
                 if (move.Kind == MoveKind.Mill)
                 {
                     sb.AppendLine($"$VEL.CP = {cutV}");
-                    sb.AppendLine(FormatLin(to, a, b, c));
+                    sb.AppendLine(FormatLin(to, a, b, c, LinE1(s)));
                 }
                 else // Travel: rapid (up/over) or plunge (down)
                 {
                     bool plunging = move.To.Z < move.From.Z - 1e-4f;
                     sb.AppendLine(plunging ? ";plunge" : ";rapid");
                     sb.AppendLine($"$VEL.CP = {(plunging ? plungeV : rapidV)}");
-                    sb.AppendLine(FormatLinExact(to, a, b, c));
+                    sb.AppendLine(FormatLinExact(to, a, b, c, LinE1(s)));
                 }
             }
         }
@@ -752,21 +752,29 @@ public static class KrlExporter
 
     // -- Line formatting -------------------------------------------------------
 
+    /// <summary>
+    /// Rail position for every LIN. The rail (E1) must HOLD its taught position
+    /// through the whole program — emitting E1 0.0 yanks the robot back to rail
+    /// zero on the first motion after the home PTP.
+    /// </summary>
+    private static float LinE1(KrlExportSettings s)
+        => float.IsNaN(s.HomeE1Mm) ? 0f : s.HomeE1Mm;
+
     // C_VEL: approximate (blended) positioning — used for extrude moves so the robot
     // never fully stops mid-bead and maintains a smooth velocity profile.
-    private static string FormatLin(Vector3 p, float a, float b, float c)
+    private static string FormatLin(Vector3 p, float a, float b, float c, float e1)
         => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
-           $"E1 0.000, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }} C_VEL";
+           $"E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }} C_VEL";
 
     // Exact stop — used for travel/approach/retreat moves so TRIGGER WHEN DISTANCE=0
     // fires at the precise physical waypoint rather than inside a C_VEL blend zone.
     // This is the fix for the $ADVANCE look-ahead timing issue: with exact stop the
     // "path switchover point" (DISTANCE=0) coincides with the actual robot position.
-    private static string FormatLinExact(Vector3 p, float a, float b, float c)
+    private static string FormatLinExact(Vector3 p, float a, float b, float c, float e1)
         => $"LIN {{X {p.X.ToString("F2", Inv)}, Y {p.Y.ToString("F2", Inv)}, Z {p.Z.ToString("F2", Inv)}, " +
            $"A {a.ToString("F3", Inv)}, B {b.ToString("F3", Inv)}, C {c.ToString("F3", Inv)}, " +
-           $"E1 0.000, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
+           $"E1 {e1.ToString("F3", Inv)}, E2 0.000, E3 0.000, E4 0.000, E5 0.000, E6 0.000 }}";
 
     private static string FormatTriggerAnout4(string text, string comment)
         => $"TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]={text} ; {comment}";

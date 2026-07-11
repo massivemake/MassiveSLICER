@@ -44,6 +44,42 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Export_holds_rail_E1_through_every_lin_move()
+    {
+        // Regression: LIN moves hard-coded E1 0.000, so the rail snapped from the
+        // home PTP position back to zero on the first motion of the print.
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(100, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(100, 50, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 50, 10), new Vector3(0, 50, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+        });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "rail_hold",
+            HomeE1Mm    = -439.08f,
+        });
+
+        Assert.Contains("E1 -439.080", krl); // home PTP
+        foreach (var line in krl.Split('\n'))
+            if (line.TrimStart().StartsWith("LIN "))
+                Assert.Contains("E1 -439.080", line);
+
+        // Without a rail, LIN keeps the legacy E1 0.000.
+        var noRail = KrlExporter.Export(tp, new KrlExportSettings { ProgramName = "no_rail" });
+        foreach (var line in noRail.Split('\n'))
+            if (line.TrimStart().StartsWith("LIN "))
+                Assert.Contains("E1 0.000", line);
+    }
+
+    [Fact]
     public void Export_applies_toolhead_orientation_offset_on_flat_toolpath()
     {
         // Regression: a deliberate global toolhead spin must survive the B≈90° gimbal-lock
