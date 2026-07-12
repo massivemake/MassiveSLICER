@@ -380,8 +380,28 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "tpopt",
+            Description = "Optimize the active toolpath: greedy travel-minimizing path order + extrude bridges between paths within 3x bead width (same as the Optimize Toolpath button).",
+            Usage = "tpopt",
+            Execute = (ctx, _) =>
+            {
+                if (ctx.Main.Viewport.ActiveScrubToolpath is not { } tpo)
+                {
+                    ctx.LogError("[tpopt] no active toolpath — slice first");
+                    return;
+                }
+                var stats = Core.Slicing.ToolpathOptimizer.Optimize(
+                    tpo, (float)ctx.Main.RightPanel.Additive.BeadWidth);
+                ctx.Main.RightPanel.Additive.OptimizeToolpathSummary = stats.ToString();
+                ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
+                ctx.Log($"[tpopt] {stats}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpfix",
-            Description = "Surgical toolpath repair: detect floating beads (no material within 0.75 bead on the layer below) and heal each with tapered finger-tip extensions. Re-run after any reslice.",
+            Description = "Surgical toolpath repair: build continuous support shelves under every floating run (full-length lines stepping back to the wall at 30 deg/layer). Re-run after any reslice.",
             Usage = "tpfix supports",
             Execute = (ctx, args) =>
             {
@@ -391,10 +411,9 @@ public sealed class ConsoleCommandRegistry
                 float bead = (float)add.BeadWidth;
                 float layerH = (float)add.LayerHeight;
                 float thr = bead * 0.75f;
-                float maxReach = bead * 4f;           // beyond this a taper cannot help
+                float maxReach = bead * 4f;
                 float maxStep = MathF.Min(layerH * MathF.Tan(30f * MathF.PI / 180f), bead * 0.5f);
 
-                // Per-layer extrude segments for distance queries.
                 var layerSegs = new List<List<(System.Numerics.Vector2 A, System.Numerics.Vector2 B)>>(tp.Layers.Count);
                 foreach (var layer in tp.Layers)
                 {
@@ -434,75 +453,142 @@ public sealed class ConsoleCommandRegistry
                     return best;
                 }
 
-                // 1. Detect floating bead points (dedup ~1.5 beads apart per layer).
-                var targets = new List<(int Layer, System.Numerics.Vector2 P, System.Numerics.Vector2 Q, float G)>();
+                // 1. Floating RUNS: consecutive floating extrudes in a layer's walk
+                //    (small supported interruptions of up to 2 moves stay in the run).
+                var runs = new List<(int Layer, List<System.Numerics.Vector2> Pts, List<float> G, List<System.Numerics.Vector2> Dir)>();
                 for (int li = 1; li < tp.Layers.Count; li++)
                 {
                     if (layerSegs[li - 1].Count == 0) continue;
-                    var placed = new List<System.Numerics.Vector2>();
+                    List<System.Numerics.Vector2>? pts = null;
+                    List<float>? gs = null;
+                    List<System.Numerics.Vector2>? dirs = null;
+                    int miss = 0;
+                    void Flush()
+                    {
+                        if (pts is { Count: >= 2 }) runs.Add((li, pts, gs!, dirs!));
+                        pts = null; gs = null; dirs = null; miss = 0;
+                    }
                     foreach (var mv in tp.Layers[li].Moves)
                     {
-                        if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                        if (mv.Kind != Core.Models.MoveKind.Extrude) { Flush(); continue; }
                         var mid = new System.Numerics.Vector2(
                             (mv.From.X + mv.To.X) * 0.5f, (mv.From.Y + mv.To.Y) * 0.5f);
-                        bool near = false;
-                        foreach (var pl in placed)
-                            if (System.Numerics.Vector2.Distance(pl, mid) < bead * 1.5f) { near = true; break; }
-                        if (near) continue;
                         float g = NearestBelow(li, mid, out var q);
-                        if (g > thr && g <= maxReach)
+                        bool floating = g > thr && g <= maxReach;
+                        if (floating)
                         {
-                            targets.Add((li, mid, q, g));
-                            placed.Add(mid);
+                            var d = mid - q;
+                            float dl = d.Length();
+                            var dir = dl > 1e-3f ? d / dl : System.Numerics.Vector2.Zero;
+                            if (pts is null) { pts = []; gs = []; dirs = []; }
+                            if (pts.Count == 0)
+                            {
+                                pts.Add(new System.Numerics.Vector2(mv.From.X, mv.From.Y));
+                                gs!.Add(g); dirs!.Add(dir);
+                            }
+                            pts.Add(new System.Numerics.Vector2(mv.To.X, mv.To.Y));
+                            gs!.Add(g); dirs!.Add(dir);
+                            miss = 0;
                         }
+                        else if (pts is not null && ++miss > 2) Flush();
                     }
+                    Flush();
                 }
-                if (targets.Count == 0) { ctx.Log("[tpfix] no floating beads found — nothing to do"); return; }
-                if (targets.Count > 4000) { ctx.LogError($"[tpfix] {targets.Count} floating points — refusing (detection likely misfiring on this stack)"); return; }
+                if (runs.Count == 0) { ctx.Log("[tpfix] no floating runs found — nothing to do"); return; }
 
-                // 2. Heal: tapered out-and-back tip extensions on the layers below.
-                int injected = 0;
-                var done = new HashSet<(int, int, int)>();
-                foreach (var (lyr, P, Q, g) in targets)
+                // 2. Shelves: reprint each floating run on the layers below,
+                //    stepping every vertex toward the wall by <= maxStep per layer
+                //    with the wall re-measured at EVERY layer (angled slicing moves
+                //    it in world XY). Vertices that land (gap <= thr) leave the
+                //    descent; vertices whose gap stops shrinking for 3 layers are
+                //    chasing a wall that leans away faster than 30 deg and are
+                //    abandoned. Runs split into independent sub-runs as vertices
+                //    drop out, so material only goes where it still helps.
+                int shelves = 0, abandoned = 0; float lenInjected = 0f;
+                foreach (var (lyr, pts, _, _) in runs)
                 {
-                    float reach = g + bead * 0.6f;
-                    int levels = Math.Min(80, (int)MathF.Ceiling(reach / MathF.Max(maxStep, 0.1f)));
-                    for (int k = 1; k <= levels && lyr - k >= 0; k++)
+                    var seg0 = new List<(System.Numerics.Vector2 P, float LastG, int Stall)>(pts.Count);
+                    foreach (var p2 in pts) seg0.Add((p2, float.MaxValue, 0));
+                    var segsAlive = new List<List<(System.Numerics.Vector2 P, float LastG, int Stall)>> { seg0 };
+                    for (int level = 0, J = lyr - 1; level < 40 && J >= 1 && segsAlive.Count > 0; level++, J--)
                     {
-                        float ext = reach - (k - 1) * maxStep;
-                        if (ext <= 0f) break;
-                        var layer = tp.Layers[lyr - k];
-                        int bi = -1; float bd = float.MaxValue; System.Numerics.Vector3 tip = default;
-                        for (int i = 0; i < layer.Moves.Count; i++)
+                        var layer = tp.Layers[J];
+                        var nextSegs = new List<List<(System.Numerics.Vector2, float, int)>>();
+                        foreach (var seg in segsAlive)
                         {
-                            var mv = layer.Moves[i];
-                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
-                            float d = System.Numerics.Vector2.Distance(
-                                new System.Numerics.Vector2(mv.To.X, mv.To.Y), P);
-                            if (d < bd) { bd = d; bi = i; tip = mv.To; }
+                            int n = seg.Count;
+                            var g = new float[n];
+                            var q = new System.Numerics.Vector2[n];
+                            for (int vi = 0; vi < n; vi++)
+                                g[vi] = NearestBelow(J, seg[vi].P, out q[vi]);
+
+                            // Print this seg at layer J: wall anchor, along, anchor, back.
+                            var line = new List<System.Numerics.Vector2>(n + 2) { q[0] };
+                            for (int vi = 0; vi < n; vi++) line.Add(seg[vi].P);
+                            line.Add(q[n - 1]);
+                            int bi = -1; float bd = float.MaxValue; System.Numerics.Vector3 vAt = default;
+                            for (int i = 0; i < layer.Moves.Count; i++)
+                            {
+                                var mv = layer.Moves[i];
+                                if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                                float d = System.Numerics.Vector2.Distance(
+                                    new System.Numerics.Vector2(mv.To.X, mv.To.Y), line[0]);
+                                if (d < bd) { bd = d; bi = i; vAt = mv.To; }
+                            }
+                            if (bi < 0 || bd > bead * 4f) { abandoned += n; continue; }
+                            var normal = layer.Moves[bi].Normal;
+                            float ZAt(System.Numerics.Vector2 p2) =>
+                                MathF.Abs(normal.Z) > 0.3f
+                                    ? vAt.Z - (normal.X * (p2.X - vAt.X) + normal.Y * (p2.Y - vAt.Y)) / normal.Z
+                                    : vAt.Z;
+                            var detour = new List<Core.Models.ToolpathMove>();
+                            var pos = vAt;
+                            void Go(System.Numerics.Vector2 p2)
+                            {
+                                var p3 = new System.Numerics.Vector3(p2.X, p2.Y, ZAt(p2));
+                                if (System.Numerics.Vector3.DistanceSquared(pos, p3) < 1e-6f) return;
+                                detour.Add(new Core.Models.ToolpathMove(pos, p3, Core.Models.MoveKind.Extrude)
+                                    { IsLightning = true, Normal = normal });
+                                lenInjected += System.Numerics.Vector3.Distance(pos, p3);
+                                pos = p3;
+                            }
+                            foreach (var p2 in line) Go(p2);
+                            for (int vi = line.Count - 2; vi >= 0; vi--) Go(line[vi]);
+                            Go(new System.Numerics.Vector2(vAt.X, vAt.Y));
+                            layer.Moves.InsertRange(bi + 1, detour);
+                            for (int vi = 1; vi < line.Count; vi++)
+                                layerSegs[J].Add((line[vi - 1], line[vi]));
+                            shelves++;
+
+                            // Step survivors toward the wall; split on dropouts.
+                            List<(System.Numerics.Vector2, float, int)>? open = null;
+                            void Close() { if (open is { Count: >= 2 }) nextSegs.Add(open); open = null; }
+                            for (int vi = 0; vi < n; vi++)
+                            {
+                                if (g[vi] <= thr) { Close(); continue; }               // landed
+                                int stall = g[vi] > seg[vi].LastG - maxStep * 0.4f
+                                    ? seg[vi].Stall + 1 : 0;
+                                if (stall >= 3) { abandoned++; Close(); continue; }    // wall leans away
+                                var d = seg[vi].P - q[vi];
+                                float dl = d.Length();
+                                var stepped = dl > 1e-3f
+                                    ? seg[vi].P - d / dl * MathF.Min(maxStep, g[vi])
+                                    : seg[vi].P;
+                                open ??= [];
+                                open.Add((stepped, g[vi], stall));
+                            }
+                            Close();
                         }
-                        if (bi < 0 || bd <= bead * 0.35f) continue;
-                        var key = (lyr - k, (int)MathF.Round(tip.X), (int)MathF.Round(tip.Y));
-                        if (!done.Add(key)) continue;
-                        var dir = P - new System.Numerics.Vector2(tip.X, tip.Y);
-                        float dl = dir.Length();
-                        if (dl < 1e-3f) continue;
-                        dir /= dl;
-                        float take = MathF.Min(ext, dl + bead * 0.6f);
-                        var e3 = new System.Numerics.Vector3(
-                            tip.X + dir.X * take, tip.Y + dir.Y * take, tip.Z);
-                        layer.Moves.Insert(bi + 1,
-                            new Core.Models.ToolpathMove(e3, tip, Core.Models.MoveKind.Extrude)
-                            { IsLightning = true, Normal = layer.Moves[bi].Normal });
-                        layer.Moves.Insert(bi + 1,
-                            new Core.Models.ToolpathMove(tip, e3, Core.Models.MoveKind.Extrude)
-                            { IsLightning = true, Normal = layer.Moves[bi].Normal });
-                        injected++;
+                        segsAlive = nextSegs
+                            .Select(sg => sg.Select(t => ((System.Numerics.Vector2)t.Item1, t.Item2, t.Item3)).ToList())
+                            .ToList();
                     }
                 }
                 ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
-                ctx.Log($"[tpfix] {targets.Count} floating spot(s) found, {injected} tip extension(s) injected. "
-                    + "Applied to the CURRENT toolpath — re-run after any reslice.");
+                ctx.Log($"[tpfix] {runs.Count} floating run(s) → {shelves} support shelf line(s), "
+                    + $"{lenInjected / 1000f:0.0} m extruded"
+                    + (abandoned > 0 ? $", {abandoned} vertex chase(s) abandoned (wall leans past 30°)" : "")
+                    + ". Applied to the CURRENT toolpath — re-run after any reslice.");
             },
         });
 
