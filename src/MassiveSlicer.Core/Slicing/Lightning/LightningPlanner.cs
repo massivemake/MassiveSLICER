@@ -472,6 +472,7 @@ public static class LightningPlanner
                     if (unsupported[si]) demandFlags++;
                 }
 
+
                 // Distribute support EVENLY along each contiguous unsupported run.
                 foreach (var (start, count) in CircularRuns(unsupported))
                 {
@@ -767,6 +768,66 @@ public static class LightningPlanner
                     mouthAim = barRun[MidIndexAlongRun(barRun)];
                 if (mouthAim is null && paintBarMid is { } gbm && paintBarLayer >= 0)
                     mouthAim = Remap(paintBarLayer, i, gbm);
+
+                // ── Corbel ledges for painted marks near the wall ─────────────
+                // A marked line floating within ~3 beads of THIS layer's wall is
+                // cheapest to catch by extending the wall outward at the overhang
+                // rate over the next few layers down (a 30°-compliant ledge that
+                // reaches half a bead past the line). Fires ONLY on user marks —
+                // automatic demand keeps the classic finger/buttress behaviour.
+                if (barRun.Count > 0)
+                {
+                    float corbelReach = bead * 3f;
+                    float stepC = MaxStep(i);
+                    // Corbelable points: off-wall, within reach.
+                    var cor = new List<(Vector2 Pt, Vector2 Anchor, Vector2 Dir, float Reach)>();
+                    foreach (var mpt in barRun)
+                    {
+                        var anchorC = ClosestOnRegionBoundary(region, mpt);
+                        float dWall = Vector2.Distance(anchorC, mpt);
+                        if (dWall <= 1e-3f || dWall > corbelReach) continue;
+                        if (InsideRegion(region, mpt)) continue; // already on material
+                        cor.Add((mpt, anchorC, (mpt - anchorC) / dWall, dWall + bead * 0.55f));
+                    }
+                    for (int ci2 = 0; ci2 < cor.Count; ci2++)
+                    {
+                        var (pt, anchorC, dirC, reachFull) = cor[ci2];
+                        // Chain with the NEXT corbel point when close — the pad then
+                        // spans the whole marked run, not just isolated fingers.
+                        bool paired = ci2 + 1 < cor.Count
+                            && Vector2.Distance(pt, cor[ci2 + 1].Pt) <= bead * 6f;
+                        int layersDown = Math.Min(40,
+                            (int)MathF.Ceiling(reachFull / MathF.Max(stepC, 0.1f)));
+                        for (int k = 0; k <= layersDown && i - k >= 0; k++)
+                        {
+                            float ext = reachFull - k * stepC;
+                            if (ext <= 0f) break;
+                            var line = new List<Vector2>
+                            {
+                                anchorC - dirC * (bead * 0.6f),
+                                anchorC + dirC * ext,
+                            };
+                            if (paired)
+                            {
+                                var (pt2, anchor2, dir2, reach2) = cor[ci2 + 1];
+                                float ext2 = MathF.Max(0f, reach2 - k * stepC);
+                                line.Add(anchor2 + dir2 * ext2);
+                                line.Add(anchor2 - dir2 * (bead * 0.6f));
+                            }
+                            var pathC = new PathD(line.Count);
+                            foreach (var v0 in line)
+                            {
+                                var v = (frames is not null && k > 0) ? Remap(i, i - k, v0) : v0;
+                                pathC.Add(new PointD(v.X, v.Y));
+                            }
+                            var padC = Clipper.InflatePaths(new PathsD { pathC }, bead * 0.6,
+                                JoinType.Round, EndType.Round, 2.0);
+                            var target = plan.Layers[i - k];
+                            target.CorbelPads ??= new PathsD();
+                            target.CorbelPads.AddRange(padC);
+                        }
+                    }
+                }
 
                 float barLenRun = 0f;
                 for (int j = 1; j < barRun.Count; j++)
