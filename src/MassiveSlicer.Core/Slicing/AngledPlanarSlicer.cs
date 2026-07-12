@@ -69,6 +69,7 @@ public static class AngledPlanarSlicer
         var   toolpath   = new Toolpath();
         int   idx        = 0;
         var   prevTracks = new List<ContourTrack>();
+        Vector3? prevEnd = null;
 
         var steps = new List<float>();
         for (float st = tMin + settings.FirstLayerHeight; st < tMax - 1e-4f; st += settings.LayerHeight)
@@ -153,10 +154,14 @@ public static class AngledPlanarSlicer
             prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
                 seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[si],
-                lightningPlan:  lightningPlan?.Layers[si]);
+                lightningPlan:  lightningPlan?.Layers[si],
+                prevEnd: prevEnd);
 
             if (layer.Moves.Count > 0)
+            {
                 toolpath.Layers.Add(layer);
+                prevEnd = layer.Moves[^1].To;
+            }
         }
 
         if (settings.PaintMarks.Count > 0)
@@ -234,6 +239,7 @@ public static class AngledPlanarSlicer
         var toolpath  = new Toolpath();
         var prevTracks = new List<ContourTrack>();
         int idx = 0;
+        Vector3? prevEnd = null;
 
         var sd = settings.SeamDirection;
         float sdLen = sd.Length();
@@ -408,7 +414,8 @@ public static class AngledPlanarSlicer
             prevTracks = BuildLayer(meshes, normal, planeD, origin, u, v,
                 seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[si],
-                lightningPlan:  lightningPlan?.Layers[si]);
+                lightningPlan:  lightningPlan?.Layers[si],
+                prevEnd: prevEnd);
 
             // Wedge thickness: distance from each move to the PREVIOUS plane, relative
             // to nominal. First layer sits on the bed at nominal thickness.
@@ -426,7 +433,10 @@ public static class AngledPlanarSlicer
             }
 
             if (layer.Moves.Count > 0)
+            {
                 toolpath.Layers.Add(layer);
+                prevEnd = layer.Moves[^1].To;
+            }
 
             nPrev = normal; dPrev = planeD; hasPrev = true;
         }
@@ -470,14 +480,16 @@ public static class AngledPlanarSlicer
         ToolpathLayer layer,
         bool isLastLayer = false,
         List<List<Vector2>>? cachedContours = null,
-        Lightning.LightningLayerPlan? lightningPlan = null)
+        Lightning.LightningLayerPlan? lightningPlan = null,
+        Vector3? prevEnd = null)
     {
         var insetContours = cachedContours
             ?? ComputeInsetContours(meshes, normal, planeD, origin, u, v, settings);
         if (insetContours.Count == 0) return new List<ContourTrack>();
 
         return BuildLayerBody(settings, layer, normal, planeD, origin, u, v,
-            seamOrigin2d, seamDir2d, prevTracks, insetContours, isLastLayer, lightningPlan);
+            seamOrigin2d, seamDir2d, prevTracks, insetContours, isLastLayer, lightningPlan,
+            prevEnd);
     }
 
     /// <summary>
@@ -594,7 +606,8 @@ public static class AngledPlanarSlicer
         List<ContourTrack> prevTracks,
         List<List<Vector2>> insetContours,
         bool isLastLayer,
-        Lightning.LightningLayerPlan? lightningPlan)
+        Lightning.LightningLayerPlan? lightningPlan,
+        Vector3? prevEnd = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -624,7 +637,7 @@ public static class AngledPlanarSlicer
             if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
                 || (settings.XBracingEnabled && lightningPlan is not null))
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
-                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject);
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject, prevEnd);
             else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                 InfillGenerator.EmitGhostMesh(fillPolys, planeD, layer, infillSpacing, infillAngle,
                                               isLastLayer, Unproject, settings.BeadWidth);
@@ -647,7 +660,7 @@ public static class AngledPlanarSlicer
                 Vector3 UnprojectX(Vector2 p) => origin + p.X * u + p.Y * v;
                 int first = layer.Moves.Count;
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
-                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, UnprojectX);
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, UnprojectX, prevEnd);
                 for (int i = first; i < layer.Moves.Count; i++)
                     layer.Moves[i] = layer.Moves[i] with { Normal = normal };
                 return new List<ContourTrack>();

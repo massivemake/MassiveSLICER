@@ -865,4 +865,79 @@ public sealed class LightningBridgeTest
         float cx = a.X + t * abx, cy = a.Y + t * aby;
         return MathF.Sqrt((p.X - cx) * (p.X - cx) + (p.Y - cy) * (p.Y - cy));
     }
+    [Fact]
+    public void OverhangConeIsMeasuredFromTheSlicePlaneAxis()
+    {
+        // A wall leaning 35° from vertical is comfortably printable straight-up
+        // (35° < the ~60° effective budget of the 30° cone + half-bead adhesion).
+        // Sliced at an OPPOSING 35° tilt, the same wall drifts at 70° relative to
+        // the stacking axis — far past any budget — so a PLANE-relative analysis
+        // must demand supports there. A world-Z analysis would see a printable
+        // 35° lean and demand nothing.
+        float hx = 150f, hy = 15f, h = 220f;
+        float lean = MathF.Tan(35f * MathF.PI / 180f); // x-shear per z
+        Vector3 S(float x, float y, float z) => new(x + z * lean, y, z);
+        var v = new Vector3[]
+        {
+            S(-hx, -hy, 0), S(hx, -hy, 0), S(hx, hy, 0), S(-hx, hy, 0),
+            S(-hx, -hy, h), S(hx, -hy, h), S(hx, hy, h), S(-hx, hy, h),
+        };
+        int[][] faces =
+        [
+            [0,1,2],[0,2,3], [4,6,5],[4,7,6],
+            [0,4,5],[0,5,1], [1,5,6],[1,6,2],
+            [2,6,7],[2,7,3], [3,7,4],[3,4,0],
+        ];
+        var tris = new List<Vector3>();
+        foreach (var f in faces)
+            tris.AddRange([v[f[0]], v[f[1]], v[f[2]]]);
+
+        var settings = new SliceSettings
+        {
+            LayerHeight = 2.5f, FirstLayerHeight = 2.5f, BeadWidth = 6f,
+            TiltAngle = -35f,
+            InfillPattern = InfillPattern.LightningBridge,
+            LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true,
+        };
+        var tp = AngledPlanarSlicer.Slice([tris.ToArray()], settings);
+        Assert.True(tp.Layers.Count > 20, $"expected many tilted layers, got {tp.Layers.Count}");
+
+        // Plane-relative demand ⇒ lightning fingers appear (extra extrusion length
+        // beyond the plain perimeter on mid layers).
+        var baseline = AngledPlanarSlicer.Slice([tris.ToArray()], new SliceSettings
+        {
+            LayerHeight = 2.5f, FirstLayerHeight = 2.5f, BeadWidth = 6f,
+            TiltAngle = -35f,
+            InfillPattern = InfillPattern.None,
+            LightningOverhangDeg = 30f,
+        });
+        float Len(Toolpath t) => t.Layers.Sum(l => l.Moves
+            .Where(m => m.Kind == MoveKind.Extrude)
+            .Sum(m => Vector3.Distance(m.From, m.To)));
+        float lightning = Len(tp), plain = Len(baseline);
+        Assert.True(lightning > plain * 1.02f,
+            $"no plane-relative demand detected: lightning={lightning:0} vs plain={plain:0} — "
+            + "overhang analysis may be evaluating against world-vertical instead of the slice plane");
+
+        // Control: the same leaning wall sliced straight-up is inside the budget —
+        // a plane-relative analysis adds (almost) nothing there.
+        var upSettings = new SliceSettings
+        {
+            LayerHeight = 2.5f, FirstLayerHeight = 2.5f, BeadWidth = 6f,
+            InfillPattern = InfillPattern.LightningBridge,
+            LightningOverhangDeg = 30f,
+            LightningAnchorInterior = true,
+        };
+        var upPlain = new SliceSettings
+        {
+            LayerHeight = 2.5f, FirstLayerHeight = 2.5f, BeadWidth = 6f,
+            InfillPattern = InfillPattern.None,
+        };
+        float upL = Len(PlanarSlicer.Slice([tris.ToArray()], upSettings, null));
+        float upP = Len(PlanarSlicer.Slice([tris.ToArray()], upPlain, null));
+        Assert.True(upL < upP * 1.15f,
+            $"straight-up slice of a 35° lean should need little support: {upL:0} vs {upP:0}");
+    }
+
 }
