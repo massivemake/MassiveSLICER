@@ -24,7 +24,8 @@ public static class LightningGenerator
         ToolpathLayer layer,
         float beadWidth,
         float tipLoopRadius,
-        Func<Vector2, Vector3>? project = null)
+        Func<Vector2, Vector3>? project = null,
+        Vector3? startFrom = null)
     {
         var region = LightningPlanner.ToPathsD(fillPolys, beadWidth);
         if (region.Count == 0) return;
@@ -130,7 +131,7 @@ public static class LightningGenerator
         // vertex-wise fillet of each boundary polyline (min radius = bead width).
         result = FilletBoundaryCorners(result, beadWidth);
 
-        EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius);
+        EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius, startFrom);
     }
 
     /// <summary>
@@ -526,7 +527,8 @@ public static class LightningGenerator
     /// <summary>Emits every result polygon as a closed extrude loop; separate polygons
     /// (islands, holes) are connected by travels exactly like shell printing.</summary>
     private static void EmitLoops(PathsD polys, float z, ToolpathLayer layer, Func<Vector2, Vector3>? project,
-        LightningLayerPlan? plan = null, float beadWidth = 0f, float tipLoopRadius = 0f)
+        LightningLayerPlan? plan = null, float beadWidth = 0f, float tipLoopRadius = 0f,
+        Vector3? startFrom = null)
     {
         Vector3 P(Vector2 p) => project?.Invoke(p) ?? new Vector3(p.X, p.Y, z);
 
@@ -580,14 +582,55 @@ public static class LightningGenerator
         }
 
         Vector3? runningEnd = layer.Moves.Count > 0 ? layer.Moves[^1].To : null;
+        // Chain reference for GREEDY PICKS only: seeded by the previous layer's end
+        // so the first loop starts where the nozzle already is. The first loop must
+        // NOT emit an explicit entry travel from it — the slicer's layer connector
+        // owns that move (and stitches it when short, keeping layers travel-free).
+        Vector3? chainRef = runningEnd ?? startFrom;
         bool outerSeamPinned = false;
 
-        foreach (var path in ordered)
+        // Travel-optimal emission: the largest outer prints first (stable seam
+        // anchor, optionally pinned to the paint-bridge seam); every following
+        // loop is chosen greedily as the NEAREST remaining one and entered at
+        // its nearest vertex. Fixed area-descending order zig-zagged across the
+        // part (left boom → right boom by size = full-wingspan travels).
+        var pending = ordered;
+        bool firstLoop = true;
+
+        while (pending.Count > 0)
         {
-            // Outer loops: pin start to the bridge seam. Holes / secondary islands
-            // still chain from the running end so travel stays short.
-            bool isOuter = Clipper.Area(path) > 0;
+            int pick = 0;
             int start = 0;
+            // Seam pin forces the classic largest-outer-first start; otherwise the
+            // greedy runs from the very first loop (seeded by the previous layer's
+            // end), so each layer begins on whichever island the nozzle is already
+            // next to and hops shrink to actual island gaps.
+            bool pinnedFirst = firstLoop && seamPin is not null;
+            if (!pinnedFirst && chainRef is { } sel)
+            {
+                float pd2 = float.MaxValue;
+                for (int t = 0; t < pending.Count; t++)
+                {
+                    var cand = pending[t];
+                    for (int i = 0; i < cand.Count; i++)
+                    {
+                        var w = P(new Vector2((float)cand[i].x, (float)cand[i].y));
+                        float d2 = (w.X - sel.X) * (w.X - sel.X) + (w.Y - sel.Y) * (w.Y - sel.Y);
+                        if (d2 < pd2) { pd2 = d2; pick = t; start = i; }
+                    }
+                }
+            }
+            var path = pending[pick];
+            pending.RemoveAt(pick);
+            if (Environment.GetEnvironmentVariable("MSL_EMIT_DEBUG") == "1" && ordered.Count > 1)
+                System.Console.WriteLine(
+                    $"[emit-order] z={z:0.#} pick={pick} start={start} first={firstLoop} " +
+                    $"pendingLeft={pending.Count} re={(runningEnd is { } r0 ? $"({r0.X:0},{r0.Y:0})" : "null")}");
+            firstLoop = false;
+
+            // Outer loops: pin start to the bridge seam. Holes / secondary islands
+            // keep the nearest-vertex entry chosen above so travel stays short.
+            bool isOuter = Clipper.Area(path) > 0;
             if (isOuter && !outerSeamPinned && seamPin is { } pin)
             {
                 float bd2 = float.MaxValue;
@@ -600,7 +643,7 @@ public static class LightningGenerator
                 }
                 outerSeamPinned = true;
             }
-            else if (runningEnd is { } re)
+            else if (start == 0 && chainRef is { } re)
             {
                 float bd2 = float.MaxValue;
                 for (int i = 0; i < path.Count; i++)
@@ -616,8 +659,19 @@ public static class LightningGenerator
             int entryTravel = -1;
             if (runningEnd is { } prev && Vector3.Distance(prev, first) > 0.01f)
             {
-                entryTravel = layer.Moves.Count;
-                layer.Moves.Add(new ToolpathMove(prev, first, MoveKind.Travel));
+                float gap = Vector3.Distance(prev, first);
+                if (beadWidth > 0f && gap <= beadWidth * 3f)
+                {
+                    // Islands within a few beads merge into ONE continuous path:
+                    // extrude a single nozzle-width bridge across the gap instead
+                    // of lifting for a travel.
+                    layer.Moves.Add(new ToolpathMove(prev, first, MoveKind.Extrude));
+                }
+                else
+                {
+                    entryTravel = layer.Moves.Count;
+                    layer.Moves.Add(new ToolpathMove(prev, first, MoveKind.Travel));
+                }
             }
 
             int extrudeStart = layer.Moves.Count;
@@ -644,6 +698,7 @@ public static class LightningGenerator
                 layer.Contours.Add(new ContourSpan(extrudeStart, extrudeCount, Closed: true, entryTravel));
 
             runningEnd = first;
+            chainRef = first;
         }
     }
 

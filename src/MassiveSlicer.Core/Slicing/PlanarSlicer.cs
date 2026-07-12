@@ -148,7 +148,8 @@ public static class PlanarSlicer
             prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[zi],
                 lightningPlan:  lightningPlan?.Layers[zi],
-                xDetourState:   xDetourState);
+                xDetourState:   xDetourState,
+                prevEnd:        prevLayer is { Moves.Count: > 0 } pvl ? pvl.Moves[^1].To : null);
 
             if (layer.Moves.Count > 0)
             {
@@ -213,7 +214,8 @@ public static class PlanarSlicer
         bool isLastLayer = false,
         (List<List<Vector2>> Contours, List<bool> Closed)? cachedContours = null,
         Lightning.LightningLayerPlan? lightningPlan = null,
-        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null)
+        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null,
+        Vector3? prevEnd = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -239,7 +241,7 @@ public static class PlanarSlicer
         if (insetContours.Count == 0) return new List<ContourTrack>();
 
         return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
-            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, xDetourState);
+            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, xDetourState, prevEnd);
     }
 
     /// <summary>
@@ -358,7 +360,8 @@ public static class PlanarSlicer
         List<(Vector2 pos, Vector3 normal)>? normalLookup,
         Vector2 seamOrigin, Vector2 seamDir, List<ContourTrack> prevTracks,
         Lightning.LightningLayerPlan? lightningPlan,
-        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null)
+        Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null,
+        Vector3? prevEnd = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -437,7 +440,7 @@ public static class PlanarSlicer
                 if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
                     || (settings.XBracingEnabled && lightningPlan is not null))
                     Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
-                        settings.BeadWidth, settings.LightningTipLoopRadiusMm);
+                        settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd);
                 else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                     InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer,
                                                   insetStepMm: settings.BeadWidth);
@@ -457,7 +460,7 @@ public static class PlanarSlicer
             if (fillPolys.Count > 0)
             {
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
-                    settings.BeadWidth, settings.LightningTipLoopRadiusMm);
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd);
                 return new List<ContourTrack>();
             }
         }
