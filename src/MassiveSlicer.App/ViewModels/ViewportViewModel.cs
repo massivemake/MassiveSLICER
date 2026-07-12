@@ -3803,6 +3803,10 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Returns the current orbit-camera pose; set by the viewport code-behind.</summary>
     internal Func<CameraView?>? GetCameraState { get; set; }
 
+    /// <summary>Wired by the view: re-upload the active scrub toolpath's GPU buffers
+    /// after in-place mutation (seam edits, tpfix injections).</summary>
+    internal Action? RequestActiveToolpathReupload { get; set; }
+
     /// <summary>Applies a saved camera pose; set by the viewport code-behind.</summary>
     internal Action<CameraView>? ApplyCameraState { get; set; }
 

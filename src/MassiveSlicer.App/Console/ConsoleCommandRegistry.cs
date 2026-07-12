@@ -381,78 +381,110 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "tpfix",
-            Description = "Surgical toolpath repair: extend support finger tips under Bridge marks (out-and-back detours, 30-deg taper). Re-run after any reslice.",
+            Description = "Surgical toolpath repair: detect floating beads (no material within 0.75 bead on the layer below) and heal each with tapered finger-tip extensions. Re-run after any reslice.",
             Usage = "tpfix supports",
             Execute = (ctx, args) =>
             {
                 var tp = ctx.Main.Viewport.ActiveScrubToolpath;
                 if (tp is null) { ctx.LogError("[tpfix] no active toolpath"); return; }
                 var add = ctx.Main.RightPanel.Additive;
-                var marks = add.PaintMarks
-                    .Where(m => m.Kind == Core.Models.PaintMarkKind.Bridge).ToList();
-                if (marks.Count == 0) { ctx.Log("[tpfix] no Bridge marks"); return; }
-
                 float bead = (float)add.BeadWidth;
                 float layerH = (float)add.LayerHeight;
+                float thr = bead * 0.75f;
+                float maxReach = bead * 4f;           // beyond this a taper cannot help
                 float maxStep = MathF.Min(layerH * MathF.Tan(30f * MathF.PI / 180f), bead * 0.5f);
+
+                // Per-layer extrude segments for distance queries.
+                var layerSegs = new List<List<(System.Numerics.Vector2 A, System.Numerics.Vector2 B)>>(tp.Layers.Count);
+                foreach (var layer in tp.Layers)
+                {
+                    var list = new List<(System.Numerics.Vector2, System.Numerics.Vector2)>();
+                    foreach (var mv in layer.Moves)
+                        if (mv.Kind == Core.Models.MoveKind.Extrude)
+                            list.Add((new System.Numerics.Vector2(mv.From.X, mv.From.Y),
+                                      new System.Numerics.Vector2(mv.To.X, mv.To.Y)));
+                    layerSegs.Add(list);
+                }
+                static float DistToSeg(System.Numerics.Vector2 p,
+                    (System.Numerics.Vector2 A, System.Numerics.Vector2 B) s)
+                {
+                    var ab = s.B - s.A;
+                    float l2 = ab.LengthSquared();
+                    if (l2 < 1e-12f) return System.Numerics.Vector2.Distance(p, s.A);
+                    float t = Math.Clamp(System.Numerics.Vector2.Dot(p - s.A, ab) / l2, 0f, 1f);
+                    return System.Numerics.Vector2.Distance(p, s.A + ab * t);
+                }
+                float NearestBelow(int li, System.Numerics.Vector2 p, out System.Numerics.Vector2 q)
+                {
+                    q = p;
+                    float best = float.MaxValue;
+                    foreach (var seg in layerSegs[li - 1])
+                    {
+                        float d = DistToSeg(p, seg);
+                        if (d < best)
+                        {
+                            best = d;
+                            var ab = seg.B - seg.A;
+                            float l2 = ab.LengthSquared();
+                            float t = l2 < 1e-12f ? 0f
+                                : Math.Clamp(System.Numerics.Vector2.Dot(p - seg.A, ab) / l2, 0f, 1f);
+                            q = seg.A + ab * t;
+                        }
+                    }
+                    return best;
+                }
+
+                // 1. Detect floating bead points (dedup ~1.5 beads apart per layer).
+                var targets = new List<(int Layer, System.Numerics.Vector2 P, System.Numerics.Vector2 Q, float G)>();
+                for (int li = 1; li < tp.Layers.Count; li++)
+                {
+                    if (layerSegs[li - 1].Count == 0) continue;
+                    var placed = new List<System.Numerics.Vector2>();
+                    foreach (var mv in tp.Layers[li].Moves)
+                    {
+                        if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                        var mid = new System.Numerics.Vector2(
+                            (mv.From.X + mv.To.X) * 0.5f, (mv.From.Y + mv.To.Y) * 0.5f);
+                        bool near = false;
+                        foreach (var pl in placed)
+                            if (System.Numerics.Vector2.Distance(pl, mid) < bead * 1.5f) { near = true; break; }
+                        if (near) continue;
+                        float g = NearestBelow(li, mid, out var q);
+                        if (g > thr && g <= maxReach)
+                        {
+                            targets.Add((li, mid, q, g));
+                            placed.Add(mid);
+                        }
+                    }
+                }
+                if (targets.Count == 0) { ctx.Log("[tpfix] no floating beads found — nothing to do"); return; }
+                if (targets.Count > 4000) { ctx.LogError($"[tpfix] {targets.Count} floating points — refusing (detection likely misfiring on this stack)"); return; }
+
+                // 2. Heal: tapered out-and-back tip extensions on the layers below.
                 int injected = 0;
                 var done = new HashSet<(int, int, int)>();
-
-                foreach (var mark in marks)
+                foreach (var (lyr, P, Q, g) in targets)
                 {
-                    // Mark layer: layer with an extrude bead inside the mark sphere.
-                    int lyr = -1;
-                    for (int li = 0; li < tp.Layers.Count && lyr < 0; li++)
-                        foreach (var mv in tp.Layers[li].Moves)
-                        {
-                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
-                            var mid = (mv.From + mv.To) * 0.5f;
-                            if (System.Numerics.Vector3.Distance(mid, mark.Center) <= mark.Radius)
-                            { lyr = li; break; }
-                        }
-                    if (lyr <= 0) continue;
-                    var mxy = new System.Numerics.Vector2(mark.Center.X, mark.Center.Y);
-
-                    // Gap at the mark layer: nearest below-material to the marked bead.
-                    float GapAt(int li)
-                    {
-                        float best = float.MaxValue;
-                        foreach (var mv in tp.Layers[li - 1].Moves)
-                        {
-                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
-                            foreach (var e in new[] { mv.From, mv.To })
-                            {
-                                float d = System.Numerics.Vector2.Distance(
-                                    new System.Numerics.Vector2(e.X, e.Y), mxy);
-                                if (d < best) best = d;
-                            }
-                        }
-                        return best;
-                    }
-                    float g = GapAt(lyr);
-                    if (g <= bead * 0.75f) continue;   // already supported
-
                     float reach = g + bead * 0.6f;
-                    int levels = Math.Min(24, (int)MathF.Ceiling(reach / MathF.Max(maxStep, 0.1f)));
+                    int levels = Math.Min(80, (int)MathF.Ceiling(reach / MathF.Max(maxStep, 0.1f)));
                     for (int k = 1; k <= levels && lyr - k >= 0; k++)
                     {
                         float ext = reach - (k - 1) * maxStep;
                         if (ext <= 0f) break;
                         var layer = tp.Layers[lyr - k];
-                        // Nearest extrude endpoint = the finger tip on this layer.
                         int bi = -1; float bd = float.MaxValue; System.Numerics.Vector3 tip = default;
                         for (int i = 0; i < layer.Moves.Count; i++)
                         {
                             var mv = layer.Moves[i];
                             if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
                             float d = System.Numerics.Vector2.Distance(
-                                new System.Numerics.Vector2(mv.To.X, mv.To.Y), mxy);
+                                new System.Numerics.Vector2(mv.To.X, mv.To.Y), P);
                             if (d < bd) { bd = d; bi = i; tip = mv.To; }
                         }
-                        if (bi < 0 || bd <= bead * 0.35f) continue;   // tip already under the line
+                        if (bi < 0 || bd <= bead * 0.35f) continue;
                         var key = (lyr - k, (int)MathF.Round(tip.X), (int)MathF.Round(tip.Y));
                         if (!done.Add(key)) continue;
-                        var dir = mxy - new System.Numerics.Vector2(tip.X, tip.Y);
+                        var dir = P - new System.Numerics.Vector2(tip.X, tip.Y);
                         float dl = dir.Length();
                         if (dl < 1e-3f) continue;
                         dir /= dl;
@@ -468,7 +500,8 @@ public sealed class ConsoleCommandRegistry
                         injected++;
                     }
                 }
-                ctx.Log($"[tpfix] injected {injected} finger tip extension(s) across {marks.Count} mark(s). "
+                ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
+                ctx.Log($"[tpfix] {targets.Count} floating spot(s) found, {injected} tip extension(s) injected. "
                     + "Applied to the CURRENT toolpath — re-run after any reslice.");
             },
         });

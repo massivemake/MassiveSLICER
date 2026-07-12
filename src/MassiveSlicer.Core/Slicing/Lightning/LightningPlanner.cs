@@ -413,8 +413,10 @@ public static class LightningPlanner
             float supportRadius = stepAbove + bead * 0.5f;
             float sampleStep = spacing * 0.25f;
 
-            if (hasManualPaint)
-                goto ManualDemandOnly;
+            // Manual marks are ADDITIVE: they pin support where the user demands
+            // it, but automatic geometric demand keeps covering the rest of the
+            // part. (The old skip-everything behaviour meant painting ONE mark
+            // silently removed support from every other overhang in the print.)
 
             // Multi-planar: precompute "upper solid not covered by lower wall band".
             PathsD? multiDemandFootprint = null;

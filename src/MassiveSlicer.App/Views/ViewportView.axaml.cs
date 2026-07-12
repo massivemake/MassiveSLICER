@@ -401,6 +401,25 @@ public partial class ViewportView : UserControl
                 _renderer.Camera.Target    = new Vector3(view.TargetX, view.TargetY, view.TargetZ);
                 GlCanvas.RequestNextFrameRendering();
             };
+            vm.RequestActiveToolpathReupload = () =>
+            {
+                if (_activeScrubNode is not { } node) return;
+                if (!_toolpathByNode.TryGetValue(node, out var tpUp)) return;
+                _rawToolpathByNode.TryGetValue(node, out var rawUp);
+                var snapUp = GetToolpathSnapshot(node);
+                if (snapUp is null) return;
+                vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+                {
+                    Toolpath      = tpUp,
+                    RawToolpath   = rawUp ?? tpUp,
+                    Node          = node,
+                    BeadWidth     = snapUp.BeadWidth,
+                    LayerHeight   = snapUp.LayerHeight,
+                    MaterialColor = snapUp.MaterialColor,
+                });
+                GlCanvas.RequestNextFrameRendering();
+            };
+
             vm.OnPlaybackSpeedChanging = () =>
             {
                 // Freeze the current simulated position so changing speed doesn't jump the toolhead.
