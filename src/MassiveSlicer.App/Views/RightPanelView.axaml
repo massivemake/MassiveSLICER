@@ -599,6 +599,16 @@
                                       IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
                                       Margin="8,4,8,2"
                                       ToolTip.Tip="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+
+                            <Button Margin="8,8,8,2" HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Content="Optimize Toolpath"
+                                    Command="{Binding Additive.OptimizeToolpathCommand}"
+                                    ToolTip.Tip="Re-order the sliced toolpath so every path starts where the previous one ends (closed loops re-seam to the nearest vertex, open paths may reverse), then weld paths closer than 3× bead width together with an extruded bridge — one continuous toolpath instead of travels. Runs on the current toolpath; re-run after a reslice."/>
+                            <TextBlock Text="{Binding Additive.OptimizeToolpathSummary}"
+                                       FontSize="10" Opacity="0.75" Margin="8,0,8,4"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding Additive.OptimizeToolpathSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                         </StackPanel>
                     </Expander>                    <Expander Classes="SectionExpander" Header="MOTION" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
