@@ -411,6 +411,13 @@ public static class LightningPlanner
             // When the user has painted Bridge marks, skip automatic geometric
             // births entirely — only inherit + manual demand (section 2b).
             float supportRadius = stepAbove + bead * 0.5f;
+            // Demand detection honors the user's Max-overhang angle. supportRadius
+            // (half-bead slack) is the PRINTABILITY limit — a bead can ride on half
+            // the bead below — but on long flares that sag accumulates; with wide
+            // beads it silently raised the support threshold to ~60° and the fins
+            // stopped short of the steep band the user asked to support. Only a
+            // small noise slack on top of the angle-derived step stays.
+            float demandRadius = MathF.Min(supportRadius, stepAbove + bead * 0.1f);
             float sampleStep = spacing * 0.25f;
 
             // Manual marks are ADDITIVE: they pin support where the user demands
@@ -420,6 +427,7 @@ public static class LightningPlanner
 
             // Multi-planar: precompute "upper solid not covered by lower wall band".
             PathsD? multiDemandFootprint = null;
+            PathsD? multiExtendFootprint = null;
             if (frames is not null)
             {
                 var upperRemapped = new PathsD();
@@ -443,6 +451,12 @@ public static class LightningPlanner
                     multiDemandFootprint.RemoveAll(p => Math.Abs(Clipper.Area(p)) < bead * bead);
                     if (multiDemandFootprint.Count == 0)
                         multiDemandFootprint = null;
+                    var extendBand = Clipper.InflatePaths(region, demandRadius,
+                        JoinType.Miter, EndType.Polygon, 3.0);
+                    multiExtendFootprint = Clipper.Difference(upperRemapped, extendBand, FillRule.NonZero);
+                    multiExtendFootprint.RemoveAll(p => Math.Abs(Clipper.Area(p)) < bead * bead);
+                    if (multiExtendFootprint.Count == 0)
+                        multiExtendFootprint = null;
                 }
             }
 
@@ -662,13 +676,20 @@ public static class LightningPlanner
                         for (int si = 0; si < samples.Count; si++)
                         {
                             var pt = samples[si];
-                            bool far = multiDemandFootprint is not null
-                                ? (InsideRegion(multiDemandFootprint, pt)
-                                   || Vector2.Distance(
-                                       ClosestOnRegionBoundary(multiDemandFootprint, pt), pt)
-                                      < bead * 0.6f)
+                            // The audit hunts at the user's Max-overhang angle
+                            // (demandRadius) — tighter than the birth passes' half-
+                            // bead printability threshold — so existing fins EXTEND
+                            // (or wall-foot stubs seed) under the marginal 30-60°
+                            // flare band instead of stopping short of it.
+                            var auditFootprint = multiExtendFootprint ?? multiDemandFootprint;
+                            bool far = frames is not null
+                                ? (auditFootprint is not null
+                                   && (InsideRegion(auditFootprint, pt)
+                                       || Vector2.Distance(
+                                           ClosestOnRegionBoundary(auditFootprint, pt), pt)
+                                          < bead * 0.6f))
                                 : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
-                                  > supportRadius;
+                                  > demandRadius;
                             if (!far) continue;
                             if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                                 continue;
