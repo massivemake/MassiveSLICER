@@ -303,7 +303,21 @@ public partial class ViewportView : UserControl
             vm.OnBoundaryDraftChanged = () => UpdateBoundaryMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             if (vm.AdditiveSettings is { } addSettings)
+            {
                 addSettings.OnAutoTiltRequested = rotateMesh => _ = RunAutoTiltAsync(vm, rotateMesh);
+                addSettings.OnOptimizeToolpathRequested = () =>
+                {
+                    if (vm.ActiveScrubToolpath is not { } tpOpt)
+                    {
+                        addSettings.OptimizeToolpathSummary = "No toolpath — slice first.";
+                        return;
+                    }
+                    var stats = MassiveSlicer.Core.Slicing.ToolpathOptimizer.Optimize(
+                        tpOpt, (float)addSettings.BeadWidth);
+                    addSettings.OptimizeToolpathSummary = stats.ToString();
+                    vm.RequestActiveToolpathReupload?.Invoke();
+                };
+            }
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);

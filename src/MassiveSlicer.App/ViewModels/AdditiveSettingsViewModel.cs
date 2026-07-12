@@ -26,6 +26,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
         SimulateThermalCommand           = new RelayCommand(() => OnSimulateThermalRequested?.Invoke());
+        OptimizeToolpathCommand          = new RelayCommand(() => OnOptimizeToolpathRequested?.Invoke());
         foreach (var row in MultiPlanarPlanes) row.Owner = this;
         MultiPlanarPlanes.CollectionChanged += (_, e) =>
         {
@@ -362,6 +363,19 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public RelayCommand SimulateThermalCommand { get; }
 
     internal Action? OnSimulateThermalRequested { get; set; }
+
+    /// <summary>Re-orders the sliced toolpath to minimize travel and bridges nearby paths into one extrusion.</summary>
+    public RelayCommand OptimizeToolpathCommand { get; }
+
+    internal Action? OnOptimizeToolpathRequested { get; set; }
+
+    private string _optimizeToolpathSummary = "";
+    /// <summary>Human-readable result of the last toolpath optimization.</summary>
+    public string OptimizeToolpathSummary
+    {
+        get => _optimizeToolpathSummary;
+        set => SetField(ref _optimizeToolpathSummary, value);
+    }
 
     private string _thermalSummary = "";
     /// <summary>Human-readable result of the last thermomechanical simulation.</summary>
