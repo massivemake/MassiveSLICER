@@ -2743,6 +2743,7 @@ public sealed class ViewportViewModel : ViewModelBase
         ActiveScrubToolpath = toolpath;
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
     }
 
     /// <summary>
