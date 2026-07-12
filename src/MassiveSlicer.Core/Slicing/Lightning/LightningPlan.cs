@@ -125,6 +125,12 @@ public sealed class LightningTree
     /// fins setting. Anchors on the cavity wall (interior mouths).</summary>
     public bool Cavity;
 
+    /// <summary>Born from a user Support mark (paint / Edit-mode selection) rather
+    /// than automatic demand. Manual columns get the lenient inherit path (re-seat
+    /// over drifting cavities instead of orphaning) — the user explicitly asked for
+    /// support there.</summary>
+    public bool Manual;
+
     /// <summary>Island umbilical: this cavity tube reaches from one region component
     /// to another so the layer stays ONE continuous line (no travel ever starts an
     /// island). Kept at full length on every layer where the island is still
@@ -149,6 +155,7 @@ public sealed class LightningTree
         {
             Id = Id, Anchor = Anchor, External = External,
             Cavity = Cavity, Connector = Connector, PaintColumn = PaintColumn,
+            Manual = Manual,
         };
         foreach (var b in Branches)
             t.Branches.Add(new LightningBranch(new List<Vector2>(b.Centerline))

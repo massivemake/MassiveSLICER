@@ -153,6 +153,10 @@ public static class LightningPlanner
                 // Nothing on this plane at all — every tree above is dangling in air.
                 foreach (var t in plan.Layers[i + 1].Trees)
                     orphaned.Add(t.Id);
+                if (Environment.GetEnvironmentVariable("MSL_ORPHAN_DEBUG") == "1"
+                    && plan.Layers[i + 1].Trees.Count > 0)
+                    System.Console.WriteLine(
+                        $"[orphan] layer={i} EMPTY-REGION kills {plan.Layers[i + 1].Trees.Count} tree(s)");
                 continue;
             }
 
@@ -211,6 +215,10 @@ public static class LightningPlanner
             if (anchorPaths.Count == 0)
             {
                 // No legal mouth on this plane — columns above have nowhere to land.
+                if (Environment.GetEnvironmentVariable("MSL_ORPHAN_DEBUG") == "1"
+                    && plan.Layers[i + 1].Trees.Count > 0)
+                    System.Console.WriteLine(
+                        $"[orphan] layer={i} NO-ANCHOR kills {plan.Layers[i + 1].Trees.Count} tree(s)");
                 foreach (var t in plan.Layers[i + 1].Trees)
                     orphaned.Add(t.Id);
                 continue;
@@ -269,6 +277,9 @@ public static class LightningPlanner
                 {
                     if (frames is null && !isPaintCol)
                     {
+                        if (Environment.GetEnvironmentVariable("MSL_ORPHAN_DEBUG") == "1")
+                            System.Console.WriteLine(
+                                $"[orphan] layer={i} REROOT-JUMP tree={t.Id} dist={reDist:0.#} tol={reTol:0.#}");
                         orphaned.Add(t.Id);
                         continue;
                     }
@@ -349,7 +360,20 @@ public static class LightningPlanner
                         }
                     if (crossesVoid)
                     {
-                        if (frames is not null && buttress
+                        // Cavity trunks: the hole drifts between (tilted) layers and
+                        // the inherited line can clip the wall band. RE-SEAT the
+                        // trunk from the snapped anchor — shorten toward a MaxStep
+                        // stub until it sits inside the void again — instead of
+                        // retiring the whole column mid-air (826 of 859 orphans on
+                        // the V85 angled stack were this exact kill; the column's
+                        // support vanished below and the marked line stayed afloat).
+                        if (t.Cavity && (t.Manual || t.PaintColumn)
+                            && TryReseatCavityTrunk(t, region, bead, MaxStep(i)))
+                        {
+                            FilletTreeCorners(t, bead);
+                            inheritReseeds++;
+                        }
+                        else if (frames is not null && buttress
                             && TryRebuildShortButtress(t, region, core, bead, barLen, MaxStep(i)))
                         {
                             FilletTreeCorners(t, bead);
@@ -362,6 +386,10 @@ public static class LightningPlanner
                         }
                         else
                         {
+                            if (Environment.GetEnvironmentVariable("MSL_ORPHAN_DEBUG") == "1")
+                                System.Console.WriteLine(
+                                    $"[orphan] layer={i} VOID-CROSS tree={t.Id} ext={t.External} cav={t.Cavity} " +
+                                    $"anchor=({t.Anchor.X:0},{t.Anchor.Y:0})");
                             orphaned.Add(t.Id);
                             continue;
                         }
@@ -914,6 +942,8 @@ public static class LightningPlanner
                             preferInterior, settings, bead, mBar, mCover, mSide,
                             layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], barSamples,
                             maxAnchorDist, face);
+                        for (int ti = treesBefore; ti < layerPlan.Trees.Count; ti++)
+                            layerPlan.Trees[ti].Manual = true;
                         if (layerPlan.Trees.Count > treesBefore)
                         {
                             var born = layerPlan.Trees[^1];
@@ -989,7 +1019,7 @@ public static class LightningPlanner
                                 {
                                     Id = nextTreeId++, Anchor = anchor,
                                     External = external, Cavity = cavity,
-                                    PaintColumn = true,
+                                    PaintColumn = true, Manual = true,
                                 };
                                 t.Branches.Add(new LightningBranch([anchor, tip]));
                                 layerPlan.Trees.Add(t);
@@ -2690,6 +2720,38 @@ public static class LightningPlanner
     /// <summary>True when the segment runs through VOID (a cavity), only touching
     /// material within one bead of the walls it departs from / arrives at. A cavity
     /// tube crossing deep material would bulge the union through a wall.</summary>
+    /// <summary>
+    /// Re-seat a cavity trunk whose inherited line clips the shifted wall band:
+    /// keep the anchor (already snapped to this layer's boundary), aim along the
+    /// old trunk direction and shorten until the segment sits inside the void.
+    /// Bars are dropped (they regrow at the overhang rate). False = even a
+    /// MaxStep stub cannot sit in the void — caller may orphan.
+    /// </summary>
+    private static bool TryReseatCavityTrunk(
+        LightningTree t, PathsD region, float bead, float maxStep)
+    {
+        if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) return false;
+        var line = t.Branches[0].Centerline;
+        var anchor = t.Anchor;
+        var tip = line[^1];
+        var dir = tip - anchor;
+        float len = dir.Length();
+        if (len < 1e-3f) return false;
+        dir /= len;
+        for (float L = len; L >= maxStep * 0.85f; L *= 0.6f)
+        {
+            var cand = anchor + dir * L;
+            if (!SegmentInsideVoid(region, anchor, cand, bead * 1.5f)) continue;
+            if (t.Branches.Count > 1)
+                t.Branches.RemoveRange(1, t.Branches.Count - 1);
+            line.Clear();
+            line.Add(anchor);
+            line.Add(cand);
+            return true;
+        }
+        return false;
+    }
+
     internal static bool SegmentInsideVoid(PathsD region, Vector2 a, Vector2 b, float bead)
     {
         float len = Vector2.Distance(a, b);
