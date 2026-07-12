@@ -1507,6 +1507,14 @@
                                 ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
                             <ia:Icon Value="mdi-key-remove" FontSize="15"/>
                         </Button>
+                        <TextBlock Text="{Binding ToolpathScrubSpeedRpmLabel}"
+                                   Classes="Readout"
+                                   FontSize="10"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0"
+                                   MinWidth="110"
+                                   IsVisible="{Binding ToolpathScrubSpeedRpmLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                   ToolTip.Tip="Linear speed and extruder RPM of the current move — the same $VEL.CP and $ANOUT[4] values the KRL export writes"/>
                     </StackPanel>
 
                     <!-- Horizontal scrubber track -->
