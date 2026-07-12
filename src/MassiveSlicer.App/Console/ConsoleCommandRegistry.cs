@@ -380,6 +380,101 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "tpfix",
+            Description = "Surgical toolpath repair: extend support finger tips under Bridge marks (out-and-back detours, 30-deg taper). Re-run after any reslice.",
+            Usage = "tpfix supports",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[tpfix] no active toolpath"); return; }
+                var add = ctx.Main.RightPanel.Additive;
+                var marks = add.PaintMarks
+                    .Where(m => m.Kind == Core.Models.PaintMarkKind.Bridge).ToList();
+                if (marks.Count == 0) { ctx.Log("[tpfix] no Bridge marks"); return; }
+
+                float bead = (float)add.BeadWidth;
+                float layerH = (float)add.LayerHeight;
+                float maxStep = MathF.Min(layerH * MathF.Tan(30f * MathF.PI / 180f), bead * 0.5f);
+                int injected = 0;
+                var done = new HashSet<(int, int, int)>();
+
+                foreach (var mark in marks)
+                {
+                    // Mark layer: layer with an extrude bead inside the mark sphere.
+                    int lyr = -1;
+                    for (int li = 0; li < tp.Layers.Count && lyr < 0; li++)
+                        foreach (var mv in tp.Layers[li].Moves)
+                        {
+                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                            var mid = (mv.From + mv.To) * 0.5f;
+                            if (System.Numerics.Vector3.Distance(mid, mark.Center) <= mark.Radius)
+                            { lyr = li; break; }
+                        }
+                    if (lyr <= 0) continue;
+                    var mxy = new System.Numerics.Vector2(mark.Center.X, mark.Center.Y);
+
+                    // Gap at the mark layer: nearest below-material to the marked bead.
+                    float GapAt(int li)
+                    {
+                        float best = float.MaxValue;
+                        foreach (var mv in tp.Layers[li - 1].Moves)
+                        {
+                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                            foreach (var e in new[] { mv.From, mv.To })
+                            {
+                                float d = System.Numerics.Vector2.Distance(
+                                    new System.Numerics.Vector2(e.X, e.Y), mxy);
+                                if (d < best) best = d;
+                            }
+                        }
+                        return best;
+                    }
+                    float g = GapAt(lyr);
+                    if (g <= bead * 0.75f) continue;   // already supported
+
+                    float reach = g + bead * 0.6f;
+                    int levels = Math.Min(24, (int)MathF.Ceiling(reach / MathF.Max(maxStep, 0.1f)));
+                    for (int k = 1; k <= levels && lyr - k >= 0; k++)
+                    {
+                        float ext = reach - (k - 1) * maxStep;
+                        if (ext <= 0f) break;
+                        var layer = tp.Layers[lyr - k];
+                        // Nearest extrude endpoint = the finger tip on this layer.
+                        int bi = -1; float bd = float.MaxValue; System.Numerics.Vector3 tip = default;
+                        for (int i = 0; i < layer.Moves.Count; i++)
+                        {
+                            var mv = layer.Moves[i];
+                            if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                            float d = System.Numerics.Vector2.Distance(
+                                new System.Numerics.Vector2(mv.To.X, mv.To.Y), mxy);
+                            if (d < bd) { bd = d; bi = i; tip = mv.To; }
+                        }
+                        if (bi < 0 || bd <= bead * 0.35f) continue;   // tip already under the line
+                        var key = (lyr - k, (int)MathF.Round(tip.X), (int)MathF.Round(tip.Y));
+                        if (!done.Add(key)) continue;
+                        var dir = mxy - new System.Numerics.Vector2(tip.X, tip.Y);
+                        float dl = dir.Length();
+                        if (dl < 1e-3f) continue;
+                        dir /= dl;
+                        float take = MathF.Min(ext, dl + bead * 0.6f);
+                        var e3 = new System.Numerics.Vector3(
+                            tip.X + dir.X * take, tip.Y + dir.Y * take, tip.Z);
+                        layer.Moves.Insert(bi + 1,
+                            new Core.Models.ToolpathMove(e3, tip, Core.Models.MoveKind.Extrude)
+                            { IsLightning = true, Normal = layer.Moves[bi].Normal });
+                        layer.Moves.Insert(bi + 1,
+                            new Core.Models.ToolpathMove(tip, e3, Core.Models.MoveKind.Extrude)
+                            { IsLightning = true, Normal = layer.Moves[bi].Normal });
+                        injected++;
+                    }
+                }
+                ctx.Log($"[tpfix] injected {injected} finger tip extension(s) across {marks.Count} mark(s). "
+                    + "Applied to the CURRENT toolpath — re-run after any reslice.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "robotset",
             Description = "Debug: get/set a RobotPanelViewModel property by name (A1..A6, E1, ...)",
             Usage = "robotset <property> [value]",
