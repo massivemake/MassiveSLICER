@@ -33,6 +33,7 @@ public sealed class ToolpathRenderer : IDisposable
 {
     // Separate VAOs per category so each can be toggled independently.
     private int  _extrudeVao, _extrudeVbo, _extrudeCount;
+    private int  _wipeVao, _wipeVbo, _wipeCount;
     private int  _travelVao,  _travelVbo,  _travelCount;
     private int  _lightningVao, _lightningVbo, _lightningCount;
     private int  _ptVao, _ptVbo;
@@ -294,6 +295,7 @@ void main() {
     private int[] _extrudeVertexCumulative = [];
     private int[] _travelVertexCumulative  = [];
     private int[] _lightningVertexCumulative = [];
+    private int[] _wipeVertexCumulative = [];
     private static readonly Vector3 LightningColor = new(1.00f, 0.58f, 0.12f);
     private int[] _beadVertexCumulative    = [];
     private int[] _seamVertexCumulative    = [];
@@ -346,6 +348,14 @@ void main() {
             (_lightningVao, _lightningVbo) = BuildVao(lgData);
             _lightningCount = lgData.Length / 6;
         }
+        if (_wipeVao != 0) { GL.DeleteVertexArray(_wipeVao); GL.DeleteBuffer(_wipeVbo); }
+        _wipeVao = _wipeVbo = _wipeCount = 0;
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0)
+        {
+            (_wipeVao, _wipeVbo) = BuildVao(wpData);
+            _wipeCount = wpData.Length / 6;
+        }
     }
 
     /// <summary>
@@ -375,6 +385,11 @@ void main() {
         {
             GL.BindVertexArray(_extrudeVao);
             GL.DrawArrays(PrimitiveType.Lines, 0, _extrudeCount);
+        }
+        if (lines && _wipeVao != 0 && _wipeCount > 0)
+        {
+            GL.BindVertexArray(_wipeVao);
+            GL.DrawArrays(PrimitiveType.Lines, 0, _wipeCount);
         }
         if (bead && _beadVao != 0 && _beadCount > 0)
         {
@@ -425,6 +440,11 @@ void main() {
         var lgData = BuildExtrudeData(lightningOnly: true);
         if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
 
+        if (_wipeVao != 0) { GL.DeleteVertexArray(_wipeVao); GL.DeleteBuffer(_wipeVbo); }
+        _wipeVao = _wipeVbo = _wipeCount = 0;
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0) { (_wipeVao, _wipeVbo) = BuildVao(wpData); _wipeCount = wpData.Length / 6; }
+
         if (_travelVao != 0) { GL.DeleteVertexArray(_travelVao); GL.DeleteBuffer(_travelVbo); }
         _travelVao = _travelVbo = _travelCount = 0;
         var trData = BuildTravelData();
@@ -443,13 +463,19 @@ void main() {
         if (_allPointCount > 0) (_allPtVao, _allPtVbo) = BuildVao(allPtData);
     }
 
-    private float[] BuildExtrudeData(bool lightningOnly = false)
+    private float[] BuildExtrudeData(bool lightningOnly = false, bool wipeOnly = false)
     {
+        // Three display buckets: lightning fingers, wipes, plain extrusion.
+        bool Match(ToolpathMove m) => lightningOnly
+            ? m.IsLightning
+            : wipeOnly
+                ? !m.IsLightning && m.IsWipe
+                : !m.IsLightning && !m.IsWipe;
         int extrudeCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
                 if (move.Kind is MoveKind.Extrude or MoveKind.Mill
-                    && move.IsLightning == lightningOnly) extrudeCount++;
+                    && Match(move)) extrudeCount++;
 
         var extData = new float[extrudeCount * 2 * 6];
         int ei = 0, mi = 0;
@@ -480,7 +506,7 @@ void main() {
             foreach (var move in layer.Moves)
             {
                 if (move.Kind is MoveKind.Extrude or MoveKind.Mill
-                    && move.IsLightning == lightningOnly)
+                    && Match(move))
                 {
                     Vector3 color;
                     if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
@@ -563,21 +589,25 @@ void main() {
         _extrudeVertexCumulative   = new int[total + 1];
         _travelVertexCumulative    = new int[total + 1];
         _lightningVertexCumulative = new int[total + 1];
+        _wipeVertexCumulative      = new int[total + 1];
 
-        int ei = 0, ti = 0, li = 0, fi = 0;
+        int ei = 0, ti = 0, li = 0, wi = 0, fi = 0;
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
             {
                 if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
-                    if (move.IsLightning) li += 2; else ei += 2;
+                    if (move.IsLightning) li += 2;
+                    else if (move.IsWipe) wi += 2;
+                    else ei += 2;
                 }
                 else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
                 fi++;
                 _extrudeVertexCumulative[fi]   = ei;
                 _travelVertexCumulative[fi]    = ti;
                 _lightningVertexCumulative[fi] = li;
+                _wipeVertexCumulative[fi]      = wi;
             }
         }
     }
@@ -618,6 +648,9 @@ void main() {
 
         var lgData = BuildExtrudeData(lightningOnly: true);
         if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
+
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0) { (_wipeVao, _wipeVbo) = BuildVao(wpData); _wipeCount = wpData.Length / 6; }
 
         var trData = BuildTravelData();
         if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
@@ -1139,6 +1172,7 @@ void main() {
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
                      Vector3 eyeLocal = default, float lineOpacity = 1f,
                      bool showLightning = true, int scrubStart = 0,
+                     bool showWipe = true,
                      bool showAllPathPoints = false,
                      bool showDepthLines = false,
                      float viewportW = 0f, float viewportH = 0f)
@@ -1147,17 +1181,19 @@ void main() {
 
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
         int lgCount    = ScrubCount(_lightningVertexCumulative, _lightningCount, scrubIndex);
+        int wpCount    = ScrubCount(_wipeVertexCumulative,    _wipeCount,    scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
         int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
         int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
         int allPtCount = ScrubCount(_allPointVertexCumulative, _allPointCount, scrubIndex);
 
         // Layer-window low bound (edit mode): first vertex per buffer to draw.
-        int extFirst = 0, lgFirst = 0, trFirst = 0, beadFirst = 0, seamFirst = 0, allPtFirst = 0;
+        int extFirst = 0, lgFirst = 0, wpFirst = 0, trFirst = 0, beadFirst = 0, seamFirst = 0, allPtFirst = 0;
         if (scrubStart > 0)
         {
             extFirst  = Math.Min(ScrubCount(_extrudeVertexCumulative,  _extrudeCount, scrubStart), extCount);
             lgFirst   = Math.Min(ScrubCount(_lightningVertexCumulative, _lightningCount, scrubStart), lgCount);
+            wpFirst   = Math.Min(ScrubCount(_wipeVertexCumulative,     _wipeCount,    scrubStart), wpCount);
             trFirst   = Math.Min(ScrubCount(_travelVertexCumulative,   _travelCount,  scrubStart), trCount);
             beadFirst = Math.Min(ScrubCount(_beadVertexCumulative,     _beadCount,    scrubStart), beadCount);
             seamFirst = Math.Min(ScrubCount(_seamVertexCumulative,     _pointCount,   scrubStart), seamCount);
@@ -1174,8 +1210,8 @@ void main() {
         if (useDepthLines)
         {
             DrawDepthAwareLines(mvp, eyeLocal, viewportW, viewportH,
-                selected, showExtrusion, showLightning, showTravel,
-                extFirst, extCount, lgFirst, lgCount, trFirst, trCount);
+                selected, showExtrusion, showLightning, showTravel, showWipe,
+                extFirst, extCount, lgFirst, lgCount, trFirst, trCount, wpFirst, wpCount);
         }
         else
         {
@@ -1208,6 +1244,12 @@ void main() {
                     GL.BindVertexArray(_lightningVao);
                     GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
                 }
+                if (showWipe && wpCount > 0)
+                {
+                    _shader.SetFloat("uOverride", 0f);
+                    GL.BindVertexArray(_wipeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+                }
             }
             else
             {
@@ -1223,6 +1265,12 @@ void main() {
                 {
                     GL.BindVertexArray(_lightningVao);
                     GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
+                }
+
+                if (showWipe && wpCount > 0)
+                {
+                    GL.BindVertexArray(_wipeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
                 }
 
                 if (showTravel && trCount > 0)
@@ -1339,8 +1387,9 @@ void main() {
     /// </summary>
     private void DrawDepthAwareLines(
         Matrix4 mvp, Vector3 eyeLocal, float viewportW, float viewportH,
-        bool selected, bool showExtrusion, bool showLightning, bool showTravel,
-        int extFirst, int extCount, int lgFirst, int lgCount, int trFirst, int trCount)
+        bool selected, bool showExtrusion, bool showLightning, bool showTravel, bool showWipe,
+        int extFirst, int extCount, int lgFirst, int lgCount, int trFirst, int trCount,
+        int wpFirst, int wpCount)
     {
         if (_depthLineShader is null) return;
 
@@ -1370,6 +1419,11 @@ void main() {
                 GL.BindVertexArray(_lightningVao);
                 GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
             }
+            if (showWipe && wpCount > wpFirst)
+            {
+                GL.BindVertexArray(_wipeVao);
+                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+            }
         }
         else
         {
@@ -1378,6 +1432,11 @@ void main() {
             {
                 GL.BindVertexArray(_extrudeVao);
                 GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
+            }
+            if (showWipe && wpCount > wpFirst)
+            {
+                GL.BindVertexArray(_wipeVao);
+                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
             }
             if (showLightning && lgCount > lgFirst)
             {
@@ -1446,6 +1505,7 @@ void main() {
         if (_extrudeVao       != 0) { GL.DeleteVertexArray(_extrudeVao);       GL.DeleteBuffer(_extrudeVbo);       }
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
         if (_lightningVao     != 0) { GL.DeleteVertexArray(_lightningVao);     GL.DeleteBuffer(_lightningVbo);     }
+        if (_wipeVao          != 0) { GL.DeleteVertexArray(_wipeVao);          GL.DeleteBuffer(_wipeVbo);          }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
         if (_allPtVao         != 0) { GL.DeleteVertexArray(_allPtVao);         GL.DeleteBuffer(_allPtVbo);         }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }

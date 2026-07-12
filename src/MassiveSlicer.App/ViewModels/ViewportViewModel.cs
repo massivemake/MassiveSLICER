@@ -292,6 +292,14 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showTravelMoves, value);
     }
 
+    private bool _showWipeMoves = true;
+    /// <summary>Wipe extrusion segments (pre-travel filament wipes) as their own display layer.</summary>
+    public bool ShowWipeMoves
+    {
+        get => _showWipeMoves;
+        set => SetField(ref _showWipeMoves, value);
+    }
+
     private bool _showLightningMoves = true;
     /// <summary>Lightning Bridge finger segments (orange display layer).</summary>
     public bool ShowLightningMoves
@@ -1397,6 +1405,9 @@ public sealed class ViewportViewModel : ViewModelBase
                 ApplyPaintEditDisplayMode();
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            // Edit mode borrows the Toolpath view's display profile (dark,
+            // line-oriented); leaving restores the active view's own profile.
+            ApplyViewDisplayProfile();
             OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
             OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
             OnPaintEditModeChanged?.Invoke(value);
@@ -1428,6 +1439,7 @@ public sealed class ViewportViewModel : ViewModelBase
             ShowBead = PaintShowBeads;
             ShowExtrusionMoves = true;
             ShowTravelMoves = false;
+            ShowWipeMoves = false;
             // Seam-only overlay off — ShowAllPathPoints draws every extrude midpoint.
             ShowSeam = false;
             ToolpathLineOpacity = 0.65f;
@@ -1438,6 +1450,7 @@ public sealed class ViewportViewModel : ViewModelBase
             ShowBead = PaintShowBeads;
             ShowExtrusionMoves = true;
             ShowTravelMoves = false;
+            ShowWipeMoves = false;
             ShowSeam = false;
             ToolpathLineOpacity = 1f;
         }
@@ -3463,14 +3476,17 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             case "Preview":
                 ShowBead = true;  ShowExtrusionMoves = false; ShowTravelMoves = false; ShowSeam = false;
+                ShowWipeMoves = false;
                 break;
             case "Speed":
             case "RPM":
             case "Thermal":
                 ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
+                ShowWipeMoves = true;
                 break;
             case "Toolpath":
                 ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = true;
+                ShowWipeMoves = true;
                 break;
         }
         foreach (var item in EnumerateUserModelItems().ToList())
@@ -3557,6 +3573,12 @@ public sealed class ViewportViewModel : ViewModelBase
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
     ];
 
+    /// <summary>
+    /// Profile key currently driving the display: edit mode borrows the
+    /// Toolpath view's profile (dark line-view look) regardless of the pill.
+    /// </summary>
+    private string EffectiveProfileKey => IsPaintEditOpen ? "Toolpath" : _viewMode;
+
     /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
     private void WireViewProfileTracking()
     {
@@ -3564,7 +3586,9 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (_applyingViewProfile || e.PropertyName is not { } name || !ProfileTrackedProps.Contains(name))
                 return;
-            if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+            // Edit mode dims lines programmatically — don't bake that into the profile.
+            if (IsPaintEditOpen && name == nameof(ToolpathLineOpacity)) return;
+            if (!_viewProfiles.TryGetValue(EffectiveProfileKey, out var prof)) return;
             prof.ShowGrid           = ShowGrid;
             prof.ShowAxes           = ShowAxes;
             prof.ShowBedGrid        = ShowBedGrid;
@@ -3582,7 +3606,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Applies the active view mode's display profile to the viewport.</summary>
     internal void ApplyViewDisplayProfile()
     {
-        if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+        if (!_viewProfiles.TryGetValue(EffectiveProfileKey, out var prof)) return;
         _applyingViewProfile = true;
         try
         {
