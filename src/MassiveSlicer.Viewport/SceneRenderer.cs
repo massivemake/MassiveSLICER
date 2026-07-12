@@ -416,6 +416,9 @@ public sealed class SceneRenderer : IDisposable
     public bool ShowExtrusionMoves { get; set; } = true;
     public bool ShowTravelMoves    { get; set; } = true;
     public bool ShowLightningMoves { get; set; } = true;
+
+    /// <summary>Wipe extrusion segments (pre-travel filament wipes) as their own display layer.</summary>
+    public bool ShowWipeMoves { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
     public bool ShowBeadOverhang        { get; set; } = false;
@@ -1143,6 +1146,7 @@ public sealed class SceneRenderer : IDisposable
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showLightning: ShowLightningMoves,
+                showWipe: ShowWipeMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
@@ -1231,7 +1235,7 @@ public sealed class SceneRenderer : IDisposable
                     if (!tpNode.Visible) continue;
                     var tpMvp = tpNode.LocalTransform * mvp;
                     entry.Renderer.DrawCavityPunch(tpMvp,
-                        lines: ShowExtrusionMoves || ShowTravelMoves || ShowLightningMoves,
+                        lines: ShowExtrusionMoves || ShowTravelMoves || ShowLightningMoves || ShowWipeMoves,
                         bead: ShowBead);
                 }
                 GL.DepthMask(true);
