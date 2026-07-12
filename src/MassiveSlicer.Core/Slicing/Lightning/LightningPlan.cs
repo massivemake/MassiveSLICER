@@ -1,4 +1,5 @@
 using System.Numerics;
+using Clipper2Lib;
 
 namespace MassiveSlicer.Core.Slicing.Lightning;
 
@@ -70,6 +71,13 @@ public sealed class LightningPlan
 public sealed class LightningLayerPlan
 {
     public List<LightningTree> Trees { get; } = [];
+
+    /// <summary>
+    /// Corbel pads (plane-local): small outward boundary extensions grown at the
+    /// overhang rate over a few layers so a line just past the wall below lands on
+    /// material. Unioned into the region at emission.
+    /// </summary>
+    public PathsD? CorbelPads { get; set; }
 
     /// <summary>Tree ids removed mid-emission — shared across ALL layers of the plan.</summary>
     public HashSet<int> DroppedTrees { get; init; } = [];

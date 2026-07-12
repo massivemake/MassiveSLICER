@@ -127,6 +127,14 @@ public static class LightningGenerator
         if (walls.Count > 0)
             result.AddRange(walls);
 
+        // Corbel pads: planner-grown outward wall extensions (30°-compliant
+        // ledges) that catch lines floating just past the wall below.
+        if (plan?.CorbelPads is { Count: > 0 } corbels)
+        {
+            result.AddRange(corbels);
+            result = Clipper.Union(result, FillRule.NonZero);
+        }
+
         // Weld islands whose gap is within a few beads into one region through a
         // nozzle-width bridge channel — the boundary then runs island A → across
         // the bridge → island B → back, ONE continuous extrusion, and the bridge
