@@ -3512,6 +3512,25 @@ public partial class ViewportView : UserControl
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
         _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+
+        // The timeline must always follow the DISPLAYED toolpath. Some replace
+        // paths (workspace-restore ordering, background re-uploads) staged a new
+        // toolpath without re-pointing the scrub, leaving ActiveScrubToolpath on
+        // a stale object — the speed/RPM readout, tpfix/tpopt and KRL export then
+        // saw pre-Adaptive-Speed values while the renderer drew the new ones.
+        if (ReferenceEquals(entry.Node, _activeScrubNode))
+        {
+            var tpNew = entry.Toolpath;
+            var node  = entry.Node;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is not ViewportViewModel vmStage) return;
+                if (!ReferenceEquals(node, _activeScrubNode)) return;
+                if (ReferenceEquals(vmStage.ActiveScrubToolpath, tpNew)) return;
+                int newMax = tpNew.Layers.Sum(l => l.Moves.Count);
+                vmStage.ResetScrubIndex(newMax, tpNew, preservePosition: true);
+            });
+        }
     }
 
     private void UploadToolpathEntry(PendingToolpathEntry entry, bool addToScene)
