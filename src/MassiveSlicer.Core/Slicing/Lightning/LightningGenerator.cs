@@ -127,11 +127,94 @@ public static class LightningGenerator
         if (walls.Count > 0)
             result.AddRange(walls);
 
+        // Weld islands whose gap is within a few beads into one region through a
+        // nozzle-width bridge channel — the boundary then runs island A → across
+        // the bridge → island B → back, ONE continuous extrusion, and the bridge
+        // stacks at the same world spot every layer (a printable tie wall).
+        result = BridgeNearbyLoops(result, beadWidth);
+
         // Soften acute corners on the toolpath without filling finger notches:
         // vertex-wise fillet of each boundary polyline (min radius = bead width).
         result = FilletBoundaryCorners(result, beadWidth);
 
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius, startFrom);
+    }
+
+    /// <summary>
+    /// Connect outer islands whose closest approach is ≤ 3 beads by unioning a
+    /// bead-wide channel between the closest boundary points (extended half a
+    /// bead into each island so the union always fuses). A spanning tree keeps
+    /// exactly one bridge per island pair chain — no redundant ladders.
+    /// </summary>
+    private static PathsD BridgeNearbyLoops(PathsD polys, float beadWidth)
+    {
+        if (beadWidth <= 0f || polys.Count < 2) return polys;
+        double maxGap = beadWidth * 3.0;
+
+        var outers = new List<int>();
+        for (int i = 0; i < polys.Count; i++)
+            if (Clipper.Area(polys[i]) > 0) outers.Add(i);
+        if (outers.Count < 2) return polys;
+
+        var edges = new List<(double D, int A, int B, PointD Pa, PointD Pb)>();
+        for (int ai = 0; ai < outers.Count; ai++)
+        for (int bi = ai + 1; bi < outers.Count; bi++)
+        {
+            var pa2 = polys[outers[ai]];
+            var pb2 = polys[outers[bi]];
+            // Concentric loops (double-shell walls, nested islands) must never be
+            // welded — a bridge union there collapses the wall gap and eats the
+            // perimeter. Bridge only islands that are truly side by side.
+            if (Clipper.PointInPolygon(pa2[0], pb2) != PointInPolygonResult.IsOutside
+                || Clipper.PointInPolygon(pb2[0], pa2) != PointInPolygonResult.IsOutside)
+                continue;
+            int sa = Math.Max(1, pa2.Count / 256);
+            int sb = Math.Max(1, pb2.Count / 256);
+            double bd = double.MaxValue;
+            PointD bpa = default, bpb = default;
+            for (int i = 0; i < pa2.Count; i += sa)
+            for (int j = 0; j < pb2.Count; j += sb)
+            {
+                double dx = pa2[i].x - pb2[j].x, dy = pa2[i].y - pb2[j].y;
+                double d2 = dx * dx + dy * dy;
+                if (d2 < bd) { bd = d2; bpa = pa2[i]; bpb = pb2[j]; }
+            }
+            double d = Math.Sqrt(bd);
+            if (d <= maxGap)
+                edges.Add((d, ai, bi, bpa, bpb));
+        }
+        if (edges.Count == 0) return polys;
+
+        edges.Sort((x, y) => x.D.CompareTo(y.D));
+        var parent = new int[outers.Count];
+        for (int i = 0; i < parent.Length; i++) parent[i] = i;
+        int Find(int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; }
+
+        var bridges = new PathsD();
+        foreach (var (d, a, b, pa, pb) in edges)
+        {
+            int ra = Find(a), rb = Find(b);
+            if (ra == rb) continue;
+            parent[ra] = rb;
+            var dir = new Vector2((float)(pb.x - pa.x), (float)(pb.y - pa.y));
+            float len = dir.Length();
+            if (len < 1e-3f) continue;
+            dir /= len;
+            var line = new PathD
+            {
+                new PointD(pa.x - dir.X * beadWidth * 0.5, pa.y - dir.Y * beadWidth * 0.5),
+                new PointD(pb.x + dir.X * beadWidth * 0.5, pb.y + dir.Y * beadWidth * 0.5),
+            };
+            var rect = Clipper.InflatePaths(new PathsD { line }, beadWidth * 0.5,
+                JoinType.Square, EndType.Butt);
+            bridges.AddRange(rect);
+        }
+        if (bridges.Count == 0) return polys;
+
+        var merged = new PathsD(polys);
+        merged.AddRange(bridges);
+        merged = Clipper.Union(merged, FillRule.NonZero);
+        return Clipper.SimplifyPaths(merged, 0.05, false);
     }
 
     /// <summary>
