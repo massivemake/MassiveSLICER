@@ -238,6 +238,29 @@ public static class LightningPlanner
             }
             Vector2 Down(Vector2 p) => Remap(i + 1, i, p);
 
+            // World-vertical projection of an upper plane-local point onto THIS
+            // plane. Plane-normal remapping cancels the tilt's world stair-step:
+            // on the down-tilt side an upper layer edge can overhang in GRAVITY
+            // while looking perfectly stacked in-plane, so demand never fired
+            // there (one wing grew fins, its mirror stayed bare). Support must
+            // also exist under the world landing point.
+            Vector2 DownGravity(Vector2 p)
+            {
+                if (frames is null) return p;
+                var fa = frames[i + 1];
+                var fb = frames[i];
+                var w = fa.Origin + fa.U * p.X + fa.V * p.Y;
+                var n = Vector3.Normalize(Vector3.Cross(fb.U, fb.V));
+                if (MathF.Abs(n.Z) < 0.2f) return Remap(i + 1, i, p);
+                float t = Vector3.Dot(n, w - fb.Origin) / n.Z;
+                var g = w - new Vector3(0f, 0f, t);
+                var rel = g - fb.Origin;
+                return new Vector2(Vector3.Dot(rel, fb.U), Vector3.Dot(rel, fb.V));
+            }
+            bool GravityFar(PathsD? fp, Vector2 ptG) => fp is not null
+                && (InsideRegion(fp, ptG)
+                    || Vector2.Distance(ClosestOnRegionBoundary(fp, ptG), ptG) < bead * 0.6f);
+
             // ── 1. Inherit the layer-above's trees with retracted tips ─────────
             float stepAbove = MaxStep(i + 1);
             // Sacrificial external fins lean at the physical bead-on-bead limit —
@@ -428,19 +451,26 @@ public static class LightningPlanner
             // Multi-planar: precompute "upper solid not covered by lower wall band".
             PathsD? multiDemandFootprint = null;
             PathsD? multiExtendFootprint = null;
+            PathsD? gravityDemandFootprint = null;
+            PathsD? gravityExtendFootprint = null;
             if (frames is not null)
             {
                 var upperRemapped = new PathsD();
+                var upperGravity = new PathsD();
                 foreach (var up in regions[i + 1])
                 {
                     if (up.Count < 3) continue;
                     var rp = new PathD(up.Count);
+                    var rg = new PathD(up.Count);
                     foreach (var pt in up)
                     {
                         var d = Down(new Vector2((float)pt.x, (float)pt.y));
                         rp.Add(new PointD(d.X, d.Y));
+                        var dg = DownGravity(new Vector2((float)pt.x, (float)pt.y));
+                        rg.Add(new PointD(dg.X, dg.Y));
                     }
                     if (rp.Count >= 3) upperRemapped.Add(rp);
+                    if (rg.Count >= 3) upperGravity.Add(rg);
                 }
                 if (upperRemapped.Count > 0)
                 {
@@ -457,6 +487,15 @@ public static class LightningPlanner
                     multiExtendFootprint.RemoveAll(p => Math.Abs(Clipper.Area(p)) < bead * bead);
                     if (multiExtendFootprint.Count == 0)
                         multiExtendFootprint = null;
+                    if (upperGravity.Count > 0)
+                    {
+                        gravityDemandFootprint = Clipper.Difference(upperGravity, lowerBand, FillRule.NonZero);
+                        gravityDemandFootprint.RemoveAll(p => Math.Abs(Clipper.Area(p)) < bead * bead);
+                        if (gravityDemandFootprint.Count == 0) gravityDemandFootprint = null;
+                        gravityExtendFootprint = Clipper.Difference(upperGravity, extendBand, FillRule.NonZero);
+                        gravityExtendFootprint.RemoveAll(p => Math.Abs(Clipper.Area(p)) < bead * bead);
+                        if (gravityExtendFootprint.Count == 0) gravityExtendFootprint = null;
+                    }
                 }
             }
 
@@ -478,6 +517,13 @@ public static class LightningPlanner
                 else
                 {
                     samples.AddRange(rawSamples);
+                }
+                List<Vector2>? samplesG = null;
+                if (frames is not null && gravityDemandFootprint is not null)
+                {
+                    samplesG = new List<Vector2>(rawSamples.Count);
+                    for (int k = 0; k < rawSamples.Count; k++)
+                        samplesG.Add(DownGravity(rawSamples[k]));
                 }
 
                 float coverRadius = buttress
@@ -506,6 +552,12 @@ public static class LightningPlanner
                     // a hollow interior fails exactly like one over shells-only
                     // emptiness. Only true outward flares stay behind the
                     // sacrificial-fins setting.
+                    if (!far && samplesG is not null
+                        && GravityFar(gravityDemandFootprint, samplesG[si]))
+                    {
+                        far = true;
+                        pt = samples[si] = samplesG[si];
+                    }
                     var space = ClassifyPoint(region, envelope, pt);
                     bool covered = buttress
                         ? CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region)
@@ -623,6 +675,13 @@ public static class LightningPlanner
                     }
                     else
                         samples.AddRange(rawSamples);
+                    List<Vector2>? samplesG = null;
+                    if (frames is not null && gravityDemandFootprint is not null)
+                    {
+                        samplesG = new List<Vector2>(rawSamples.Count);
+                        for (int k = 0; k < rawSamples.Count; k++)
+                            samplesG.Add(DownGravity(rawSamples[k]));
+                    }
 
                     for (int si = 0; si < samples.Count; si++)
                     {
@@ -633,6 +692,12 @@ public static class LightningPlanner
                                 || Vector2.Distance(ClosestOnRegionBoundary(multiDemandFootprint, pt), pt) < bead * 0.6f;
                         else
                             stillOpen = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
+                        if (!stillOpen && samplesG is not null
+                            && GravityFar(gravityDemandFootprint, samplesG[si]))
+                        {
+                            stillOpen = true;
+                            pt = samples[si] = samplesG[si];
+                        }
                         if (!stillOpen) continue;
                         if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                             continue;
@@ -672,6 +737,13 @@ public static class LightningPlanner
                         }
                         else
                             samples.AddRange(rawSamples);
+                        List<Vector2>? samplesG = null;
+                        if (frames is not null && gravityDemandFootprint is not null)
+                        {
+                            samplesG = new List<Vector2>(rawSamples.Count);
+                            for (int k = 0; k < rawSamples.Count; k++)
+                                samplesG.Add(DownGravity(rawSamples[k]));
+                        }
 
                         for (int si = 0; si < samples.Count; si++)
                         {
@@ -690,6 +762,12 @@ public static class LightningPlanner
                                           < bead * 0.6f))
                                 : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
                                   > demandRadius;
+                            if (!far && samplesG is not null
+                                && GravityFar(gravityExtendFootprint ?? gravityDemandFootprint, samplesG[si]))
+                            {
+                                far = true;
+                                pt = samples[si] = samplesG[si];
+                            }
                             if (!far) continue;
                             if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                                 continue;
@@ -751,6 +829,13 @@ public static class LightningPlanner
                     }
                     else
                         samples.AddRange(rawSamples);
+                    List<Vector2>? samplesG = null;
+                    if (frames is not null && gravityDemandFootprint is not null)
+                    {
+                        samplesG = new List<Vector2>(rawSamples.Count);
+                        for (int k = 0; k < rawSamples.Count; k++)
+                            samplesG.Add(DownGravity(rawSamples[k]));
+                    }
                     for (int si = 0; si < samples.Count; si++)
                     {
                         var pt = samples[si];
@@ -761,6 +846,12 @@ public static class LightningPlanner
                                   < bead * 0.6f)
                             : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
                               > supportRadius;
+                        if (!far && samplesG is not null
+                            && GravityFar(gravityDemandFootprint, samplesG[si]))
+                        {
+                            far = true;
+                            pt = samples[si] = samplesG[si];
+                        }
                         if (!far) continue;
                         if (ClassifyPoint(region, envelope, pt) == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
                             continue;
