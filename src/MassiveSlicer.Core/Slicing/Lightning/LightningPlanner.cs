@@ -1692,16 +1692,32 @@ public static class LightningPlanner
         }
         if (!hasBar)
         {
+            // Region too thin for any bar (wing-tip slivers, narrow flare edges —
+            // multi-planar tilt makes this hit one side of a symmetric part): a
+            // trunk-only stub still covers demand within coverRadius of the elbow,
+            // so birth it rather than leaving the tip unsupported. Counters kept
+            // for diagnostics only.
             if (!TryBoundaryFrame(region, anchor, out var tan2, out _))
-            { PfNoFrame++; return null; }
-            float reach = MaxBarReach(elbow, tan2, halfBar, region, bead);
-            if (reach < bead * 0.75f) { PfBarReach++; return null; }
-            tree.Branches.Add(new LightningBranch([elbow, elbow + tan2 * reach])
-                { ParentBranch = 0, ParentNode = 1 });
-            float reachL = MaxBarReach(elbow, -tan2, halfBar, region, bead);
-            if (reachL >= bead * 0.75f)
-                tree.Branches.Add(new LightningBranch([elbow, elbow - tan2 * reachL])
-                    { ParentBranch = 0, ParentNode = 1 });
+            {
+                PfNoFrame++;
+            }
+            else
+            {
+                float reach = MaxBarReach(elbow, tan2, halfBar, region, bead);
+                if (reach < bead * 0.75f)
+                {
+                    PfBarReach++;
+                }
+                else
+                {
+                    tree.Branches.Add(new LightningBranch([elbow, elbow + tan2 * reach])
+                        { ParentBranch = 0, ParentNode = 1 });
+                    float reachL = MaxBarReach(elbow, -tan2, halfBar, region, bead);
+                    if (reachL >= bead * 0.75f)
+                        tree.Branches.Add(new LightningBranch([elbow, elbow - tan2 * reachL])
+                            { ParentBranch = 0, ParentNode = 1 });
+                }
+            }
         }
         FilletTreeCorners(tree, bead);
         return tree;
