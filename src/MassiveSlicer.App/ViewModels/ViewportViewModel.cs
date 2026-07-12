@@ -2482,6 +2482,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 }
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
                 OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
@@ -2570,6 +2571,54 @@ public sealed class ViewportViewModel : ViewModelBase
             if (total <= 0) return string.Empty;
             int cur = GetScrubLayerIndex() + 1; // 1-based for humans
             return $"Layer {cur} / {total}";
+        }
+    }
+
+    /// <summary>
+    /// Live "speed · RPM" readout for the current scrub/playback move, matching
+    /// what KRL export writes ($VEL.CP and $ANOUT[4]): print speed × per-move
+    /// scale, and geometry RPM % × speed/height scales capped at 100 %.
+    /// </summary>
+    public string ToolpathScrubSpeedRpmLabel
+    {
+        get
+        {
+            if (AdditiveSettings is not { } add || ActiveScrubToolpath is not { } tp
+                || _scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+                return string.Empty;
+            int li = GetScrubLayerIndex();
+            if (li >= tp.Layers.Count) return string.Empty;
+            var moves = tp.Layers[li].Moves;
+            if (moves.Count == 0) return string.Empty;
+            int start = li == 0 ? 0 : _scrubLayerEnds[li - 1];
+            var mv = moves[Math.Clamp(_toolpathScrubIndex - start, 0, moves.Count - 1)];
+            if (mv.Kind == MoveKind.Mill) return string.Empty;
+            if (mv.Kind == MoveKind.Travel)
+            {
+                double tSpeed = mv.TravelSpeedMps is { } o ? o * 1000.0 : add.TravelSpeed;
+                return $"{tSpeed:0} mm/s · RPM {KrlAnout.RpmIdlePercent:0}%";
+            }
+            double speed;
+            float rpmScale;
+            if (mv.IsWipe)
+            {
+                speed = add.WipeSpeed;
+                rpmScale = mv.WipeRpmScale;
+            }
+            else
+            {
+                float sScale = Math.Max(mv.PrintSpeedScale, 1e-6f);
+                rpmScale = sScale * Math.Max(mv.HeightScale, 1e-6f);
+                if (mv.IsResumeRamp)
+                {
+                    sScale *= Math.Max(mv.ResumeSpeedScale, 1e-6f);
+                    rpmScale *= Math.Max(mv.ResumeRpmScale, 1e-6f);
+                }
+                speed = add.PrintSpeed * sScale;
+            }
+            float pct = Math.Min(
+                add.GetEffectiveExtrusionSpeedPercent() * Math.Max(rpmScale, 0f), 100f);
+            return $"{speed:0} mm/s · RPM {pct:0}%";
         }
     }
 
@@ -2759,6 +2808,7 @@ public sealed class ViewportViewModel : ViewModelBase
         if (!SetField(ref _toolpathScrubIndex, index)) return;
         OnPropertyChanged(nameof(ToolpathScrubLabel));
         OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
         _scrubSyncing     = true;
