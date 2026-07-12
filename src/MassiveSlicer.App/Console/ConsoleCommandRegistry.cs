@@ -313,11 +313,14 @@ public sealed class ConsoleCommandRegistry
                 string path = string.IsNullOrWhiteSpace(args)
                     ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "toolpath-dump.csv")
                     : args.Trim();
-                var sb = new System.Text.StringBuilder("layer,z,kind,fx,fy,fz,tx,ty,tz\n");
+                var sb = new System.Text.StringBuilder(
+                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz\n");
                 for (int li = 0; li < tp.Layers.Count; li++)
                 {
                     var lyr = tp.Layers[li];
                     foreach (var m in lyr.Moves)
+                    {
+                        var n = m.Normal.LengthSquared() > 0.01f ? m.Normal : lyr.PlaneNormal;
                         sb.Append(li).Append(',').Append(lyr.Z.ToString("0.###")).Append(',')
                           .Append(m.Kind).Append(',')
                           .Append(m.From.X.ToString("0.###")).Append(',')
@@ -325,7 +328,13 @@ public sealed class ConsoleCommandRegistry
                           .Append(m.From.Z.ToString("0.###")).Append(',')
                           .Append(m.To.X.ToString("0.###")).Append(',')
                           .Append(m.To.Y.ToString("0.###")).Append(',')
-                          .Append(m.To.Z.ToString("0.###")).Append('\n');
+                          .Append(m.To.Z.ToString("0.###")).Append(',')
+                          .Append(m.IsLightning ? 1 : 0).Append(',')
+                          .Append(m.HeightScale.ToString("0.###")).Append(',')
+                          .Append(n.X.ToString("0.####")).Append(',')
+                          .Append(n.Y.ToString("0.####")).Append(',')
+                          .Append(n.Z.ToString("0.####")).Append('\n');
+                    }
                 }
                 System.IO.File.WriteAllText(path, sb.ToString());
                 ctx.Log($"[tpdump] {tp.Layers.Count} layer(s) → {path}");

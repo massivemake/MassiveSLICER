@@ -1455,7 +1455,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ExtrusionStartWaitSec
     {
         get => _extrusionStartWaitSec;
-        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 60.0));
+        // Allow long purges for material calibration workspaces (was capped at 60 s).
+        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
     private double _extrusionResumeWaitSec;
@@ -1464,7 +1465,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ExtrusionResumeWaitSec
     {
         get => _extrusionResumeWaitSec;
-        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 60.0));
+        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
     // -- Movement (z-hop, wipe) ------------------------------------------------

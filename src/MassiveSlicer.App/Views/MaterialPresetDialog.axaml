@@ -252,6 +252,19 @@
                                    Text="{Binding CalibTimeSec, Mode=TwoWay, StringFormat={}{0:F0}}"/>
                     </Grid>
 
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Classes="LabelMuted" TextWrapping="Wrap" VerticalAlignment="Center" Opacity="0.85"
+                                   Text="Open a new MassiveSLICER window with a calibration .mass (home XY, 1 ft Z, motor % × time). This scene stays open — adjust then Export / Send to robot."/>
+                        <Button    Grid.Column="1" Content="Create Material Calibration"
+                                   Classes="ToolbarButton" Padding="12,6" Margin="8,0,0,0"
+                                   Click="OnCreateMaterialCalibration"
+                                   ToolTip.Tip="Writes a .mass workspace and launches a second MassiveSLICER instance. Does not close or change this workspace."/>
+                    </Grid>
+
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="140"/>
