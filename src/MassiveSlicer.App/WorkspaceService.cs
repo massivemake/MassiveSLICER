@@ -142,6 +142,8 @@ internal static class WorkspaceService
         {
             ViewMode                 = viewport.ViewMode,
             IsPaintEditOpen          = viewport.IsPaintEditOpen,
+            IsSlicePlaneViewerActive = viewport.IsSlicePlaneViewerActive,
+            ShowMultiPlanarPlanes    = viewport.ShowMultiPlanarPlanes,
             PaintHandActive          = viewport.PaintHandActive,
             PaintBoxSelectActive     = viewport.PaintBoxSelectActive,
             PaintBridgeActive        = viewport.PaintBridgeActive,

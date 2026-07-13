@@ -57,8 +57,14 @@ public static class PlanarSlicer
                   settings.LayerHeight, settings.AdaptiveQuality)
             : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
 
+        // Tree Support must reach the print bed (Layer 1). If the mesh floats above
+        // Z=0, prepend buffer layers so foundation is L1… and the part shifts up —
+        // never require "layer −1".
+        bool hasTreePaintEarly = PaintSupportStyleUtil.HasTreePaint(settings.PaintMarks);
+        if (hasTreePaintEarly)
+            zPositions = PrependTreeBedFoundationLayers(zPositions, zMin, settings);
+
         var toolpath     = new Toolpath();
-        int idx          = 0;
         var prevTracks   = new List<ContourTrack>();
         ToolpathLayer? prevLayer = null;
 
@@ -67,11 +73,20 @@ public static class PlanarSlicer
         //    contours verbatim so plan and geometry cannot drift.
         List<(List<List<Vector2>> Contours, List<bool> Closed)>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
+        TreeSupport.TreeSupportPlan? treePlan = null;
+        bool hasFormboundPaint = PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks);
+        bool hasTreePaint = hasTreePaintEarly;
+        // Target Support Selections: Formbound ONLY when the user painted Support
+        // (Formbound style). The FILL PATTERN dropdown alone must not scar the
+        // whole part — rest of toolpath stays normal shells.
+        bool formboundActive = settings.LightningTargetSupportSelections
+            ? hasFormboundPaint
+            : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+               || hasFormboundPaint);
         // Zig-zag single-skin prints open faces only — skip Formbound/X dual-wall plans
         // that would re-create a closed back panel.
         bool needLightning = !settings.ZigZagSeam
-            && (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
-                || settings.XBracingEnabled);
+            && (formboundActive || settings.XBracingEnabled || hasTreePaint);
         if (needLightning)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
@@ -84,24 +99,60 @@ public static class PlanarSlicer
                 var cached = ComputeInsetContours(meshes, zPositions[zi], settings);
                 lightningCache.Add(cached);
                 fillPolysPerLayer.Add(FilterFillPolys(cached.Contours, cached.Closed, surfaceMode));
-                heights.Add(zi == 0 ? zPositions[0] - zMin : zPositions[zi] - zPositions[zi - 1]);
+                // Height between planes (bed buffer first layer uses FirstLayerHeight).
+                float prevPlane = zi == 0
+                    ? zPositions[0] - MathF.Max(settings.FirstLayerHeight, settings.LayerHeight)
+                    : zPositions[zi - 1];
+                heights.Add(MathF.Max(0.1f, zPositions[zi] - prevPlane));
             }
             // The oracle probes just BELOW the plane: the demanding solid occupies
             // the layer beneath it, and a grazing plane itself is ambiguous.
             var meshTester = new Lightning.MeshInsideTester(meshes);
-            if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+            float halfBand = settings.LightningTargetSupportSelections
+                ? MathF.Max(settings.LayerHeight * 1.75f, settings.BeadWidth * 1.5f)
+                : MathF.Max(settings.LayerHeight * 0.75f, settings.BeadWidth * 0.75f);
+            Func<int, (Vector3 Origin, Vector3 Normal, Vector3 U, Vector3 V)> frameOf =
+                li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY);
+
+            if (formboundActive)
             {
+                // Only Formbound-style paint feeds Lightning; Tree marks are separate.
+                var formDemand = ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, zPositions.Length, frameOf,
+                    halfBandMm: halfBand,
+                    targetSupportSelectionsOnly: settings.LightningTargetSupportSelections,
+                    styleFilter: PaintSupportStyleUtil.IsFormbound);
+                // Caller (BuildSliceSettings) should already force InfillPattern from paint.
+                // If not, Build still runs but buttress vs bridge follows settings.InfillPattern.
                 lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
                     solidAt: (li, p) => meshTester.IsInside(
                         new Vector3(p.X, p.Y, zPositions[li] - 0.4f * heights[li])),
-                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
-                        settings.PaintMarks, zPositions.Length,
-                        li => (new Vector3(0f, 0f, zPositions[li]), Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY),
-                        // Bead-scale band so wall-path marks always hit their layer plane.
-                        halfBandMm: MathF.Max(settings.LayerHeight * 0.75f, settings.BeadWidth * 0.75f)));
+                    manualDemand: formDemand);
             }
             else
                 lightningPlan = new Lightning.LightningPlan(zPositions.Length);
+
+            if (hasTreePaint)
+            {
+                // Tree: pin demand to the painted tip only (target-support band).
+                // Planner grows freestanding columns from layer 0 → tip regardless.
+                var treeDemand = ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, zPositions.Length, frameOf,
+                    halfBandMm: halfBand,
+                    targetSupportSelectionsOnly: true,
+                    styleFilter: PaintSupportStyleUtil.IsTree);
+                treePlan = TreeSupport.TreeSupportPlanner.Build(
+                    fillPolysPerLayer, heights, settings, treeDemand);
+                if (treePlan is not null)
+                {
+                    int with = 0;
+                    for (int i = 0; i < treePlan.Layers.Length; i++)
+                        if (treePlan.Layers[i].Branches.Count > 0) with++;
+                    System.Console.WriteLine(
+                        $"[tree-support] planar: treePaint marks → plan branches on " +
+                        $"{with}/{treePlan.Layers.Length} layers (must include bed L0)");
+                }
+            }
 
             if (settings.XBracingEnabled)
             {
@@ -142,12 +193,18 @@ public static class PlanarSlicer
         {
             if ((zi & 15) == 0) progress?.Invoke(zi / (float)zPositions.Length);
             float z           = zPositions[zi];
-            float prevZ       = zi == 0 ? zMin : zPositions[zi - 1];
+            // Height relative to previous plane (or bed for the first buffer/mesh layer).
+            float prevZ       = zi == 0
+                ? MathF.Min(zMin, zPositions[0] - MathF.Max(settings.FirstLayerHeight, settings.LayerHeight))
+                : zPositions[zi - 1];
             bool  isLastLayer = zi == zPositions.Length - 1;
-            var layer         = new ToolpathLayer(idx++, z) { Height = z - prevZ };
+            // Contiguous 0-based index among emitted layers (not plane skip index).
+            var layer         = new ToolpathLayer(toolpath.Layers.Count, z)
+                { Height = MathF.Max(0.1f, z - prevZ) };
             prevTracks = BuildLayer(meshes, z, settings, seamOrigin, sd, prevTracks, layer, isLastLayer,
                 cachedContours: lightningCache?[zi],
                 lightningPlan:  lightningPlan?.Layers[zi],
+                treePlan:       treePlan?.Layers[zi],
                 xDetourState:   xDetourState,
                 prevEnd:        prevLayer is { Moves.Count: > 0 } pvl ? pvl.Moves[^1].To : null);
 
@@ -201,6 +258,48 @@ public static class PlanarSlicer
         return [.. positions];
     }
 
+    /// <summary>
+    /// When Tree Support is active and the mesh bottom sits above the print bed (Z=0),
+    /// prepend slice planes from the bed up to the first mesh plane so tree foundation
+    /// occupies Layer 1… and the part never needs "negative" layers.
+    /// </summary>
+    private static float[] PrependTreeBedFoundationLayers(
+        float[] zPositions, float meshZMin, SliceSettings settings)
+    {
+        if (zPositions.Length == 0) return zPositions;
+
+        // Print bed at Z=0. If the mesh already rests on/below the bed, no buffer.
+        const float bedZ = 0f;
+        float layerH = MathF.Max(settings.LayerHeight, 0.1f);
+        float firstH = MathF.Max(settings.FirstLayerHeight, layerH);
+        float meshFirst = zPositions[0];
+
+        // Only when the first slice is clearly above the bed.
+        if (meshFirst <= bedZ + firstH * 0.5f)
+            return zPositions;
+
+        var buffer = new List<float>(64);
+        float z = bedZ + firstH;
+        // Safety: never insert more than ~2 m of foundation at this layer height.
+        int maxBuf = Math.Clamp((int)MathF.Ceiling(2500f / layerH), 1, 800);
+        while (z < meshFirst - 0.25f * layerH && buffer.Count < maxBuf)
+        {
+            buffer.Add(z);
+            z += layerH;
+        }
+
+        if (buffer.Count == 0) return zPositions;
+
+        var merged = new float[buffer.Count + zPositions.Length];
+        buffer.CopyTo(merged, 0);
+        zPositions.CopyTo(merged, buffer.Count);
+        System.Console.WriteLine(
+            $"[tree-support] bed foundation buffer: +{buffer.Count} layers " +
+            $"(Z {merged[0]:0.#} → mesh first {meshFirst:0.#} mm, meshZMin={meshZMin:0.#}) " +
+            $"→ Layer 1 starts on the bed");
+        return merged;
+    }
+
     // -- Layer construction ----------------------------------------------------
 
     private static List<ContourTrack> BuildLayer(
@@ -214,6 +313,7 @@ public static class PlanarSlicer
         bool isLastLayer = false,
         (List<List<Vector2>> Contours, List<bool> Closed)? cachedContours = null,
         Lightning.LightningLayerPlan? lightningPlan = null,
+        TreeSupport.TreeSupportLayerPlan? treePlan = null,
         Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null,
         Vector3? prevEnd = null)
     {
@@ -238,10 +338,16 @@ public static class PlanarSlicer
                 : null;
             (insetContours, insetClosed) = ComputeInsetContours(meshes, z, settings, normalLookup);
         }
-        if (insetContours.Count == 0) return new List<ContourTrack>();
+        // Empty mesh cut: still emit freestanding tree columns (bed foundation under
+        // overhangs where lower planes miss the solid).
+        if (insetContours.Count == 0)
+        {
+            EmitTreeSupportIfAny(treePlan, z, layer, settings, partFillPolys: null);
+            return new List<ContourTrack>();
+        }
 
         return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
-            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, xDetourState, prevEnd);
+            normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, treePlan, xDetourState, prevEnd);
     }
 
     /// <summary>
@@ -360,6 +466,7 @@ public static class PlanarSlicer
         List<(Vector2 pos, Vector3 normal)>? normalLookup,
         Vector2 seamOrigin, Vector2 seamDir, List<ContourTrack> prevTracks,
         Lightning.LightningLayerPlan? lightningPlan,
+        TreeSupport.TreeSupportLayerPlan? treePlan = null,
         Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null,
         Vector3? prevEnd = null)
     {
@@ -410,18 +517,30 @@ public static class PlanarSlicer
             }
         }
 
+        // Target Support Selections: Formbound only when this layer has paint trees.
+        // Otherwise fall through to normal shells so unselected geometry is untouched.
+        bool targetSel = settings.LightningTargetSupportSelections;
+        bool hasPaintTrees = lightningPlan is not null
+            && lightningPlan.Trees.Any(t =>
+                (t.Manual || t.PaintColumn) && !lightningPlan.DroppedTrees.Contains(t.Id));
+        bool formboundEmit = targetSel
+            ? hasPaintTrees
+            : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+               || (lightningPlan is not null
+                   && PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks)
+                   && hasPaintTrees));
+
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Surface mode fills across CLOSED boundary chains (open chains can't bound
         // a region, so layers without any closed chain keep their boundary paths).
         // Zig-zag single-skin always takes the shell path below (never Formbound fill).
-        if (!singleSkinZigZag && settings.InfillPattern != InfillPattern.None)
+        if (!singleSkinZigZag && (settings.InfillPattern != InfillPattern.None || formboundEmit))
         {
             var fillPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
             // X-bracing / Formbound need a region; open surface shells often leave
             // fillPolys empty — fall back to all inset contours so braces still emit.
             if (fillPolys.Count == 0
-                && (settings.XBracingEnabled
-                    || Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)))
+                && (settings.XBracingEnabled || formboundEmit))
                 fillPolys = insetContours.Where(c => c.Count >= 3).ToList();
 
             if (fillPolys.Count > 0)
@@ -437,15 +556,46 @@ public static class PlanarSlicer
                 float spacing = settings.InfillSpacingMm > 0f
                     ? settings.InfillSpacingMm
                     : settings.BeadWidth;
-                if (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
-                    || (settings.XBracingEnabled && lightningPlan is not null))
+                if (formboundEmit
+                    || (settings.XBracingEnabled && lightningPlan is not null
+                        && !targetSel)) // X alone may still use lightning emit
+                {
+                    // Target Support: local notches only — no global fillet/weld.
                     Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
-                        settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd);
-                else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                        settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd,
+                        localSupportOnly: targetSel);
+                    EmitTreeSupportIfAny(treePlan, z, layer, settings, fillPolys);
+                    return new List<ContourTrack>();
+                }
+                if (settings.XBracingEnabled && lightningPlan is not null && targetSel
+                    && !formboundEmit)
+                {
+                    // X-bracing with target-sel but no paint formbound this layer:
+                    // still need X emit if X trees exist — without local-only strip of paint.
+                    bool hasX = lightningPlan.Trees.Any(t =>
+                        !lightningPlan.DroppedTrees.Contains(t.Id));
+                    if (hasX)
+                    {
+                        Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
+                            settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd,
+                            localSupportOnly: false);
+                        EmitTreeSupportIfAny(treePlan, z, layer, settings, fillPolys);
+                        return new List<ContourTrack>();
+                    }
+                }
+                if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
                     InfillGenerator.EmitGhostMesh(fillPolys, z, layer, spacing, angle, isLastLayer,
                                                   insetStepMm: settings.BeadWidth);
-                else
+                else if (settings.InfillPattern != InfillPattern.None
+                         && !Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
                     InfillGenerator.Emit(fillPolys, z, layer, spacing, angle);
+                else
+                {
+                    // Formbound pattern under Target Support with no paint trees this
+                    // layer, or tree-only: normal shells (geometry untouched).
+                    goto ShellPath;
+                }
+                EmitTreeSupportIfAny(treePlan, z, layer, settings, fillPolys);
                 return new List<ContourTrack>();
             }
         }
@@ -460,11 +610,14 @@ public static class PlanarSlicer
             if (fillPolys.Count > 0)
             {
                 Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, z, layer,
-                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd);
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, null, prevEnd,
+                    localSupportOnly: targetSel && hasPaintTrees);
+                EmitTreeSupportIfAny(treePlan, z, layer, settings, fillPolys);
                 return new List<ContourTrack>();
             }
         }
 
+        ShellPath:
         var guideXY = settings.SeamGuidePoints.Select(g => g.ToXY()).ToList();
         var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir, guideXY);
 
@@ -481,7 +634,27 @@ public static class PlanarSlicer
         }
 
         ContourSeamPlanner.EmitOptimizedContours(tracks, z, layer, settings.ZigZagSeam, layer.Index);
+        var partPolys = FilterFillPolys(insetContours, insetClosed, surfaceMode);
+        if (partPolys.Count == 0)
+            partPolys = insetContours.Where(c => c.Count >= 3).ToList();
+        EmitTreeSupportIfAny(treePlan, z, layer, settings, partPolys);
         return tracks;
+    }
+
+    private static void EmitTreeSupportIfAny(
+        TreeSupport.TreeSupportLayerPlan? treePlan,
+        float z,
+        ToolpathLayer layer,
+        SliceSettings settings,
+        List<List<Vector2>>? partFillPolys,
+        float? minWorldZ = null)
+    {
+        if (treePlan is null || treePlan.Branches.Count == 0) return;
+        // Floor at this layer's Z for planar (constant-Z); never extrude below bed.
+        float floor = minWorldZ ?? z;
+        TreeSupport.TreeSupportGenerator.Emit(
+            treePlan, z, layer, settings.BeadWidth, partFillPolys,
+            project: null, minWorldZ: floor);
     }
 
     /// <summary>

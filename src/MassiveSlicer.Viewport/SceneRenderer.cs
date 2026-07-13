@@ -358,6 +358,118 @@ public sealed class SceneRenderer : IDisposable
     public bool IsToolpathNode(SceneNode node) => _toolpaths.ContainsKey(node);
 
     /// <summary>
+    /// 2D Slice Plane Viewer multi-pass — ONLY these five bands are drawn:
+    /// <list type="bullet">
+    ///   <item>current−3 @ 17% opacity</item>
+    ///   <item>current−2 @ 30% opacity</item>
+    ///   <item>current−1 @ 60% opacity</item>
+    ///   <item>current+1 dashed @ 40% opacity</item>
+    ///   <item>current solid @ 100%, 2× line weight</item>
+    /// </list>
+    /// Nothing older than current−3 is drawn. Depth test off so fade composites top-down.
+    /// </summary>
+    private void DrawSlicePlaneLayers(
+        ToolpathRenderer renderer, Matrix4 toolpathMvp, Vector3 eyeLocal,
+        bool selected, int[] ends)
+    {
+        int n = ends.Length;
+        if (n == 0) return;
+        int cur = Math.Clamp(SlicePlaneLayerIndex, 0, n - 1);
+
+        static (int start, int end) Range(int[] endsArr, int layer)
+        {
+            int start = layer <= 0 ? 0 : endsArr[layer - 1];
+            int end = endsArr[layer];
+            return (start, end);
+        }
+
+        const float ctxWidth = 2.2f;
+        const float activeWidth = ctxWidth * 2f;
+
+        // Always enable alpha blending for fade; ignore mesh depth.
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.Disable(EnableCap.DepthTest);
+        GL.DepthMask(false);
+
+        // Farther-below first so nearer below-layers and the active line paint on top.
+        // depth 3 → 17%, depth 2 → 30%, depth 1 → 60%.
+        ReadOnlySpan<float> belowOpacity = [0.17f, 0.30f, 0.60f];
+        for (int depth = 3; depth >= 1; depth--)
+        {
+            int li = cur - depth;
+            if (li < 0) continue;
+            float opacity = belowOpacity[3 - depth];
+            var (lo, hi) = Range(ends, li);
+            if (hi <= lo) continue;
+            // selected:false so override colour stays uniform; opacity carries the fade.
+            renderer.Draw(toolpathMvp, selected: false,
+                showExtrusion: true, showTravel: false,
+                showLightning: true, showWipe: false,
+                showSeam: false, showBead: false, showBeadOverhang: false,
+                showOrientationPreview: false,
+                scrubIndex: hi, scrubStart: lo,
+                eyeLocal: eyeLocal, lineOpacity: opacity,
+                showAllPathPoints: false, showDepthLines: false,
+                viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                dashPeriodPx: 0f, lineWidth: ctxWidth);
+        }
+
+        // One layer above: dashed, semi-transparent (not pickable in the view).
+        if (cur + 1 < n)
+        {
+            var (lo, hi) = Range(ends, cur + 1);
+            if (hi > lo)
+            {
+                renderer.Draw(toolpathMvp, selected: false,
+                    showExtrusion: true, showTravel: false,
+                    showLightning: true, showWipe: false,
+                    showSeam: false, showBead: false, showBeadOverhang: false,
+                    showOrientationPreview: false,
+                    scrubIndex: hi, scrubStart: lo,
+                    eyeLocal: eyeLocal, lineOpacity: 0.40f,
+                    showAllPathPoints: false, showDepthLines: false,
+                    viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                    dashPeriodPx: 12f, lineWidth: ctxWidth);
+            }
+        }
+
+        // Active current layer — full opacity, double weight, on top.
+        {
+            var (lo, hi) = Range(ends, cur);
+            if (hi > lo)
+            {
+                renderer.Draw(toolpathMvp, selected: true,
+                    showExtrusion: true, showTravel: false,
+                    showLightning: true, showWipe: false,
+                    showSeam: false, showBead: false, showBeadOverhang: false,
+                    showOrientationPreview: false,
+                    scrubIndex: hi, scrubStart: lo,
+                    eyeLocal: eyeLocal, lineOpacity: 1f,
+                    showAllPathPoints: false, showDepthLines: false,
+                    viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                    dashPeriodPx: 0f, lineWidth: activeWidth);
+            }
+        }
+
+        GL.DepthMask(true);
+        GL.Enable(EnableCap.DepthTest);
+    }
+
+    /// <summary>Exclusive move-count ends per layer from live toolpath data.</summary>
+    private static int[] BuildLayerEnds(Toolpath toolpath)
+    {
+        var ends = new int[toolpath.Layers.Count];
+        int acc = 0;
+        for (int i = 0; i < toolpath.Layers.Count; i++)
+        {
+            acc += toolpath.Layers[i].Moves.Count;
+            ends[i] = acc;
+        }
+        return ends;
+    }
+
+    /// <summary>
     /// The gizmo axis currently being dragged, or <see cref="GizmoAxis.None"/>.
     /// Set by the viewport when a drag begins and cleared when it ends.
     /// </summary>
@@ -439,6 +551,30 @@ public sealed class SceneRenderer : IDisposable
     /// when the mesh (or TCP) is selected so the dual-slider still hides layers.
     /// </summary>
     public SceneNode? ToolpathActiveScrubNode { get; set; }
+
+    /// <summary>
+    /// Edit-mode 2D Slice Plane Viewer: draw current layer solid, three layers below
+    /// with fade, one dashed layer above (top-down context).
+    /// </summary>
+    public bool SlicePlaneViewerActive { get; set; }
+
+    /// <summary>0-based current layer when <see cref="SlicePlaneViewerActive"/>.</summary>
+    public int SlicePlaneLayerIndex { get; set; }
+
+    /// <summary>Half bead width (mm) — spacing for the 2D slice measurement grid.</summary>
+    public float SlicePlaneGridSpacingMm { get; set; } = 3f;
+
+    /// <summary>World Z of the active slice plane (grid is drawn here).</summary>
+    public float SlicePlaneGridZ { get; set; }
+
+    /// <summary>Grid centre in world XY (usually the active toolpath centroid).</summary>
+    public float SlicePlaneGridCenterX { get; set; }
+    public float SlicePlaneGridCenterY { get; set; }
+
+    /// <summary>
+    /// Exclusive move-count ends per layer (prefix sums). Null disables neighbour passes.
+    /// </summary>
+    public int[]? SlicePlaneLayerEnds { get; set; }
 
     /// <summary>
     /// When true, draw a point at every extrude bead (edit Point mode) instead of
@@ -1061,9 +1197,18 @@ public sealed class SceneRenderer : IDisposable
             GL.DepthMask(true);
         }
 
-        if (ShowGrid && !arcticPresentation) _grid?.Draw(mvp);
+        // 2D slice view: replace the normal ground / bed grids with a subtle
+        // measurement grid (drawn again after toolpaths so alpha composites cleanly).
+        if (SlicePlaneViewerActive)
+        {
+            // No world ground grid or bed outline — they fight the slice readout.
+        }
+        else if (ShowGrid && !arcticPresentation)
+        {
+            _grid?.Draw(mvp);
+        }
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid && !arcticPresentation)
+        if (ShowBedGrid && !arcticPresentation && !SlicePlaneViewerActive)
             _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
@@ -1139,10 +1284,34 @@ public sealed class SceneRenderer : IDisposable
                 || (ToolpathActiveScrubNode is not null
                     && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
+
+            // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
+            // dual-slider full window (those stacked every layer into a solid blob when
+            // edit mode had scrub active but nothing selected in the outliner).
+            if (SlicePlaneViewerActive)
+            {
+                // Only the armed scrub toolpath (or any path if none armed yet).
+                if (ToolpathActiveScrubNode is not null
+                    && !ReferenceEquals(tpNode, ToolpathActiveScrubNode))
+                    continue;
+
+                var sliceEnds = SlicePlaneLayerEnds;
+                if (sliceEnds is null || sliceEnds.Length == 0
+                    || (entry.Data.Layers.Count > 0 && sliceEnds.Length != entry.Data.Layers.Count))
+                    sliceEnds = BuildLayerEnds(entry.Data);
+                if (sliceEnds.Length > 0)
+                {
+                    DrawSlicePlaneLayers(entry.Renderer, toolpathMvp, eyeLocal,
+                        isSelected || ToolpathFullAppearance, sliceEnds);
+                }
+                continue;
+            }
+
             int scrub = applyScrub ? ToolpathActiveScrubIndex : int.MaxValue;
             int scrubLo = applyScrub ? ToolpathActiveScrubStart : 0;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
+
             entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
                 showLightning: ShowLightningMoves,
@@ -1155,6 +1324,14 @@ public sealed class SceneRenderer : IDisposable
                 showAllPathPoints: ShowAllPathPoints,
                 showDepthLines: ShowDepthAwareLines,
                 viewportW: _viewportWidthPx, viewportH: _viewportHeightPx);
+        }
+
+        // Slice measurement grid AFTER toolpaths so centre-lines stay readable and
+        // alpha blends over the dark backdrop (not under opaque white lines).
+        if (SlicePlaneViewerActive && _grid is not null)
+        {
+            _grid.DrawSliceGrid(mvp, SlicePlaneGridSpacingMm, SlicePlaneGridZ,
+                SlicePlaneGridCenterX, SlicePlaneGridCenterY);
         }
 
         // Translucent helper geometry (effector range glow, …): depth-tested but not

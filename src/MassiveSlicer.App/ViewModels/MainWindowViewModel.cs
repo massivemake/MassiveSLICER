@@ -2917,17 +2917,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.SmoothRotation                = copy.SmoothRotation;
         live.SmoothRotationRadius          = copy.SmoothRotationRadius;
         live.SmoothRotationMaxRateDegPerMm = copy.SmoothRotationMaxRateDegPerMm;
-        live.InfillPattern          = copy.InfillPattern;
+        live.InfillPattern          = NormalizeInfillPatternLabel(copy.InfillPattern);
         live.InfillSpacingMm        = copy.InfillSpacingMm;
         live.InfillAngleDeg         = copy.InfillAngleDeg;
         live.LightningOverhangDeg     = copy.LightningOverhangDeg;
         live.LightningBranchSpacingMm = copy.LightningBranchSpacingMm;
         live.LightningTipLoopRadiusMm = copy.LightningTipLoopRadiusMm;
         live.LightningAnchorInterior  = copy.LightningAnchorInterior;
-        live.LightningAnchorExterior  = copy.LightningAnchorExterior;
         live.LightningExteriorOverhangs = copy.LightningExteriorOverhangs;
+        live.LightningAnchorExterior  = copy.LightningExteriorOverhangs;
         live.LightningButtressBarMm         = copy.LightningButtressBarMm;
         live.LightningPreferInteriorMouths  = copy.LightningPreferInteriorMouths;
+        live.LightningTargetSupportSelections = copy.LightningTargetSupportSelections;
         live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.XBracingEnabled        = copy.XBracingEnabled;
@@ -3029,6 +3030,22 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Canonical FILL PATTERN labels for the ComboBox / workspace round-trip.
+    /// Maps legacy names and rejects unknown values so the selection sticks on reopen.
+    /// </summary>
+    private static string NormalizeInfillPatternLabel(string? raw) => raw switch
+    {
+        "Rectilinear" => "Rectilinear",
+        "Grid" => "Grid",
+        "Triangle" => "Triangle",
+        "Ghost Mesh Grid" => "Ghost Mesh Grid",
+        "Formbound Bridge" or "Lightning Bridge" => "Formbound Bridge",
+        "Formbound Buttress" => "Formbound Buttress",
+        "None" or null or "" => "None",
+        _ => "None",
+    };
+
+    /// <summary>
     /// Copies all persisted settings from <see cref="AppPreferences"/> back into
     /// the live ViewModels. Called at startup and after the Preferences dialog applies.
     /// </summary>
@@ -3108,17 +3125,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SmoothRotation                = p.SmoothRotation;
         add.SmoothRotationRadius          = p.SmoothRotationRadius;
         add.SmoothRotationMaxRateDegPerMm = p.SmoothRotationMaxRateDegPerMm;
-        add.InfillPattern    = p.InfillPattern;
+        add.InfillPattern    = NormalizeInfillPatternLabel(p.InfillPattern);
         add.InfillSpacingMm  = p.InfillSpacingMm;
         add.InfillAngleDeg   = p.InfillAngleDeg;
         add.LightningOverhangDeg     = p.LightningOverhangDeg;
         add.LightningBranchSpacingMm = p.LightningBranchSpacingMm;
         add.LightningTipLoopRadiusMm = p.LightningTipLoopRadiusMm;
-        add.LightningAnchorInterior  = p.LightningAnchorInterior;
-        add.LightningAnchorExterior  = p.LightningAnchorExterior;
-        add.LightningExteriorOverhangs = p.LightningExteriorOverhangs;
+        // Affect Interior / Affect Exterior (UI checkboxes).
+        add.LightningAffectInterior = p.LightningAnchorInterior;
+        add.LightningAffectExterior = p.LightningExteriorOverhangs;
         add.LightningButtressBarMm         = p.LightningButtressBarMm;
         add.LightningPreferInteriorMouths  = p.LightningPreferInteriorMouths;
+        add.LightningTargetSupportSelections = p.LightningTargetSupportSelections;
         add.MultiPlanarPlanes.Clear();
         foreach (var pair in p.MultiPlanarPlanes.Where(a => a is { Length: >= 2 }))
             add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(pair[0], pair[1]));
@@ -3216,7 +3234,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             .Select(a => new PaintMark(
                 new System.Numerics.Vector3(a[0], a[1], a[2]), a[3],
                 a[4] >= 1f ? PaintMarkKind.Remove : PaintMarkKind.Bridge,
-                a.Length >= 6 ? (PaintBridgeRole)(int)a[5] : PaintBridgeRole.None)));
+                a.Length >= 6 ? (PaintBridgeRole)(int)a[5] : PaintBridgeRole.None,
+                a.Length >= 7 ? (PaintSupportStyle)(int)a[6] : PaintSupportStyle.FormboundButtress,
+                a.Length >= 8 ? (PaintSupportSide)(int)a[7] : PaintSupportSide.Inside)));
         add.CurvedBoundarySourceDisplay = p.CurvedBoundarySource switch
         {
             "Viewport Pick" => "Viewport Pick",
@@ -3399,17 +3419,18 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SmoothRotation                = add.SmoothRotation;
         p.SmoothRotationRadius          = add.SmoothRotationRadius;
         p.SmoothRotationMaxRateDegPerMm = add.SmoothRotationMaxRateDegPerMm;
-        p.InfillPattern    = add.InfillPattern;
+        p.InfillPattern    = NormalizeInfillPatternLabel(add.InfillPattern);
         p.InfillSpacingMm  = add.InfillSpacingMm;
         p.InfillAngleDeg   = add.InfillAngleDeg;
         p.LightningOverhangDeg     = add.LightningOverhangDeg;
         p.LightningBranchSpacingMm = add.LightningBranchSpacingMm;
         p.LightningTipLoopRadiusMm = add.LightningTipLoopRadiusMm;
-        p.LightningAnchorInterior  = add.LightningAnchorInterior;
-        p.LightningAnchorExterior  = add.LightningAnchorExterior;
-        p.LightningExteriorOverhangs = add.LightningExteriorOverhangs;
+        p.LightningAnchorInterior  = add.LightningAffectInterior;
+        p.LightningAnchorExterior  = add.LightningAffectExterior;
+        p.LightningExteriorOverhangs = add.LightningAffectExterior;
         p.LightningButtressBarMm         = add.LightningButtressBarMm;
         p.LightningPreferInteriorMouths  = add.LightningPreferInteriorMouths;
+        p.LightningTargetSupportSelections = add.LightningTargetSupportSelections;
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
             .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
@@ -3484,7 +3505,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.PaintMarks = add.PaintMarks
             .Select(m => new[] {
                 m.Center.X, m.Center.Y, m.Center.Z, m.Radius,
-                (float)m.Kind, (float)m.BridgeRole })
+                (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
+                (float)m.SupportSide })
             .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;

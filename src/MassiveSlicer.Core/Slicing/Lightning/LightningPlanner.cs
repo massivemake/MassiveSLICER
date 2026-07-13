@@ -51,6 +51,27 @@ public static class LightningPlanner
         var plan = new LightningPlan(n);
         if (n == 0) return plan;
 
+        if (settings.LightningTargetSupportSelections)
+        {
+            int bridgeMarks = 0;
+            foreach (var m in settings.PaintMarks)
+                if (m.Kind == PaintMarkKind.Bridge) bridgeMarks++;
+            bool anyManual = false;
+            if (manualDemand is not null)
+                for (int mi = 0; mi < manualDemand.Count && !anyManual; mi++)
+                    anyManual = manualDemand[mi].HasAny;
+            System.Console.WriteLine(
+                $"[formbound] Target Support Selections ON — auto demand OFF; " +
+                $"bridgeMarks={bridgeMarks} manualDemandLayers={(anyManual ? "yes" : "none")}");
+            if (bridgeMarks == 0 && !anyManual)
+            {
+                plan.UncoveredLog.Add(
+                    "[formbound] Target Support Selections: no Support paint marks — " +
+                    "select paths in Edit → Support/Apply, then reslice.");
+                System.Console.WriteLine(plan.UncoveredLog[^1]);
+            }
+        }
+
         float bead    = MathF.Max(settings.BeadWidth, 0.1f);
         float tanA    = MathF.Tan(Math.Clamp(settings.LightningOverhangDeg, 5f, 80f) * MathF.PI / 180f);
         float spacing = settings.LightningBranchSpacingMm > 0f
@@ -80,6 +101,13 @@ public static class LightningPlanner
         if (manualDemand is not null)
             for (int mi = 0; mi < manualDemand.Count && !hasManualPaint; mi++)
                 if (manualDemand[mi].HasAny) hasManualPaint = true;
+        // The severity-aware Bridge machinery (severity-scaled cover radius, the
+        // residual worst-first pass, and the free-edge exterior re-birth pass) is
+        // only engaged for the Target-Support-Selections feature or when the user
+        // has painted Support marks. On the default automatic path it changed
+        // finger density enough to notch perimeters and trail exterior fins to the
+        // bed, so keep the classic fixed-radius behavior there.
+        bool severityAware = hasManualPaint || settings.LightningTargetSupportSelections;
         // Exactly one paint-driven perimeter mouth for the whole stack.
         int? paintColumnId = null;
         // Fixed seam pin (bridge target / column mouth XY). Copied onto every layer
@@ -185,6 +213,10 @@ public static class LightningPlanner
             // have positive area and holes negative.
             // Formbound Buttress with prefer-interior: try holes first; exterior is
             // only used as fallback when a tip cannot reach any interior anchor.
+            //
+            // Target Support Selections: mouths must still root on the wall even when
+            // Affect Interior/Exterior are both off (those gates only auto-demand).
+            bool targetSelOnly = settings.LightningTargetSupportSelections;
             var anchorInterior = new PathsD();
             var anchorExterior = new PathsD();
             foreach (var path in region)
@@ -192,13 +224,14 @@ public static class LightningPlanner
                 bool isOuter = Clipper.Area(path) > 0;
                 if (isOuter)
                 {
-                    if (settings.LightningAnchorExterior) anchorExterior.Add(path);
+                    if (settings.LightningAnchorExterior || targetSelOnly)
+                        anchorExterior.Add(path);
                 }
-                else if (settings.LightningAnchorInterior)
+                else if (settings.LightningAnchorInterior || targetSelOnly)
                     anchorInterior.Add(path);
             }
             var anchorPaths = new PathsD();
-            if (buttress && preferInterior && anchorInterior.Count > 0)
+            if (buttress && preferInterior && anchorInterior.Count > 0 && !targetSelOnly)
             {
                 foreach (var p in anchorInterior) anchorPaths.Add(p);
                 // Exterior kept as fallback per-tip below.
@@ -211,6 +244,12 @@ public static class LightningPlanner
             if (anchorPaths.Count == 0)
             {
                 foreach (var p in anchorExterior) anchorPaths.Add(p);
+            }
+            if (anchorPaths.Count == 0 && targetSelOnly)
+            {
+                // Last resort: any contour so paint-driven mouths can still land.
+                foreach (var path in region)
+                    anchorPaths.Add(path);
             }
             if (anchorPaths.Count == 0)
             {
@@ -272,6 +311,18 @@ public static class LightningPlanner
             // Skip+short-reseed left mid-wall gaps; snap + RetractButtress grows ≤ MaxStep.
             foreach (var above in plan.Layers[i + 1].Trees)
             {
+                // Target Support Selections: never inherit automatic / non-paint
+                // trees — those were the "buttress all over the surface" cascade.
+                // Only Manual / PaintColumn lineages (and optional connectors) continue.
+                if (targetSelOnly
+                    && !above.Manual
+                    && !above.PaintColumn
+                    && !above.Connector)
+                    continue;
+                // Selection mode: skip island-connector umbrellas (not user support).
+                if (targetSelOnly && above.Connector && !above.Manual && !above.PaintColumn)
+                    continue;
+
                 var t = above.Clone();
 
                 if (frames is not null)
@@ -441,12 +492,23 @@ public static class LightningPlanner
             // stopped short of the steep band the user asked to support. Only a
             // small noise slack on top of the angle-derived step stays.
             float demandRadius = MathF.Min(supportRadius, stepAbove + bead * 0.1f);
-            float sampleStep = spacing * 0.25f;
+            // Slightly denser than legacy spacing/4 so short free-edge lobes register,
+            // without exploding sample count (SamplePath floors at 0.5 mm).
+            // Denser sampling helps the Target-Support-Selections feature resolve
+            // fine painted runs, but on the default automatic path it lengthens
+            // "unsupported" runs and shifts mouth/tip placement enough that merged
+            // slits notch the perimeter (fast-reversing multi-planar stacks). Keep
+            // the classic pitch unless the feature is engaged.
+            float sampleStep = severityAware
+                ? MathF.Min(spacing * 0.25f, MathF.Max(1.25f, bead * 0.45f))
+                : spacing * 0.25f;
 
-            // Manual marks are ADDITIVE: they pin support where the user demands
-            // it, but automatic geometric demand keeps covering the rest of the
-            // part. (The old skip-everything behaviour meant painting ONE mark
-            // silently removed support from every other overhang in the print.)
+            // Manual marks are ADDITIVE by default: they pin support where the user
+            // demands it, while automatic geometric demand covers the rest.
+            // "Target Support Selections" turns that off — only edit-mode Support
+            // paint marks (Bridge) drive Formbound; skip all auto overhang detection.
+            if (settings.LightningTargetSupportSelections)
+                goto ManualDemandOnly;
 
             // Multi-planar: precompute "upper solid not covered by lower wall band".
             PathsD? multiDemandFootprint = null;
@@ -532,13 +594,13 @@ public static class LightningPlanner
                 float sameSideMax = MathF.Max(6f * bead, barLen);
 
                 var unsupported = new bool[samples.Count];
+                var severities = new float[samples.Count];
                 for (int si = 0; si < samples.Count; si++)
                 {
                     var pt = samples[si];
                     bool far;
                     if (multiDemandFootprint is not null)
                     {
-                        // Multi-planar: only points that land in the unsupported footprint.
                         far = InsideRegion(multiDemandFootprint, pt)
                               || Vector2.Distance(ClosestOnRegionBoundary(multiDemandFootprint, pt), pt)
                                  < bead * 0.6f;
@@ -547,11 +609,6 @@ public static class LightningPlanner
                     {
                         far = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
                     }
-                    // Interior (in material) and Cavity (over a MODELED internal
-                    // void — a region hole) are both mandatory demand: a ledge over
-                    // a hollow interior fails exactly like one over shells-only
-                    // emptiness. Only true outward flares stay behind the
-                    // sacrificial-fins setting.
                     if (!far && samplesG is not null
                         && GravityFar(gravityDemandFootprint, samplesG[si]))
                     {
@@ -559,17 +616,26 @@ public static class LightningPlanner
                         pt = samples[si] = samplesG[si];
                     }
                     var space = ClassifyPoint(region, envelope, pt);
+                    float severity = far
+                        ? DemandSeverity(pt, region, multiDemandFootprint, supportRadius, bead)
+                        : 0f;
+                    severities[si] = severity;
+                    // Affect Interior (inner + cavity) vs Affect Exterior (outer flares).
+                    bool domainOk = space == DemandSpace.Exterior
+                        ? settings.LightningExteriorOverhangs
+                        : settings.LightningAnchorInterior;
+                    // Bridge: severity-aware cover so mid-wall fingers do not suppress
+                    // free-edge demand. Buttress keeps same-side cover.
                     bool covered = buttress
                         ? CoveredBySameSide(layerPlan.Trees, pt, coverRadius, sameSideMax, region)
-                        : NearAnyCenterline(layerPlan.Trees, pt, coverRadius);
-                    unsupported[si] = far
-                        && (space != DemandSpace.Exterior || settings.LightningExteriorOverhangs)
-                        && !covered;
+                        : NearAnyCenterline(layerPlan.Trees, pt,
+                            severityAware
+                                ? CoverRadiusForSeverity(severity, supportRadius, bead)
+                                : coverRadius);
+                    unsupported[si] = far && domainOk && !covered;
                     if (unsupported[si]) demandFlags++;
                 }
 
-
-                // Distribute support EVENLY along each contiguous unsupported run.
                 foreach (var (start, count) in CircularRuns(unsupported))
                 {
                     float runLen = count * sampleStep;
@@ -608,49 +674,175 @@ public static class LightningPlanner
                     }
                     else
                     {
-                        int tipCount = Math.Max(1, (int)MathF.Round(runLen / spacing));
-                        for (int k = 0; k < tipCount; k++)
+                        // Separate tip budgets: Interior and Exterior domains do not
+                        // steal finger slots from each other along a mixed run.
+                        var rankedInt = new List<(int Si, float Sev)>(count);
+                        var rankedExt = new List<(int Si, float Sev)>(count);
+                        int intSamples = 0, extSamples = 0;
+                        for (int j = 0; j < count; j++)
                         {
-                            int si = (start + (int)((k + 0.5f) * count / tipCount)) % samples.Count;
-                            var sPt = samples[si];
-
-                            if (!PassesMeshVetoAt(solidAt, i + 1, regions[i + 1], rawSamples, si, bead))
+                            int si = (start + j) % samples.Count;
+                            if (!unsupported[si]) continue;
+                            var sp = ClassifyPoint(region, envelope, samples[si]);
+                            if (sp == DemandSpace.Exterior)
                             {
-                                meshVetoes++;
-                                continue;
+                                extSamples++;
+                                rankedExt.Add((si, severities[si]));
                             }
-
-                            var tipSpace = ClassifyPoint(region, envelope, sPt);
-                            bool external = tipSpace == DemandSpace.Exterior;
-                            bool cavity   = tipSpace == DemandSpace.Cavity;
-                            // Interior tips stay a bead inside so the slit can't
-                            // breach the far wall; cavity/exterior tips sit at the
-                            // demand itself (the tube is UNIONED, nothing to breach).
-                            var tip = tipSpace == DemandSpace.Interior
-                                ? (InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt))
-                                : sPt;
-
-                            if (TooCloseToExisting(layerPlan.Trees, tip, spacing * 0.5f)) continue;
-
-                            // Cavity fingers anchor on the void's wall (interior
-                            // mouths by construction); region includes the holes.
-                            var anchor = tipSpace == DemandSpace.Interior
-                                ? ClosestOnRegionBoundary(anchorPaths, tip)
-                                : ClosestOnRegionBoundary(region, tip);
-
-                            if (Vector2.Distance(anchor, tip) < bead) continue;
-                            if (tipSpace == DemandSpace.Interior
-                                && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
-                            if (cavity && !SegmentInsideVoid(region, anchor, tip, bead)) continue;
-
-                            var t = new LightningTree
+                            else
                             {
-                                Id = nextTreeId++, Anchor = anchor,
-                                External = external, Cavity = cavity,
-                            };
-                            t.Branches.Add(new LightningBranch([anchor, tip]));
-                            layerPlan.Trees.Add(t);
+                                intSamples++;
+                                rankedInt.Add((si, severities[si]));
+                            }
                         }
+                        rankedInt.Sort((a, b) => b.Sev.CompareTo(a.Sev));
+                        rankedExt.Sort((a, b) => b.Sev.CompareTo(a.Sev));
+
+                        int tipBudgetInt = rankedInt.Count == 0 ? 0
+                            : Math.Max(1, (int)MathF.Round(intSamples * sampleStep / spacing));
+                        int tipBudgetExt = rankedExt.Count == 0 ? 0
+                            : Math.Max(1, (int)MathF.Round(extSamples * sampleStep / spacing));
+
+                        meshVetoes += PlaceBridgeDomainTips(
+                            rankedInt, tipBudgetInt, samples, rawSamples,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            settings, bead, supportRadius, spacing, exteriorDomain: false,
+                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                        meshVetoes += PlaceBridgeDomainTips(
+                            rankedExt, tipBudgetExt, samples, rawSamples,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            settings, bead, supportRadius, spacing, exteriorDomain: true,
+                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                    }
+                }
+            }
+
+            // Residual: one pass for still-open severe free-edge holes only.
+            // Feature-gated — the default automatic Bridge path must not densify.
+            if (!buttress && severityAware)
+            {
+                float severeMin = MathF.Max(bead * 0.5f, supportRadius * 0.65f);
+                var residual = CollectBridgeDemand(
+                    regions[i + 1], region, envelope, core,
+                    multiDemandFootprint, gravityDemandFootprint,
+                    frames is not null, Down, DownGravity,
+                    settings, bead, supportRadius, sampleStep,
+                    layerPlan.Trees, solidAt, i + 1);
+                residual.RemoveAll(s => s.Severity < severeMin);
+                if (residual.Count > 0)
+                {
+                    residual.Sort((a, b) => b.Severity.CompareTo(a.Severity));
+                    // At most a few extras — do not densify into phantom ladders.
+                    int extraBudget = Math.Max(1, 1 + residual.Count / 8);
+                    if (residual.Count > extraBudget)
+                        residual.RemoveRange(extraBudget, residual.Count - extraBudget);
+                    meshVetoes += PlaceBridgeTipsSeverityFirst(
+                        residual, region, envelope, core, anchorPaths,
+                        settings, bead, supportRadius, spacing,
+                        layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                }
+            }
+
+            // ── Free-edge exterior pass (Formbound Bridge + Affect Exterior) ──
+            // Outer perimeter of the UPPER layer often steps out only a few mm per
+            // layer. The main pass uses supportRadius (= maxStep + bead/2), which with
+            // wide beads is ~5 mm — so a 3–4 mm free-edge step never registers as
+            // "far" and the worst free edge stays bare. Use the angle-based
+            // demandRadius (respects Max overhang °) and denser tip spacing so free
+            // edges get sacrificial exterior fins under Affect Exterior.
+            if (!buttress && settings.LightningExteriorOverhangs)
+            {
+                float freeStep = MathF.Max(1f, bead * 0.4f);
+                float freeTipSep = MathF.Max(bead * 1.25f, spacing * 0.45f);
+                float freeRadius = MathF.Max(demandRadius, stepAbove + bead * 0.05f);
+                var freeMouth = anchorExterior.Count > 0 ? anchorExterior
+                    : (anchorPaths.Count > 0 ? anchorPaths : region);
+
+                foreach (var path in regions[i + 1])
+                {
+                    if (path.Count < 3) continue;
+                    // Outer perimeter only (positive area after normalization).
+                    if (Clipper.Area(path) <= 0) continue;
+
+                    var raw = SamplePath(path, freeStep);
+                    if (raw.Count == 0) continue;
+                    var pts = new List<Vector2>(raw.Count);
+                    if (frames is not null)
+                    {
+                        for (int k = 0; k < raw.Count; k++)
+                            pts.Add(Down(raw[k]));
+                    }
+                    else
+                        pts.AddRange(raw);
+
+                    // Rank free-edge candidates by how far they sit outside lower material.
+                    var freeRanked = new List<(Vector2 Pt, float Sev, int Si)>(pts.Count);
+                    for (int si = 0; si < pts.Count; si++)
+                    {
+                        var pt = pts[si];
+                        float dWall = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt);
+                        bool outside = !InsideRegion(region, pt);
+                        // Require a genuine outward step past the angle-based radius,
+                        // whether the sample reads inside or (numerically) just outside
+                        // the wall. On a straight wall the upper perimeter coincides
+                        // with this wall (dWall≈0) and read "outside" — the old
+                        // !outside-only skip let those fabricate a fin every layer,
+                        // trailing sacrificial material all the way to the bed.
+                        if (dWall <= freeRadius) continue;
+                        float sev = outside ? dWall + bead : MathF.Max(0f, dWall - freeRadius);
+                        if (NearAnyCenterline(layerPlan.Trees, pt,
+                                CoverRadiusForSeverity(sev + freeRadius, supportRadius, bead)))
+                            continue;
+                        freeRanked.Add((pt, sev, si));
+                    }
+                    if (freeRanked.Count == 0) continue;
+                    freeRanked.Sort((a, b) => b.Sev.CompareTo(a.Sev));
+
+                    // Own free-edge tip budget (independent of interior budget).
+                    float freeArc = freeRanked.Count * freeStep;
+                    int freeBudget = Math.Max(1, (int)MathF.Ceiling(freeArc / freeTipSep));
+                    int freePlaced = 0;
+                    foreach (var cand in freeRanked)
+                    {
+                        if (freePlaced >= freeBudget) break;
+                        var tip = cand.Pt;
+                        int si = cand.Si;
+                        if (TooCloseToExisting(layerPlan.Trees, tip, freeTipSep)) continue;
+                        if (!PassesMeshVetoAt(solidAt, i + 1, regions[i + 1], raw, si, bead))
+                        {
+                            meshVetoes++;
+                            continue;
+                        }
+
+                        // Fin roots on lower outer wall, tip at free-edge demand.
+                        var anchor = ClosestOnRegionBoundary(freeMouth, tip);
+                        if (Vector2.Distance(anchor, tip) < bead * 0.5f)
+                        {
+                            // Demand almost on the wall — push tip outward along free edge normal.
+                            var prev = pts[(si - 1 + pts.Count) % pts.Count];
+                            var next = pts[(si + 1) % pts.Count];
+                            var tan = next - prev;
+                            var nrm = tan.LengthSquared() > 1e-8f
+                                ? Vector2.Normalize(new Vector2(-tan.Y, tan.X))
+                                : new Vector2(1f, 0f);
+                            // Prefer outward (away from lower material).
+                            if (InsideRegion(region, tip + nrm * bead))
+                                nrm = -nrm;
+                            tip += nrm * MathF.Max(bead, freeRadius);
+                            anchor = ClosestOnRegionBoundary(freeMouth, tip);
+                        }
+                        if (Vector2.Distance(anchor, tip) < bead * 0.4f) continue;
+
+                        var t = new LightningTree
+                        {
+                            Id = nextTreeId++,
+                            Anchor = anchor,
+                            External = true,
+                            Cavity = false,
+                        };
+                        t.Branches.Add(new LightningBranch([anchor, tip]));
+                        layerPlan.Trees.Add(t);
+                        freePlaced++;
                     }
                 }
             }
@@ -879,13 +1071,44 @@ public static class LightningPlanner
             // ColumnFoot (bridge target) = the ONLY wall break / mouth / seam pin —
             // stacked vertically on every layer. SupportBar only opens the T width
             // at the support height; it must NEVER relocate the mouth to the bar.
+            //
+            // Target Support Selections (aggressive): densify the painted run and
+            // birth/extend T columns so the *entire* selected line is covered —
+            // not a single mid-point T with sparse bars.
             {
+                bool aggressive = settings.LightningTargetSupportSelections;
                 var dem = (manualDemand is not null && manualDemand.Count > i + 1)
                     ? manualDemand[i + 1] : null;
+                // Raw projected samples + sides (before order/densify).
+                var barRaw = dem is not null
+                    ? dem.SupportBar.Select(Down).ToList() : new List<Vector2>();
+                var barSidesRaw = dem is not null
+                    ? new List<PaintSupportSide>(dem.SupportBarSides) : new List<PaintSupportSide>();
+                while (barSidesRaw.Count < barRaw.Count)
+                    barSidesRaw.Add(PaintSupportSide.Inside);
+                var footRaw = dem is not null
+                    ? dem.ColumnFoot.Select(Down).ToList() : new List<Vector2>();
+                var footSidesRaw = dem is not null
+                    ? new List<PaintSupportSide>(dem.ColumnFootSides) : new List<PaintSupportSide>();
+                while (footSidesRaw.Count < footRaw.Count)
+                    footSidesRaw.Add(PaintSupportSide.Inside);
+
                 var barRun = dem is not null
                     ? OrderDemandRun(dem.SupportBar, Down) : new List<Vector2>();
                 var footRun = dem is not null
                     ? OrderDemandRun(dem.ColumnFoot, Down) : new List<Vector2>();
+
+                // Dense samples along the selected line (sub-bead pitch).
+                if (aggressive && barRun.Count >= 2)
+                    barRun = DenseResampleRun(barRun, MathF.Max(1.5f, bead * 0.4f));
+                if (aggressive && footRun.Count >= 2)
+                    footRun = DenseResampleRun(footRun, MathF.Max(1.5f, bead * 0.4f));
+
+                // Map densified samples back to Inside/Outside from original paint.
+                var barSides = TransferDemandSides(barRaw, barSidesRaw, barRun);
+                var footSides = TransferDemandSides(footRaw, footSidesRaw, footRun);
+                PaintSupportSide SideAtBar(int si) =>
+                    si >= 0 && si < barSides.Count ? barSides[si] : PaintSupportSide.Inside;
 
                 // Global foot in THIS layer's frame — preferred mouth + seam for all Z.
                 Vector2? globalFoot = null;
@@ -911,17 +1134,16 @@ public static class LightningPlanner
                 if (mouthAim is null && paintBarMid is { } gbm && paintBarLayer >= 0)
                     mouthAim = Remap(paintBarLayer, i, gbm);
 
-                // ── Corbel ledges for painted marks near the wall ─────────────
-                // A marked line floating within ~3 beads of THIS layer's wall is
-                // cheapest to catch by extending the wall outward at the overhang
-                // rate over the next few layers down (a 30°-compliant ledge that
-                // reaches half a bead past the line). Fires ONLY on user marks —
-                // automatic demand keeps the classic finger/buttress behaviour.
-                if (barRun.Count > 0)
+                // ── Corbel ledges (classic paint only) ───────────────────────
+                // NEVER when Target Support Selections: corbel pads are inflated
+                // free-space loops that the generator unions into floating islands
+                // ("support starting in mid-air"). Selection mode uses steppable
+                // wall→tip columns only (MaxStep per layer, inherited downward).
+                if (barRun.Count > 0 && !aggressive)
                 {
                     float corbelReach = bead * 3f;
                     float stepC = MaxStep(i);
-                    // Corbelable points: off-wall, within reach.
+                    float pairDist = bead * 6f;
                     var cor = new List<(Vector2 Pt, Vector2 Anchor, Vector2 Dir, float Reach)>();
                     foreach (var mpt in barRun)
                     {
@@ -934,10 +1156,8 @@ public static class LightningPlanner
                     for (int ci2 = 0; ci2 < cor.Count; ci2++)
                     {
                         var (pt, anchorC, dirC, reachFull) = cor[ci2];
-                        // Chain with the NEXT corbel point when close — the pad then
-                        // spans the whole marked run, not just isolated fingers.
                         bool paired = ci2 + 1 < cor.Count
-                            && Vector2.Distance(pt, cor[ci2 + 1].Pt) <= bead * 6f;
+                            && Vector2.Distance(pt, cor[ci2 + 1].Pt) <= pairDist;
                         int layersDown = Math.Min(40,
                             (int)MathF.Ceiling(reachFull / MathF.Max(stepC, 0.1f)));
                         for (int k = 0; k <= layersDown && i - k >= 0; k++)
@@ -974,35 +1194,302 @@ public static class LightningPlanner
                 float barLenRun = 0f;
                 for (int j = 1; j < barRun.Count; j++)
                     barLenRun += Vector2.Distance(barRun[j - 1], barRun[j]);
-                float mBar = barRun.Count > 0
-                    ? MathF.Max(barLen, MathF.Max(bead * 5f, barLenRun * 1.05f))
-                    : MathF.Max(barLen, bead * 5f);
-                // Wide same-side so T bars can reach a laterally offset support path
-                // while the mouth stays on the foot seam.
-                float mSide = MathF.Max(
-                    MathF.Max(24f * bead, barLen * 2f),
-                    barLenRun + 16f * bead);
-                float mCover = MathF.Max(bead * 2f, MathF.Max(barLenRun, bead * 4f) * 0.55f);
+                // Aggressive multi-T: each column uses the user Horizontal-bar length
+                // (or a modest default) — NOT the full painted run length. Using
+                // barLenRun as halfBar made one T claim the whole path, then
+                // TryExtend always "succeeded" by a hair and blocked every new birth
+                // (2 trees covering ~25% of 700+ samples).
+                // Classic single-column mode still opens one T spanning the run.
+                float mBar = aggressive
+                    ? MathF.Max(barLen > 0f ? barLen : spacing * 2f, bead * 5f)
+                    : (barRun.Count > 0
+                        ? MathF.Max(barLen, MathF.Max(bead * 5f, barLenRun * 1.05f))
+                        : MathF.Max(barLen, bead * 5f));
+                float mSide = aggressive
+                    ? MathF.Max(12f * bead, mBar * 1.5f)
+                    : MathF.Max(
+                        MathF.Max(24f * bead, barLen * 2f),
+                        barLenRun + 16f * bead);
+                float mCover = aggressive
+                    ? MathF.Max(bead * 1.25f, MathF.Min(bead * 2.5f, spacing * 0.55f))
+                    : MathF.Max(bead * 2f, MathF.Max(barLenRun, bead * 4f) * 0.55f);
                 float mStep = bead * 2.5f;
                 float layerH = MathF.Max(i < layerHeights.Count ? layerHeights[i] : bead, 0.1f);
-                float maxAnchorDist = MathF.Max(2f * layerH, 24f * bead);
+                // How far a tip may stick out and still have a MaxStep-legal column
+                // underneath (layers 0..i below the current planning layer).
                 float stepI = MaxStep(i);
+                float maxPrintableReach = MathF.Max(bead * 2f, (i + 1) * stepI + bead);
+                float maxAnchorDist = aggressive
+                    ? MathF.Max(maxPrintableReach, bead * 4f)
+                    : MathF.Max(2f * layerH, 24f * bead);
+                // NEVER grow faster than MaxStep — that prints air under the bar.
+                float growStep = stepI;
 
-                // Face the support bar when opening the T (mouth still at foot).
                 Vector2? barFace = null;
                 if (barRun.Count > 0)
                     barFace = barRun[MidIndexAlongRun(barRun)];
                 else if (paintBarMid is { } gbm2 && paintBarLayer >= 0)
                     barFace = Remap(paintBarLayer, i, gbm2);
 
-                // Locate the existing paint column on this layer (inherited).
                 LightningTree? paintTree = null;
                 if (paintColumnId is int pid)
                     paintTree = layerPlan.Trees.FirstOrDefault(t => t.Id == pid);
                 if (paintTree is null)
                     paintTree = layerPlan.Trees.FirstOrDefault(t => t.PaintColumn);
 
-                if (buttress && paintTree is not null)
+                // Trees already present on this layer came from inheritance + MaxStep
+                // retract. Re-birthing a full-depth T under the same demand creates a
+                // mid-air island (full bar with no steppable column below). Snapshot
+                // ids NOW — before any new births this layer.
+                var inheritedTreeIds = new HashSet<int>();
+                foreach (var t0 in layerPlan.Trees)
+                    inheritedTreeIds.Add(t0.Id);
+                bool hasInheritedPaintColumn = layerPlan.Trees.Any(t =>
+                    inheritedTreeIds.Contains(t.Id) && (t.PaintColumn || t.Manual));
+
+                // ── Aggressive full-line support (Target Support Selections) ──
+                // TOP of a paint column: birth full wall-rooted T's along the run.
+                // LOWER layers (already have inherited paint trees): ONLY MaxStep
+                // extend — never invent a new full-depth bar in free space.
+                // Bottom-up: stub → longer trunk → opening bar → full T under selection.
+                void AggressiveCoverBarRun()
+                {
+                    if (!buttress || barRun.Count == 0) return;
+                    var barSamples = barRun;
+                    // Birth allowed only when this layer is founding the column
+                    // (no inherited paint/manual trees). Otherwise extend-only.
+                    bool allowFullBirth = !hasInheritedPaintColumn;
+                    // Birth pitch ≈ half a T-bar so neighboring columns tile the run.
+                    float birthPitch = MathF.Max(bead * 2f,
+                        MathF.Min(mBar * 0.85f, MathF.Max(spacing * 0.75f, bead * 3f)));
+                    float acc = birthPitch; // force first sample
+                    int births = 0;
+                    int extensions = 0;
+                    int birthFails = 0;
+
+                    // Local sample window around a birth so halfBar does not expand
+                    // to the entire 700-pt painted path (that blocked multi-T birth).
+                    void LocalRunWindow(int si, out int runStart, out int runCount)
+                    {
+                        float want = MathF.Max(mBar, bead * 6f);
+                        runStart = si;
+                        float left = 0f;
+                        while (runStart > 0 && left < want * 0.55f)
+                        {
+                            left += Vector2.Distance(barSamples[runStart - 1], barSamples[runStart]);
+                            runStart--;
+                        }
+                        int runEnd = si;
+                        float right = 0f;
+                        while (runEnd + 1 < barSamples.Count && right < want * 0.55f)
+                        {
+                            right += Vector2.Distance(barSamples[runEnd], barSamples[runEnd + 1]);
+                            runEnd++;
+                        }
+                        runCount = Math.Max(1, runEnd - runStart + 1);
+                    }
+
+                    void TagNewPaintTrees(int treesBefore, PaintSupportSide side)
+                    {
+                        bool outside = PaintSupportSideUtil.IsOutside(side);
+                        for (int ti = treesBefore; ti < layerPlan.Trees.Count; ti++)
+                        {
+                            var nt = layerPlan.Trees[ti];
+                            nt.Manual = true;
+                            nt.PaintColumn = true;
+                            // Inside = dual-wall notch into the solid; Outside =
+                            // sacrificial exterior fin (union, not difference).
+                            nt.External = outside;
+                            nt.Cavity = false;
+                            // Soft validate interior trunks only.
+                            if (!outside
+                                && nt.Branches.Count > 0
+                                && nt.Branches[0].Centerline.Count >= 2)
+                            {
+                                var a = nt.Anchor;
+                                var e = nt.Branches[0].Centerline[^1];
+                                if (!SegmentInsideRegion(region, a, e, bead * 1.25f))
+                                {
+                                    if (!TryRebuildShortButtress(nt, region, core, bead, mBar, growStep))
+                                    {
+                                        layerPlan.Trees.RemoveAt(ti);
+                                        ti--;
+                                        continue;
+                                    }
+                                }
+                            }
+                            births++;
+                        }
+                    }
+
+                    for (int si = 0; si < barSamples.Count; si++)
+                    {
+                        var pt = barSamples[si];
+                        float stepAlong = si == 0 ? birthPitch
+                            : Vector2.Distance(barSamples[si - 1], pt);
+                        acc += stepAlong;
+                        bool birthSlot = acc >= birthPitch - 1e-4f || si == 0
+                                         || si == barSamples.Count - 1;
+                        if (birthSlot) acc = 0f;
+
+                        if (CoveredBySameSide(layerPlan.Trees, pt, mCover, mSide, region))
+                        {
+                            // Already covered — optional MaxStep grow.
+                            if (TryExtendExistingButtress(
+                                    layerPlan.Trees, pt, region, core,
+                                    bead, mBar, growStep, mCover, mSide))
+                                extensions++;
+                            continue;
+                        }
+
+                        // Grow existing columns first, but ONLY skip birth when the
+                        // sample is actually covered after the extend. A tiny MaxStep
+                        // nudge must not block a new T for an uncovered far sample.
+                        if (TryExtendExistingButtress(
+                                layerPlan.Trees, pt, region, core,
+                                bead, mBar, growStep, mCover, mSide))
+                        {
+                            extensions++;
+                            if (CoveredBySameSide(layerPlan.Trees, pt, mCover, mSide, region))
+                                continue;
+                        }
+
+                        // Lower layers: no new full T — inheritance is the foundation.
+                        if (!allowFullBirth || !birthSlot)
+                            continue;
+
+                        int treesBefore = layerPlan.Trees.Count;
+                        LocalRunWindow(si, out int r0, out int rN);
+                        Vector2? face = barFace ?? pt;
+                        var side = SideAtBar(si);
+                        bool added = TryAddButtressAt(barSamples, si, mStep, rN, r0,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            preferInterior, settings, bead, mBar, mCover, mSide,
+                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], barSamples,
+                            maxAnchorDist, face, side);
+                        TagNewPaintTrees(treesBefore, side);
+                        if (!added && layerPlan.Trees.Count == treesBefore)
+                            birthFails++;
+                        if (layerPlan.Trees.Count > treesBefore)
+                        {
+                            paintColumnId ??= layerPlan.Trees[^1].Id;
+                            paintSeamPin ??= layerPlan.Trees[^1].Anchor;
+                            for (int sj = Math.Max(0, si - 4);
+                                 sj < Math.Min(barSamples.Count, si + 5); sj++)
+                            {
+                                if (TryExtendExistingButtress(
+                                        layerPlan.Trees, barSamples[sj], region, core,
+                                        bead, mBar, growStep, mCover, mSide))
+                                    extensions++;
+                            }
+                        }
+                    }
+
+                    // Final sweep: extend only on lower layers; birth only when founding.
+                    int reseed = 0;
+                    foreach (var pt in barSamples)
+                    {
+                        if (CoveredBySameSide(layerPlan.Trees, pt, mCover * 1.15f, mSide, region))
+                            continue;
+                        if (TryExtendExistingButtress(
+                                layerPlan.Trees, pt, region, core,
+                                bead, mBar, growStep, mCover * 1.25f, mSide))
+                        {
+                            extensions++;
+                            if (CoveredBySameSide(layerPlan.Trees, pt, mCover * 1.15f, mSide, region))
+                            { reseed++; continue; }
+                        }
+                        if (!allowFullBirth)
+                            continue;
+                        int treesBefore = layerPlan.Trees.Count;
+                        int bSi = 0;
+                        float bestD = float.MaxValue;
+                        for (int k = 0; k < barSamples.Count; k++)
+                        {
+                            float d = Vector2.DistanceSquared(barSamples[k], pt);
+                            if (d < bestD) { bestD = d; bSi = k; }
+                        }
+                        LocalRunWindow(bSi, out int r0b, out int rNb);
+                        var sideB = SideAtBar(bSi);
+                        bool added = TryAddButtressAt(barSamples, bSi, mStep, rNb, r0b,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            preferInterior, settings, bead, mBar, mCover * 0.85f, mSide,
+                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], barSamples,
+                            maxAnchorDist, pt, sideB);
+                        int beforeCount = births;
+                        TagNewPaintTrees(treesBefore, sideB);
+                        if (births > beforeCount) reseed++;
+                        else if (!added) birthFails++;
+                    }
+
+                    int covered = 0;
+                    foreach (var pt in barSamples)
+                        if (CoveredBySameSide(layerPlan.Trees, pt, mCover * 1.2f, mSide, region))
+                            covered++;
+                    var msg = $"[formbound] target-selections layer={i + 1} " +
+                              $"barPts={barSamples.Count} covered={covered}/{barSamples.Count} " +
+                              $"trees={layerPlan.Trees.Count(t => t.Manual)} " +
+                              $"births={births} fail={birthFails} ext={extensions} " +
+                              $"mode={(allowFullBirth ? "FOUND" : "INHERIT-ONLY")} " +
+                              $"mBar={mBar:0.#} pitch={birthPitch:0.#} reseeds={reseed}";
+                    plan.UncoveredLog.Add(msg);
+                    System.Console.WriteLine(msg);
+                }
+
+                if (aggressive && buttress && dem is not null && dem.HasAny)
+                {
+                    // Prefer classic single-column mouth at foot when a bridge target
+                    // exists, then aggressively cover the full support bar.
+                    // Dominant side for this layer's paint (outside wins if any sample is).
+                    bool layerOutside = barSides.Any(PaintSupportSideUtil.IsOutside)
+                        || footSides.Any(PaintSupportSideUtil.IsOutside);
+                    var layerSide = layerOutside ? PaintSupportSide.Outside : PaintSupportSide.Inside;
+
+                    if (paintTree is not null && mouthAim is { } aimKeep)
+                    {
+                        paintColumnId = paintTree.Id;
+                        paintTree.PaintColumn = true;
+                        paintTree.External = layerOutside;
+                        paintTree.Cavity = false;
+                        SnapPaintMouthToAim(paintTree, aimKeep, region, core, bead, mBar, growStep);
+                    }
+                    else if (!hasInheritedPaintColumn
+                             && paintColumnId is null
+                             && (globalFoot is not null || footRun.Count > 0))
+                    {
+                        // First foundation only — never re-birth a full foot column
+                        // on lower layers that already inherited paint trees.
+                        List<Vector2> birthRun = globalFoot is { } gfB
+                            ? [gfB]
+                            : footRun;
+                        int bMid = MidIndexAlongRun(birthRun);
+                        int treesBefore = layerPlan.Trees.Count;
+                        var barSamples = barRun.Count > 0 ? barRun : birthRun;
+                        TryAddButtressAt(birthRun, bMid, mStep, birthRun.Count, 0,
+                            region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
+                            preferInterior, settings, bead, mBar, mCover, mSide,
+                            layerPlan, ref nextTreeId, null, i + 1, regions[i + 1], barSamples,
+                            maxAnchorDist, barFace ?? mouthAim, layerSide);
+                        for (int ti = treesBefore; ti < layerPlan.Trees.Count; ti++)
+                        {
+                            layerPlan.Trees[ti].Manual = true;
+                            layerPlan.Trees[ti].PaintColumn = true;
+                            layerPlan.Trees[ti].External = layerOutside;
+                            layerPlan.Trees[ti].Cavity = false;
+                        }
+                        if (layerPlan.Trees.Count > treesBefore)
+                        {
+                            paintColumnId = layerPlan.Trees[^1].Id;
+                            paintSeamPin ??= globalFoot ?? layerPlan.Trees[^1].Anchor;
+                            if (mouthAim is { } aim0)
+                                SnapPaintMouthToAim(layerPlan.Trees[^1], aim0, region, core,
+                                    bead, mBar, growStep);
+                        }
+                    }
+
+                    AggressiveCoverBarRun();
+                }
+                else if (buttress && paintTree is not null)
                 {
                     paintColumnId = paintTree.Id;
                     paintTree.PaintColumn = true;
@@ -1101,20 +1588,32 @@ public static class LightningPlanner
                         }
                     }
                 }
-                else if (!buttress && dem is not null && dem.HasAny
-                         && paintColumnId is null
-                         && !layerPlan.Trees.Any(t => t.PaintColumn))
+                else if (!buttress && dem is not null && dem.HasAny)
                 {
-                    // Formbound Bridge (non-buttress): ONE finger mouth only.
+                    // Formbound Bridge: one finger per dense sample when aggressive;
+                    // classic mode keeps a single paint-column mouth.
                     var run = OrderDemandRun(
                         dem.ColumnFoot.Count > 0 ? dem.ColumnFoot : dem.SupportBar, Down);
+                    if (aggressive && run.Count >= 2)
+                        run = DenseResampleRun(run, MathF.Max(1.5f, bead * 0.45f));
                     if (run.Count > 0)
                     {
-                        int midSi = MidIndexAlongRun(run);
-                        var pt = run[midSi];
-                        if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius
-                            && !NearAnyCenterline(layerPlan.Trees, pt, spacing * 0.4f))
+                        int[] indices = aggressive
+                            ? Enumerable.Range(0, run.Count).ToArray()
+                            : (paintColumnId is null
+                                && !layerPlan.Trees.Any(t => t.PaintColumn)
+                                    ? new[] { MidIndexAlongRun(run) }
+                                    : Array.Empty<int>());
+                        float tipSep = aggressive ? MathF.Max(bead * 1.1f, spacing * 0.4f)
+                            : spacing * 0.4f;
+                        foreach (int midSi in indices)
                         {
+                            var pt = run[midSi];
+                            if (NearAnyCenterline(layerPlan.Trees, pt, tipSep))
+                                continue;
+                            if (Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt)
+                                <= supportRadius * 0.35f && !aggressive)
+                                continue;
                             var mSpace = ClassifyPoint(region, envelope, pt);
                             bool external = mSpace == DemandSpace.Exterior;
                             bool cavity   = mSpace == DemandSpace.Cavity;
@@ -1124,20 +1623,29 @@ public static class LightningPlanner
                             var anchor = mSpace == DemandSpace.Interior
                                 ? ClosestOnRegionBoundary(anchorPaths, tip)
                                 : ClosestOnRegionBoundary(region, tip);
-                            if (Vector2.Distance(anchor, tip) >= bead
+                            if (Vector2.Distance(anchor, tip) < bead * 0.5f && aggressive)
+                            {
+                                // On-wall paint: push tip slightly off-wall so a fin can form.
+                                var nrm = tip - anchor;
+                                float nl = nrm.Length();
+                                if (nl > 1e-4f) tip = anchor + nrm / nl * MathF.Max(bead, nl);
+                            }
+                            if (Vector2.Distance(anchor, tip) >= bead * 0.45f
                                 && (mSpace != DemandSpace.Interior
-                                    || SegmentInsideRegion(region, anchor, tip, bead))
-                                && (!cavity || SegmentInsideVoid(region, anchor, tip, bead)))
+                                    || SegmentInsideRegion(region, anchor, tip, bead)
+                                    || aggressive)
+                                && (!cavity || SegmentInsideVoid(region, anchor, tip, bead)
+                                    || aggressive))
                             {
                                 var t = new LightningTree
                                 {
                                     Id = nextTreeId++, Anchor = anchor,
-                                    External = external, Cavity = cavity,
+                                    External = external && !aggressive, Cavity = cavity,
                                     PaintColumn = true, Manual = true,
                                 };
                                 t.Branches.Add(new LightningBranch([anchor, tip]));
                                 layerPlan.Trees.Add(t);
-                                paintColumnId = t.Id;
+                                paintColumnId ??= t.Id;
                             }
                         }
                     }
@@ -1152,6 +1660,10 @@ public static class LightningPlanner
             //       connector holds full length on every disconnected layer; below
             //       the island the same lineage retracts into a normal support
             //       column, so bottom-up the umbilical's landing is always there.
+            // Target Support Selections: never invent island tubes (surface-wide
+            // formbound that is not part of the user's Support selection).
+            if (settings.LightningTargetSupportSelections)
+                goto SkipIslandConnectors;
             var outerPaths = new List<PathD>();
             foreach (var pth in region)
                 if (Clipper.Area(pth) > 0) outerPaths.Add(pth);
@@ -1213,6 +1725,7 @@ public static class LightningPlanner
                 }
             }
 
+            SkipIslandConnectors:
             // ── 3. Straightening: nudge interior nodes toward the root–tip chord,
             //       budgeted by this layer's max step so the layer above still rests
             //       within one step of the new position. ──────────────────────────
@@ -1415,7 +1928,11 @@ public static class LightningPlanner
         }
         if (best is null) return false;
         // Too far to close in one MaxStep growth budget — let birth handle it.
-        if (bestScore > coverRadius + maxStep * 4f && bestScore > barLen * 0.6f)
+        // Cap the "barLen" leg so a multi-metre painted run (when barLen was
+        // mistakenly set to full path length) cannot force extend-always-true.
+        float extendCap = MathF.Max(coverRadius + maxStep * 4f,
+            MathF.Min(MathF.Max(barLen * 0.6f, bead * 4f), bead * 24f));
+        if (bestScore > extendCap)
             return false;
 
         var trunk = best.Branches[0].Centerline;
@@ -1525,7 +2042,8 @@ public static class LightningPlanner
         Func<int, Vector2, bool>? solidAt, int layerAbove, PathsD regionAbove,
         List<Vector2> rawSamples,
         float maxAnchorDist = float.MaxValue,
-        Vector2? faceToward = null)
+        Vector2? faceToward = null,
+        PaintSupportSide supportSide = PaintSupportSide.Inside)
     {
         if (!PassesMeshVetoAt(solidAt, layerAbove, regionAbove, rawSamples, si, bead))
             return false;
@@ -1535,7 +2053,7 @@ public static class LightningPlanner
             region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
             preferInterior, settings.LightningAnchorInterior,
             settings.LightningAnchorExterior,
-            bead, barLen, nextTreeId, maxAnchorDist, faceToward);
+            bead, barLen, nextTreeId, maxAnchorDist, faceToward, supportSide);
         if (tree is null) return false;
 
         // Proximity: same-side only. A T on the opposite wall of a channel must not
@@ -1621,7 +2139,8 @@ public static class LightningPlanner
         bool preferInterior, bool allowInterior, bool allowExterior,
         float bead, float barLen, int id,
         float maxAnchorDist = float.MaxValue,
-        Vector2? faceToward = null)
+        Vector2? faceToward = null,
+        PaintSupportSide supportSide = PaintSupportSide.Inside)
     {
         // Birth = FULL support geometry at the TOP of the overhang column.
         // Lower layers inherit and RetractButtress by MaxStep so bottom-up print
@@ -1650,7 +2169,46 @@ public static class LightningPlanner
         // the solid so a short wall→elbow trunk is valid; otherwise every candidate
         // is rejected as dElbow < bead/2 and the paint column never births.
         bool paintBirth = maxAnchorDist < float.MaxValue * 0.5f;
-        if (!offMaterial && paintBirth
+        bool forceOutside = paintBirth && PaintSupportSideUtil.IsOutside(supportSide);
+        // Per-selection Outside: sacrificial exterior fin (unioned outside the wall).
+        if (forceOutside
+            && TryBoundaryFrame(region, homeWall, out _, out var paintOutward))
+        {
+            // Frame "inward" points into solid; exterior fin grows the opposite way.
+            var outward = -paintOutward;
+            float wantDepth = MathF.Min(maxTrunk,
+                MathF.Max(bead * 2.5f, Vector2.Distance(homeWall, sPt)));
+            if (maxAnchorDist < float.MaxValue * 0.5f)
+                wantDepth = MathF.Min(wantDepth, MathF.Max(bead * 2f, maxAnchorDist));
+            elbow = homeWall + outward * wantDepth;
+            external = true;
+            cavity = false;
+            offMaterial = true;
+            keep = region;
+        }
+        // Target Support Inside: NEVER leave the elbow in free air — grow wall→core.
+        else if (paintBirth && offMaterial
+            && TryBoundaryFrame(region, homeWall, out _, out var paintInward))
+        {
+            float wantDepth = MathF.Min(maxTrunk,
+                MathF.Max(bead * 2.5f, Vector2.Distance(homeWall, sPt)));
+            // Cap initial trunk so a single layer cannot claim more reach than the
+            // caller allowed (maxAnchorDist / maxPrintableReach).
+            if (maxAnchorDist < float.MaxValue * 0.5f)
+                wantDepth = MathF.Min(wantDepth, MathF.Max(bead * 2f, maxAnchorDist));
+            var inset = homeWall + paintInward * wantDepth;
+            if (InsideRegion(core, inset))
+                elbow = inset;
+            else if (InsideRegion(region, inset))
+                elbow = ClosestOnRegionBoundary(core, inset);
+            else
+                elbow = ClosestOnRegionBoundary(core, homeWall + paintInward * bead * 2.5f);
+            external = false;
+            cavity = false;
+            offMaterial = false;
+            keep = core;
+        }
+        else if (!offMaterial && paintBirth
             && Vector2.Distance(homeWall, elbow) < bead * 2.5f
             && TryBoundaryFrame(region, homeWall, out _, out var inwardN))
         {
@@ -1667,6 +2225,9 @@ public static class LightningPlanner
         float halfBar = MathF.Max(barLen * 0.5f, bead * 2f);
         // From this sample, also allow walking the remaining run distance so a
         // mid-run birth opens a T that reaches both ends of the selected segment.
+        // Paint multi-T births pass a LOCAL run window — walk that window only.
+        // Never let halfBar explode past barLen for paint (that made one T claim
+        // an entire 1m+ selection and blocked further births).
         if (runCount > 1 && samples.Count > 0)
         {
             float toStart = 0f, toEnd = 0f;
@@ -1675,7 +2236,10 @@ public static class LightningPlanner
             int runEnd = Math.Min(samples.Count - 1, runStart + runCount - 1);
             for (int j = si; j < runEnd; j++)
                 toEnd += Vector2.Distance(samples[j], samples[j + 1]);
-            halfBar = MathF.Max(halfBar, MathF.Max(toStart, toEnd) + bead);
+            float walk = MathF.Max(toStart, toEnd) + bead;
+            if (paintBirth)
+                walk = MathF.Min(walk, halfBar * 1.15f);
+            halfBar = MathF.Max(halfBar, walk);
         }
         var left  = WalkAlongRun(samples, si, runStart, runCount, sampleStep, -halfBar, keep, bead, offMaterial);
         var right = WalkAlongRun(samples, si, runStart, runCount, sampleStep,  halfBar, keep, bead, offMaterial);
@@ -2308,6 +2872,68 @@ public static class LightningPlanner
         return outp;
     }
 
+    /// <summary>
+    /// Assign each densified sample the Inside/Outside of the nearest original paint
+    /// sample (so order/densify preserve per-selection wall side).
+    /// </summary>
+    private static List<PaintSupportSide> TransferDemandSides(
+        List<Vector2> srcPts, List<PaintSupportSide> srcSides, List<Vector2> dstPts)
+    {
+        var result = new List<PaintSupportSide>(dstPts.Count);
+        if (dstPts.Count == 0) return result;
+        if (srcPts.Count == 0)
+        {
+            for (int i = 0; i < dstPts.Count; i++)
+                result.Add(PaintSupportSide.Inside);
+            return result;
+        }
+        foreach (var p in dstPts)
+        {
+            int bi = 0;
+            float bd = float.MaxValue;
+            for (int i = 0; i < srcPts.Count; i++)
+            {
+                float d = Vector2.DistanceSquared(srcPts[i], p);
+                if (d < bd) { bd = d; bi = i; }
+            }
+            result.Add(bi < srcSides.Count ? srcSides[bi] : PaintSupportSide.Inside);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Evenly sample a polyline at <paramref name="pitch"/> mm so long selected
+    /// lines get dense Formbound demand (Target Support Selections).
+    /// </summary>
+    private static List<Vector2> DenseResampleRun(List<Vector2> run, float pitch)
+    {
+        if (run.Count == 0) return run;
+        if (run.Count == 1 || pitch < 1e-3f) return new List<Vector2>(run);
+        var result = new List<Vector2> { run[0] };
+        float acc = 0f;
+        for (int i = 1; i < run.Count; i++)
+        {
+            var a = run[i - 1];
+            var b = run[i];
+            float seg = Vector2.Distance(a, b);
+            if (seg < 1e-6f) continue;
+            float d = 0f;
+            while (acc + (seg - d) >= pitch - 1e-5f)
+            {
+                float need = pitch - acc;
+                d += need;
+                float u = Math.Clamp(d / seg, 0f, 1f);
+                result.Add(a + (b - a) * u);
+                acc = 0f;
+            }
+            acc += seg - d;
+        }
+        var last = run[^1];
+        if (Vector2.DistanceSquared(result[^1], last) > 1e-4f)
+            result.Add(last);
+        return result;
+    }
+
     /// <summary>Index of the sample nearest the geometric midpoint of the run.</summary>
     private static int MidIndexAlongRun(List<Vector2> run)
     {
@@ -2590,6 +3216,272 @@ public static class LightningPlanner
                         return true;
             }
         return false;
+    }
+
+    // ── Formbound Bridge severity placement ─────────────────────────────────
+
+    /// <summary>One boundary sample that still needs a Formbound Bridge finger.</summary>
+    private readonly record struct BridgeDemandSample(
+        Vector2 Pt, float Severity, int RawSi, List<Vector2> RawSamples, List<Vector2> Samples);
+
+    /// <summary>
+    /// How far past the support threshold this sample hangs (mm). Higher = worse overhang.
+    /// Multi-planar: same metric via distance to the lower wall region boundary.
+    /// </summary>
+    internal static float DemandSeverity(
+        Vector2 pt, PathsD region, PathsD? multiDemandFootprint, float supportRadius, float bead)
+    {
+        float dWall = Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt);
+        float baseSev = MathF.Max(0f, dWall - supportRadius);
+        if (multiDemandFootprint is null) return baseSev;
+
+        // Inside the unsupported footprint: prefer deeper into the air-side pocket.
+        if (InsideRegion(multiDemandFootprint, pt))
+            return MathF.Max(baseSev, bead * 0.5f + baseSev);
+
+        float dFp = Vector2.Distance(ClosestOnRegionBoundary(multiDemandFootprint, pt), pt);
+        if (dFp < bead * 0.6f)
+            return MathF.Max(baseSev, MathF.Max(0.01f, bead * 0.6f - dFp));
+        return baseSev;
+    }
+
+    /// <summary>
+    /// Cover radius used when deciding "already supported". Mild demand keeps a wide
+    /// radius; severe free-edge demand only counts a finger as covering when it is
+    /// close (so mid-wall fingers do not suppress the free edge).
+    /// </summary>
+    internal static float CoverRadiusForSeverity(
+        float severity, float supportRadius, float bead)
+    {
+        float mild = MathF.Max(supportRadius, bead * 0.5f);
+        // Severe free edge: only a nearby tip counts as cover (not half a spacing away).
+        // Always strictly tighter than mild so mid-wall fingers cannot suppress free edges.
+        float severe = MathF.Min(mild * 0.4f, MathF.Max(bead * 0.75f, mild * 0.25f));
+        float span = MathF.Max(supportRadius, bead * 0.5f);
+        float t = Math.Clamp(severity / span, 0f, 1f);
+        t = t * t * (3f - 2f * t); // smoothstep
+        return mild + (severe - mild) * t;
+    }
+
+    /// <summary>
+    /// Place Bridge tips for one domain (interior or exterior) with an isolated tip budget.
+    /// Returns mesh-veto skip count.
+    /// </summary>
+    private static int PlaceBridgeDomainTips(
+        List<(int Si, float Sev)> ranked,
+        int tipBudget,
+        List<Vector2> samples,
+        List<Vector2> rawSamples,
+        PathsD region, PathsD envelope, PathsD core,
+        PathsD anchorPaths, PathsD anchorInterior, PathsD anchorExterior,
+        SliceSettings settings, float bead, float supportRadius, float spacing,
+        bool exteriorDomain,
+        LightningLayerPlan layerPlan, ref int nextTreeId,
+        Func<int, Vector2, bool>? solidAt, int upperLayerIdx,
+        PathsD regionAbove)
+    {
+        if (tipBudget <= 0 || ranked.Count == 0) return 0;
+        int meshVetoes = 0;
+        int placed = 0;
+        float tipSpacing = spacing * 0.5f;
+
+        foreach (var (si, sev) in ranked)
+        {
+            if (placed >= tipBudget) break;
+            var sPt = samples[si];
+            float coverR = CoverRadiusForSeverity(sev, supportRadius, bead);
+            if (NearAnyCenterline(layerPlan.Trees, sPt, coverR))
+                continue;
+
+            if (!PassesMeshVetoAt(solidAt, upperLayerIdx, regionAbove, rawSamples, si, bead))
+            {
+                meshVetoes++;
+                continue;
+            }
+
+            var tipSpace = ClassifyPoint(region, envelope, sPt);
+            bool external = tipSpace == DemandSpace.Exterior;
+            bool cavity   = tipSpace == DemandSpace.Cavity;
+            if (exteriorDomain != external) continue;
+
+            var tip = tipSpace == DemandSpace.Interior
+                ? (InsideRegion(core, sPt) ? sPt : ClosestOnRegionBoundary(core, sPt))
+                : sPt;
+
+            if (TooCloseToExisting(layerPlan.Trees, tip, tipSpacing))
+                continue;
+
+            // Domain-matched mouths: interior demand prefers interior anchors;
+            // exterior demand prefers outer perimeter (falls back to any allowed).
+            PathsD mouthPaths;
+            if (external)
+            {
+                mouthPaths = anchorExterior.Count > 0 ? anchorExterior
+                    : (anchorPaths.Count > 0 ? anchorPaths : region);
+            }
+            else
+            {
+                mouthPaths = anchorInterior.Count > 0 ? anchorInterior
+                    : (anchorPaths.Count > 0 ? anchorPaths : region);
+            }
+
+            var anchor = tipSpace == DemandSpace.Interior || tipSpace == DemandSpace.Cavity
+                ? ClosestOnRegionBoundary(mouthPaths, tip)
+                : ClosestOnRegionBoundary(mouthPaths.Count > 0 ? mouthPaths : region, tip);
+
+            if (Vector2.Distance(anchor, tip) < bead) continue;
+            if (tipSpace == DemandSpace.Interior
+                && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+            if (cavity && !SegmentInsideVoid(region, anchor, tip, bead)) continue;
+
+            var t = new LightningTree
+            {
+                Id = nextTreeId++, Anchor = anchor,
+                External = external, Cavity = cavity,
+            };
+            t.Branches.Add(new LightningBranch([anchor, tip]));
+            layerPlan.Trees.Add(t);
+            placed++;
+        }
+
+        return meshVetoes;
+    }
+
+    /// <summary>
+    /// Place Bridge tips worst-first (residual path). Returns mesh-veto skip count.
+    /// </summary>
+    private static int PlaceBridgeTipsSeverityFirst(
+        List<BridgeDemandSample> demand,
+        PathsD region, PathsD envelope, PathsD core, PathsD anchorPaths,
+        SliceSettings settings, float bead, float supportRadius, float spacing,
+        LightningLayerPlan layerPlan, ref int nextTreeId,
+        Func<int, Vector2, bool>? solidAt, int upperLayerIdx,
+        PathsD regionAbove)
+    {
+        if (demand.Count == 0) return 0;
+        demand.Sort((a, b) => b.Severity.CompareTo(a.Severity));
+
+        int meshVetoes = 0;
+        float tipSpacing = MathF.Max(bead * 1.25f, spacing * 0.85f);
+
+        foreach (var s in demand)
+        {
+            var pt = s.Pt;
+            float coverR = CoverRadiusForSeverity(s.Severity, supportRadius, bead);
+            if (NearAnyCenterline(layerPlan.Trees, pt, coverR))
+                continue;
+
+            if (!PassesMeshVetoAt(solidAt, upperLayerIdx, regionAbove, s.RawSamples, s.RawSi, bead))
+            {
+                meshVetoes++;
+                continue;
+            }
+
+            var tipSpace = ClassifyPoint(region, envelope, pt);
+            bool external = tipSpace == DemandSpace.Exterior;
+            bool cavity   = tipSpace == DemandSpace.Cavity;
+            // Respect domain checkboxes.
+            if (external && !settings.LightningExteriorOverhangs) continue;
+            if (!external && !settings.LightningAnchorInterior) continue;
+
+            var tip = tipSpace == DemandSpace.Interior
+                ? (InsideRegion(core, pt) ? pt : ClosestOnRegionBoundary(core, pt))
+                : pt;
+
+            if (TooCloseToExisting(layerPlan.Trees, tip, tipSpacing))
+                continue;
+
+            var anchor = tipSpace == DemandSpace.Interior
+                ? ClosestOnRegionBoundary(anchorPaths, tip)
+                : ClosestOnRegionBoundary(region, tip);
+
+            if (Vector2.Distance(anchor, tip) < bead) continue;
+            if (tipSpace == DemandSpace.Interior
+                && !SegmentInsideRegion(region, anchor, tip, bead)) continue;
+            if (cavity && !SegmentInsideVoid(region, anchor, tip, bead)) continue;
+
+            var t = new LightningTree
+            {
+                Id = nextTreeId++, Anchor = anchor,
+                External = external, Cavity = cavity,
+            };
+            t.Branches.Add(new LightningBranch([anchor, tip]));
+            layerPlan.Trees.Add(t);
+        }
+
+        return meshVetoes;
+    }
+
+    /// <summary>Re-scan upper boundaries for residual Bridge demand (severity-aware cover).</summary>
+    private static List<BridgeDemandSample> CollectBridgeDemand(
+        PathsD upperRegions,
+        PathsD region, PathsD envelope, PathsD core,
+        PathsD? multiDemandFootprint, PathsD? gravityDemandFootprint,
+        bool hasFrames,
+        Func<Vector2, Vector2> down, Func<Vector2, Vector2> downGravity,
+        SliceSettings settings, float bead, float supportRadius, float sampleStep,
+        List<LightningTree> trees,
+        Func<int, Vector2, bool>? solidAt, int upperLayerIdx)
+    {
+        var list = new List<BridgeDemandSample>(128);
+        foreach (var path in upperRegions)
+        {
+            if (Math.Abs(Clipper.Area(path)) < 4.0 * bead * bead) continue;
+            var rawSamples = SamplePath(path, sampleStep);
+            if (rawSamples.Count == 0) continue;
+            var samples = new List<Vector2>(rawSamples.Count);
+            if (hasFrames)
+            {
+                for (int k = 0; k < rawSamples.Count; k++)
+                    samples.Add(down(rawSamples[k]));
+            }
+            else
+                samples.AddRange(rawSamples);
+
+            List<Vector2>? samplesG = null;
+            if (hasFrames && gravityDemandFootprint is not null)
+            {
+                samplesG = new List<Vector2>(rawSamples.Count);
+                for (int k = 0; k < rawSamples.Count; k++)
+                    samplesG.Add(downGravity(rawSamples[k]));
+            }
+
+            for (int si = 0; si < samples.Count; si++)
+            {
+                var pt = samples[si];
+                bool far = multiDemandFootprint is not null
+                    ? (InsideRegion(multiDemandFootprint, pt)
+                       || Vector2.Distance(ClosestOnRegionBoundary(multiDemandFootprint, pt), pt)
+                          < bead * 0.6f)
+                    : Vector2.Distance(ClosestOnRegionBoundary(region, pt), pt) > supportRadius;
+                if (!far && samplesG is not null && gravityDemandFootprint is not null)
+                {
+                    var ptG = samplesG[si];
+                    bool gFar = InsideRegion(gravityDemandFootprint, ptG)
+                        || Vector2.Distance(ClosestOnRegionBoundary(gravityDemandFootprint, ptG), ptG)
+                           < bead * 0.6f;
+                    if (gFar)
+                    {
+                        far = true;
+                        pt = samples[si] = ptG;
+                    }
+                }
+                if (!far) continue;
+                var space = ClassifyPoint(region, envelope, pt);
+                if (space == DemandSpace.Exterior && !settings.LightningExteriorOverhangs)
+                    continue;
+                if (space != DemandSpace.Exterior && !settings.LightningAnchorInterior)
+                    continue;
+                float severity = DemandSeverity(pt, region, multiDemandFootprint, supportRadius, bead);
+                float coverR = CoverRadiusForSeverity(severity, supportRadius, bead);
+                if (NearAnyCenterline(trees, pt, coverR))
+                    continue;
+                if (!PassesMeshVetoAt(solidAt, upperLayerIdx, upperRegions, rawSamples, si, bead))
+                    continue;
+                list.Add(new BridgeDemandSample(pt, severity, si, rawSamples, samples));
+            }
+        }
+        return list;
     }
 
     private static float DistToSegmentSq(Vector2 p, Vector2 a, Vector2 b)

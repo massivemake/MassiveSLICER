@@ -15,6 +15,8 @@ public class WorkspaceSaveTest
             {
                 ViewMode               = "Preview",
                 IsPaintEditOpen        = true,
+                IsSlicePlaneViewerActive = true,
+                ShowMultiPlanarPlanes  = false,
                 PaintLineRemoveActive  = true,
                 PaintSelectGranularity = "Point",
                 PaintPickFilter        = "Formbound",
@@ -38,6 +40,8 @@ public class WorkspaceSaveTest
             var s = loaded!.UiSession!;
             Assert.Equal("Preview", s.ViewMode);
             Assert.True(s.IsPaintEditOpen);
+            Assert.True(s.IsSlicePlaneViewerActive);
+            Assert.False(s.ShowMultiPlanarPlanes);
             Assert.True(s.PaintLineRemoveActive);
             Assert.Equal("Point", s.PaintSelectGranularity);
             Assert.Equal("Formbound", s.PaintPickFilter);

@@ -15,6 +15,11 @@ public sealed class GridRenderer : IDisposable
     private int _minorVao, _minorVbo, _minorCount;
     private int _majorVao, _majorVbo, _majorCount;
 
+    // 2D Slice Plane Viewer overlay grid (rebuild when bead spacing changes).
+    private int   _sliceVao, _sliceVbo, _sliceCount;
+    private float _sliceSpacing = -1f;
+    private float _sliceExtent  = 5000f;
+
     private bool _disposed;
 
     // Grid extents and spacing (all in mm).
@@ -25,6 +30,8 @@ public sealed class GridRenderer : IDisposable
     // Colours (RGBA).
     private static readonly Vector4 MinorColour = new(0.18f, 0.22f, 0.30f, 1f);
     private static readonly Vector4 MajorColour = new(0.28f, 0.33f, 0.45f, 1f);
+    /// <summary>Subtle white — 2D slice-view measurement grid (needs GL blend).</summary>
+    private static readonly Vector4 SliceGridColour = new(1f, 1f, 1f, 0.07f);
 
     private static readonly string VertSrc = """
         #version 330 core
@@ -79,6 +86,63 @@ public sealed class GridRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
+    /// <summary>
+    /// 2D Slice Plane Viewer grid: white @ low alpha (requires blending).
+    /// Drawn in the XY plane at <paramref name="planeZ"/> so it sits with the active slice.
+    /// Spacing is clamped so we never emit a near-solid mesh of lines.
+    /// </summary>
+    public void DrawSliceGrid(Matrix4 mvp, float spacingMm, float planeZ,
+        float centerX = 0f, float centerY = 0f, float extentMm = 4000f)
+    {
+        // Floor spacing so a half-bead grid never densifies into a white sheet.
+        if (spacingMm < 2f) spacingMm = 2f;
+        // Cap extent so line count stays reasonable (~2 * 2 * (extent/spacing) lines).
+        float maxExtent = MathF.Min(extentMm, spacingMm * 200f); // ≤ ~400 lines per axis
+        EnsureSliceGrid(spacingMm, maxExtent);
+
+        // Shift grid from Z=0 / origin-centered verts into the slice plane.
+        var model = Matrix4.CreateTranslation(centerX, centerY, planeZ);
+        var gridMvp = model * mvp;
+
+        _shader.Use();
+        _shader.SetMatrix4("uMVP", ref gridMvp);
+        _shader.SetVector4("uColor", SliceGridColour);
+
+        // Alpha only works with blending — without it the white grid paints solid
+        // and washes out toolpaths / looks like a bright sheet.
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.Disable(EnableCap.DepthTest);
+        GL.DepthMask(false);
+        GL.BindVertexArray(_sliceVao);
+        GL.DrawArrays(PrimitiveType.Lines, 0, _sliceCount);
+        GL.BindVertexArray(0);
+        GL.DepthMask(true);
+        GL.Enable(EnableCap.DepthTest);
+        // Leave blend enabled — later translucent passes expect it; solid passes re-set.
+    }
+
+    private void EnsureSliceGrid(float spacing, float extent)
+    {
+        if (_sliceVao != 0
+            && MathF.Abs(_sliceSpacing - spacing) < 1e-4f
+            && MathF.Abs(_sliceExtent - extent) < 1e-3f)
+            return;
+
+        if (_sliceVao != 0)
+        {
+            GL.DeleteVertexArray(_sliceVao);
+            GL.DeleteBuffer(_sliceVbo);
+            _sliceVao = _sliceVbo = _sliceCount = 0;
+        }
+
+        _sliceSpacing = spacing;
+        _sliceExtent  = extent;
+        var verts = BuildGridLines(spacing, extent);
+        _sliceCount = verts.Length / 3;
+        (_sliceVao, _sliceVbo) = UploadLineVerts(verts);
+    }
+
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -90,6 +154,11 @@ public sealed class GridRenderer : IDisposable
         GL.DeleteBuffer(_minorVbo);
         GL.DeleteVertexArray(_majorVao);
         GL.DeleteBuffer(_majorVbo);
+        if (_sliceVao != 0)
+        {
+            GL.DeleteVertexArray(_sliceVao);
+            GL.DeleteBuffer(_sliceVbo);
+        }
     }
 
     // -- Private builders ----------------------------------------------------

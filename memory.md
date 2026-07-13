@@ -1,6 +1,6 @@
-# MassiveSLICER V2 — Project Memory
+# MassiveSLICER V3 — Project Memory
 
-Last updated: 2026-07-04 (builds 1–30: crash fixes, bead renderer, Fixed/Dynamic wave, flow calibration, singularity auto-repair — see CHANGELOG.md)
+Last updated: 2026-07-12 (2D Slice Plane Viewer, edit-mode multipass, Target Support Selections, LFAM1 bed BASE align, ortho zoom clip fix)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -113,7 +113,8 @@ dotnet format
 
 | What | Path |
 |------|------|
-| Repo | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
+| Repo (this machine) | `/Users/thomboessel/MassiveSLICER V3` |
+| Repo (NAS historical) | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
 | GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
 | GitHub (mirror) | https://github.com/MattWhite3194/MassiveSlicer |
 | Milestone tag (2026-06-25) | `milestone/krl-import-viewport-polish-2026-06-25` @ `409e2e8` on `master`/`main` |
@@ -504,6 +505,91 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-12 — 2D Slice Plane Viewer + edit multipass + Target Support Selections
+
+**Scope:** Long iterative session on the **2D Slice Plane Viewer** (edit mode), multipass layer stack, navigation, selection, Formbound “Target Support Selections”, LFAM 1 bed BASE alignment, and ortho zoom clipping. Work tree: `/Users/thomboessel/MassiveSLICER V3`.
+
+#### 2D Slice Plane Viewer (edit mode only)
+
+| Item | Behavior / location |
+|------|---------------------|
+| Toggle | Layers-triple button under edit pencil (`ViewportOverlayView.axaml` → `IsSlicePlaneViewerActive`) |
+| Default ON | Entering paint edit in Preview sets `IsSlicePlaneViewerActive = true` (`ViewportViewModel.IsPaintEditOpen`) |
+| Session | Saved/restored via `WorkspaceUiSession.IsSlicePlaneViewerActive` (`.mass`) |
+| Camera | Top-down orthographic, elev **90°**, azimuth = rail-up then **−90°** (90° CCW on screen); no orbit |
+| Nav lock | Pan + zoom only: block orbit; right-drag pans; Space+LMB pan; trackpad no-mod = zoom not orbit |
+| Multipass draw | Current solid 2× width; below −1/60%, −2/30%, −3/17%; +1 dashed ~40% (`SceneRenderer.DrawSlicePlaneLayers`) |
+| Pick window | **Active layer only** (not −3…+1) — `GetPaintScrubMoveStart/Limit` |
+| Scene hide | Robot/env/solids hidden every frame; contact shadows off |
+| Grid | Subtle white measurement grid after toolpaths; blend on; spacing ≈ bead (not half-bead sheet) |
+| Layer follow | Scrub layers/timeline slides camera **Target** by layer-centroid delta; **Radius (zoom) preserved** |
+| Stats HUD | Left overlay: `SlicePlaneStatsHeader/Body/Below` via `SliceLayerAnalyzer` |
+| Workspace | Also: `ShowMultiPlanarPlanes` nullable in `WorkspaceUiSession` so Planes toggle persists |
+
+**Critical multipass bug fixed:** With edit open + scrub active + nothing selected, `SimRenderProgress` returned 0–1 and skipped multipass (`ToolpathSimProgress >= 0`). Multipass now always runs when `SlicePlaneViewerActive`; edit/slice force `SimRenderProgress = -1`.
+
+**Ortho zoom clip fixed:** Zoom used to shrink **eye distance** and frustum together → multiplanar Z span near-clipped. `OrbitCamera`: orthographic eye stays far (≥ 50 m); `Radius` only scales frustum; min ortho zoom 2 mm; depth window ±25 m around focus.
+
+**Key files:** `ViewportView.axaml.cs`, `ViewportViewModel.cs`, `ViewportOverlayView.axaml`, `SceneRenderer.cs`, `GridRenderer.cs`, `ToolpathRenderer.cs`, `OrbitCamera.cs`, `WorkspaceDocument.cs`, `WorkspaceService.cs`, `SliceLayerAnalyzer.cs`.
+
+#### Edit selection (2D slice)
+
+- Single click → short local section; **double-click** → full connected path (`ExpandFullConnectedPath`).
+- Slice Path mode: looser `ExpandLocalSection` (multiplanar gaps).
+- Esc deselect; selection list / MODIFICATIONS cards for Support/Remove Apply.
+
+#### Formbound — **Target Support Selections**
+
+- Checkbox under Formbound Bridge/Buttress: `LightningTargetSupportSelections` (UI label **Target Support Selections**).
+- **On:** skip all automatic geometric Formbound demand; only edit-mode **Support** paint (Bridge marks) drive support (`LightningPlanner` → `goto ManualDemandOnly`).
+- **Aggressive full-line coverage** when on:
+  - Dense Support dabs (~0.4× bead, along segments) in `MarkPickedSpanDabs`
+  - Wider `ProjectBridgeMarks` half-band (planar + angled slicers)
+  - Dense-resample painted run; multi-T columns along the line; faster bar growth; corbel reach ~8× bead; coverage audit + reseed; Bridge mode multi-finger along run
+- Prefs/settings: `SliceSettings`, `AppPreferences`, `AdditiveSettingsViewModel`, clone/load/save in `MainWindowViewModel`, reslice watchlist in `ViewportView.axaml.cs`.
+- Workflow: enable checkbox → select path(s) → Support/Apply → reslice. Re-apply Support after enabling aggressive density if marks were sparse.
+- Aggressive mode: **no mid-air births** — lower layers inherit + MaxStep extend only; corbel pads disabled; paint elbows forced wall→core.
+- **Target Support Selections isolation:** Formbound runs only when Formbound-style Support paint exists; layers without paint trees use **normal shells**; emit is `localSupportOnly` (no global fillet/island-weld/phantom drop; only Manual/PaintColumn trees notch). FILL PATTERN Formbound alone does **not** scar the whole part when this checkbox is on.
+
+#### Per-area support types + Tree Support (2026-07-12)
+
+- **`PaintSupportStyle`** on each Bridge mark: `FormboundButtress` | `FormboundBridge` | `Tree` (not only global FILL PATTERN).
+- Edit Apply / MODIFICATIONS **Support type** stamps style on marks; changing a card restamps **that** mod’s marks only.
+- Reslice **force-enables** Formbound/Tree from paint even when FILL PATTERN is None.
+- **Tree Support:** `Slicing/TreeSupport/*` — bed-rooted dual-wall branches, MaxStep growth, cluster branching; paint-only v1. Planar + Angled + Multi-Planar emit after shells/Formbound.
+- Bridge target UI hidden for Tree (roots to bed). Formbound still uses Target/foot.
+
+#### Console / diagnostics
+
+- `paint support` / `paint support layer` — evaluate edit selection or current-layer islands vs layer-below XY gap (`ConsoleCommandRegistry`).
+- Local control bridge `http://127.0.0.1:8723` for `viewset`, `tpdump`, `selection`, screenshots.
+
+#### LFAM 1 print bed / BASE marker
+
+| Concept | Meaning (LFAM 1) |
+|---------|------------------|
+| Mesh | `assets/cells/LFAM1/lfam1_bed.glb` placed at `bed.origin` |
+| Grid corner | `VisualGridCorner` → origin when no visual shift |
+| BASE marker | `BaseMarkerWorld` = robot + `baseData.XY`, **Z = origin.Z** |
+
+- Dev-mode translate of Print Bed writes **`bed.origin`** via `CellDevTransformSaver` / `SaveBedDevTransform` (often **Debug bin** cell path, not only repo assets).
+- Example move measured: origin **+130.3 X, +99.3 Y** (bin JSON); BASE does not follow bed drag unless `baseData` updated.
+- Aligned BASE to geometry: set `baseData.XY = origin.XY` (was +151.15 X offset historically from `1496.36` vs `1345.21`).
+- After user bed move, origin/baseData ~ `(1475.51, -609.30, …)` in assets + bin copies — reload cell after edit.
+
+**Bed files:** `assets/cells/LFAM1/lfam1.json`, `lfam1_bed.glb`; runtime may load `bin/Debug/net8.0/assets/cells/LFAM1/`.
+
+#### Planes toggle persistence
+
+- `WorkspaceUiSession.ShowMultiPlanarPlanes` (`bool?`) — capture/restore so Multi-Planar **Planes** overlay state survives `.mass` open; null on old files keeps default on.
+
+#### Practical notes for next session
+
+- 2D slice: multipass must not depend on outliner selection; scrub must be armed (`EnsureScrubArmedForEdit`).
+- Dev bed edits: verify both **repo** `assets/cells/...` and **bin** cell path; rebuild can overwrite bin from assets.
+- Target Support Selections: requires **Support Apply** marks, not bare selection alone.
+- GLSL: no non-ASCII in shader strings (premature EOF).
 
 ### 2026-07-04 — Curtain print failure countermeasures (builds 25–30)
 **Print failed mid-run: KUKA hit wrist singularity.** Root cause: KRL export wrote a frozen `A 0, B 90, C 0` orientation on every move — the exporter's gimbal-lock branch zeroed any TCP rotation for a straight-down tool.

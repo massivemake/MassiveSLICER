@@ -1121,27 +1121,88 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     private bool _lightningAnchorInterior = true;
-    /// <summary>Root fingers on interior boundaries (holes/inner walls — hidden notches).</summary>
+    private bool _lightningAnchorExterior;
+    private bool _lightningExteriorOverhangs;
+    private bool _lightningPreferInteriorMouths = true;
+
+    /// <summary>
+    /// Support inward overhangs / cavities / inner walls. Own tip budget.
+    /// Also enables interior mouth anchoring (notches hidden inside the part).
+    /// </summary>
+    public bool LightningAffectInterior
+    {
+        get => _lightningAnchorInterior;
+        set
+        {
+            if (!SetField(ref _lightningAnchorInterior, value)) return;
+            OnPropertyChanged(nameof(LightningAnchorInterior));
+        }
+    }
+
+    /// <summary>
+    /// Support outward flares / free edges (sacrificial exterior fins). Own tip budget,
+    /// independent of Interior — both may be on at once.
+    /// </summary>
+    public bool LightningAffectExterior
+    {
+        get => _lightningExteriorOverhangs;
+        set
+        {
+            if (!SetField(ref _lightningExteriorOverhangs, value)) return;
+            // Exterior demand uses exterior perimeter mouths.
+            if (SetField(ref _lightningAnchorExterior, value))
+                OnPropertyChanged(nameof(LightningAnchorExterior));
+            OnPropertyChanged(nameof(LightningExteriorOverhangs));
+        }
+    }
+
+    /// <summary>Persistence / planner: root fingers on interior boundaries.</summary>
     public bool LightningAnchorInterior
     {
         get => _lightningAnchorInterior;
-        set => SetField(ref _lightningAnchorInterior, value);
+        set
+        {
+            if (!SetField(ref _lightningAnchorInterior, value)) return;
+            OnPropertyChanged(nameof(LightningAffectInterior));
+        }
     }
 
-    private bool _lightningAnchorExterior = true;
-    /// <summary>Root fingers on the outer perimeter (notch visible outside).</summary>
+    /// <summary>Persistence / planner: root fingers on the outer perimeter.</summary>
     public bool LightningAnchorExterior
     {
         get => _lightningAnchorExterior;
-        set => SetField(ref _lightningAnchorExterior, value);
+        set
+        {
+            if (!SetField(ref _lightningAnchorExterior, value)) return;
+            // Keep exterior-affect demand in sync when loaded from prefs.
+            if (value && !_lightningExteriorOverhangs)
+            {
+                _lightningExteriorOverhangs = true;
+                OnPropertyChanged(nameof(LightningExteriorOverhangs));
+                OnPropertyChanged(nameof(LightningAffectExterior));
+            }
+            else if (!value && _lightningExteriorOverhangs && !_lightningAnchorInterior)
+            {
+                // exterior-only mode can leave AnchorExterior true; no force-off of demand
+            }
+            OnPropertyChanged(nameof(LightningAffectExterior));
+        }
     }
 
-    private bool _lightningExteriorOverhangs;
-    /// <summary>Grow sacrificial external fins under outward overhangs (cut away later).</summary>
+    /// <summary>Planner: grow sacrificial fins under outward overhangs.</summary>
     public bool LightningExteriorOverhangs
     {
         get => _lightningExteriorOverhangs;
-        set => SetField(ref _lightningExteriorOverhangs, value);
+        set
+        {
+            if (!SetField(ref _lightningExteriorOverhangs, value)) return;
+            if (value && !_lightningAnchorExterior)
+            {
+                _lightningAnchorExterior = true;
+                OnPropertyChanged(nameof(LightningAnchorExterior));
+            }
+            OnPropertyChanged(nameof(LightningAffectExterior));
+        }
     }
 
     private double _lightningButtressBarMm = 40.0;
@@ -1152,12 +1213,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _lightningButtressBarMm, Math.Clamp(value, 5.0, 500.0));
     }
 
-    private bool _lightningPreferInteriorMouths = true;
-    /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
+    /// <summary>Formbound Buttress: prefer interior mouths when Interior domain is enabled.</summary>
     public bool LightningPreferInteriorMouths
     {
         get => _lightningPreferInteriorMouths;
         set => SetField(ref _lightningPreferInteriorMouths, value);
+    }
+
+    private bool _lightningTargetSupportSelections;
+    /// <summary>
+    /// Formbound Bridge/Buttress: only place support under edit-mode Support
+    /// selections (painted Bridge marks). Disables automatic overhang detection.
+    /// </summary>
+    public bool LightningTargetSupportSelections
+    {
+        get => _lightningTargetSupportSelections;
+        set => SetField(ref _lightningTargetSupportSelections, value);
     }
 
     private double _infillSpacingMm = 0.0;

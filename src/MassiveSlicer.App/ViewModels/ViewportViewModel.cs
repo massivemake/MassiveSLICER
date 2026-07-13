@@ -1385,6 +1385,9 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintBoxSelectActive = false;
                 PaintHandActive = false;
                 PaintBridgePickModificationId = null;
+                // Slice plane viewer is edit-mode only.
+                if (_isSlicePlaneViewerActive)
+                    IsSlicePlaneViewerActive = false;
                 // Restore normal toolpath display when leaving edit.
                 ToolpathLineOpacity = 1f;
             }
@@ -1397,12 +1400,20 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintHandActive = false;
                 if (!string.Equals(PaintPickFilter, "All", StringComparison.OrdinalIgnoreCase))
                     PaintPickFilter = "All";
-                // Default support type for edit Apply; sync slice settings.
+                // Default support type for edit Apply only — do NOT overwrite the
+                // saved FILL PATTERN dropdown (that is restored from workspace prefs).
                 if (string.IsNullOrWhiteSpace(PaintSupportType))
                     PaintSupportType = "Formbound Buttress";
-                ApplyPaintSupportTypeToSettings();
                 // Path / Point granularity owns the display hierarchy while editing.
                 ApplyPaintEditDisplayMode();
+                // Arm the scrub/layer window so the LAYERS dual-slider has a real
+                // Maximum (otherwise it sticks at the empty 1–2 default).
+                OnEnsureEditScrub?.Invoke();
+                // Seed CREATE MODIFICATION catalog (search + Offset path, …).
+                EnsureCreateModificationCatalog();
+                // Layers-triple (2D slice plane) is on by default in edit mode.
+                // Session restore may override this immediately after.
+                IsSlicePlaneViewerActive = true;
             }
             RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
             // Edit mode borrows the Toolpath view's display profile (dark,
@@ -1418,10 +1429,160 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Notifies the right panel to swap workflow cards for edit-mode cards.</summary>
     internal Action<bool>? OnPaintEditModeChanged { get; set; }
 
+    /// <summary>
+    /// Viewport arms the scrub session / layer ends for the edit-mode LAYERS slider.
+    /// Without this the dual-slider stays at the empty 1–2 default when no toolpath
+    /// was previously selected.
+    /// </summary>
+    internal Action? OnEnsureEditScrub { get; set; }
+
     /// <summary>Closes paint edit mode (EXIT EDIT MODE floating card).</summary>
     public RelayCommand ExitPaintEditCommand => _exitPaintEdit ??= new RelayCommand(() =>
         IsPaintEditOpen = false);
     private RelayCommand? _exitPaintEdit;
+
+    // ── 2D Slice Plane Viewer (edit mode only) ───────────────────────────────
+
+    private bool _isSlicePlaneViewerActive;
+
+    /// <summary>
+    /// Top-down orthographic slice context: current layer solid, one layer below
+    /// transparent, one layer above transparent + dashed. Only meaningful while
+    /// <see cref="IsPaintEditOpen"/>; the overlay button is hidden outside edit mode.
+    /// </summary>
+    public bool IsSlicePlaneViewerActive
+    {
+        get => _isSlicePlaneViewerActive;
+        set
+        {
+            // Outside edit mode the viewer cannot stay on.
+            if (value && !IsPaintEditOpen) value = false;
+            if (!SetField(ref _isSlicePlaneViewerActive, value)) return;
+            OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+            RefreshSlicePlaneStats();
+            OnSlicePlaneViewerChanged?.Invoke(value);
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Camera lock / restore when the 2D slice plane viewer toggles.</summary>
+    internal Action<bool>? OnSlicePlaneViewerChanged { get; set; }
+
+    /// <summary>0-based layer index at the current scrub high handle.</summary>
+    internal int CurrentScrubLayerIndex => GetScrubLayerIndex();
+
+    /// <summary>Exclusive move-count ends per layer (prefix sums), or null.</summary>
+    internal int[]? ScrubLayerEnds => _scrubLayerEnds;
+
+    // ── 2D Slice Plane Viewer HUD stats ──────────────────────────────────────
+
+    /// <summary>True when the top-right slice stats panel should show.</summary>
+    public bool ShowSlicePlaneStatsOverlay =>
+        IsSlicePlaneViewerActive && IsPaintEditOpen && ActiveScrubToolpath is not null;
+
+    private string _slicePlaneStatsHeader = "";
+    public string SlicePlaneStatsHeader
+    {
+        get => _slicePlaneStatsHeader;
+        private set => SetField(ref _slicePlaneStatsHeader, value);
+    }
+
+    private string _slicePlaneStatsBody = "";
+    public string SlicePlaneStatsBody
+    {
+        get => _slicePlaneStatsBody;
+        private set => SetField(ref _slicePlaneStatsBody, value);
+    }
+
+    private string _slicePlaneStatsBelow = "";
+    public string SlicePlaneStatsBelow
+    {
+        get => _slicePlaneStatsBelow;
+        private set
+        {
+            if (!SetField(ref _slicePlaneStatsBelow, value)) return;
+            OnPropertyChanged(nameof(HasSlicePlaneStatsBelow));
+        }
+    }
+
+    public bool HasSlicePlaneStatsBelow => !string.IsNullOrEmpty(_slicePlaneStatsBelow);
+
+    /// <summary>
+    /// Rebuilds the 2D slice HUD from the active scrub toolpath and current layer.
+    /// Call when the slice viewer toggles, scrub layer changes, or toolpath updates.
+    /// </summary>
+    internal void RefreshSlicePlaneStats()
+    {
+        OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+        if (!ShowSlicePlaneStatsOverlay || ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            SlicePlaneStatsHeader = "";
+            SlicePlaneStatsBody = "";
+            SlicePlaneStatsBelow = "";
+            return;
+        }
+
+        float bead = (float)(AdditiveSettings?.BeadWidth ?? 6.0);
+        float height = (float)(AdditiveSettings?.LayerHeight ?? 3.0);
+        if (bead < 0.1f) bead = 6f;
+        if (height < 0.05f) height = 3f;
+        var rates = new MassiveSlicer.Core.Slicing.ToolpathMotionRates(
+            AdditiveSettings?.PrintSpeed ?? 60,
+            AdditiveSettings?.TravelSpeed ?? 600,
+            AdditiveSettings?.WipeSpeed ?? 60);
+
+        int cur = Math.Clamp(CurrentScrubLayerIndex, 0, tp.Layers.Count - 1);
+        var s = MassiveSlicer.Core.Slicing.SliceLayerAnalyzer.Analyze(
+            tp, cur, bead, height, rates);
+
+        SlicePlaneStatsHeader =
+            $"SLICE  L{s.LayerNumber} / {tp.Layers.Count}    Z {s.Z:0.#} mm";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Path length     {FmtLen(s.ExtrudeLengthMm)}");
+        sb.AppendLine($"  Travel        {FmtLen(s.TravelLengthMm)}");
+        if (s.LightningLengthMm > 0.5)
+            sb.AppendLine($"  Formbound     {FmtLen(s.LightningLengthMm)}  ({s.FormboundPercent:0.#}%)");
+        if (s.WipeLengthMm > 0.5)
+            sb.AppendLine($"  Wipe          {FmtLen(s.WipeLengthMm)}");
+        sb.AppendLine($"Islands         {s.Islands}   ({s.ClosedLoops} closed · {s.OpenPaths} open)");
+        sb.AppendLine($"Moves           {s.ExtrudeMoves:N0} extrude · {s.TravelMoves:N0} travel");
+        if (cur > 0)
+            sb.AppendLine($"Overhang        {s.OverhangPercent:0.#}%   ({FmtLen(s.OverhangLengthMm)})");
+        else
+            sb.AppendLine("Overhang        —  (first layer)");
+        sb.AppendLine($"Est. time       {MassiveSlicer.Core.Slicing.ToolpathStatistics.FormatDuration(s.EstTimeSeconds)}");
+        sb.AppendLine($"Volume          {FmtVol(s.VolumeMm3)}");
+        if (s.BoundsWidthMm > 0 || s.BoundsDepthMm > 0)
+            sb.AppendLine($"Bounds          {s.BoundsWidthMm:0.#} × {s.BoundsDepthMm:0.#} mm");
+        if (s.BoundsHeightSpanMm > 0.5f)
+            sb.AppendLine($"Z span          {s.BoundsHeightSpanMm:0.#} mm");
+        SlicePlaneStatsBody = sb.ToString().TrimEnd();
+
+        // Compact readout for the three layers below (context in the 2D view).
+        var below = new System.Text.StringBuilder();
+        for (int d = 1; d <= 3; d++)
+        {
+            int li = cur - d;
+            if (li < 0) break;
+            var b = MassiveSlicer.Core.Slicing.SliceLayerAnalyzer.Analyze(
+                tp, li, bead, height, rates);
+            string oh = li > 0 ? $"{b.OverhangPercent:0.#}% OH" : "base";
+            below.AppendLine(
+                $"L{b.LayerNumber}  {FmtLen(b.ExtrudeLengthMm)}  ·  {b.Islands} isl  ·  {oh}");
+        }
+        SlicePlaneStatsBelow = below.Length > 0
+            ? "BELOW\n" + below.ToString().TrimEnd()
+            : "";
+    }
+
+    private static string FmtLen(double mm)
+        => MassiveSlicer.Core.Slicing.ToolpathStatistics.FormatCutLength(mm);
+
+    private static string FmtVol(double mm3)
+        => mm3 >= 1_000_000 ? $"{mm3 / 1_000_000.0:0.###} L"
+            : mm3 >= 1000 ? $"{mm3 / 1000.0:0.#} cm³"
+            : $"{mm3:0} mm³";
 
     /// <summary>
     /// Path granularity → centre-line only (no fat beads) unless
@@ -1749,6 +1910,7 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action<Guid>? OnPaintModificationClearBridgeRequested;
     internal Action<Guid>? OnPaintModificationToggleExpandRequested;
     internal Action<Guid, string>? OnPaintModificationSupportTypeChanged;
+    internal Action<Guid, string>? OnPaintModificationSupportSideChanged;
 
     public RelayCommand ClearPaintModificationsCommand => _clearPaintMods ??= new RelayCommand(() =>
         OnPaintModificationsClearRequested?.Invoke());
@@ -1758,6 +1920,7 @@ public sealed class ViewportViewModel : ViewModelBase
     internal readonly record struct PaintModRow(
         Guid Id,
         bool IsSupport,
+        bool IsOffset,
         string Title,
         string Detail,
         string AnchorSummary,
@@ -1766,7 +1929,8 @@ public sealed class ViewportViewModel : ViewModelBase
         int ScaffoldLayerCount,
         int ScaffoldMarkCount,
         bool KeepExpanded,
-        string SupportType);
+        string SupportType,
+        string SupportSide);
 
     internal void SetPaintModifications(IReadOnlyList<PaintModRow> rows)
     {
@@ -1784,7 +1948,8 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 Id = id,
                 IsSupport = r.IsSupport,
-                KindLabel = r.IsSupport ? "Support" : "Remove",
+                IsOffset = r.IsOffset,
+                KindLabel = r.IsOffset ? "Offset" : r.IsSupport ? "Support" : "Remove",
                 Title = r.Title,
                 Detail = r.Detail,
                 AnchorSummary = r.AnchorSummary,
@@ -1803,12 +1968,17 @@ public sealed class ViewportViewModel : ViewModelBase
                 ClearBridgeTargetCommand = new RelayCommand(() =>
                     OnPaintModificationClearBridgeRequested?.Invoke(id)),
             };
-            // Init type first, then wire change handler (avoids apply-on-rebuild).
+            // Init type/side first, then wire change handlers (avoids apply-on-rebuild).
             item.SupportType = string.IsNullOrWhiteSpace(r.SupportType)
                 ? "Formbound Buttress"
                 : r.SupportType;
+            item.SupportSide = string.IsNullOrWhiteSpace(r.SupportSide)
+                ? Core.Models.PaintSupportSideUtil.LabelInside
+                : r.SupportSide;
             item.SupportTypeChanged = (modId, type) =>
                 OnPaintModificationSupportTypeChanged?.Invoke(modId, type);
+            item.SupportSideChanged = (modId, side) =>
+                OnPaintModificationSupportSideChanged?.Invoke(modId, side);
             PaintModifications.Add(item);
         }
         OnPropertyChanged(nameof(HasPaintModifications));
@@ -1843,10 +2013,127 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasPaintSelection));
         OnPropertyChanged(nameof(PaintActiveSelectionSummary));
         ApplyPaintModificationCommand.RaiseCanExecuteChanged();
+        ApplyCreateModificationCommand.RaiseCanExecuteChanged();
+        RefreshSupportBridgeEstimate();
     }
 
     /// <summary>Viewport removes one entry identified by layer + span.</summary>
     internal Action<int, int, int>? OnPaintDeselectItemRequested;
+
+    // ── Support-bridge proximity helper (SELECTION sidebar, Mode = Support) ──
+
+    private string _supportBridgeSummary = "";
+    /// <summary>Short line: layers needed / gap / already supported.</summary>
+    public string SupportBridgeSummary
+    {
+        get => _supportBridgeSummary;
+        private set => SetField(ref _supportBridgeSummary, value);
+    }
+
+    private string _supportBridgeDetail = "";
+    /// <summary>Longer MaxStep / angle / sample explanation.</summary>
+    public string SupportBridgeDetail
+    {
+        get => _supportBridgeDetail;
+        private set => SetField(ref _supportBridgeDetail, value);
+    }
+
+    private int _supportBridgeLayers;
+    public int SupportBridgeLayers
+    {
+        get => _supportBridgeLayers;
+        private set => SetField(ref _supportBridgeLayers, value);
+    }
+
+    private float _supportBridgeGapMm;
+    public float SupportBridgeGapMm
+    {
+        get => _supportBridgeGapMm;
+        private set => SetField(ref _supportBridgeGapMm, value);
+    }
+
+    private float _supportBridgeMaxStepMm;
+    public float SupportBridgeMaxStepMm
+    {
+        get => _supportBridgeMaxStepMm;
+        private set => SetField(ref _supportBridgeMaxStepMm, value);
+    }
+
+    private float _supportBridgeOverhangDeg = 30f;
+    public float SupportBridgeOverhangDeg
+    {
+        get => _supportBridgeOverhangDeg;
+        private set => SetField(ref _supportBridgeOverhangDeg, value);
+    }
+
+    private bool _supportBridgeAlreadyOk;
+    public bool SupportBridgeAlreadyOk
+    {
+        get => _supportBridgeAlreadyOk;
+        private set => SetField(ref _supportBridgeAlreadyOk, value);
+    }
+
+    private string _supportBridgeGapStepLabel = "";
+    /// <summary>e.g. "4.2 / 1.73 mm" (max gap / MaxStep).</summary>
+    public string SupportBridgeGapStepLabel
+    {
+        get => _supportBridgeGapStepLabel;
+        private set => SetField(ref _supportBridgeGapStepLabel, value);
+    }
+
+    /// <summary>Show the bridge helper when Mode=Support and something is selected.</summary>
+    public bool ShowSupportBridgeHelper =>
+        ShowPaintSupportTypePicker && HasPaintSelection && !string.IsNullOrEmpty(SupportBridgeSummary);
+
+    /// <summary>
+    /// From the current edit selection, estimate how many layers of steppable
+    /// support (at the Formbound overhang angle, default 30°) are needed to bridge
+    /// down to solid geometry or the bed.
+    /// </summary>
+    public void RefreshSupportBridgeEstimate()
+    {
+        if (!ShowPaintSupportTypePicker || PaintSelectionItems.Count == 0
+            || ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            SupportBridgeSummary = "";
+            SupportBridgeDetail = "";
+            SupportBridgeGapStepLabel = "";
+            SupportBridgeLayers = 0;
+            SupportBridgeGapMm = 0;
+            SupportBridgeAlreadyOk = false;
+            OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+            return;
+        }
+
+        float layerH = (float)(AdditiveSettings?.LayerHeight ?? 3.0);
+        if (layerH < 0.1f) layerH = 3f;
+        float bead = (float)(AdditiveSettings?.BeadWidth ?? 6.0);
+        if (bead < 0.5f) bead = 6f;
+        float deg = (float)(AdditiveSettings?.LightningOverhangDeg ?? 30.0);
+        if (deg < 5f) deg = 30f;
+
+        var spans = new List<(int, int, int)>(PaintSelectionItems.Count);
+        foreach (var item in PaintSelectionItems)
+            spans.Add((item.LayerIndex, item.MoveStart, item.MoveCount));
+
+        // Tree Support is bed-rooted — never stop the estimate at a mid-air solid plane.
+        bool toBed = Core.Models.PaintSupportStyleUtil.IsTree(
+            Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType));
+
+        var r = MassiveSlicer.Core.Slicing.SupportBridgeEstimate.Compute(
+            tp, spans, layerH, bead, overhangDeg: deg, capMaxStepToHalfBead: true,
+            toBedFoundation: toBed);
+
+        SupportBridgeSummary = r.Summary;
+        SupportBridgeDetail = r.Detail;
+        SupportBridgeLayers = r.LayersRequired;
+        SupportBridgeGapMm = r.MaxGapMm;
+        SupportBridgeMaxStepMm = r.MaxStepMm;
+        SupportBridgeOverhangDeg = r.OverhangDeg;
+        SupportBridgeAlreadyOk = r.AlreadySupported;
+        SupportBridgeGapStepLabel = $"{r.MaxGapMm:0.#} / {r.MaxStepMm:0.##} mm";
+        OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+    }
 
     private string _paintSelectGranularity = "Path";
     /// <summary>Selection granularity: "Path" picks a whole contour section per
@@ -1897,48 +2184,67 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (!SetField(ref _paintModificationMode, value ?? "Support")) return;
             OnPropertyChanged(nameof(ShowPaintSupportTypePicker));
+            OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+            RefreshSupportBridgeEstimate();
         }
     }
 
     /// <summary>
-    /// Support strategy used when Mode = Support. Applied to additive infill so
-    /// Reslice grows the right Formbound style. Default: Formbound Buttress (T-column).
+    /// Support strategy used when Mode = Support. Stored per applied modification
+    /// (and on each Bridge mark). Default: Formbound Buttress (T-column).
     /// </summary>
     public string[] PaintSupportTypeOptions { get; } =
-        ["Formbound Buttress", "Formbound Bridge"];
+        Core.Models.PaintSupportStyleUtil.AllLabels;
 
-    private string _paintSupportType = "Formbound Buttress";
+    private string _paintSupportType = Core.Models.PaintSupportStyleUtil.LabelButtress;
     public string PaintSupportType
     {
         get => _paintSupportType;
         set
         {
-            var v = value is "Formbound Bridge" ? "Formbound Bridge" : "Formbound Buttress";
+            var v = Core.Models.PaintSupportStyleUtil.ToLabel(
+                Core.Models.PaintSupportStyleUtil.FromLabel(value));
             if (!SetField(ref _paintSupportType, v)) return;
-            ApplyPaintSupportTypeToSettings();
+            // Do not overwrite FILL PATTERN here — that is a separate saved setting.
+            // Explicit Support Apply may soft-sync via ApplyPaintSupportTypeToSettings.
+            // Tree vs Formbound changes how the bridge estimate counts (bed vs plane).
+            RefreshSupportBridgeEstimate();
         }
     }
 
     public bool ShowPaintSupportTypePicker =>
         string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Push the SELECTION support-type choice into slice settings.</summary>
+    /// <summary>
+    /// Soft-push the SELECTION support-type into FILL PATTERN only when the user
+    /// is explicitly applying Formbound Support and FILL PATTERN is still None.
+    /// Never clobbers a user-chosen Grid/None/etc. that was restored from a workspace.
+    /// With Target Support Selections on, Formbound is paint-driven — leave dropdown alone.
+    /// </summary>
     public void ApplyPaintSupportTypeToSettings()
     {
         if (AdditiveSettings is null) return;
-        // Always push when Mode = Support. Also push when Bridge paint marks exist
-        // even if Mode was left on something else — otherwise Reslice bakes shells
-        // with InfillPattern=None and the buttress never appears.
+        if (AdditiveSettings.LightningTargetSupportSelections)
+            return; // paint marks drive Formbound; FILL PATTERN is independent
+
         bool supportMode = string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
         bool hasBridgePaint = AdditiveSettings.PaintMarks.Any(m =>
             m.Kind == Core.Models.PaintMarkKind.Bridge);
         if (!supportMode && !hasBridgePaint) return;
-        AdditiveSettings.InfillPattern = string.IsNullOrWhiteSpace(PaintSupportType)
-            ? "Formbound Buttress"
-            : PaintSupportType;
+
+        var style = Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType);
+        if (Core.Models.PaintSupportStyleUtil.IsTree(style))
+            return; // Tree is paint-only; leave FILL PATTERN alone.
+
+        // Only seed Formbound when the user has not chosen another fill yet.
+        var cur = AdditiveSettings.InfillPattern ?? "None";
+        if (cur is not ("None" or "" or "Formbound Buttress" or "Formbound Bridge" or "Lightning Bridge"))
+            return;
+
+        AdditiveSettings.InfillPattern = Core.Models.PaintSupportStyleUtil.ToLabel(style);
     }
 
-    /// <summary>Summary for ACTIVE SELECTION (e.g. layer numbers).</summary>
+    /// <summary>Summary for ACTIVE SELECTION (e.g. layer numbers). Multi-select = group.</summary>
     public string PaintActiveSelectionSummary
     {
         get
@@ -1948,9 +2254,11 @@ public sealed class ViewportViewModel : ViewModelBase
             if (PaintSelectionItems.Count == 1)
                 return PaintSelectionItems[0].Title;
             var layers = PaintSelectionItems.Select(i => i.LayerNumber).Distinct().OrderBy(n => n).ToList();
-            if (layers.Count <= 4)
-                return $"{PaintSelectionCount} items · layers {string.Join(", ", layers)}";
-            return $"{PaintSelectionCount} items · layers {layers.First()}…{layers.Last()}";
+            string layerTxt = layers.Count <= 4
+                ? string.Join(", ", layers)
+                : $"{layers.First()}…{layers.Last()}";
+            // Shift multi-select is one Apply group on the MODIFICATIONS panel.
+            return $"Group · {PaintSelectionCount} paths · layers {layerTxt}";
         }
     }
 
@@ -2025,6 +2333,187 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ApplyRemoveSelectionCommand => _applyRemoveSel ??= new RelayCommand(() =>
         OnPaintApplyRequested?.Invoke(false));
     private RelayCommand? _applyRemoveSel;
+
+    // ── CREATE MODIFICATION catalog (search + Offset path, …) ────────────────
+
+    /// <summary>Full catalog of edit-mode operations (search filters this).</summary>
+    public ObservableCollection<CreateModificationItem> CreateModificationCatalog { get; } = new();
+
+    /// <summary>Search-filtered operations bound to the CREATE MODIFICATION list.</summary>
+    public ObservableCollection<CreateModificationItem> FilteredCreateModifications { get; } = new();
+
+    private string _createModificationSearch = "";
+    /// <summary>Filter text for the CREATE MODIFICATION search bar.</summary>
+    public string CreateModificationSearch
+    {
+        get => _createModificationSearch;
+        set
+        {
+            if (!SetField(ref _createModificationSearch, value ?? "")) return;
+            RefreshFilteredCreateModifications();
+        }
+    }
+
+    private string? _selectedCreateModificationId;
+    public string? SelectedCreateModificationId
+    {
+        get => _selectedCreateModificationId;
+        set
+        {
+            if (!SetField(ref _selectedCreateModificationId, value)) return;
+            foreach (var item in CreateModificationCatalog)
+                item.IsSelected = string.Equals(item.Id, value, StringComparison.Ordinal);
+            OnPropertyChanged(nameof(ShowOffsetPathSettings));
+            OnPropertyChanged(nameof(ShowCreateModSettings));
+            OnPropertyChanged(nameof(SelectedCreateModificationTitle));
+            ApplyCreateModificationCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool ShowCreateModSettings => !string.IsNullOrEmpty(SelectedCreateModificationId)
+        && CreateModificationCatalog.Any(c =>
+            c.Id == SelectedCreateModificationId && c.IsAvailable);
+
+    public bool ShowOffsetPathSettings =>
+        string.Equals(SelectedCreateModificationId, "offset", StringComparison.OrdinalIgnoreCase);
+
+    public string SelectedCreateModificationTitle =>
+        CreateModificationCatalog.FirstOrDefault(c => c.Id == SelectedCreateModificationId)?.Title
+        ?? "OPERATION";
+
+    // Offset path settings (AiBuild-style)
+    private double _offsetDistanceMm = -1.0;
+    public double OffsetDistanceMm
+    {
+        get => _offsetDistanceMm;
+        set => SetField(ref _offsetDistanceMm, value);
+    }
+
+    public string[] OffsetJoinTypeOptions { get; } = ["Miter", "Round", "Square"];
+    private string _offsetJoinType = "Miter";
+    public string OffsetJoinType
+    {
+        get => _offsetJoinType;
+        set => SetField(ref _offsetJoinType, value ?? "Miter");
+    }
+
+    public string[] OffsetModeOptions { get; } = ["Add offsets"];
+    private string _offsetMode = "Add offsets";
+    public string OffsetMode
+    {
+        get => _offsetMode;
+        set => SetField(ref _offsetMode, value ?? "Add offsets");
+    }
+
+    private int _offsetCount = 1;
+    public int OffsetCount
+    {
+        get => _offsetCount;
+        set => SetField(ref _offsetCount, Math.Clamp(value, 1, 32));
+    }
+
+    public string[] OffsetSideOptions { get; } = ["Both", "Left", "Right"];
+    private string _offsetSide = "Both";
+    public string OffsetSide
+    {
+        get => _offsetSide;
+        set => SetField(ref _offsetSide, value ?? "Both");
+    }
+
+    public RelayCommand<string> SelectCreateModificationCommand =>
+        _selectCreateMod ??= new RelayCommand<string>(id =>
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            var item = CreateModificationCatalog.FirstOrDefault(c => c.Id == id);
+            if (item is null || !item.IsAvailable) return;
+            SelectedCreateModificationId =
+                string.Equals(SelectedCreateModificationId, id, StringComparison.Ordinal)
+                    ? null
+                    : id;
+        });
+    private RelayCommand<string>? _selectCreateMod;
+
+    public RelayCommand CancelCreateModificationCommand => _cancelCreateMod ??= new RelayCommand(() =>
+        SelectedCreateModificationId = null);
+    private RelayCommand? _cancelCreateMod;
+
+    public RelayCommand ApplyCreateModificationCommand => _applyCreateMod ??= new RelayCommand(() =>
+    {
+        if (ShowOffsetPathSettings)
+            OnApplyOffsetPathRequested?.Invoke();
+    }, () => ShowOffsetPathSettings && HasPaintSelection);
+    private RelayCommand? _applyCreateMod;
+
+    public RelayCommand<string> NudgeOffsetCountCommand => _nudgeOffsetCount ??= new RelayCommand<string>(delta =>
+    {
+        if (!int.TryParse(delta, out int d)) return;
+        OffsetCount = OffsetCount + d;
+    });
+    private RelayCommand<string>? _nudgeOffsetCount;
+
+    /// <summary>Viewport applies Offset path to the current selection.</summary>
+    internal Action? OnApplyOffsetPathRequested { get; set; }
+
+    private void EnsureCreateModificationCatalog()
+    {
+        if (CreateModificationCatalog.Count > 0) return;
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "offset",
+            Title = "Offset path",
+            Description = "Creates parallel copies of existing toolpaths.",
+            Icon = "mdi-vector-polyline",
+            IsAvailable = true,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "chamfer",
+            Title = "Chamfer",
+            Description = "Bevel sharp corners on selected paths.",
+            Icon = "mdi-angle-acute",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "clip-plane",
+            Title = "Clip by plane",
+            Description = "Trim paths with a cutting plane.",
+            Icon = "mdi-scissors-cutting",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "clip-sketch",
+            Title = "Clip with sketch",
+            Description = "Trim paths using a sketch boundary.",
+            Icon = "mdi-vector-curve",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "cut-point",
+            Title = "Cut at point",
+            Description = "Split a path at a chosen point.",
+            Icon = "mdi-content-cut",
+            IsAvailable = false,
+        });
+        RefreshFilteredCreateModifications();
+    }
+
+    private void RefreshFilteredCreateModifications()
+    {
+        EnsureCreateModificationCatalog();
+        string q = (CreateModificationSearch ?? "").Trim();
+        FilteredCreateModifications.Clear();
+        foreach (var item in CreateModificationCatalog)
+        {
+            if (q.Length == 0
+                || item.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || item.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || item.Id.Contains(q, StringComparison.OrdinalIgnoreCase))
+                FilteredCreateModifications.Add(item);
+        }
+    }
 
     /// <summary>Re-slices NOW with the accumulated paint edits, keeping the edit
     /// menu open and auto-slice paused afterwards.</summary>
@@ -2517,6 +3006,9 @@ public sealed class ViewportViewModel : ViewModelBase
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected || _isScrubSessionActive)
                     OnScrubIkRequested?.Invoke(clamped);
+                // 2D slice HUD tracks the active layer.
+                if (_isSlicePlaneViewerActive)
+                    RefreshSlicePlaneStats();
                 // Always repaint: the IK callback only repaints on a successful solve,
                 // so without this the viewport freezes when scrubbing through
                 // unreachable poses.
@@ -2661,6 +3153,72 @@ public sealed class ViewportViewModel : ViewModelBase
         return lo;
     }
 
+    /// <summary>
+    /// Step the toolpath view by one layer. <paramref name="delta"/> +1 = next layer
+    /// (higher), −1 = previous layer (lower). Used by Preview ↑/↓ arrow keys.
+    /// Returns true when the scrub position changed.
+    /// </summary>
+    public bool StepScrubLayer(int delta)
+    {
+        if (delta == 0) return false;
+        if (ActiveScrubToolpath is not { Layers.Count: > 0 }) return false;
+        // Ensure layer ends are available (scrub session may not have rebuilt yet).
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            RebuildScrubLayerEnds(ActiveScrubToolpath);
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return false;
+
+        int n = _scrubLayerEnds.Length;
+        int cur = GetScrubLayerIndex(); // 0-based
+        int next = Math.Clamp(cur + delta, 0, n - 1);
+        if (next == cur && ToolpathScrubIndex == _scrubLayerEnds[next])
+            return false;
+
+        // Show through the end of the target layer (exclusive end move index).
+        ToolpathScrubIndex = _scrubLayerEnds[next];
+        return true;
+    }
+
+    /// <summary>
+    /// Jump the timeline / LAYERS dual-slider so the active (high) handle is on
+    /// <paramref name="layerIndex0Hi"/> (0-based). The low handle stays at layer 1
+    /// so bed foundation and all layers below the selection remain visible —
+    /// never raise the low handle to the selection (that hid layers 1…N−1 in 2D/3D).
+    /// </summary>
+    public void FocusScrubOnLayers(int layerIndex0Lo, int layerIndex0Hi)
+    {
+        if (ActiveScrubToolpath is not { Layers.Count: > 0 } tp) return;
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            RebuildScrubLayerEnds(tp);
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+
+        int n = _scrubLayerEnds.Length;
+        int hi = Math.Clamp(Math.Max(layerIndex0Lo, layerIndex0Hi), 0, n - 1);
+
+        // Keep scrub session live so the dual-slider / timeline stays armed.
+        if (!_isScrubSessionActive)
+            IsScrubSessionActive = true;
+
+        // High = end of focus layer (current slice / scrub position).
+        // Low = always layer 1 (move 0) so tree foundation and early layers stay drawn.
+        int newHigh = _scrubLayerEnds[hi];
+        if (newHigh <= 0)
+            newHigh = Math.Min(_toolpathScrubMax, 1);
+
+        ToolpathScrubIndex = newHigh;
+        ToolpathScrubLowIndex = 0;
+
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Jump scrub high handle to a single layer (0-based); low stays at bed.</summary>
+    public void FocusScrubOnLayer(int layerIndex0) =>
+        FocusScrubOnLayers(layerIndex0, layerIndex0);
+
     private void RebuildScrubLayerEnds(Toolpath? toolpath)
     {
         if (toolpath is null || toolpath.Layers.Count == 0)
@@ -2757,6 +3315,8 @@ public sealed class ViewportViewModel : ViewModelBase
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
     }
 
     /// <summary>
@@ -2788,14 +3348,21 @@ public sealed class ViewportViewModel : ViewModelBase
         if (toolpath is null || _toolpathScrubMax <= 0)
             index = 0;
         else if (preservePosition)
+        {
             index = Math.Clamp(previous, 0, _toolpathScrubMax);
+            // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
+            // blank window when the path has content (common after re-arming edit scrub
+            // with a stale default index of 0).
+            if (index <= 0)
+                index = _toolpathScrubMax;
+        }
         else
             index = _toolpathScrubMax; // historical: land at end of path on first select
 
         _toolpathScrubIndex = index;
         _toolpathScrubText  = index.ToString();
         // Full stack on first select: low at bed, high at top layer.
-        if (!preservePosition || toolpath is null)
+        if (!preservePosition || toolpath is null || index <= 0)
             _toolpathScrubLowIndex = 0;
         else if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
             _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
@@ -2811,6 +3378,8 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
     }
 
     /// <summary>
@@ -3410,6 +3979,9 @@ public sealed class ViewportViewModel : ViewModelBase
         get
         {
             if (_simRecording || ShowSimTimeline) return (float)(_simTimelinePercent / 100.0);
+            // Edit mode + 2D slice use dual-slider / multi-pass windows — never the
+            // sim-progress override (it was blanking multipass when nothing is selected).
+            if (IsPaintEditOpen || _isSlicePlaneViewerActive) return -1f;
             if (_viewMode == "Preview" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
                 return (float)_toolpathScrubIndex / _toolpathScrubMax;
             return -1f;
@@ -4515,6 +5087,11 @@ public sealed class ViewportViewModel : ViewModelBase
         if (!string.IsNullOrWhiteSpace(session.ViewMode))
             ViewMode = session.ViewMode;
 
+        // Multi-Planar Planes toggle — only apply when the workspace actually saved it
+        // (null = older .mass → keep default on).
+        if (session.ShowMultiPlanarPlanes is bool showPlanes)
+            ShowMultiPlanarPlanes = showPlanes;
+
         if (!string.IsNullOrWhiteSpace(session.PaintSelectGranularity))
             PaintSelectGranularity = session.PaintSelectGranularity;
         if (!string.IsNullOrWhiteSpace(session.PaintPickFilter))
@@ -4556,8 +5133,18 @@ public sealed class ViewportViewModel : ViewModelBase
                 PaintLineRemoveActive = true;
             // else: path-select is the implicit default when no other tool is armed
 
-            ApplyPaintSupportTypeToSettings();
+            // Do not call ApplyPaintSupportTypeToSettings here — that would overwrite
+            // the workspace-restored FILL PATTERN with the edit Support type.
             ApplyPaintEditDisplayMode();
+
+            // 2D Slice Plane Viewer — after edit is open so the toggle is allowed.
+            IsSlicePlaneViewerActive = session.IsSlicePlaneViewerActive;
+            if (session.IsSlicePlaneViewerActive)
+                RefreshSlicePlaneStats();
+        }
+        else
+        {
+            IsSlicePlaneViewerActive = false;
         }
 
         // MODIFICATIONS list — after toolpath is armed (caller may re-invoke with layers ready).
@@ -5038,6 +5625,17 @@ public sealed class ViewportViewModel : ViewModelBase
             _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
             (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
         }
+    }
+
+    /// <summary>
+    /// Syncs Robot Root / Pedestal / Arm outliner eye state from the live scene nodes
+    /// (e.g. after 2D slice view temporarily hides the robot).
+    /// </summary>
+    internal void RefreshRobotOutlinerVisibilityFromScene()
+    {
+        _robotGroupItem?.NotifyVisibilityFromScene();
+        _robotPedestalItem?.NotifyVisibilityFromScene();
+        _robotArmItem?.NotifyVisibilityFromScene();
     }
 
     /// <summary>

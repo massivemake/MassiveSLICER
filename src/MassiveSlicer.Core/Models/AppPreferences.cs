@@ -184,6 +184,12 @@ public sealed class AppPreferences
     /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
     public bool LightningPreferInteriorMouths { get; set; } = true;
 
+    /// <summary>
+    /// Formbound Bridge/Buttress: only grow support under edit-mode Support
+    /// selections (skip automatic overhang detection).
+    /// </summary>
+    public bool LightningTargetSupportSelections { get; set; }
+
     /// <summary>Multi-Planar guide planes as [heightPct, angleDeg] pairs.</summary>
     public List<double[]> MultiPlanarPlanes { get; set; } =
         [[0, 0], [50, 15], [100, 30]];

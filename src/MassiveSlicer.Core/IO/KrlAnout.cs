@@ -36,17 +36,46 @@ public static class KrlAnout
 
     /// <summary>
     /// Extruder RPM channel 4 from motor speed percentage:
-    /// <c>$ANOUT[4] = RPM% ÷ 100</c> (50 % → <c>0.5</c>).
+    /// <c>$ANOUT[4] = RPM% ÷ 100</c>, then <see cref="RoundAnout4UpToPercent"/>
+    /// so the machine only sees whole-percent steps (1–100 %).
     /// </summary>
     public static float RpmPercentToAnout(float rpmPercent)
     {
-        float v = rpmPercent / 100f;
-        return Math.Max(0f, v);
+        if (rpmPercent <= 0f) return 0f;
+        return RoundAnout4UpToPercent(rpmPercent / 100f);
     }
 
-    /// <summary>KRL literal for an RPM <c>$ANOUT[4]</c> value.</summary>
+    /// <summary>
+    /// Round a raw <c>$ANOUT[4]</c> extrusion value <b>up</b> to the next whole percent
+    /// (0.01 steps). Prefers slight overextrusion over underextrusion — the motor only
+    /// accepts 1–100 % resolution.
+    /// <list type="bullet">
+    /// <item><c>0.0203</c> → <c>0.03</c></item>
+    /// <item><c>0.0303</c> → <c>0.04</c></item>
+    /// <item><c>0.03</c> exact → <c>0.03</c></item>
+    /// <item><c>0</c> stays <c>0</c> (extruder off / travel)</item>
+    /// </list>
+    /// </summary>
+    public static float RoundAnout4UpToPercent(float anout)
+    {
+        if (anout <= 0f) return 0f;
+        // Ceiling to 0.01. Epsilon keeps exact whole percents (0.50, 0.03) from
+        // float-noise-bumping to the next step (0.51 / 0.04).
+        float percent = MathF.Ceiling(anout * 100f - 1e-4f);
+        percent = Math.Clamp(percent, 1f, 100f);
+        return percent / 100f;
+    }
+
+    /// <summary>KRL literal for an RPM <c>$ANOUT[4]</c> value (always two decimals, e.g. <c>0.03</c>).</summary>
     public static string RpmPercentToAnoutText(float rpmPercent)
-        => RpmPercentToAnout(rpmPercent).ToString("0.####", Inv);
+        => FormatAnout4(RpmPercentToAnout(rpmPercent));
+
+    /// <summary>KRL literal for a normalized <c>$ANOUT[4]</c> value after percent ceiling.</summary>
+    public static string FormatAnout4(float anout)
+    {
+        if (anout <= 0f) return "0.00";
+        return RoundAnout4UpToPercent(anout).ToString("0.00", Inv);
+    }
 
     /// <summary>
     /// Motor RPM percentage from bead geometry, print speed, and material <see cref="Models.MaterialPreset.FlowRate"/>.

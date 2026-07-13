@@ -527,10 +527,10 @@ public sealed class LightningBridgeTest
     [Fact]
     public void AnchorClassCheckboxesControlWhereFingersRoot()
     {
-        // Shrinking square (demand every layer) with a fixed centered hole: with
-        // interior-only anchoring every tree roots on the hole boundary; with
-        // exterior-only, on the outer square.
-        List<List<List<Vector2>>> Polys()
+        // Affect Interior: inward demand roots on the hole. Affect Exterior: outward
+        // flares root on the outer perimeter (sacrificial). Separate domains — exterior
+        // does not require interior to be on.
+        List<List<List<Vector2>>> ShrinkingWithHole()
         {
             var layers = new List<List<List<Vector2>>>();
             for (int i = 0; i < 8; i++)
@@ -538,25 +538,41 @@ public sealed class LightningBridgeTest
                 float h = 90f - i * 6f;
                 layers.Add(
                 [
-                    [new(-h, -h), new(h, -h), new(h, h), new(-h, h)],                     // outer CCW
-                    [new(-20f, -20f), new(-20f, 20f), new(20f, 20f), new(20f, -20f)],     // hole CW
+                    [new(-h, -h), new(h, -h), new(h, h), new(-h, h)],
+                    [new(-20f, -20f), new(-20f, 20f), new(20f, 20f), new(20f, -20f)],
+                ]);
+            }
+            return layers;
+        }
+        // Expanding outer square (outward flare) — exterior-domain demand.
+        List<List<List<Vector2>>> ExpandingOuter()
+        {
+            var layers = new List<List<List<Vector2>>>();
+            for (int i = 0; i < 8; i++)
+            {
+                float h = 40f + i * 8f;
+                layers.Add(
+                [
+                    [new(-h, -h), new(h, -h), new(h, h), new(-h, h)],
                 ]);
             }
             return layers;
         }
         var heights = Enumerable.Repeat(LayerH, 8).ToList();
 
-        var interiorOnly = LightningPlanner.Build(Polys(), heights, new SliceSettings
+        var interiorOnly = LightningPlanner.Build(ShrinkingWithHole(), heights, new SliceSettings
         {
             LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
             InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
             LightningAnchorInterior = true, LightningAnchorExterior = false,
+            LightningExteriorOverhangs = false,
         });
-        var exteriorOnly = LightningPlanner.Build(Polys(), heights, new SliceSettings
+        var exteriorOnly = LightningPlanner.Build(ExpandingOuter(), heights, new SliceSettings
         {
             LayerHeight = LayerH, FirstLayerHeight = LayerH, BeadWidth = Bead,
             InfillPattern = InfillPattern.LightningBridge, LightningOverhangDeg = 30f,
             LightningAnchorInterior = false, LightningAnchorExterior = true,
+            LightningExteriorOverhangs = true,
         });
 
         bool sawInterior = false, sawExterior = false;
@@ -572,12 +588,11 @@ public sealed class LightningBridgeTest
             foreach (var t in lp.Trees)
             {
                 sawExterior = true;
-                float m = MathF.Max(MathF.Abs(t.Anchor.X), MathF.Abs(t.Anchor.Y));
-                Assert.True(m > 25f,
-                    $"exterior-only anchor ({t.Anchor.X:0.#},{t.Anchor.Y:0.#}) on the hole");
+                Assert.True(t.External,
+                    $"exterior-only tree should be External (got cavity/interior at {t.Anchor})");
             }
-        Assert.True(sawInterior, "no trees planned with interior anchoring");
-        Assert.True(sawExterior, "no trees planned with exterior anchoring");
+        Assert.True(sawInterior, "no trees planned with Affect Interior");
+        Assert.True(sawExterior, "no trees planned with Affect Exterior");
     }
 
     [Fact]
