@@ -67,17 +67,24 @@ public sealed class ToolpathRenderer : IDisposable
         }
         """;
 
+    // Keep GLSL pure ASCII - some drivers choke on unicode in comments (em-dash etc.).
     private static readonly string FragSrc = """
-        #version 330 core
-        in vec3 vColor;
-        uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
-        uniform vec3  uOverrideColor;
-        uniform float uOpacity;        // line transparency (1 = opaque)
-        out vec4 fragColor;
-        void main() {
-            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
-        }
-        """;
+#version 330 core
+in vec3 vColor;
+uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
+uniform vec3  uOverrideColor;
+uniform float uOpacity;        // line transparency (1 = opaque)
+uniform float uDashPeriodPx;   // 0 = solid; >0 = screen-space dash period (px)
+out vec4 fragColor;
+void main() {
+    if (uDashPeriodPx > 0.5) {
+        // Diagonal screen-space stipple - consistent dash length at any zoom.
+        float t = (gl_FragCoord.x + gl_FragCoord.y) / uDashPeriodPx;
+        if (fract(t) > 0.55) discard;
+    }
+    fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
+}
+""";
 
     /// <summary>
     /// Edit Point mode: size + alpha from camera distance so near beads pop and
@@ -1175,7 +1182,9 @@ void main() {
                      bool showWipe = true,
                      bool showAllPathPoints = false,
                      bool showDepthLines = false,
-                     float viewportW = 0f, float viewportH = 0f)
+                     float viewportW = 0f, float viewportH = 0f,
+                     float dashPeriodPx = 0f,
+                     float lineWidth = 1f)
     {
         if (_disposed) return;
 
@@ -1202,8 +1211,10 @@ void main() {
 
         // Path edit mode: depth-cued thick lines (near = 2.5x, far = fade). Prefer the
         // geometry-shader path; fall back to plain GL lines if unavailable.
+        // Dashed neighbour layers force the simple line path (depth shader has no dash).
         bool useDepthLines = showDepthLines
             && !showAllPathPoints
+            && dashPeriodPx <= 0.5f
             && _depthLineShader is not null
             && viewportW > 1f && viewportH > 1f;
 
@@ -1218,10 +1229,12 @@ void main() {
             _shader.Use();
             _shader.SetMatrix4("uMVP", ref mvp);
             _shader.SetFloat("uOpacity", lineOpacity);
+            _shader.SetFloat("uDashPeriodPx", dashPeriodPx);
 
             // Point edit mode: slightly thicker centre-lines under the dots.
-            if (showAllPathPoints)
-                GL.LineWidth(2.5f);
+            float appliedWidth = showAllPathPoints ? Math.Max(2.5f, lineWidth) : lineWidth;
+            if (appliedWidth > 1.01f)
+                GL.LineWidth(appliedWidth);
 
             if (!selected)
             {
@@ -1280,8 +1293,10 @@ void main() {
                 }
             }
 
-            if (showAllPathPoints)
+            if (appliedWidth > 1.01f)
                 GL.LineWidth(1f);
+            // Reset dash so other draws default to solid.
+            _shader.SetFloat("uDashPeriodPx", 0f);
         }
 
         // Seam / singularity points (selected appearance only).

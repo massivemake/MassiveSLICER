@@ -17,6 +17,11 @@ namespace MassiveSlicer.Core.Slicing.Lightning;
 /// </summary>
 public static class LightningGenerator
 {
+    /// <param name="localSupportOnly">
+    /// Target Support Selections mode: only cut paint/manual trees into the region;
+    /// skip global post-process (phantom drop, island weld, whole-perimeter fillet)
+    /// so the rest of the toolpath matches normal shells outside the selection.
+    /// </param>
     public static void EmitLightning(
         List<List<Vector2>> fillPolys,
         LightningLayerPlan? plan,
@@ -25,7 +30,8 @@ public static class LightningGenerator
         float beadWidth,
         float tipLoopRadius,
         Func<Vector2, Vector3>? project = null,
-        Vector3? startFrom = null)
+        Vector3? startFrom = null,
+        bool localSupportOnly = false)
     {
         var region = LightningPlanner.ToPathsD(fillPolys, beadWidth);
         if (region.Count == 0) return;
@@ -35,9 +41,11 @@ public static class LightningGenerator
         // stray wall itself is removed. A real contour's interior is solid AT its
         // own plane by definition of slicing; a phantom's is void. The dominant
         // outer is never touched (safety), and real islands (posts) probe solid.
+        // Skip in local-support mode — must not rewrite geometry away from the paint.
         var solidAt = plan?.SolidAt;
         string? dumpDirEarly = Environment.GetEnvironmentVariable("MSL_LIGHTNING_DUMP");
-        if (plan?.SolidAtPlane is { } solidAtPlane && region.Count > 1)
+        if (!localSupportOnly
+            && plan?.SolidAtPlane is { } solidAtPlane && region.Count > 1)
             RemovePhantomIslands(region, solidAtPlane, plan.SolidAt, beadWidth, dumpDirEarly, z);
         if (region.Count == 0) return;
 
@@ -54,7 +62,22 @@ public static class LightningGenerator
         int outerCount = CountOuters(region);
         var result = region;
 
-        if (plan is not null && plan.Trees.Count > 0)
+        // Target Support Selections: only paint/manual trees may notch the wall.
+        // Drop automatic / connector lineages so they never scar unselected geometry.
+        if (localSupportOnly && plan is not null)
+        {
+            for (int ti = plan.Trees.Count - 1; ti >= 0; ti--)
+            {
+                var t = plan.Trees[ti];
+                if (t.Manual || t.PaintColumn) continue;
+                plan.DroppedTrees.Add(t.Id);
+            }
+        }
+
+        bool anyLiveTree = plan is not null && plan.Trees.Any(t =>
+            !plan.DroppedTrees.Contains(t.Id));
+
+        if (plan is not null && anyLiveTree)
         {
             // Thin band just inside the region boundary. A healthy slit crosses it
             // exactly once (its mouth); a second crossing means the slit is punching
@@ -129,21 +152,25 @@ public static class LightningGenerator
 
         // Corbel pads: planner-grown outward wall extensions (30°-compliant
         // ledges) that catch lines floating just past the wall below.
-        if (plan?.CorbelPads is { Count: > 0 } corbels)
+        // Never in local-support mode (floating pads away from the selection).
+        if (!localSupportOnly && plan?.CorbelPads is { Count: > 0 } corbels)
         {
             result.AddRange(corbels);
             result = Clipper.Union(result, FillRule.NonZero);
         }
 
-        // Weld islands whose gap is within a few beads into one region through a
-        // nozzle-width bridge channel — the boundary then runs island A → across
-        // the bridge → island B → back, ONE continuous extrusion, and the bridge
-        // stacks at the same world spot every layer (a printable tie wall).
-        result = BridgeNearbyLoops(result, beadWidth);
+        if (!localSupportOnly)
+        {
+            // Weld islands whose gap is within a few beads into one region through a
+            // nozzle-width bridge channel — the boundary then runs island A → across
+            // the bridge → island B → back, ONE continuous extrusion, and the bridge
+            // stacks at the same world spot every layer (a printable tie wall).
+            result = BridgeNearbyLoops(result, beadWidth);
 
-        // Soften acute corners on the toolpath without filling finger notches:
-        // vertex-wise fillet of each boundary polyline (min radius = bead width).
-        result = FilletBoundaryCorners(result, beadWidth);
+            // Soften acute corners on the toolpath without filling finger notches:
+            // vertex-wise fillet of each boundary polyline (min radius = bead width).
+            result = FilletBoundaryCorners(result, beadWidth);
+        }
 
         EmitLoops(result, z, layer, project, plan, beadWidth, tipLoopRadius, startFrom);
     }

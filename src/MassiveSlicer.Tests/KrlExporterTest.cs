@@ -40,7 +40,8 @@ public sealed class KrlExporterTest
 
         Assert.Contains("$ANOUT[1] = 0.2272 ; T1 = 220C", krl);
         Assert.Contains("$ANOUT[4] = 0.001 ; RPM idle", krl);
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.5 ; RPM on", krl);
+        // Geometry RPM ~50.004% → ceiling to whole percent → 0.51
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.51 ; RPM on", krl);
     }
 
     [Fact]
@@ -154,11 +155,11 @@ public sealed class KrlExporterTest
 
         var krl = KrlExporter.Export(tp, settings);
 
-        Assert.Contains("$ANOUT[4] = 0.5 ; RPM on", krl);
+        Assert.Contains("$ANOUT[4] = 0.50 ; RPM on", krl);
         Assert.Contains("WAIT SEC 1", krl);
-        Assert.DoesNotContain("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.5 ; RPM on", krl);
+        Assert.DoesNotContain("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.50 ; RPM on", krl);
 
-        int rpmIdx  = krl.IndexOf("$ANOUT[4] = 0.5 ; RPM on", StringComparison.Ordinal);
+        int rpmIdx  = krl.IndexOf("$ANOUT[4] = 0.50 ; RPM on", StringComparison.Ordinal);
         int waitIdx = krl.IndexOf("WAIT SEC 1", StringComparison.Ordinal);
         int velIdx  = krl.IndexOf("$VEL.CP", waitIdx, StringComparison.Ordinal);
         Assert.True(rpmIdx >= 0 && waitIdx > rpmIdx && velIdx > waitIdx);
@@ -189,7 +190,7 @@ public sealed class KrlExporterTest
         Assert.Contains("WAIT SEC 0.5", krl);
         int travelIdx = krl.IndexOf(";travel", StringComparison.Ordinal);
         int waitIdx   = krl.IndexOf("WAIT SEC 0.5", StringComparison.Ordinal);
-        int rpmIdx    = krl.LastIndexOf("$ANOUT[4] = 0.5 ; RPM on", StringComparison.Ordinal);
+        int rpmIdx    = krl.LastIndexOf("$ANOUT[4] = 0.50 ; RPM on", StringComparison.Ordinal);
         Assert.True(travelIdx < waitIdx);
         Assert.True(rpmIdx < waitIdx);
     }
@@ -250,7 +251,7 @@ public sealed class KrlExporterTest
 
         var krl = KrlExporter.Export(tp, settings);
 
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.6 ; RPM on", krl);
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.60 ; RPM on", krl);
     }
 
     [Fact]
@@ -287,7 +288,7 @@ public sealed class KrlExporterTest
 
         Assert.Contains("$ANOUT[4] = 0.01 ; RPM ramp", krl);
         Assert.Contains("$VEL.CP = 0.000500", krl);
-        Assert.Contains("$ANOUT[4] = 0.5 ; RPM ramp", krl);
+        Assert.Contains("$ANOUT[4] = 0.50 ; RPM ramp", krl);
         Assert.Contains("$VEL.CP = 0.100000", krl);
     }
 
@@ -350,5 +351,45 @@ public sealed class KrlExporterTest
 
         var krl = KrlExporter.Export(tp, settings);
         Assert.Contains("PTP {A1 0.000, A2 -90.000, A3 90.000, A4 0.000, A5 15.000, A6 0.000, E1 -1100.520}", krl);
+    }
+
+    [Fact]
+    public void Export_travel_and_wipe_always_set_anout4_to_zero()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(60, 0, 10), MoveKind.Extrude)
+        {
+            Normal = Vector3.UnitZ,
+            IsWipe = true,
+            WipeRpmScale = 1f, // legacy scale — must still force ANOUT 4 = 0
+        });
+        layer.Moves.Add(new ToolpathMove(new Vector3(60, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName         = "wipe_travel_off",
+            ExtrusionRpmPercent = 50f,
+            TravelSetAnout4Zero = false, // even when flag is off, travel/wipe must be 0
+        });
+
+        int wipeIdx = krl.IndexOf(";wipe", StringComparison.Ordinal);
+        int travelIdx = krl.IndexOf(";travel", StringComparison.Ordinal);
+        Assert.True(wipeIdx >= 0);
+        Assert.True(travelIdx >= 0);
+
+        // Immediately after ;wipe / ;travel comments: $ANOUT[4] = 0.000
+        Assert.Contains("$ANOUT[4] = 0.000 ; extruder off (wipe)", krl);
+        Assert.Contains("$ANOUT[4] = 0.000 ; extruder off", krl);
+
+        // Must not write extrusion RPM for the wipe segment.
+        var wipeBlock = krl.Substring(wipeIdx, Math.Min(200, krl.Length - wipeIdx));
+        Assert.DoesNotContain("wipe)", wipeBlock.Replace("extruder off (wipe)", ""));
+        Assert.DoesNotContain("= 0.5 ; wipe", wipeBlock);
     }
 }

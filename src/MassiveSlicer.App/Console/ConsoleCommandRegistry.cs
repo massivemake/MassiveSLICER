@@ -661,8 +661,8 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "paint",
-            Description = "Toolpath paint marks: bridge/remove dabs, list, clear",
-            Usage = "paint <bridge|remove> <x> <y> <z> <radius> | paint list | paint clear",
+            Description = "Toolpath paint marks: bridge/remove dabs, list, clear; support eval of selection",
+            Usage = "paint <bridge|remove> <x> <y> <z> <radius> | paint list | paint clear | paint support | paint support layer",
             Execute = (ctx, args) =>
             {
                 var add = ctx.Main.RightPanel.Additive;
@@ -683,6 +683,12 @@ public sealed class ConsoleCommandRegistry
                     case "clear":
                         add.ClearPaintMarksCommand.Execute(null);
                         ctx.Log("[paint] cleared");
+                        break;
+                    case "support":
+                        // paint support        → current edit selection
+                        // paint support layer  → every island on the current scrub layer
+                        EvalPaintSupport(ctx, wholeLayer: parts.Length > 1
+                            && parts[1].Equals("layer", StringComparison.OrdinalIgnoreCase));
                         break;
                     default:
                         foreach (var m in add.PaintMarks)
@@ -1520,4 +1526,192 @@ public sealed class ConsoleCommandRegistry
             Description = command.Description,
             Usage = string.IsNullOrWhiteSpace(command.Usage) ? command.Name : command.Usage,
         };
+
+    /// <summary>
+    /// Report support coverage for edit selection (or every island on the current scrub
+    /// layer). A mid-bead is "unsupported" when its XY gap to the previous layer exceeds
+    /// 0.5× bead width (same threshold as <see cref="Core.Slicing.SliceLayerAnalyzer"/>).
+    /// </summary>
+    private static void EvalPaintSupport(ConsoleCommandContext ctx, bool wholeLayer)
+    {
+        var vp = ctx.Main.Viewport;
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[paint support] no active toolpath — arm a scrub / enter edit");
+            return;
+        }
+
+        float bead = (float)ctx.Main.RightPanel.Additive.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        float thr = bead * 0.5f; // OverhangScore ≥ 0.5 ⇔ gap ≥ 0.5× bead
+
+        // Build candidate spans: selection rows, or every contour on the scrub high layer.
+        var spans = new List<(int LayerIdx, int Start, int Count, string Label)>();
+        if (!wholeLayer && vp.PaintSelectionItems.Count > 0)
+        {
+            foreach (var item in vp.PaintSelectionItems)
+            {
+                spans.Add((item.LayerIndex, item.MoveStart, item.MoveCount,
+                    $"{item.Title}  ({item.Detail})"));
+            }
+        }
+        else
+        {
+            // Prefer layer of first selection; else scrub high (1-based → 0-based).
+            int li = wholeLayer || vp.PaintSelectionItems.Count == 0
+                ? Math.Clamp((int)Math.Round(vp.ToolpathScrubLayerHigh) - 1, 0, tp.Layers.Count - 1)
+                : vp.PaintSelectionItems[0].LayerIndex;
+            li = Math.Clamp(li, 0, tp.Layers.Count - 1);
+            var layer = tp.Layers[li];
+            IReadOnlyList<ContourSpan> contours = layer.Contours.Count > 0
+                ? layer.Contours
+                : SynthesizeExtrudeRuns(layer);
+            int n = 0;
+            foreach (var c in contours)
+            {
+                if (c.Count < 1) continue;
+                n++;
+                string kind = c.Closed ? "closed" : "open";
+                spans.Add((li, c.Start, c.Count,
+                    $"L{li + 1} island #{n} · {kind} · m{c.Start}+{c.Count}"));
+            }
+            ctx.Log($"[paint support] layer L{li + 1} (Z={layer.Z:0.#} mm) — {spans.Count} island(s)");
+        }
+
+        if (spans.Count == 0)
+        {
+            ctx.Log("[paint support] nothing to evaluate — select paths in edit mode, or: paint support layer");
+            return;
+        }
+
+        ctx.Log($"[paint support] bead={bead:0.#} mm  unsupported if XY gap to layer below ≥ {thr:0.##} mm");
+        int failCount = 0;
+        for (int si = 0; si < spans.Count; si++)
+        {
+            var (layerIdx, start, count, label) = spans[si];
+            if (layerIdx < 0 || layerIdx >= tp.Layers.Count)
+            {
+                ctx.Log($"  [{si + 1}] {label}  →  invalid layer");
+                continue;
+            }
+            var layer = tp.Layers[layerIdx];
+            ToolpathLayer? prev = layerIdx > 0 ? tp.Layers[layerIdx - 1] : null;
+
+            int end = Math.Min(layer.Moves.Count, start + Math.Max(0, count));
+            double totalLen = 0, unsupLen = 0;
+            int samples = 0, unsupSamples = 0;
+            float minGap = float.MaxValue, maxGap = 0f, sumGap = 0f;
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            System.Numerics.Vector3 midSum = default;
+            int midN = 0;
+
+            for (int i = start; i < end; i++)
+            {
+                var mv = layer.Moves[i];
+                if (mv.Kind != MoveKind.Extrude) continue;
+                float dist = System.Numerics.Vector3.Distance(mv.From, mv.To);
+                totalLen += dist;
+                samples++;
+                var mid = (mv.From + mv.To) * 0.5f;
+                midSum += mid;
+                midN++;
+                if (mid.X < minX) minX = mid.X;
+                if (mid.X > maxX) maxX = mid.X;
+                if (mid.Y < minY) minY = mid.Y;
+                if (mid.Y > maxY) maxY = mid.Y;
+
+                float gap = prev is null
+                    ? float.PositiveInfinity
+                    : NearestPrevGapXy(prev, mid);
+                if (gap < minGap) minGap = gap;
+                if (gap > maxGap && !float.IsInfinity(gap)) maxGap = gap;
+                if (!float.IsInfinity(gap)) sumGap += gap;
+
+                if (prev is null || gap >= thr)
+                {
+                    unsupLen += dist;
+                    unsupSamples++;
+                }
+            }
+
+            double unsupPct = totalLen > 1e-6 ? unsupLen / totalLen * 100.0 : 0;
+            float avgGap = samples > 0 && minGap < float.MaxValue ? sumGap / samples : float.NaN;
+            bool fails = prev is null
+                ? samples > 0
+                : unsupPct >= 50.0; // majority of length has no support within 0.5 bead
+            if (fails) failCount++;
+
+            string verdict = prev is null
+                ? "NO LAYER BELOW (first layer / bed only)"
+                : fails
+                    ? "UNSUPPORTED — likely print fail without added support"
+                    : unsupPct > 5
+                        ? "PARTIAL overhang — review"
+                        : "supported";
+
+            var centroid = midN > 0 ? midSum / midN : default;
+            ctx.Log(
+                $"  [{si + 1}] {label}\n"
+                + $"      len={totalLen:0.#} mm  samples={samples}  unsup={unsupPct:0.#}% ({unsupLen:0.#} mm)\n"
+                + $"      gap to below: min={FmtGap(minGap)}  avg={FmtGap(avgGap)}  max={FmtGap(maxGap)}\n"
+                + $"      mid≈({centroid.X:0.#},{centroid.Y:0.#},{centroid.Z:0.#})  XY span {Math.Max(0, maxX - minX):0.#}×{Math.Max(0, maxY - minY):0.#} mm\n"
+                + $"      → {verdict}");
+        }
+
+        ctx.Log(failCount == 0
+            ? $"[paint support] {spans.Count} path(s): all have support under the 0.5×bead rule"
+            : $"[paint support] {failCount}/{spans.Count} path(s) FAIL support check");
+    }
+
+    private static string FmtGap(float g)
+        => float.IsInfinity(g) || float.IsNaN(g) ? "∞" : $"{g:0.##} mm";
+
+    private static float NearestPrevGapXy(ToolpathLayer prev, System.Numerics.Vector3 mid)
+    {
+        float best = float.MaxValue;
+        foreach (var mv in prev.Moves)
+        {
+            if (mv.Kind != MoveKind.Extrude) continue;
+            float d = DistPointToSeg2D(mid.X, mid.Y, mv.From.X, mv.From.Y, mv.To.X, mv.To.Y);
+            if (d < best) best = d;
+        }
+        return best == float.MaxValue ? float.PositiveInfinity : best;
+    }
+
+    private static float DistPointToSeg2D(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay;
+        float len2 = abx * abx + aby * aby;
+        float t = len2 < 1e-12f ? 0f : Math.Clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0f, 1f);
+        float cx = ax + t * abx - px, cy = ay + t * aby - py;
+        return MathF.Sqrt(cx * cx + cy * cy);
+    }
+
+    private static List<ContourSpan> SynthesizeExtrudeRuns(ToolpathLayer layer)
+    {
+        var spans = new List<ContourSpan>();
+        var moves = layer.Moves;
+        int i = 0;
+        while (i < moves.Count)
+        {
+            while (i < moves.Count && moves[i].Kind != MoveKind.Extrude) i++;
+            if (i >= moves.Count) break;
+            int start = i;
+            while (i < moves.Count && moves[i].Kind == MoveKind.Extrude
+                   && !moves[i].IsLayerStitch && !moves[i].IsLayerChange)
+                i++;
+            int count = i - start;
+            if (count < 1) continue;
+            bool closed = false;
+            if (count >= 2)
+            {
+                var a = moves[start].From;
+                var b = moves[start + count - 1].To;
+                closed = System.Numerics.Vector3.DistanceSquared(a, b) < 1.0f;
+            }
+            spans.Add(new ContourSpan(start, count, closed, -1));
+        }
+        return spans;
+    }
 }

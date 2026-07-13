@@ -92,15 +92,15 @@
   "bed": {
     "modelPath": "assets/cells/LFAM1/lfam1_bed.glb",
     "origin": {
-      "x": 1345.21,
-      "y": -708.56,
+      "x": 1475.5131,
+      "y": -609.29846,
       "z": 70
     },
     "width": 2375,
     "depth": 5750,
     "baseData": {
-      "x": 1496.3605,
-      "y": -708.56,
+      "x": 1475.5131,
+      "y": -609.29846,
       "z": 278
     },
     "hidden": false

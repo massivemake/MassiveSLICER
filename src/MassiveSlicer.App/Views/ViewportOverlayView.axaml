@@ -18,7 +18,7 @@
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid Background="Transparent" Margin="320,52,320,0">
 
-        <!-- View-mode pills (effector style) — top right -->
+        <!-- View-mode pills — top right -->
         <Border HorizontalAlignment="Right" VerticalAlignment="Top"
                 Margin="0,8,0,0" ZIndex="15"
                 Background="#B3222222" CornerRadius="6"
@@ -45,6 +45,38 @@
                 <Button Classes="ViewPill" Content="Preview"
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 2D Slice Plane Viewer — per-layer statistics (left side of viewport) -->
+        <Border IsVisible="{Binding ShowSlicePlaneStatsOverlay}"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="56,8,0,0" ZIndex="16"
+                Background="#CC1A1A1A" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="10,8" MinWidth="228" MaxWidth="290"
+                IsHitTestVisible="False">
+            <StackPanel Spacing="5">
+                <TextBlock Text="{Binding SlicePlaneStatsHeader}"
+                           FontSize="11" FontWeight="SemiBold"
+                           Foreground="{DynamicResource Accent}"
+                           FontFamily="Consolas,Courier New,monospace"/>
+                <Border Height="1" Background="{DynamicResource Border1}" Opacity="0.55"/>
+                <TextBlock Text="{Binding SlicePlaneStatsBody}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontFamily="Consolas,Courier New,monospace"
+                           LineHeight="16"
+                           Opacity="0.92"/>
+                <StackPanel IsVisible="{Binding HasSlicePlaneStatsBelow}">
+                    <Border Height="1" Background="{DynamicResource Border1}" Opacity="0.4" Margin="0,2,0,3"/>
+                    <TextBlock Text="{Binding SlicePlaneStatsBelow}"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextSecondary}"
+                               FontFamily="Consolas,Courier New,monospace"
+                               LineHeight="14"
+                               Opacity="0.88"/>
+                </StackPanel>
             </StackPanel>
         </Border>
 
@@ -184,7 +216,14 @@
                               ToolTip.Tip="Edit toolpath — slicing pauses while open; collapsing re-slices with your edits">
                     <ia:Icon Value="mdi-pencil" FontSize="15"/>
                 </ToggleButton>
-
+                <!-- 2D Slice Plane Viewer — edit mode only, directly under the pencil. -->
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsVisible="{Binding IsPaintEditOpen}"
+                              IsChecked="{Binding IsSlicePlaneViewerActive, Mode=TwoWay}"
+                              Classes.active="{Binding IsSlicePlaneViewerActive}"
+                              ToolTip.Tip="2D Slice Plane Viewer — top-down orthographic; current layer (2× thick), three layers below at 60%/30%/17% opacity, dashed layer above. Only current and the three below are pickable.">
+                    <ia:Icon Value="mdi-layers-triple" FontSize="15"/>
+                </ToggleButton>
             </StackPanel>
         </Border>
 
@@ -963,9 +1002,9 @@
                 </StackPanel>
             </Border>
 
-            <!-- Multi-Planar: show/hide the guide plane quads. Lives in this stack so
-                 it always drops below whatever floating boxes are showing above it. -->
-            <Border IsVisible="{Binding AdditiveSettings.ShowMultiPlanarControls, FallbackValue=False}"
+            <!-- Multi-Planar: show/hide the guide plane quads. Hidden in edit mode —
+                 the bottom toolbar already has the same Planes control. -->
+            <Border IsVisible="{Binding ShowMultiPlanarPlanesButton, FallbackValue=False}"
                     Background="#B3222222" CornerRadius="6"
                     BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                     Padding="3" HorizontalAlignment="Right">

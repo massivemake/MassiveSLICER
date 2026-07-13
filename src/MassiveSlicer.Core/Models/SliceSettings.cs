@@ -354,6 +354,13 @@ public sealed class SliceSettings
     /// inner walls) before scarifying the outer face.</summary>
     public bool LightningPreferInteriorMouths { get; init; } = true;
 
+    /// <summary>
+    /// When true, Formbound Bridge/Buttress only grows under edit-mode Support
+    /// selections (Bridge paint marks). Automatic geometric overhang detection is
+    /// skipped so support is limited to what the user selected.
+    /// </summary>
+    public bool LightningTargetSupportSelections { get; init; }
+
     // ── Toolpath paint marks (brush tool in the preview view) ─────────────────
 
     /// <summary>World-space brush dabs painted on the toolpath. Bridge marks inject

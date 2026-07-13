@@ -14,6 +14,14 @@ public sealed class WorkspaceDocument
     /// <summary>Orbit camera pose at save time.</summary>
     public CameraView? Camera { get; set; }
 
+    /// <summary>
+    /// Viewport UI session at save time (edit mode, tools, layer isolation, scrub,
+    /// 2D slice viewer). Written immediately after Camera so a truncated large save
+    /// (common on NAS mid-toolpath serialize) still restores view/edit state.
+    /// Null on workspaces saved before this field existed.
+    /// </summary>
+    public WorkspaceUiSession? UiSession { get; set; }
+
     /// <summary>Active right-panel tab name (matches <see cref="RightPanelTab"/> enum).</summary>
     public string RightPanelTab { get; set; } = "Additive";
 
@@ -25,13 +33,6 @@ public sealed class WorkspaceDocument
 
     /// <summary>ERP project/lead this workspace is attached to, or null.</summary>
     public ErpAttachment? Erp { get; set; }
-
-    /// <summary>
-    /// Viewport UI session at save time (edit mode, tools, layer isolation, scrub).
-    /// Restored on open so the file reopens exactly where the user left off.
-    /// Null on workspaces saved before this field existed.
-    /// </summary>
-    public WorkspaceUiSession? UiSession { get; set; }
 }
 
 /// <summary>
@@ -45,6 +46,15 @@ public sealed class WorkspaceUiSession
 
     /// <summary>Whether the toolpath Edit toolbar was open.</summary>
     public bool IsPaintEditOpen { get; set; }
+
+    /// <summary>2D Slice Plane Viewer toggle (edit mode only).</summary>
+    public bool IsSlicePlaneViewerActive { get; set; }
+
+    /// <summary>
+    /// Multi-Planar "Planes" viewport overlay toggle. Nullable so workspaces saved
+    /// before this field keep the app default (on) instead of deserializing as false.
+    /// </summary>
+    public bool? ShowMultiPlanarPlanes { get; set; }
 
     public bool PaintHandActive { get; set; }
     public bool PaintBoxSelectActive { get; set; }
@@ -114,6 +124,23 @@ public sealed class WorkspaceUiSession
 }
 
 /// <summary>
+/// One path/point span inside a grouped paint modification (Shift multi-select).
+/// </summary>
+public sealed class WorkspacePaintModMember
+{
+    public int LayerIndex { get; set; }
+    public float LayerZ { get; set; }
+    public int SpanStart { get; set; }
+    public int SpanCount { get; set; }
+    public bool SpanClosed { get; set; }
+    public int SpanEntryTravelIndex { get; set; } = -1;
+    /// <summary>Mark centres as [x,y,z] for this member only.</summary>
+    public List<float[]> MarkCenters { get; set; } = [];
+    /// <summary>World highlight polyline [x,y,z] points.</summary>
+    public List<float[]> WorldPoints { get; set; } = [];
+}
+
+/// <summary>
 /// One applied paint modification for workspace save/restore.
 /// Layer spans are re-bound by index/Z after the toolpath reloads.
 /// </summary>
@@ -137,11 +164,20 @@ public sealed class WorkspacePaintModification
     public string Detail { get; set; } = "";
     public bool IsExpanded { get; set; }
 
-    /// <summary>"Formbound Buttress" or "Formbound Bridge".</summary>
+    /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
     public string SupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
+    public string SupportSide { get; set; } = "Inside";
 
     /// <summary>World highlight polyline [x,y,z] points.</summary>
     public List<float[]> WorldPoints { get; set; } = [];
+
+    /// <summary>
+    /// Group members (Shift multi-select). Empty = legacy single-span mod.
+    /// When present, primary Layer/Span fields still mirror the first member.
+    /// </summary>
+    public List<WorkspacePaintModMember> Members { get; set; } = [];
 
     // ── Optional bridge target ───────────────────────────────────────────────
     public int? TargetLayerIndex { get; set; }

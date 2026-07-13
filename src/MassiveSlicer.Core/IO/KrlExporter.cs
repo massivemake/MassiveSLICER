@@ -277,6 +277,8 @@ public static class KrlExporter
         bool inZHopSequence = false;
         float lastExtrudeSpeedMps = -1f;
         float lastExtrudeRpmScale = -1f;
+        string? lastExtrudeAnoutText = null;
+        string? lastExtrudeVelText = null;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
         // kernel before ABC conversion. This prevents the KRL exporter from producing
@@ -306,10 +308,8 @@ public static class KrlExporter
                         if (!inZHopSequence)
                         {
                             sb.AppendLine(";z-hop");
-                            if (s.TravelSetAnout4Zero)
-                                sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
-                            else
-                                sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
+                            // Travel / z-hop: always stop extruder (ANOUT 4 = 0).
+                            sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
                             inZHopSequence = true;
                         }
 
@@ -324,10 +324,8 @@ public static class KrlExporter
 
                     inZHopSequence = false;
                     sb.AppendLine(move.IsLayerChange ? ";layer change" : move.IsMergeConnector ? ";merge travel" : ";travel");
-                    if (s.TravelSetAnout4Zero)
-                        sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
-                    else
-                        sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
+                    // Travel always parks the extruder — never leave residual RPM.
+                    sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
                     var travelSpeed = move.TravelSpeedMps ?? s.TravelSpeedMps;
                     sb.AppendLine($"$VEL.CP = {travelSpeed.ToString("F6", Inv)}");
                     var (ta, tb, tc) = lastAbc;
@@ -355,13 +353,14 @@ public static class KrlExporter
 
                     if (move.IsWipe)
                     {
+                        // Wipe is a non-deposit purge path: extruder must be off.
                         sb.AppendLine(";wipe");
-                        sb.AppendLine(FormatDirectAnout4(
-                            ResolveAnout4ExtrudeText(s, move.WipeRpmScale), "wipe"));
+                        sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off (wipe)");
                         sb.AppendLine($"$VEL.CP = {s.WipeSpeedMps.ToString("F6", Inv)}");
                         sb.AppendLine(FormatLin(to, ma, mb, mc, LinE1(s)));
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
+                        needsRpmOn = true; // re-arm RPM for the next real extrude
                         continue;
                     }
 
@@ -406,8 +405,14 @@ public static class KrlExporter
 
                     float extrudeRpmScale = EffectiveRpmScale(move);
                     float extrudeSpeedMps = EffectivePrintSpeedMps(move, s);
-                    bool speedChanged = Math.Abs(extrudeSpeedMps - lastExtrudeSpeedMps) > 1e-7f
-                                     || Math.Abs(extrudeRpmScale - lastExtrudeRpmScale) > 1e-5f;
+                    // Compare the *emitted* KRL text, not raw floats. Multi-planar HeightScale
+                    // and layer-speed scales jitter every bead; if ANOUT/VEL round to the same
+                    // digits, re-writing them between every LIN kills $ADVANCE continuous path
+                    // and makes the robot stutter on dense clusters.
+                    string anoutText = ResolveAnout4ExtrudeText(s, extrudeRpmScale);
+                    string velText = extrudeSpeedMps.ToString("F6", Inv);
+                    bool anoutChanged = !string.Equals(anoutText, lastExtrudeAnoutText, StringComparison.Ordinal);
+                    bool velChanged = !string.Equals(velText, lastExtrudeVelText, StringComparison.Ordinal);
 
                     if (needsRpmOn)
                     {
@@ -416,23 +421,26 @@ public static class KrlExporter
                             : s.ExtrusionResumeWaitSec;
                         if (waitSec > 0f)
                         {
-                            sb.AppendLine(FormatDirectAnout4(
-                                ResolveAnout4ExtrudeText(s, extrudeRpmScale), "RPM on"));
+                            sb.AppendLine(FormatDirectAnout4(anoutText, "RPM on"));
                             sb.AppendLine(FormatWaitSec(waitSec));
                         }
                         else
-                            sb.AppendLine(FormatTriggerAnout4(
-                                ResolveAnout4ExtrudeText(s, extrudeRpmScale), "RPM on"));
+                            sb.AppendLine(FormatTriggerAnout4(anoutText, "RPM on"));
 
-                        sb.AppendLine($"$VEL.CP = {extrudeSpeedMps.ToString("F6", Inv)}");
+                        sb.AppendLine($"$VEL.CP = {velText}");
                         isFirstPrintStart = false;
                         needsRpmOn = false;
+                        lastExtrudeAnoutText = anoutText;
+                        lastExtrudeVelText = velText;
                     }
-                    else if (speedChanged)
+                    else if (anoutChanged || velChanged)
                     {
-                        sb.AppendLine(FormatDirectAnout4(
-                            ResolveAnout4ExtrudeText(s, extrudeRpmScale), "layer speed"));
-                        sb.AppendLine($"$VEL.CP = {extrudeSpeedMps.ToString("F6", Inv)}");
+                        if (anoutChanged)
+                            sb.AppendLine(FormatDirectAnout4(anoutText, "layer speed"));
+                        if (velChanged)
+                            sb.AppendLine($"$VEL.CP = {velText}");
+                        lastExtrudeAnoutText = anoutText;
+                        lastExtrudeVelText = velText;
                     }
 
                     sb.AppendLine(FormatLin(to, ma, mb, mc, LinE1(s)));
@@ -448,10 +456,7 @@ public static class KrlExporter
         // -- Final retreat --------------------------------------------------------
         var (fa, fb, fc) = lastAbc;
         sb.AppendLine(";retreat");
-        if (s.TravelSetAnout4Zero)
-            sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
-        else
-            sb.AppendLine(FormatTriggerAnout4(ResolveAnout4IdleText(s), "RPM idle"));
+        sb.AppendLine("$ANOUT[4] = 0.000 ; extruder off");
         sb.AppendLine($"$VEL.CP = {s.TravelSpeedMps.ToString("F6", Inv)}");
         sb.AppendLine(FormatLinExact(new Vector3(lastPos.X, lastPos.Y, lastPos.Z + s.ApproachZMm), fa, fb, fc, LinE1(s)));
         sb.AppendLine();
@@ -837,7 +842,14 @@ public static class KrlExporter
     private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
     {
         if (!string.IsNullOrWhiteSpace(s.Anout4ExtrudeText) && Math.Abs(rpmScale - 1f) < 1e-4f)
+        {
+            // Still ceiling-round custom overrides to whole-percent ANOUT steps.
+            if (float.TryParse(s.Anout4ExtrudeText.Trim(),
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out float raw))
+                return KrlAnout.FormatAnout4(raw);
             return s.Anout4ExtrudeText.Trim();
+        }
 
         float rpmPercent = s.ExtrusionRpmPercent
             ?? KrlAnout.ComputeRpmPercent(s.BeadWidthMm, s.LayerHeightMm, s.PrintSpeedMps, s.FlowRate);

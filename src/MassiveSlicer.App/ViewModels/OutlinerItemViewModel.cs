@@ -81,6 +81,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Scene node visibility was changed outside the outliner (e.g. 2D slice view
+    /// hides the robot). Refresh the bound eye-icon without firing hide callbacks.
+    /// </summary>
+    public void NotifyVisibilityFromScene() => OnPropertyChanged(nameof(Visible));
+
     public ObservableCollection<OutlinerItemViewModel> Children { get; } = [];
     public bool HasChildren => Children.Count > 0;
 

@@ -63,7 +63,7 @@ public class LayerSpeedPostProcessorTest
 
         var krl = KrlExporter.Export(tp, settings);
 
-        int layerSpeedIdx  = krl.IndexOf("$ANOUT[4] = 0.3 ; layer speed", StringComparison.Ordinal);
+        int layerSpeedIdx  = krl.IndexOf("$ANOUT[4] = 0.30 ; layer speed", StringComparison.Ordinal);
         int secondExtrude  = krl.IndexOf("X 100.00", StringComparison.Ordinal);
         int travelIdx      = krl.IndexOf(";travel", StringComparison.Ordinal);
         int extruderOffIdx = krl.LastIndexOf("$ANOUT[4] = 0.000 ; extruder off", StringComparison.Ordinal);
@@ -103,7 +103,7 @@ public class LayerSpeedPostProcessorTest
         var krl = KrlExporter.Export(tp, settings);
 
         Assert.Contains("$VEL.CP = 0.030000", krl);
-        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.3 ; RPM on", krl);
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.30 ; RPM on", krl);
     }
 
     private static float ExtrudeScale(Toolpath tp, int layerIndex)

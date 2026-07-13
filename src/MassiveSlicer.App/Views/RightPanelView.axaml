@@ -174,13 +174,39 @@
                                                             <ComboBox HorizontalAlignment="Stretch"
                                                                       ItemsSource="{Binding SupportTypeOptions}"
                                                                       SelectedItem="{Binding SupportType, Mode=TwoWay}"
-                                                                      ToolTip.Tip="Revise Formbound style for this modification. Reslice to bake."/>
+                                                                      ToolTip.Tip="Per-area type: Formbound Buttress / Bridge, or Tree Support (bed-rooted). Reslice to bake."/>
                                                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                                                       Text="Change anytime — Reslice applies the new style to the toolpath."/>
+                                                                       Text="Each area keeps its own type. Changing this only updates this modification."/>
+                                                            <!-- Formbound wall side: Inside notch vs Outside fin -->
+                                                            <StackPanel IsVisible="{Binding ShowSupportSideUi}" Spacing="4"
+                                                                        Margin="0,4,0,0">
+                                                                <TextBlock Text="WALL SIDE" FontSize="9" Opacity="0.55"
+                                                                           LetterSpacing="0.8" FontWeight="SemiBold"/>
+                                                                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                                                                    <RadioButton Grid.Column="0"
+                                                                                 Content="Inside"
+                                                                                 GroupName="{Binding Id}"
+                                                                                 HorizontalAlignment="Stretch"
+                                                                                 HorizontalContentAlignment="Center"
+                                                                                 Padding="8,5"
+                                                                                 IsChecked="{Binding IsSupportSideInside, Mode=TwoWay}"
+                                                                                 ToolTip.Tip="Formbound grows into the part (dual-wall notch hidden inside the wall)."/>
+                                                                    <RadioButton Grid.Column="1"
+                                                                                 Content="Outside"
+                                                                                 GroupName="{Binding Id}"
+                                                                                 HorizontalAlignment="Stretch"
+                                                                                 HorizontalContentAlignment="Center"
+                                                                                 Padding="8,5"
+                                                                                 IsChecked="{Binding IsSupportSideOutside, Mode=TwoWay}"
+                                                                                 ToolTip.Tip="Formbound grows as a sacrificial fin outside the wall (trim after print)."/>
+                                                                </Grid>
+                                                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                                                           Text="Inside = notch into the solid. Outside = exterior fin. Reslice to bake."/>
+                                                            </StackPanel>
                                                         </StackPanel>
 
-                                                        <!-- BRIDGE TARGET card (Support only) -->
-                                                        <StackPanel IsVisible="{Binding IsSupport}" Spacing="4">
+                                                        <!-- BRIDGE TARGET card (Formbound only — Tree roots to bed) -->
+                                                        <StackPanel IsVisible="{Binding ShowBridgeTargetUi}" Spacing="4">
                                                             <Border Background="#1A80B7FF" CornerRadius="6" Padding="8,7"
                                                                     BorderBrush="#5580B7FF" BorderThickness="1">
                                                                 <StackPanel Spacing="3">
@@ -224,7 +250,10 @@
                                                             </Grid>
                                                         </StackPanel>
 
-                                                        <TextBlock IsVisible="{Binding !IsSupport}"
+                                                        <TextBlock IsVisible="{Binding IsOffset}"
+                                                                   TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                                                   Text="Offset path copies were inserted into the toolpath geometry. Reselect to highlight the original anchor."/>
+                                                        <TextBlock IsVisible="{Binding ShowRemoveHelp}"
                                                                    TextWrapping="Wrap" FontSize="10" Opacity="0.6"
                                                                    Text="Remove marks delete beads under the anchor. Bridge/scaffold is only available on Support modifications."/>
                                                     </StackPanel>
@@ -252,9 +281,122 @@
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,8" Spacing="6">
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Use the viewport edit tools to select paths or points, then mark them for support or removal."/>
-                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                       Text="• Select tool — click paths (Shift to multi-select)&#x0a;• Lines / Points — choose section vs single bead&#x0a;• Support / Remove — apply marks to the selection&#x0a;• Expand a Support mod → Pick bridge target on another layer for multi-layer scaffold&#x0a;• Reslice — bake Formbound buttress / removals into the toolpath"/>
+                                       Text="Select paths in the viewport, pick an operation, then Apply. Support / Remove also remain on the SELECTION card."/>
+
+                            <!-- Search operations -->
+                            <TextBox Watermark="Search operations…"
+                                     Text="{Binding $parent[Window].DataContext.Viewport.CreateModificationSearch, Mode=TwoWay}"
+                                     FontSize="11" Padding="8,6"
+                                     Background="{DynamicResource Bg3}"
+                                     BorderBrush="{DynamicResource Border1}"/>
+
+                            <!-- Catalog list -->
+                            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto"
+                                          IsVisible="{Binding !$parent[Window].DataContext.Viewport.ShowCreateModSettings}">
+                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.FilteredCreateModifications}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Classes="ToolbarButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Left"
+                                                    Padding="8,7" Margin="0,0,0,3"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.SelectCreateModificationCommand}"
+                                                    CommandParameter="{Binding Id}"
+                                                    IsEnabled="{Binding IsAvailable}"
+                                                    ToolTip.Tip="{Binding Description}">
+                                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                                    <ia:Icon Grid.Column="0" Value="{Binding Icon}" FontSize="14"
+                                                             Margin="0,0,8,0" VerticalAlignment="Center"
+                                                             Opacity="0.85"/>
+                                                    <StackPanel Grid.Column="1" Spacing="1">
+                                                        <TextBlock Text="{Binding Title}" FontSize="12"
+                                                                   FontWeight="SemiBold"/>
+                                                        <TextBlock Text="{Binding Description}" FontSize="10"
+                                                                   Opacity="0.55" TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="soon" FontSize="9"
+                                                               Opacity="0.4" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !IsAvailable}"/>
+                                                </Grid>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+
+                            <!-- Offset path settings -->
+                            <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowOffsetPathSettings}"
+                                        Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <ia:Icon Value="mdi-vector-polyline" FontSize="14" Opacity="0.85"
+                                             VerticalAlignment="Center"/>
+                                    <TextBlock Text="OFFSET PATH" FontSize="11" FontWeight="SemiBold"
+                                               LetterSpacing="0.8" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                           Text="Creates parallel copies of the selected toolpaths and inserts them into the same layer."/>
+
+                                <TextBlock Text="SETTINGS" FontSize="9" Opacity="0.5" LetterSpacing="0.8" FontWeight="SemiBold"/>
+
+                                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Distance" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                HorizontalAlignment="Right">
+                                        <TextBox Width="72" FontSize="11" Padding="6,4"
+                                                 Text="{Binding $parent[Window].DataContext.Viewport.OffsetDistanceMm, Mode=TwoWay}"
+                                                 HorizontalContentAlignment="Right"/>
+                                        <TextBlock Text="mm" FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Join type" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetJoinTypeOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetJoinType, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetModeOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetMode, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Offset count" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                HorizontalAlignment="Right">
+                                        <Button Classes="ToolbarButton" Padding="8,2" Content="−"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                CommandParameter="-1"/>
+                                        <TextBlock MinWidth="20" TextAlignment="Center" FontSize="12"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding $parent[Window].DataContext.Viewport.OffsetCount}"/>
+                                        <Button Classes="ToolbarButton" Padding="8,2" Content="+"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                CommandParameter="1"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="OPEN PATH OFFSETS" FontSize="9" Opacity="0.5"
+                                           LetterSpacing="0.8" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                <Grid ColumnDefinitions="*,*">
+                                    <TextBlock Grid.Column="0" Text="Side" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetSideOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetSide, Mode=TwoWay}"/>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                                    <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
+                                            Content="Cancel"
+                                            Command="{Binding $parent[Window].DataContext.Viewport.CancelCreateModificationCommand}"/>
+                                    <Button Grid.Column="1" Classes="AccentButton" Padding="14,6" Margin="8,0,0,0"
+                                            Content="Apply"
+                                            Command="{Binding $parent[Window].DataContext.Viewport.ApplyCreateModificationCommand}"
+                                            ToolTip.Tip="Insert parallel offset copies of the selected paths"/>
+                                </Grid>
+                            </StackPanel>
                         </StackPanel>
                     </Expander>
 
@@ -1481,15 +1623,17 @@
                                                    ToolTip.Tip="Radius of the support pad loop at each finger tip. 0 = plain one-bead tip."/>
                                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningTipLoopRadiusMm}"/>
                                     </Grid>
-                                    <CheckBox Margin="8,2,8,0" FontSize="11" Content="Bridge from interior walls"
-                                              IsChecked="{Binding Additive.LightningAnchorInterior, Mode=TwoWay}"
-                                              ToolTip.Tip="Root support fingers on interior boundaries (holes / inner walls) — the perimeter notch stays hidden inside the part."/>
-                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Bridge from outside perimeter"
-                                              IsChecked="{Binding Additive.LightningAnchorExterior, Mode=TwoWay}"
-                                              ToolTip.Tip="Root support fingers on the outer perimeter — the notch is visible on the outside surface."/>
-                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Support exterior overhangs (sacrificial)"
-                                              IsChecked="{Binding Additive.LightningExteriorOverhangs, Mode=TwoWay}"
-                                              ToolTip.Tip="Grow external support fins under outward overhangs. The fins add material OUTSIDE the part — cut them away after printing."/>
+                                    <TextBlock Margin="8,6,8,2" Text="SUPPORT DOMAINS" Classes="LabelMuted" FontSize="10"
+                                               ToolTip.Tip="Choose where Formbound looks for overhangs. Check one or both — each domain has its own tip budget (fingers are not stolen from the other)."/>
+                                    <CheckBox Margin="8,2,8,0" FontSize="11" Content="Affect Interior"
+                                              IsChecked="{Binding Additive.LightningAffectInterior, Mode=TwoWay}"
+                                              ToolTip.Tip="Support inward overhangs, cavities, and inner walls. Fingers root on interior boundaries (notches hidden inside). Own tip budget along unsupported interior edges."/>
+                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Affect Exterior"
+                                              IsChecked="{Binding Additive.LightningAffectExterior, Mode=TwoWay}"
+                                              ToolTip.Tip="Support outward flares / free edges outside the part (sacrificial fins — trim after print). Own tip budget, independent of Interior — both can run at once."/>
+                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Target Support Selections"
+                                              IsChecked="{Binding Additive.LightningTargetSupportSelections, Mode=TwoWay}"
+                                              ToolTip.Tip="Formbound only near edit-mode Support selections (Apply). Rest of the toolpath stays normal shells — no auto Formbound, no global wall scarring. Without Support paint, Formbound does not run at all."/>
                                     <StackPanel IsVisible="{Binding Additive.ShowButtressControls}">
                                         <Grid Margin="8,2,8,4">
                                             <Grid.ColumnDefinitions>
@@ -1500,9 +1644,6 @@
                                                        ToolTip.Tip="Formbound Buttress: length of the single-bead horizontal support bar under the overhang. The wall cut morphs into this bar as one continuous line."/>
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningButtressBarMm}"/>
                                         </Grid>
-                                        <CheckBox Margin="8,2,8,4" FontSize="11" Content="Prefer interior mouths"
-                                                  IsChecked="{Binding Additive.LightningPreferInteriorMouths, Mode=TwoWay}"
-                                                  ToolTip.Tip="Root buttress mouths on interior walls/holes first to minimize exterior face disruption."/>
                                     </StackPanel>
                                 </StackPanel>
 
