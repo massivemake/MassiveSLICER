@@ -144,7 +144,8 @@ public static class InfillGenerator
         float spacingMm,
         float angleDeg,
         bool isLastLayer = false,
-        Func<Vector2, Vector3>? project = null)
+        Func<Vector2, Vector3>? project = null,
+        float insetStepMm = 0f)
     {
         if (polygons.Count == 0 || spacingMm < 0.1f) return;
 
@@ -175,6 +176,13 @@ public static class InfillGenerator
         if (maxY - minY < spacingMm * 0.5f) return;
 
         var chain = new BoundaryChain(rotPolys);
+
+        // Per-edge traversal counts: each repeat pass over a boundary span walks an
+        // inset curve one more bead width inside, so connectors never re-extrude the
+        // same line (the "7 passes piled on one perimeter" mess).
+        var edgeUse = new int[rotPolys.Count][];
+        for (int pi = 0; pi < rotPolys.Count; pi++)
+            edgeUse[pi] = new int[rotPolys[pi].Count];
 
         var xa = new List<float>();
         var xb = new List<float>();
@@ -234,7 +242,7 @@ public static class InfillGenerator
                 float dx = fromX - lastScan.X, dy2 = sy - lastScan.Y;
                 if (dx * dx + dy2 * dy2 > 1e-4f)
                     EmitBoundaryWalk(chain, lastScan, new Vector2(fromX, sy),
-                                     lastPos, worldFrom, layer, W);
+                                     lastPos, worldFrom, layer, W, edgeUse, insetStepMm);
             }
 
             layer.Moves.Add(new ToolpathMove(worldFrom, worldTo, MoveKind.Extrude));
@@ -254,7 +262,8 @@ public static class InfillGenerator
         BoundaryChain chain,
         Vector2 fromScan, Vector2 toScan,
         Vector3 fromWorld, Vector3 toWorld,
-        ToolpathLayer layer, Func<float, float, Vector3> toWorld3)
+        ToolpathLayer layer, Func<float, float, Vector3> toWorld3,
+        int[][]? edgeUse = null, float insetStepMm = 0f)
     {
         var (piF, eF, _, arcF) = ClosestOnBoundary(chain, fromScan);
         var (piT, eT, _, arcT) = ClosestOnBoundary(chain, toScan);
@@ -270,13 +279,38 @@ public static class InfillGenerator
             float fwd   = arcT >= arcF ? arcT - arcF : arcT + tot - arcF;
             bool  goFwd = fwd <= tot * 0.5f;
 
+            int steps      = goFwd ? (eT - eF + pn) % pn : (eF - eT + pn) % pn;
+            int spanStart  = goFwd ? eF : eT;            // covered edges: spanStart..spanStart+steps
+
+            // Repeat passes over an already-extruded span walk an inset curve:
+            // offset inward by (prior passes × bead width) so beads sit side by side.
+            float off = 0f;
+            var   use = edgeUse?[piF];
+            if (use is not null && insetStepMm > 0.01f)
+            {
+                // Max over the span: the walk clears the busiest edge it crosses,
+                // so no part of it ever re-extrudes an already-printed line.
+                int usage = 0;
+                for (int i = 0; i <= steps; i++)
+                    usage = Math.Max(usage, use[(spanStart + i) % pn]);
+                off = usage * insetStepMm;
+            }
+            bool ccw = chain.Areas[piF] > 0f;
+
+            Vector3 Emit(int v)
+            {
+                var pv = poly[v];
+                if (off > 0f)
+                    pv += VertexInwardNormal(poly, v, ccw) * off;
+                return toWorld3(pv.X, pv.Y);
+            }
+
             if (goFwd)
             {
-                int steps = (eT - eF + pn) % pn;
                 int v = (eF + 1) % pn;
                 for (int i = 0; i < steps; i++)
                 {
-                    var wp3 = toWorld3(poly[v].X, poly[v].Y);
+                    var wp3 = Emit(v);
                     layer.Moves.Add(new ToolpathMove(prev3, wp3, MoveKind.Extrude));
                     prev3 = wp3;
                     v = (v + 1) % pn;
@@ -284,21 +318,48 @@ public static class InfillGenerator
             }
             else
             {
-                int steps = (eF - eT + pn) % pn;
                 int v = eF;
                 for (int i = 0; i < steps; i++)
                 {
-                    var wp3 = toWorld3(poly[v].X, poly[v].Y);
+                    var wp3 = Emit(v);
                     layer.Moves.Add(new ToolpathMove(prev3, wp3, MoveKind.Extrude));
                     prev3 = wp3;
                     v = (v - 1 + pn) % pn;
                 }
             }
+
+            if (use is not null)
+                for (int i = 0; i <= steps; i++)
+                    use[(spanStart + i) % pn]++;
         }
         // else: cross-polygon — fall through, prev3 = fromWorld, final step reaches toWorld
 
         if (Vector3.DistanceSquared(prev3, toWorld) > 1e-4f)
             layer.Moves.Add(new ToolpathMove(prev3, toWorld, MoveKind.Extrude));
+    }
+
+    /// <summary>Unit normal pointing into the polygon at vertex <paramref name="v"/>
+    /// (angle-bisector of the adjacent edges; sign resolved by winding).</summary>
+    private static Vector2 VertexInwardNormal(List<Vector2> poly, int v, bool ccw)
+    {
+        int n = poly.Count;
+        var p     = poly[v];
+        var pPrev = poly[(v - 1 + n) % n];
+        var pNext = poly[(v + 1) % n];
+
+        var d1 = p - pPrev;
+        var d2 = pNext - p;
+        if (d1.LengthSquared() > 1e-12f) d1 = Vector2.Normalize(d1);
+        if (d2.LengthSquared() > 1e-12f) d2 = Vector2.Normalize(d2);
+
+        // Left normals point inside a CCW polygon.
+        var nv = new Vector2(-d1.Y, d1.X) + new Vector2(-d2.Y, d2.X);
+        if (nv.LengthSquared() < 1e-9f)
+            nv = new Vector2(-d1.Y, d1.X);
+        if (nv.LengthSquared() < 1e-12f)
+            return Vector2.Zero;
+        nv = Vector2.Normalize(nv);
+        return ccw ? nv : -nv;
     }
 
     // After the last infill segment, trace the entire outer perimeter once and

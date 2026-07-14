@@ -19,6 +19,7 @@ using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Viewport;
+using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.FK;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.App.Diagnostics;
@@ -55,6 +56,9 @@ public partial class ViewportView : UserControl
     private bool     _isPanning;
     private AvaBtn?  _orbitButton;
     private AvaBtn?  _panButton;
+    /// <summary>Space held → LMB pans (2D slice / edit-friendly; works globally).</summary>
+    private bool     _spaceHeld;
+    private bool     _spaceUsedForPan;
 
     // Selection / gizmo drag tracking
     private Point    _leftDownPos;
@@ -90,6 +94,17 @@ public partial class ViewportView : UserControl
 
     // Pointer capture
     private IPointer? _capturedPointer;
+
+    // Toolpath seam-point drag: click-hold a seam point, slide the mouse left/right
+    // to walk the seam along its contour, release to re-seam the whole toolpath there.
+    private bool _seamPointDragging;
+    private SceneNode? _seamDragNode;
+    private readonly List<TkVector3> _seamDragLoopWorld = [];
+    private readonly List<System.Numerics.Vector2> _seamDragLoopLocalXY = [];
+    private float[] _seamDragCumLen = [];
+    private float _seamDragOffsetMm;
+    private float _seamDragMmPerPixel = 1f;
+    private int _seamDragVertex;
 
     // Seam guide drag
     private bool _seamGuideDragging;
@@ -208,6 +223,7 @@ public partial class ViewportView : UserControl
         PointerWheelChanged += OnPointerWheelChanged;
         PointerMoved += (_, e) => _lastPointerPos = e.GetPosition(this);
         KeyDown             += OnKeyDown;
+        KeyUp               += OnKeyUp;
 
         Focusable = true;
 
@@ -274,6 +290,8 @@ public partial class ViewportView : UserControl
                     nameof(ViewportViewModel.PbrMaterial)         or
                     nameof(ViewportViewModel.ShowExtrusionMoves)  or
                     nameof(ViewportViewModel.ShowTravelMoves)     or
+                    nameof(ViewportViewModel.ShowLightningMoves)  or
+                    nameof(ViewportViewModel.ShowWipeMoves)       or
                     nameof(ViewportViewModel.ShowSeam)               or
                     nameof(ViewportViewModel.ShowBead)               or
                     nameof(ViewportViewModel.ShowBeadOverhang)       or
@@ -291,7 +309,21 @@ public partial class ViewportView : UserControl
             vm.OnBoundaryDraftChanged = () => UpdateBoundaryMarkers(vm);
             vm.OnSliceRequested       = () => RunSliceAsync(vm);
             if (vm.AdditiveSettings is { } addSettings)
+            {
                 addSettings.OnAutoTiltRequested = rotateMesh => _ = RunAutoTiltAsync(vm, rotateMesh);
+                addSettings.OnOptimizeToolpathRequested = () =>
+                {
+                    if (vm.ActiveScrubToolpath is not { } tpOpt)
+                    {
+                        addSettings.OptimizeToolpathSummary = "No toolpath — slice first.";
+                        return;
+                    }
+                    var stats = MassiveSlicer.Core.Slicing.ToolpathOptimizer.Optimize(
+                        tpOpt, (float)addSettings.BeadWidth);
+                    addSettings.OptimizeToolpathSummary = stats.ToString();
+                    vm.RequestActiveToolpathReupload?.Invoke();
+                };
+            }
             vm.OnMillRequested        = () => RunMillAsync(vm);
             vm.OnPreviewDisplacedRequested = () => RunPreviewDisplacedAsync(vm);
             vm.OnGenerateMultiAxisRequested = () => RunMultiAxisMillAsync(vm);
@@ -301,8 +333,24 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
+            vm.OnSequenceToggleRequested = node => ToggleSequenceSelection(vm, node);
+            vm.OnSequenceRangeRequested  = item => SequenceRangeSelect(vm, item);
+            StartViewTagTimer(vm);
+            vm.GetSequenceCount          = () => _renderer.SelectedToolpathCount;
+            vm.GetSpeedSpread = () =>
+            {
+                var kv = _toolpathByNode.FirstOrDefault();
+                if (kv.Value is null) return "no toolpath";
+                float min = float.MaxValue, max = float.MinValue; int n = 0;
+                foreach (var l in kv.Value.Layers)
+                    foreach (var m in l.Moves)
+                        if (m.Kind == MoveKind.Extrude)
+                        { min = Math.Min(min, m.PrintSpeedScale); max = Math.Max(max, m.PrintSpeedScale); n++; }
+                return $"moves={n} scale min={min:F3} max={max:F3} tags={vm.ViewTags.Count} | renderer: {_renderer.DescribeToolpathEntry(kv.Key)}";
+            };
             vm.OnMergeScansRequested     = mode => MergeSelectedScans(vm, mode);
             vm.OnMergedSettingsChanged   = () => RebuildMergedToolpath(vm);
             vm.OnOutlinerSelectRequested = node =>
@@ -323,6 +371,7 @@ public partial class ViewportView : UserControl
                 UpdateFocusOverlay();
                 GlCanvas.RequestNextFrameRendering();
             };
+            vm.RequestApplyPendingUiSession = () => ApplyPendingUiSession(vm);
             vm.OnNodeHidden           = node =>
             {
                 if (_renderer.SelectedNode is { } sel && node.SelfAndDescendants().Any(n => n == sel))
@@ -337,6 +386,9 @@ public partial class ViewportView : UserControl
             vm.OnUngroupRequested     = UngroupSelected;
             vm.OnExplodeRequested     = ExplodeSelected;
             vm.OnMeshCleanupRequested = () => _ = MeshCleanupSelectedAsync();
+            vm.OnCutToolRequested     = () => BeginCutToolInteractive();
+            vm.OnCancelCutToolRequested = CancelCutToolInteractive;
+            vm.OnPerformCutToolRequested = () => PerformCutToolInteractive();
             vm.OnScrubIkRequested  = ScrubIk;
             vm.OnSimScrubRequested = SimScrubIk;
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
@@ -348,27 +400,51 @@ public partial class ViewportView : UserControl
             vm.OnFrameAllRequested = FrameAll;
             WireRealtimeSlicing(vm);
             vm.OnViewPresetRequested = ApplyViewPreset;
+            vm.OnSlicePlaneViewerChanged = active => ApplySlicePlaneViewerCamera(active);
+            vm.OnEnsureEditScrub = () => EnsureScrubArmedForEdit(vm);
+            vm.OnApplyOffsetPathRequested = () => ApplyOffsetPathToSelection(vm);
             vm.GetCameraState = () =>
             {
                 var c = _renderer.Camera;
                 return new MassiveSlicer.Core.Models.CameraView
                 {
-                    Azimuth   = c.Azimuth,
-                    Elevation = c.Elevation,
-                    Radius    = c.Radius,
-                    TargetX   = c.Target.X,
-                    TargetY   = c.Target.Y,
-                    TargetZ   = c.Target.Z,
+                    Azimuth        = c.Azimuth,
+                    Elevation      = c.Elevation,
+                    Radius         = c.Radius,
+                    TargetX        = c.Target.X,
+                    TargetY        = c.Target.Y,
+                    TargetZ        = c.Target.Z,
+                    IsOrthographic = c.IsOrthographic,
                 };
             };
             vm.ApplyCameraState = view =>
             {
-                _renderer.Camera.Azimuth   = view.Azimuth;
-                _renderer.Camera.Elevation = view.Elevation;
-                _renderer.Camera.Radius    = view.Radius;
-                _renderer.Camera.Target    = new Vector3(view.TargetX, view.TargetY, view.TargetZ);
+                _renderer.Camera.Azimuth        = view.Azimuth;
+                _renderer.Camera.Elevation      = view.Elevation;
+                _renderer.Camera.Radius         = view.Radius;
+                _renderer.Camera.Target         = new Vector3(view.TargetX, view.TargetY, view.TargetZ);
+                _renderer.Camera.IsOrthographic = view.IsOrthographic;
                 GlCanvas.RequestNextFrameRendering();
             };
+            vm.RequestActiveToolpathReupload = () =>
+            {
+                if (_activeScrubNode is not { } node) return;
+                if (!_toolpathByNode.TryGetValue(node, out var tpUp)) return;
+                _rawToolpathByNode.TryGetValue(node, out var rawUp);
+                var snapUp = GetToolpathSnapshot(node);
+                if (snapUp is null) return;
+                vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+                {
+                    Toolpath      = tpUp,
+                    RawToolpath   = rawUp ?? tpUp,
+                    Node          = node,
+                    BeadWidth     = snapUp.BeadWidth,
+                    LayerHeight   = snapUp.LayerHeight,
+                    MaterialColor = snapUp.MaterialColor,
+                });
+                GlCanvas.RequestNextFrameRendering();
+            };
+
             vm.OnPlaybackSpeedChanging = () =>
             {
                 // Freeze the current simulated position so changing speed doesn't jump the toolhead.
@@ -550,9 +626,11 @@ public partial class ViewportView : UserControl
         vm.OnSelectionTranslated = (x, y, z) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
+            var old = node.LocalTransform;
             var lt = node.LocalTransform;
             lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
             node.LocalTransform = lt;
+            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Move");
@@ -560,6 +638,7 @@ public partial class ViewportView : UserControl
         vm.OnSelectionRotated = (a, b, c) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
+            var old  = node.LocalTransform;
             var lt   = node.LocalTransform;
             float sX = lt.Row0.Xyz.Length;
             float sY = lt.Row1.Xyz.Length;
@@ -569,6 +648,7 @@ public partial class ViewportView : UserControl
             lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
             lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
             node.LocalTransform = lt;
+            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Rotate");
@@ -604,7 +684,16 @@ public partial class ViewportView : UserControl
 
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.TiltAngle)
                                     or nameof(AdditiveSettingsViewModel.TiltAngleX)
-                                    or nameof(AdditiveSettingsViewModel.Method))
+                                    or nameof(AdditiveSettingsViewModel.Method)
+                                    or nameof(AdditiveSettingsViewModel.XBracingEnabled)
+                                    or nameof(AdditiveSettingsViewModel.XBracingPlaneTiltY)
+                                    or nameof(AdditiveSettingsViewModel.XBracingPlaneTiltX)
+                                    or nameof(AdditiveSettingsViewModel.XBracingProjectionType)
+                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderDiameterMm)
+                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderX)
+                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderY)
+                                    or nameof(AdditiveSettingsViewModel.XBracingCylinderFlipDirection)
+                                    or nameof(AdditiveSettingsViewModel.XBracingShowHelper))
                     GlCanvas.RequestNextFrameRendering();
 
                 // Re-solve IK live when the toolhead orientation offset changes so the
@@ -649,6 +738,12 @@ public partial class ViewportView : UserControl
                     RebuildToolpathsFromRaw(additive);
             };
 
+            additive.OnSimulateThermalRequested = () => RunThermalSimulation(vm, additive);
+            vm.Erp.PricingChanged += () => Dispatcher.UIThread.Post(() =>
+            {
+                if (_activeScrubNode is { } statsNode && _toolpathByNode.TryGetValue(statsNode, out var statsTp))
+                    ApplyToolpathStats(vm, statsTp);
+            });
             additive.OnSetDefaultHomePositionRequested = () => SaveDefaultHomePosition(vm);
             UpdateSeamGuideMarkers(vm);
             GlCanvas.RequestNextFrameRendering();
@@ -842,7 +937,9 @@ public partial class ViewportView : UserControl
             _renderer.ContactShadowSize       = vm.ContactShadowSize;
             _renderer.ContactShadowDarkness   = vm.ContactShadowDarkness;
             _renderer.ContactShadowBlur       = vm.ContactShadowBlur;
-            _renderer.CavityEnabled           = vm.CavityEnabled;
+            _renderer.CavityEnabled              = vm.CavityEnabled;
+            _renderer.CavityShadeToolpaths       = vm.CavityShadeToolpaths;
+            _renderer.CavityShadeImportedMeshes  = vm.CavityShadeImportedMeshes;
             _renderer.CavityMode              = vm.CavityMode;
             _renderer.CavityScreenRidge       = vm.CavityScreenRidge;
             _renderer.CavityScreenValley      = vm.CavityScreenValley;
@@ -851,15 +948,135 @@ public partial class ViewportView : UserControl
             _renderer.CavityWorldDistance     = vm.CavityWorldDistance;
             _renderer.ShowExtrusionMoves = vm.ShowExtrusionMoves;
             _renderer.ShowTravelMoves    = vm.ShowTravelMoves;
+            _renderer.ShowLightningMoves = vm.ShowLightningMoves;
+            _renderer.ShowWipeMoves      = vm.ShowWipeMoves;
             _renderer.ShowSeam           = vm.ShowSeam;
             _renderer.ShowBead          = vm.ShowBead;
             _renderer.ShowBeadOverhang       = vm.ShowBeadOverhang;
             _renderer.ShowOrientationPreview = vm.ShowOrientationPreview;
-            _renderer.ToolpathActiveScrubIndex  = vm.IsToolpathSelected
-                ? vm.ToolpathScrubIndex
-                : int.MaxValue;
-            _renderer.SetToolpathBeadColor(
-                new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
+            // Scrub hides not-yet-printed moves whenever a scrub session is live
+            // (selection or sticky timeline), matching what the user can see.
+            bool scrubLive = vm.IsToolpathSelected || vm.IsScrubSessionActive;
+            int scrubHi = scrubLive ? vm.ToolpathScrubIndex : int.MaxValue;
+            int scrubLo = scrubLive ? vm.ToolpathScrubLowIndex : 0;
+            // Empty window [lo, hi) with hi<=lo draws zero vertices — recover to the
+            // full stack so a stale scrub (index 0) never blanks the toolpath.
+            if (scrubLive && vm.ToolpathScrubMax > 0 && scrubHi <= Math.Max(0, scrubLo))
+            {
+                scrubHi = vm.ToolpathScrubMax;
+                scrubLo = 0;
+            }
+            _renderer.ToolpathActiveScrubIndex = scrubHi;
+            _renderer.ToolpathActiveScrubStart = scrubLo;
+            // Apply the window to this node even when the mesh/TCP is selected.
+            _renderer.ToolpathActiveScrubNode = scrubLive ? _activeScrubNode : null;
+            // 2D Slice Plane Viewer — top-down neighbour-layer context in edit mode.
+            // Multi-pass must NOT depend on scrubLive alone: edit mode often has no
+            // outliner selection ("Nothing selected") which previously fell through to
+            // the normal dual-slider window and stacked every layer into a solid blob.
+            bool slicePlane = vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen;
+            if (slicePlane)
+            {
+                // Keep a scrub target armed so layer ends + multi-pass have a toolpath.
+                if (_activeScrubNode is null || vm.ActiveScrubToolpath is null
+                    || vm.ScrubLayerEnds is null || vm.ScrubLayerEnds.Length == 0)
+                    EnsureScrubArmedForEdit(vm);
+
+                // Contact shadows fight the clean 2D readout (save before hide flag flips).
+                if (!_sliceViewerHidScene)
+                    _sliceViewerSavedContactShadows = _renderer.ShowContactShadows;
+                _renderer.ShowContactShadows = false;
+
+                // Re-assert every frame: robot / env / solid meshes stay hidden.
+                EnforceSlicePlaneSceneHiding(hide: true);
+                // Camera lock every frame: top-down ortho, no azimuth spin (pan+zoom only).
+                // Elevation exactly 90° so the pole up-vector matches locked azimuth with
+                // no residual in-plane twist from the near-pole Gram-Schmidt path.
+                var cam = _renderer.Camera;
+                cam.Elevation = 90f;
+                if (_sliceViewerHasSavedCamera)
+                    cam.Azimuth = _sliceViewerLockedAzimuth;
+                cam.IsOrthographic = true;
+
+                // Scrub layers/timeline: slide the target with the active slice so the
+                // geometry stays framed; Radius (zoom) is left untouched.
+                FollowSliceLayerCamera(vm, cam);
+
+                // Measurement grid: one bead spacing (half-bead densified into a white sheet).
+                float bead = (float)(vm.AdditiveSettings?.BeadWidth ?? 6.0);
+                if (bead < 0.1f) bead = 6f;
+                _renderer.SlicePlaneGridSpacingMm = MathF.Max(bead, 3f);
+
+                // Grid Z must track real extrusion height (multiplanar used to store
+                // march parameter h as layer.Z ≈ −1950, leaving the 2D view empty).
+                float gridZ = cam.Target.Z;
+                float cx = cam.Target.X, cy = cam.Target.Y;
+                if (vm.ActiveScrubToolpath is { Layers.Count: > 0 } tp)
+                {
+                    int li = Math.Clamp(vm.CurrentScrubLayerIndex, 0, tp.Layers.Count - 1);
+                    if (TryGetSliceLayerWorldCenter(tp.Layers[li], out var layerCenter))
+                    {
+                        gridZ = layerCenter.Z;
+                        cx = layerCenter.X;
+                        cy = layerCenter.Y;
+                    }
+                    else
+                        gridZ = tp.Layers[li].Z;
+                }
+                _renderer.SlicePlaneGridZ = gridZ;
+                _renderer.SlicePlaneGridCenterX = cx;
+                _renderer.SlicePlaneGridCenterY = cy;
+            }
+            else if (_sliceViewerHidScene)
+            {
+                EnforceSlicePlaneSceneHiding(hide: false);
+                _renderer.ShowContactShadows = _sliceViewerSavedContactShadows;
+                _sliceFollowLayerIndex = -1;
+            }
+            else
+            {
+                _sliceFollowLayerIndex = -1;
+            }
+
+            _renderer.SlicePlaneViewerActive = slicePlane;
+            _renderer.SlicePlaneLayerIndex = vm.CurrentScrubLayerIndex;
+            // Prefer live ends from ActiveScrubToolpath so multi-pass always has data.
+            int[]? sliceEnds = null;
+            if (slicePlane && vm.ActiveScrubToolpath is { Layers.Count: > 0 } scrubTp)
+            {
+                sliceEnds = new int[scrubTp.Layers.Count];
+                int acc = 0;
+                for (int i = 0; i < scrubTp.Layers.Count; i++)
+                {
+                    acc += scrubTp.Layers[i].Moves.Count;
+                    sliceEnds[i] = acc;
+                }
+            }
+            else if (slicePlane)
+                sliceEnds = vm.ScrubLayerEnds;
+            _renderer.SlicePlaneLayerEnds = sliceEnds;
+            if (slicePlane && _activeScrubNode is not null)
+                _renderer.ToolpathActiveScrubNode = _activeScrubNode;
+            // Edit Point mode: every bead midpoint, not just contour seam ends.
+            // Slice plane viewer is pure centre-line readout — skip dense points.
+            _renderer.ShowAllPathPoints =
+                vm.IsPaintEditOpen && vm.PaintPointGranularityActive && !slicePlane;
+            // Edit Path mode: depth-cued line width (near 2.5x) + far fade.
+            // Top-down slice view uses flat line widths instead.
+            _renderer.ShowDepthAwareLines =
+                vm.IsPaintEditOpen && vm.PaintPathGranularityActive && !slicePlane;
+            // Edit mode: force pure-white beads so the whole toolpath reads as
+            // "editable" and paint/selection highlights stand out against it.
+            if (vm.IsPaintEditOpen)
+                _renderer.SetToolpathBeadColor(new TkVector3(1f, 1f, 1f));
+            else
+            {
+                _paintSelectedLine = null;   // clear sticky selection when leaving edit
+                _paintSelectedId = null;
+                ClearPaintPointAnchor();
+                _renderer.SetToolpathBeadColor(
+                    new TkVector3(vm.BeadColor.X, vm.BeadColor.Y, vm.BeadColor.Z));
+            }
             _renderer.SetToolpathColorMode(vm.ToolpathColorMode);
             _renderer.SetToolpathColors(
                 new TkVector3(vm.ToolpathExtrudeColor.X,     vm.ToolpathExtrudeColor.Y,     vm.ToolpathExtrudeColor.Z),
@@ -904,6 +1121,7 @@ public partial class ViewportView : UserControl
             _renderer.ShowTcpFrame     = vm.ShowTcpFrame;
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
+            _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {
@@ -1081,24 +1299,54 @@ public partial class ViewportView : UserControl
             while (_pendingOrientationUpdate.TryDequeue(out var upd))
                 _renderer.UpdateToolpathBeadOrientation(upd.node, upd.rates);
 
+            bool uploadedPending = false;
             while (vm.PendingToolpath.TryDequeue(out var entry))
             {
+                uploadedPending = true;
                 UploadToolpathEntry(entry, addToScene: true);
                 // Keep the current selection (usually the model) — auto-selecting the
                 // toolpath would flip the sidebar to the Toolpath view mid-workflow.
                 var adoptNode = entry.Node;
                 var adoptTp   = entry.Toolpath;
+                // When restoring a saved UI session, skip auto-adopt jump-to-end —
+                // the session restore will arm the correct toolpath and scrub window.
+                bool deferAdopt = vm.PendingUiSession is not null;
                 Dispatcher.UIThread.Post(() =>
                 {
                     // Adopt the new toolpath as the live scrub session so the timeline
                     // shows immediately without requiring a selection.
-                    if (DataContext is ViewportViewModel vmAdopt && _activeScrubNode is null)
+                    // Also re-arm while edit mode is open so the LAYERS dual-slider
+                    // picks up the real layer count (otherwise it stays at 1–2).
+                    if (!deferAdopt
+                        && DataContext is ViewportViewModel vmAdopt
+                        && (_activeScrubNode is null || vmAdopt.IsPaintEditOpen))
                     {
+                        bool sameNode = ReferenceEquals(_activeScrubNode, adoptNode);
+                        bool canPreserve = sameNode
+                            && vmAdopt.IsScrubSessionActive
+                            && vmAdopt.ToolpathScrubIndex > 0
+                            && vmAdopt.ToolpathScrubIndex > vmAdopt.ToolpathScrubLowIndex;
                         _activeScrubNode = adoptNode;
-                        vmAdopt.ResetScrubIndex(adoptTp.Layers.Sum(l => l.Moves.Count), adoptTp);
+                        vmAdopt.ResetScrubIndex(
+                            adoptTp.Layers.Sum(l => l.Moves.Count),
+                            adoptTp,
+                            preservePosition: canPreserve);
                         vmAdopt.IsScrubSessionActive = true;
                     }
                     UpdateFocusOverlay();
+                });
+            }
+
+            // After all workspace toolpaths are on the GPU, restore edit mode / tools /
+            // isolated layers from the .mass file.
+            if (uploadedPending
+                && vm.PendingUiSession is not null
+                && vm.PendingToolpath.IsEmpty)
+            {
+                Dispatcher.UIThread.Post(() =>
+                {
+                    if (DataContext is ViewportViewModel vmSession)
+                        ApplyPendingUiSession(vmSession);
                 });
             }
 
@@ -1109,7 +1357,16 @@ public partial class ViewportView : UserControl
                 _singularityByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
-                Dispatcher.UIThread.Post(UpdateFocusOverlay);
+                var replacedNode = entry.Node;
+                Dispatcher.UIThread.Post(() =>
+                {
+                    UpdateFocusOverlay();
+                    // After re-slice upload, keep robot on the current timeline frame.
+                    if (DataContext is ViewportViewModel vRep
+                        && ReferenceEquals(_activeScrubNode, replacedNode)
+                        && vRep.IsScrubSessionActive)
+                        ScrubIkForNode(replacedNode, vRep.ToolpathScrubIndex);
+                });
             }
 
             // Apply any completed reachability results on the GL thread.
@@ -1119,7 +1376,11 @@ public partial class ViewportView : UserControl
             while (_pendingSingularityPoints.TryDequeue(out var sing))
                 _renderer.UpdateToolpathSingularityPoints(sing.node, sing.singularity);
 
-            UpdateAnglePlanePreview(vm);
+            if (vm.IsCutToolActive)
+                UpdateCutToolOverlay(vm);
+            else
+                UpdateAnglePlanePreview(vm);
+            UpdatePaintOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -1206,9 +1467,17 @@ public partial class ViewportView : UserControl
             && DataContext is ViewportViewModel { Robot: not null } tcpVm)
             SyncTcpReadout(tcpVm);
 
-        _renderer.GizmoPivotWorld = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcpGizmo
-            ? tcpGizmo.Row3.Xyz
-            : null;
+        if (DataContext is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
+        {
+            _renderer.GizmoPivotWorld = new Vector3(
+                (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
+        }
+        else
+        {
+            _renderer.GizmoPivotWorld = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcpGizmo
+                ? tcpGizmo.Row3.Xyz
+                : null;
+        }
 
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
@@ -1455,6 +1724,118 @@ public partial class ViewportView : UserControl
             vm.Robot.IkSolver = _ikSolver;
     }
 
+    // -- Workspace UI session restore (edit mode / tools / layer isolation) ----
+
+    /// <summary>
+    /// Reapplies the UI session saved with the .mass file: re-arms the scrubbed
+    /// toolpath, restores the isolated layer window, reopens edit mode, and
+    /// re-selects the paint/path tool that was active at save time.
+    /// </summary>
+    private void ApplyPendingUiSession(ViewportViewModel vm)
+    {
+        if (vm.PendingUiSession is not { } session) return;
+        vm.PendingUiSession = null;
+
+        SceneNode? target = FindSessionToolpathNode(vm, session.ScrubModelName, session.ScrubToolpathName);
+
+        if (target is not null && _toolpathByNode.TryGetValue(target, out var tp))
+        {
+            if (session.SelectToolpath)
+            {
+                // Selection path also arms scrub via UpdateFocusOverlay (lands at end).
+                _renderer.Select(target);
+                vm.SetOutlinerSelection(target);
+                UpdateFocusOverlay();
+            }
+            else if (session.IsScrubSessionActive || session.IsPaintEditOpen)
+            {
+                // Arm scrub without forcing outliner selection onto the toolpath.
+                _activeScrubNode = target;
+                vm.ResetScrubIndex(tp.Layers.Sum(l => l.Moves.Count), tp, preservePosition: false);
+                vm.IsScrubSessionActive = true;
+            }
+
+            if (session.IsScrubSessionActive || session.IsPaintEditOpen || session.SelectToolpath)
+                vm.ApplyUiSessionScrubWindow(session);
+        }
+        else if (session.IsScrubSessionActive && _activeScrubNode is { } armed
+                 && _toolpathByNode.TryGetValue(armed, out _))
+        {
+            // Fallback: whatever was auto-armed — still restore the window.
+            vm.ApplyUiSessionScrubWindow(session);
+        }
+
+        vm.ApplyUiSessionViewState(session);
+        // Re-bind MODIFICATIONS after scrub/toolpath is armed (layers available).
+        if (session.PaintModifications is { Count: > 0 } mods)
+            RestorePaintModificationsState(mods);
+        // Re-apply slice-plane camera lock / robot hide after tools + scrub are armed
+        // (ApplyCameraState may have run before edit session restored).
+        if (session.IsSlicePlaneViewerActive && session.IsPaintEditOpen)
+        {
+            vm.IsSlicePlaneViewerActive = true;
+            ApplySlicePlaneViewerCamera(true);
+            vm.RefreshSlicePlaneStats();
+        }
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+        vm.OnDevLog?.Invoke(
+            $"[workspace] Restored UI session"
+            + (session.IsPaintEditOpen ? " (edit mode)" : "")
+            + (session.IsSlicePlaneViewerActive ? " (2D slice view)" : "")
+            + (session.ScrubToolpathName is { } n ? $" toolpath '{n}'" : "")
+            + $" layers {session.ToolpathScrubLayerLow:0}–{session.ToolpathScrubLayerHigh:0}."
+            + (session.PaintModifications.Count > 0
+                ? $" paintMods={session.PaintModifications.Count}"
+                : ""));
+    }
+
+    /// <summary>Finds a restored toolpath node by parent model + toolpath name.</summary>
+    private SceneNode? FindSessionToolpathNode(
+        ViewportViewModel vm, string? modelName, string? toolpathName)
+    {
+        if (string.IsNullOrEmpty(toolpathName))
+        {
+            // No name saved — first uploaded toolpath if any.
+            foreach (var kv in _toolpathByNode)
+                return kv.Key;
+            return null;
+        }
+
+        SceneNode? nameOnlyMatch = null;
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            bool modelOk = string.IsNullOrEmpty(modelName)
+                || string.Equals(item.Node.Name, modelName, StringComparison.OrdinalIgnoreCase);
+            if (!modelOk) continue;
+
+            foreach (var child in item.Children)
+            {
+                if (!string.Equals(child.Node.Name, toolpathName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (!_toolpathByNode.ContainsKey(child.Node)) continue;
+                return child.Node;
+            }
+        }
+
+        // Model name may have changed or been a placeholder — match toolpath name alone.
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            foreach (var child in item.Children)
+            {
+                if (string.Equals(child.Node.Name, toolpathName, StringComparison.OrdinalIgnoreCase)
+                    && _toolpathByNode.ContainsKey(child.Node))
+                {
+                    nameOnlyMatch = child.Node;
+                    break;
+                }
+            }
+            if (nameOnlyMatch is not null) break;
+        }
+
+        return nameOnlyMatch;
+    }
+
     // -- Cell swap -------------------------------------------------------------
 
     void ClearAllViewportToolpaths()
@@ -1481,10 +1862,12 @@ public partial class ViewportView : UserControl
         var world = node.WorldTransform;
         node.Parent?.RemoveChild(node);
 
-        if (_rotaryBedPivot is { } pivot)
+        // Content lives under the print bed: the rotary pivot where one exists (so E1
+        // spins the part with the table), else the flat bed node. World pose preserved.
+        if ((_rotaryBedPivot ?? _bedNode) is { } bed)
         {
-            node.LocalTransform = world * pivot.WorldTransform.Inverted();
-            pivot.AddChild(node);
+            node.LocalTransform = world * bed.WorldTransform.Inverted();
+            bed.AddChild(node);
         }
         else
         {
@@ -1539,13 +1922,20 @@ public partial class ViewportView : UserControl
     private void RestoreUserContentAfterCellSwap(
         ViewportViewModel vm,
         List<PreservedUserModel> users,
-        List<PreservedToolpathUpload> toolpaths)
+        List<PreservedToolpathUpload> toolpaths,
+        Matrix4 oldBedWorld)
     {
         if (users.Count == 0 && toolpaths.Count == 0) return;
 
+        // Old-bed → new-bed frame change. Content keeps its pose relative to the print
+        // bed, so it lands on the new cell's bed instead of floating at the old cell's
+        // world coordinates. Identity when either cell has no bed (world preserved).
+        var newBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
+        var bedDelta    = oldBedWorld.Inverted() * newBedWorld;
+
         foreach (var (node, world) in users)
         {
-            node.LocalTransform = world;
+            node.LocalTransform = world * bedDelta;
             AttachUserImportToCell(node);
         }
 
@@ -1559,7 +1949,7 @@ public partial class ViewportView : UserControl
                 BeadWidth              = snap.BeadWidth,
                 LayerHeight            = snap.LayerHeight,
                 MaterialColor          = snap.MaterialColor,
-                LocalTransformOverride = local,
+                LocalTransformOverride = local * bedDelta,
             }, addToScene: true);
         }
 
@@ -1576,6 +1966,10 @@ public partial class ViewportView : UserControl
             ClearToolChangeSequence(restorePriorMount: false);
         else
             Dispatcher.UIThread.Invoke(() => ClearToolChangeSequence(restorePriorMount: false));
+
+        // Content transfers bed-relative: capture the outgoing bed frame before teardown
+        // so restored models/toolpaths land on the NEW bed where they sat on the old one.
+        var oldBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
 
         var preservedUsers      = DetachUserModelsForCellSwap(vm);
         var preservedToolpaths  = SnapshotToolpathsForCellSwap(vm);
@@ -1794,7 +2188,7 @@ public partial class ViewportView : UserControl
                 System.Console.WriteLine("[cell] scene swap applied — robot visible");
         }
 
-        RestoreUserContentAfterCellSwap(vm, preservedUsers, preservedToolpaths);
+        RestoreUserContentAfterCellSwap(vm, preservedUsers, preservedToolpaths, oldBedWorld);
 
         // Dispatch UI-thread updates: joint limits, home angles, tool library.
         Dispatcher.UIThread.InvokeAsync(() =>
@@ -2029,6 +2423,18 @@ public partial class ViewportView : UserControl
         _                             => btn == AvaBtn.Middle,
     };
 
+    /// <summary>Space + left drag pans in every preset (handy in 2D slice / edit mode).</summary>
+    private bool IsSpaceLeftPan(AvaBtn btn) => _spaceHeld && btn == AvaBtn.Left;
+
+    /// <summary>
+    /// 2D slice plane locks the camera to top-down orthographic: pan + zoom only,
+    /// no orbit/rotate (including touchpad two-finger rotate).
+    /// </summary>
+    private bool IsSlicePlaneNavLocked =>
+        DataContext is ViewportViewModel sliceNavVm
+        && sliceNavVm.IsSlicePlaneViewerActive
+        && sliceNavVm.IsPaintEditOpen;
+
     // -- Pointer input ---------------------------------------------------------
 
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
@@ -2053,6 +2459,147 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Space + left drag → pan (before paint/select so 2D slice edit stays usable).
+        if (kind == PointerUpdateKind.LeftButtonPressed && _spaceHeld)
+        {
+            _isPanning = true;
+            _panButton = AvaBtn.Left;
+            _spaceUsedForPan = true;
+            GlCanvas.InteractionRenderScale = InteractionScale;
+            e.Pointer.Capture(this);
+            _capturedPointer = e.Pointer;
+            e.Handled = true;
+            return;
+        }
+
+        // 2D slice plane: right-drag pans (orbit is locked; this is the primary pan).
+        if (kind == PointerUpdateKind.RightButtonPressed && IsSlicePlaneNavLocked)
+        {
+            _isPanning = true;
+            _panButton = AvaBtn.Right;
+            GlCanvas.InteractionRenderScale = InteractionScale;
+            e.Pointer.Capture(this);
+            _capturedPointer = e.Pointer;
+            e.Handled = true;
+            return;
+        }
+
+        // Double-click: in 2D slice view, expand the line under the cursor to the full
+        // connected path (single-click stays a short local section). Elsewhere / on miss
+        // → frame the hit as the orbit centre.
+        if (kind == PointerUpdateKind.LeftButtonPressed && e.ClickCount >= 2)
+        {
+            if (IsSlicePlaneNavLocked
+                && DataContext is ViewportViewModel dblVm
+                && dblVm.ViewMode == "Preview"
+                && dblVm.IsPaintEditOpen
+                && !dblVm.PaintHandActive
+                && !dblVm.PaintBoxSelectActive
+                && !_spaceHeld
+                && (dblVm.PaintLineToolActive || !dblVm.PaintBrushActive)
+                && PickSpanUnderCursor(pos, fullConnectedPath: true) is not null)
+            {
+                TryPaintLineAt(dblVm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
+                    applyMarks: dblVm.PaintLineToolActive,
+                    additive: mods.HasFlag(KeyModifiers.Shift),
+                    fullConnectedPath: true);
+                if (_paintStrokeChanged)
+                {
+                    _paintStrokeChanged = false;
+                    dblVm.AdditiveSettings?.BumpPaintStamp();
+                }
+                GlCanvas.RequestNextFrameRendering();
+                e.Handled = true;
+                return;
+            }
+
+            FrameUnderCursorOrSelection(pos);
+            e.Handled = true;
+            return;
+        }
+
+        // Toolpath paint / line-select owns the pointer while the Edit menu is open
+        // in Preview: left paints (Alt erases), right-drag resizes the brush. A plain
+        // click with no tool (or with a line tool) always sticky-highlights the contour.
+        if (DataContext is ViewportViewModel pbVm
+            && pbVm.ViewMode == "Preview"
+            && (pbVm.PaintBrushActive || pbVm.IsPaintEditOpen)
+            && !_spaceHeld)
+        {
+            if (kind == PointerUpdateKind.RightButtonPressed && pbVm.PaintBrushActive
+                && !pbVm.PaintLineToolActive)
+            {
+                _paintResizing = true;
+                _paintResizeStartX = (float)pos.X;
+                _paintResizeStartRadius = pbVm.PaintBrushRadiusMm;
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
+            if (kind == PointerUpdateKind.LeftButtonPressed)
+            {
+                // Hand tool: leave the click alone so orbit/pan/select mesh still work.
+                if (pbVm.PaintHandActive)
+                    return;
+
+                // Region select (square marquee or lasso) — start drag, not a click-pick.
+                if (pbVm.PaintBoxSelectActive)
+                {
+                    _paintBoxDragging = true;
+                    _paintBoxStart = pos;
+                    _paintLassoPts.Clear();
+                    if (pbVm.PaintRegionSelectIsLasso)
+                    {
+                        pbVm.PaintMarqueeVisible = false;
+                        _paintLassoPts.Add(pos);
+                        pbVm.SetPaintLassoPoints(_paintLassoPts);
+                        pbVm.PaintLassoVisible = true;
+                    }
+                    else
+                    {
+                        pbVm.PaintLassoVisible = false;
+                        pbVm.ClearPaintLassoPoints();
+                        pbVm.PaintMarqueeX = pos.X;
+                        pbVm.PaintMarqueeY = pos.Y;
+                        pbVm.PaintMarqueeW = 0;
+                        pbVm.PaintMarqueeH = 0;
+                        pbVm.PaintMarqueeVisible = true;
+                    }
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+
+                if (pbVm.PaintLineToolActive || !pbVm.PaintBrushActive)
+                {
+                    // Line tool active → mark/unmark; edit open with no tool → select
+                    // only. Shift accumulates: earlier picks stay highlighted.
+                    // Single click = short local section (full path is double-click in 2D slice).
+                    TryPaintLineAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt),
+                        applyMarks: pbVm.PaintLineToolActive,
+                        additive: mods.HasFlag(KeyModifiers.Shift),
+                        fullConnectedPath: false);
+                    if (_paintStrokeChanged)
+                    {
+                        _paintStrokeChanged = false;
+                        pbVm.AdditiveSettings?.BumpPaintStamp();   // pending while paused
+                    }
+                    GlCanvas.RequestNextFrameRendering();          // show highlight / marks
+                    e.Handled = true;
+                    return;
+                }
+                _paintStroking = true;
+                _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                TryPaintAt(pbVm, pos, erase: mods.HasFlag(KeyModifiers.Alt));
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
+        }
+
         if (kind == PointerUpdateKind.LeftButtonPressed)
         {
             _leftDownPos = pos;
@@ -2073,11 +2620,43 @@ public partial class ViewportView : UserControl
                 _capturedPointer = e.Pointer;
                 return;
             }
+
+            if (DataContext is ViewportViewModel spVm
+                && TryBeginSeamPointDrag(spVm, mx, my, vpW, vpH))
+            {
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
+
+            if (DataContext is ViewportViewModel gpVm
+                && TryBeginGuidePlaneDrag(gpVm, mx, my, vpW, vpH))
+            {
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
+
+            if (DataContext is ViewportViewModel xcVm
+                && TryBeginXBraceCylinderDrag(xcVm, mx, my, vpW, vpH))
+            {
+                e.Pointer.Capture(this);
+                _capturedPointer = e.Pointer;
+                e.Handled = true;
+                return;
+            }
         }
 
         if (btn.HasValue)
         {
-            if (_orbitButton is null && IsOrbitButton(btn.Value, mods))
+            // 2D slice: never start an orbit — top view is pan + zoom only.
+            bool allowOrbit = !IsSlicePlaneNavLocked;
+            if (allowOrbit
+                && _orbitButton is null
+                && IsOrbitButton(btn.Value, mods)
+                && !IsSpaceLeftPan(btn.Value))
             {
                 _isOrbiting  = true;
                 _orbitButton = btn;
@@ -2085,14 +2664,20 @@ public partial class ViewportView : UserControl
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
-            else if (_panButton is null && IsPanButton(btn.Value, mods))
+            else if (_panButton is null
+                     && (IsPanButton(btn.Value, mods)
+                         || IsSpaceLeftPan(btn.Value)
+                         || (IsSlicePlaneNavLocked && btn.Value == AvaBtn.Right)))
             {
                 _isPanning  = true;
                 _panButton  = btn;
+                if (IsSpaceLeftPan(btn.Value))
+                    _spaceUsedForPan = true;
                 GlCanvas.InteractionRenderScale = InteractionScale;
                 e.Pointer.Capture(this);
                 _capturedPointer = e.Pointer;
             }
+            // In 2D slice, orbit bindings are ignored (pan via right-drag / middle / Space+LMB).
         }
     }
 
@@ -2109,6 +2694,50 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
+        {
+            if (pbxVm.PaintRegionSelectIsLasso)
+            {
+                // Thin the stream — only keep points that moved enough.
+                if (_paintLassoPts.Count == 0
+                    || Dist2D(_paintLassoPts[^1], pos) >= 4.0)
+                {
+                    _paintLassoPts.Add(pos);
+                    pbxVm.SetPaintLassoPoints(_paintLassoPts);
+                }
+            }
+            else
+            {
+                pbxVm.PaintMarqueeX = Math.Min(pos.X, _paintBoxStart.X);
+                pbxVm.PaintMarqueeY = Math.Min(pos.Y, _paintBoxStart.Y);
+                pbxVm.PaintMarqueeW = Math.Abs(pos.X - _paintBoxStart.X);
+                pbxVm.PaintMarqueeH = Math.Abs(pos.Y - _paintBoxStart.Y);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_paintResizing && DataContext is ViewportViewModel prVm)
+        {
+            prVm.PaintBrushRadiusMm =
+                _paintResizeStartRadius + ((float)pos.X - _paintResizeStartX) * 0.15;
+            e.Handled = true;
+            return;
+        }
+        if (_paintStroking && DataContext is ViewportViewModel psVm)
+        {
+            if (Math.Abs(pos.X - _lastPaintPx.X) + Math.Abs(pos.Y - _lastPaintPx.Y) >= 6)
+                TryPaintAt(psVm, pos, erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
+        // Edit menu open (or a paint tool armed): live hover feedback.
+        if (DataContext is ViewportViewModel phVm
+            && phVm.ViewMode == "Preview"
+            && (phVm.PaintBrushActive || phVm.IsPaintEditOpen)
+            && !_isOrbiting && !_isPanning)
+            if (!phVm.PaintHandActive) UpdatePaintHover(phVm, pos);
+
         if (_gizmoDragAxis != GizmoAxis.None)
         {
             _leftDragged = true;
@@ -2116,6 +2745,30 @@ public partial class ViewportView : UserControl
             if (_toolIsDragging)
                 RunIkForToolDrag();
             GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        if (_seamPointDragging)
+        {
+            _leftDragged = true;
+            UpdateSeamPointDrag((float)delta.X);
+            return;
+        }
+
+        if (_guidePlaneDragging && DataContext is ViewportViewModel gpDragVm)
+        {
+            _leftDragged = true;
+            UpdateGuidePlaneDrag(gpDragVm, (float)delta.X, (float)delta.Y);
+            return;
+        }
+
+        if (_xBraceCylinderDragging && DataContext is ViewportViewModel xcDragVm)
+        {
+            _leftDragged = true;
+            float vpW = (float)GlCanvas.Bounds.Width;
+            float vpH = (float)GlCanvas.Bounds.Height;
+            var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+            UpdateXBraceCylinderDrag(xcDragVm, ray);
             return;
         }
 
@@ -2143,6 +2796,13 @@ public partial class ViewportView : UserControl
 
         bool changed = false;
 
+        // 2D slice plane: pan + zoom only — drop any in-flight orbit.
+        if (_isOrbiting && IsSlicePlaneNavLocked)
+        {
+            _isOrbiting  = false;
+            _orbitButton = null;
+        }
+
         if (_isOrbiting)
         {
             _renderer.Camera.Orbit(
@@ -2168,6 +2828,50 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+
+        if (_paintBoxDragging)
+        {
+            _paintBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel boxVm)
+            {
+                bool additive = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
+                if (boxVm.PaintRegionSelectIsLasso)
+                {
+                    boxVm.PaintLassoVisible = false;
+                    if (_paintLassoPts.Count >= 3)
+                        SelectSpansInLasso(boxVm, _paintLassoPts, additive);
+                    _paintLassoPts.Clear();
+                    boxVm.ClearPaintLassoPoints();
+                }
+                else
+                {
+                    boxVm.PaintMarqueeVisible = false;
+                    var rect = new Avalonia.Rect(
+                        Math.Min(pt.Position.X, _paintBoxStart.X),
+                        Math.Min(pt.Position.Y, _paintBoxStart.Y),
+                        Math.Abs(pt.Position.X - _paintBoxStart.X),
+                        Math.Abs(pt.Position.Y - _paintBoxStart.Y));
+                    if (rect.Width > 4 && rect.Height > 4)
+                        SelectSpansInRect(boxVm, rect, additive);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_paintStroking || _paintResizing)
+        {
+            _paintStroking = false;
+            _paintResizing = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (_paintStrokeChanged && DataContext is ViewportViewModel pcVm)
+            {
+                _paintStrokeChanged = false;
+                pcVm.AdditiveSettings?.BumpPaintStamp();   // commit → re-slice
+            }
+            e.Handled = true;
+            return;
+        }
 
         // Stop an active orbit/pan FIRST, for ANY button. The left-button release is
         // otherwise consumed (and returned) by the selection/gizmo branch below, so a
@@ -2195,6 +2899,36 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (kind == PointerUpdateKind.LeftButtonReleased && _guidePlaneDragging)
+        {
+            if (DataContext is ViewportViewModel gpVm)
+                FinishGuidePlaneDrag(gpVm);
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            _leftDragged = false;
+            return;
+        }
+
+        if (kind == PointerUpdateKind.LeftButtonReleased && _xBraceCylinderDragging)
+        {
+            if (DataContext is ViewportViewModel xcVm)
+                FinishXBraceCylinderDrag(xcVm);
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            _leftDragged = false;
+            return;
+        }
+
+        if (kind == PointerUpdateKind.LeftButtonReleased && _seamPointDragging)
+        {
+            if (DataContext is ViewportViewModel spVm)
+                FinishSeamPointDrag(spVm);
+            _capturedPointer?.Capture(null);
+            _capturedPointer = null;
+            _leftDragged = false;
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonReleased && _seamGuideDragging)
         {
             _seamGuideDragging  = false;
@@ -2209,7 +2943,10 @@ public partial class ViewportView : UserControl
         {
             if (_gizmoDragAxis != GizmoAxis.None)
             {
-                if (_renderer.SelectedNode is { } gzNode && DataContext is ViewportViewModel vmGz)
+                bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
+                if (!cutDragging
+                    && _renderer.SelectedNode is { } gzNode
+                    && DataContext is ViewportViewModel vmGz)
                 {
                     var op = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
@@ -2217,9 +2954,10 @@ public partial class ViewportView : UserControl
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (DataContext is ViewportViewModel vmGz2)
+                if (!cutDragging && DataContext is ViewportViewModel vmGz2)
                 {
                     SyncSelectionTransformDisplay(vmGz2);
                     if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
@@ -2308,8 +3046,9 @@ public partial class ViewportView : UserControl
                     var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
                     var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
-                    if (shiftHeld && picked is not null && _renderer.IsToolpathNode(picked))
-                        _renderer.ToggleToolpathSelection(picked);
+                    if (shiftHeld && picked is not null
+                        && ResolveSequenceToolpath(pickVm, picked) is not null)
+                        ToggleSequenceSelection(pickVm, picked);
                     else
                         RequestSceneSelection(pickVm, picked);
                 }
@@ -2350,6 +3089,31 @@ public partial class ViewportView : UserControl
         float dx = (float)e.Delta.X;
         float dy = (float)e.Delta.Y;
 
+        // 2D slice plane: pan + zoom only — never orbit from the wheel/trackpad.
+        if (IsSlicePlaneNavLocked)
+        {
+            if (ActivePreset == NavigationPresetId.Touchpad
+                && mods.HasFlag(KeyModifiers.Meta))
+            {
+                // Cmd + two fingers → pan (same as normal Touchpad).
+                _renderer.Camera.Pan(
+                    deltaX:         dx * 4f,
+                    deltaY:        -dy * 4f,
+                    viewportWidth:  (float)GlCanvas.Bounds.Width,
+                    viewportHeight: (float)GlCanvas.Bounds.Height);
+            }
+            else
+            {
+                // Plain scroll / two-finger drag → zoom (no rotate).
+                float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
+                _renderer.Camera.Zoom(zoom);
+            }
+
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
+
         // Every preset except Touchpad maps a plain scroll to zoom (see NavigationPreset table).
         // The Touchpad preset keeps two-finger gestures: no-modifier orbit, Shift zoom, Cmd pan.
         if (ActivePreset != NavigationPresetId.Touchpad)
@@ -2384,6 +3148,40 @@ public partial class ViewportView : UserControl
         e.Handled = true;
     }
 
+    private void OnKeyUp(object? sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Space) return;
+
+        bool wasHeld = _spaceHeld;
+        bool usedPan = _spaceUsedForPan;
+        _spaceHeld = false;
+        _spaceUsedForPan = false;
+
+        // Space alone (no pan) still toggles playback when a toolpath is selected,
+        // except in edit mode where Space is reserved for temporary pan.
+        if (wasHeld && !usedPan
+            && DataContext is ViewportViewModel spaceVm
+            && spaceVm.IsToolpathSelected
+            && !spaceVm.IsPaintEditOpen)
+        {
+            spaceVm.TogglePlaybackCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>True when keyboard focus is in a text field (don't steal ↑/↓).</summary>
+    private bool IsTextInputFocused()
+    {
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        if (focused is null) return false;
+        if (focused is TextBox) return true;
+        // Nested text presenter / custom editors.
+        var t = focused.GetType();
+        return t.Name.Contains("TextBox", StringComparison.Ordinal)
+            || t.Name.Contains("TextPresenter", StringComparison.Ordinal)
+            || t.Name.Contains("TextEditor", StringComparison.Ordinal);
+    }
+
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
         if (_kbTransformActive)
@@ -2412,8 +3210,33 @@ public partial class ViewportView : UserControl
             }
         }
 
+        // Space alone arms temporary pan mode (Space + LMB drag). Playback toggle
+        // moves to KeyUp so a pan gesture does not start/stop the timeline.
+        if (e.Key == Key.Space && e.KeyModifiers == KeyModifiers.None)
+        {
+            if (!_spaceHeld)
+            {
+                _spaceHeld = true;
+                _spaceUsedForPan = false;
+            }
+            e.Handled = true;
+            return;
+        }
+
+        // Number-row / numpad view keys: 1 Top, 2 Front, 3 Right, 4 Iso+Frame, 5 Left.
+        // First press → that view in orthographic; press again → same view in perspective.
+        if (e.KeyModifiers == KeyModifiers.None
+            && TryHandleViewNumberKey(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
+
         switch (e.Key)
         {
+            case Key.X when e.KeyModifiers == KeyModifiers.None:
+                if (TryDeleteSelectedWithUndo()) e.Handled = true;
+                break;
             case Key.F:      FocusSelected();                          e.Handled = true; break;
             case Key.G:
                 SetGizmoMode(GizmoMode.None);
@@ -2434,13 +3257,6 @@ public partial class ViewportView : UserControl
                 }
                 e.Handled = true; break;
             case Key.Delete: DeleteSelectedNode();                     e.Handled = true; break;
-            case Key.Space:
-                if (DataContext is ViewportViewModel spaceVm && spaceVm.IsToolpathSelected)
-                {
-                    spaceVm.TogglePlaybackCommand.Execute(null);
-                    e.Handled = true;
-                }
-                break;
             case Key.Escape:
                 if (DataContext is ViewportViewModel pieEscVm && pieEscVm.IsViewPieOpen)
                 {
@@ -2448,9 +3264,35 @@ public partial class ViewportView : UserControl
                     e.Handled = true;
                     break;
                 }
+                if (DataContext is ViewportViewModel cutEscVm && cutEscVm.IsCutToolActive)
+                {
+                    CancelCutToolInteractive();
+                    e.Handled = true;
+                    break;
+                }
+                if (DataContext is ViewportViewModel bridgeEscVm
+                    && bridgeEscVm.PaintBridgePickModificationId.HasValue)
+                {
+                    bridgeEscVm.PaintBridgePickModificationId = null;
+                    LogPaintConsole("[edit] bridge target pick cancelled");
+                    e.Handled = true;
+                    break;
+                }
                 if (DataContext is ViewportViewModel escVm && escVm.IsLayFlatMode)
                 {
                     escVm.IsLayFlatMode = false;
+                    e.Handled = true;
+                    break;
+                }
+                // Edit mode: clear all selected path/point lines (same as Deselect).
+                if (DataContext is ViewportViewModel paintEscVm
+                    && paintEscVm.IsPaintEditOpen
+                    && (_paintSelection.Count > 0
+                        || _paintSelectedLine is { Count: > 0 }
+                        || _paintMultiLines.Count > 0))
+                {
+                    DeselectPaintSelection(paintEscVm);
+                    _paintHoverLine = null;
                     e.Handled = true;
                 }
                 break;
@@ -2459,6 +3301,21 @@ public partial class ViewportView : UserControl
                 {
                     hudVm.ToggleSyncHud();
                     e.Handled = true;
+                }
+                break;
+
+            // Preview: ↑ / ↓ step the layer scrub up / down one layer.
+            case Key.Up:
+            case Key.Down:
+                if (e.KeyModifiers == KeyModifiers.None
+                    && !IsTextInputFocused()
+                    && DataContext is ViewportViewModel layerVm
+                    && layerVm.ViewMode == "Preview")
+                {
+                    // Up = next higher layer, Down = previous lower layer.
+                    int delta = e.Key == Key.Up ? +1 : -1;
+                    if (layerVm.StepScrubLayer(delta))
+                        e.Handled = true;
                 }
                 break;
         }
@@ -2624,6 +3481,34 @@ public partial class ViewportView : UserControl
         return meshSnapshots;
     }
 
+    /// <summary>
+    /// Map UI infill name → core enum. Formbound paint marks force the matching
+    /// Formbound pattern (per-mark style majority) even when FILL PATTERN is None.
+    /// Tree-only paint leaves pattern None — the slicer force-enables Tree separately.
+    /// </summary>
+    private static InfillPattern ResolveInfillPatternForSlice(AdditiveSettingsViewModel s)
+    {
+        var mapped = s.InfillPattern switch
+        {
+            "Rectilinear"        => InfillPattern.Rectilinear,
+            "Grid"               => InfillPattern.Grid,
+            "Triangle"           => InfillPattern.Triangle,
+            "Ghost Mesh Grid"    => InfillPattern.GhostMeshGrid,
+            "Formbound Bridge"   => InfillPattern.LightningBridge,
+            "Lightning Bridge"   => InfillPattern.LightningBridge,
+            "Formbound Buttress" => InfillPattern.FormboundButtress,
+            _                    => InfillPattern.None,
+        };
+        // Explicit Formbound dropdown wins for auto whole-part mode.
+        if (mapped is InfillPattern.LightningBridge or InfillPattern.FormboundButtress)
+            return mapped;
+        // Paint Formbound marks force enable even when dropdown is None/Grid.
+        if (Core.Models.PaintSupportStyleUtil.ResolveFormboundPatternFromPaint(s.PaintMarks)
+            is { } fromPaint)
+            return fromPaint;
+        return mapped;
+    }
+
     private static SliceSettings BuildSliceSettings(AdditiveSettingsViewModel? additive)
     {
         if (additive is not { } s) return new SliceSettings();
@@ -2639,6 +3524,12 @@ public partial class ViewportView : UserControl
             ApproachZ        = (float)s.ApproachZ,
             PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
+                                   ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
+                                   : s.PatternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase)
+                                       ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength
+                                       : MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength,
+            PatternWavelengthMm  = (float)s.PatternWavelengthMm,
             PatternAmplitude     = (float)s.PatternAmplitude,
             PatternFrequency     = (float)s.PatternFrequency,
             PatternTwistDegPerMm = (float)s.PatternTwist,
@@ -2649,6 +3540,19 @@ public partial class ViewportView : UserControl
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
             ZigZagSeam             = s.SeamMode == "Zig-zag",
+            Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
+            XBracingEnabled     = s.XBracingEnabled,
+            XBracingDepthMm     = (float)s.XBracingDepthMm,
+            XBracingSpanMm      = (float)s.XBracingSpanMm,
+            XBracingAngleDeg    = (float)s.XBracingAngleDeg,
+            XBracingExtendEdges = s.XBracingExtendEdges,
+            XBracingPlaneTiltY  = (float)s.XBracingPlaneTiltY,
+            XBracingPlaneTiltX  = (float)s.XBracingPlaneTiltX,
+            XBracingProjectionType = s.XBracingProjectionType,
+            XBracingCylinderDiameterMm = (float)s.XBracingCylinderDiameterMm,
+            XBracingCylinderX   = (float)s.XBracingCylinderX,
+            XBracingCylinderY   = (float)s.XBracingCylinderY,
+            XBracingCylinderFlipDirection = s.XBracingCylinderFlipDirection,
             WaveEffect    = s.WaveEffect switch
             {
                 "Sine"     => WaveEffectType.Sine,
@@ -2683,16 +3587,19 @@ public partial class ViewportView : UserControl
             SmoothRotation                = s.SmoothRotation,
             SmoothRotationRadius          = s.SmoothRotationRadius,
             SmoothRotationMaxRateDegPerMm = (float)s.SmoothRotationMaxRateDegPerMm,
-            InfillPattern = s.InfillPattern switch
-            {
-                "Rectilinear"     => InfillPattern.Rectilinear,
-                "Grid"            => InfillPattern.Grid,
-                "Triangle"        => InfillPattern.Triangle,
-                "Ghost Mesh Grid" => InfillPattern.GhostMeshGrid,
-                _                 => InfillPattern.None,
-            },
+            InfillPattern = ResolveInfillPatternForSlice(s),
             InfillSpacingMm = (float)s.InfillSpacingMm,
             InfillAngleDeg  = (float)s.InfillAngleDeg,
+            LightningOverhangDeg     = (float)s.LightningOverhangDeg,
+            LightningBranchSpacingMm = (float)s.LightningBranchSpacingMm,
+            LightningTipLoopRadiusMm = (float)s.LightningTipLoopRadiusMm,
+            // Affect Interior / Affect Exterior (UI) map onto anchor + exterior demand.
+            LightningAnchorInterior  = s.LightningAffectInterior,
+            LightningAnchorExterior  = s.LightningAffectExterior,
+            LightningExteriorOverhangs = s.LightningAffectExterior,
+            LightningButtressBarMm         = (float)s.LightningButtressBarMm,
+            LightningPreferInteriorMouths  = s.LightningPreferInteriorMouths,
+            LightningTargetSupportSelections = s.LightningTargetSupportSelections,
             ZHopMm          = (float)s.ZHopMm,
             WipeMode        = s.WipeModeDisplay switch
             {
@@ -2704,6 +3611,7 @@ public partial class ViewportView : UserControl
             WipeLengthMm = (float)s.WipeLengthMm,
             WipeRampMm   = (float)s.WipeRampMm,
             WipeSpeed    = (float)(s.WipeSpeed / 1000.0),
+            WipeSkipShortTravels = s.WipeSkipShortTravels,
             FlowRate     = (float)(s.SelectedPreset?.FlowRate ?? 0.463),
             ResumeRampEnabled          = s.ResumeRampEnabled,
             ResumeRampStartSpeedMps    = (float)(s.ResumeRampStartSpeed / 1000.0),
@@ -2714,7 +3622,18 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            MultiPlanarPlanes          = s.MultiPlanarPlanes
+                .Select(r => new MassiveSlicer.Core.Models.MultiPlanarPlane((float)r.HeightPct, (float)r.AngleDeg))
+                .ToList(),
+            MultiPlanarAxisX           = s.MultiPlanarAxisX,
+            ThermalDepositTempC        = (float)Math.Max(s.Temperature1, Math.Max(s.Temperature2, s.Temperature3)),
+            ThermalGlassTransitionC    = ResolveThermalGlassTransitionC(s.SelectedPreset),
+            ThermalAmbientTempC        = (float)(s.SelectedPreset?.ThermalAmbientC ?? 30.0),
+            ThermalDensityGmCc         = (float)(s.SelectedPreset?.MaterialDensity ?? 1.05),
+            ThermalBondMarginC         = ResolveThermalBondMarginC(s.SelectedPreset),
+            ThermalSagMarginC          = ResolveThermalSagMarginC(s.SelectedPreset),
             SeamGuidePoints = s.BuildSeamGuideList(),
+            PaintMarks      = s.BuildPaintMarkList(),
             CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
             CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
             CurvedBoundarySource        = s.CurvedBoundarySource,
@@ -2724,25 +3643,55 @@ public partial class ViewportView : UserControl
         };
     }
 
+    /// <summary>
+    /// Glass-transition for thermal sim: material preset override when &gt; 0,
+    /// otherwise the family lookup from material type (ABS→105, PEI→217, …).
+    /// </summary>
+    private static float ResolveThermalGlassTransitionC(MaterialPreset? preset)
+    {
+        if (preset is not null && preset.GlassTransitionC > 0)
+            return (float)preset.GlassTransitionC;
+        return ThermalSimulator.GlassTransitionC(preset?.MaterialType);
+    }
+
+    private static float ResolveThermalBondMarginC(MaterialPreset? preset)
+    {
+        if (preset is not null && preset.ThermalBondMarginC > 0)
+            return (float)preset.ThermalBondMarginC;
+        return ThermalSimulator.DefaultBondMarginC;
+    }
+
+    private static float ResolveThermalSagMarginC(MaterialPreset? preset)
+    {
+        if (preset is not null && preset.ThermalSagMarginC > 0)
+            return (float)preset.ThermalSagMarginC;
+        return ThermalSimulator.DefaultSagMarginC;
+    }
+
     private static async Task<(Toolpath smoothed, Toolpath raw, SliceSettings settings)> ComputeToolpathAsync(
         List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)> meshSnapshots,
         SliceMethod method,
         SliceSettings settings,
         Action<string>? reportProgress = null,
-        Action<double>? reportPercent = null)
+        Action<double>? reportPercent = null,
+        CancellationToken cancel = default)
     {
         void Report(string msg) => reportProgress?.Invoke(msg);
         void Pct(double p)      => reportPercent?.Invoke(p);
+        void ThrowIfCancel() => cancel.ThrowIfCancellationRequested();
 
         Report("Preparing mesh…");
         Pct(1);
+        ThrowIfCancel();
         SliceLogger.BeginSession($"ComputeToolpathAsync  method={method}  wave={settings.WaveEffect}");
         var (smoothedToolpath, rawToolpath) = await Task.Run(() =>
         {
+            ThrowIfCancel();
             SliceLogger.Step("background thread started");
             var flatMeshes = new List<NVec3[]>(meshSnapshots.Count);
             foreach (var (positions, indices, world) in meshSnapshots)
             {
+                ThrowIfCancel();
                 NVec3[] flat;
                 if (indices is null)
                 {
@@ -2759,31 +3708,64 @@ public partial class ViewportView : UserControl
                 flatMeshes.Add(flat);
             }
             SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}");
+            ThrowIfCancel();
 
             Report(method switch
             {
                 SliceMethod.Curved   => "Curved (Sweep): computing boundaries and layers…",
                 SliceMethod.Geodesic => "Geodesic: computing surface-distance layers…",
                 SliceMethod.Angled   => "Angled: intersecting tilted planes…",
+                SliceMethod.MultiPlanar => "Multi-Planar: interpolating guide planes…",
                 _                    => "Planar: intersecting layers…",
             });
             Pct(5);
 
             // Stage weights: slicing dominates wall-clock, so it owns 5→75%.
+            // Progress callback also polls cancel so long planar runs abort mid-stack.
+            void SlicePct(float f)
+            {
+                ThrowIfCancel();
+                Pct(5 + f * 70);
+            }
+
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.MultiPlanar) tp = AngledPlanarSlicer.SliceMultiPlanar(flatMeshes, settings);
             else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
-            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings,
-                                                          f => Pct(5 + f * 70));
-            SliceLogger.Step($"slicer done  layers={tp.Layers.Count}  moves={tp.Layers.Sum(l => l.Moves.Count)}");
+            else                                     tp = PlanarSlicer.Slice(flatMeshes, settings, SlicePct);
+            ThrowIfCancel();
+            int lightningMoves = 0;
+            foreach (var lyr in tp.Layers)
+                foreach (var mv in lyr.Moves)
+                    if (mv.IsLightning) lightningMoves++;
+            SliceLogger.Step($"slicer done  layers={tp.Layers.Count}  moves={tp.Layers.Sum(l => l.Moves.Count)}  lightningMoves={lightningMoves}");
+            if (MassiveSlicer.Core.Slicing.Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+                || settings.XBracingEnabled)
+            {
+                // Stdout mirror during background slice; UI Console.Log runs on completion.
+                if (tp.FormboundStats is { } fs)
+                    System.Console.WriteLine(fs.ToLogLine());
+                System.Console.WriteLine(
+                    $"[formbound] emit: {lightningMoves} lightning bead segment(s) across {tp.Layers.Count} layer(s) " +
+                    $"(pattern={settings.InfillPattern}, bar={settings.LightningButtressBarMm:0.#}mm" +
+                    $", xBracing={settings.XBracingEnabled})");
+            }
             Pct(75);
+            ThrowIfCancel();
+
+            // Effects/post-processors rebuild the toolpath and drop FormboundStats —
+            // capture now and re-stamp on the results so the console report survives.
+            var fbStats = tp.FormboundStats;
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
+            ThrowIfCancel();
             tp = MassiveSlicer.Core.Slicing.Effects.PatternEffect.Apply(tp, settings);
+            tp = MassiveSlicer.Core.Slicing.Effects.SpiralizeEffect.Apply(tp, settings);
             SliceLogger.Step($"WaveEffect done  moves={tp.Layers.Sum(l => l.Moves.Count)}");
             Pct(80);
+            ThrowIfCancel();
 
             tp = MovementPostProcessor.Apply(tp, settings);
             SliceLogger.Step("MovementPostProcessor done");
@@ -2791,14 +3773,17 @@ public partial class ViewportView : UserControl
             tp = ResumeRampPostProcessor.Apply(tp, settings);
             SliceLogger.Step("ResumeRampPostProcessor done");
             Pct(84);
+            ThrowIfCancel();
 
             var raw = ToolpathClone.Copy(tp);
             SliceLogger.Step("ToolpathClone.Copy(raw) done");
             Pct(88);
+            ThrowIfCancel();
 
             var withSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(tp), settings);
             SliceLogger.Step("LayerSpeedPostProcessor done");
             Pct(93);
+            ThrowIfCancel();
 
             var toSmooth = ToolpathClone.Copy(withSpeed);
             SliceLogger.Step("ToolpathClone.Copy(toSmooth) done");
@@ -2806,13 +3791,18 @@ public partial class ViewportView : UserControl
 
             OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
             SliceLogger.Step("OrientationBlender done");
+            ThrowIfCancel();
 
             var smoothed = OrientationSmoother.Apply(toSmooth, settings);
             SliceLogger.Step("OrientationSmoother done");
+
+            ThermalSimulator.StampLayerTemps(smoothed, settings);
             Pct(100);
 
+            smoothed.FormboundStats ??= fbStats;
+            raw.FormboundStats ??= fbStats;
             return (smoothed, raw);
-        });
+        }, cancel);
 
         SliceLogger.Step("back on UI thread — returning result");
         SliceLogger.EndSession();
@@ -2825,7 +3815,9 @@ public partial class ViewportView : UserControl
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
         OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
-        return OrientationSmoother.Apply(toSmooth, settings);
+        var smoothed = OrientationSmoother.Apply(toSmooth, settings);
+        ThermalSimulator.StampLayerTemps(smoothed, settings);
+        return smoothed;
     }
 
     private ToolpathSnapshot? GetToolpathSnapshot(SceneNode node)
@@ -2848,6 +3840,25 @@ public partial class ViewportView : UserControl
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
         _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+
+        // The timeline must always follow the DISPLAYED toolpath. Some replace
+        // paths (workspace-restore ordering, background re-uploads) staged a new
+        // toolpath without re-pointing the scrub, leaving ActiveScrubToolpath on
+        // a stale object — the speed/RPM readout, tpfix/tpopt and KRL export then
+        // saw pre-Adaptive-Speed values while the renderer drew the new ones.
+        if (ReferenceEquals(entry.Node, _activeScrubNode))
+        {
+            var tpNew = entry.Toolpath;
+            var node  = entry.Node;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is not ViewportViewModel vmStage) return;
+                if (!ReferenceEquals(node, _activeScrubNode)) return;
+                if (ReferenceEquals(vmStage.ActiveScrubToolpath, tpNew)) return;
+                int newMax = tpNew.Layers.Sum(l => l.Moves.Count);
+                vmStage.ResetScrubIndex(newMax, tpNew, preservePosition: true);
+            });
+        }
     }
 
     private void UploadToolpathEntry(PendingToolpathEntry entry, bool addToScene)
@@ -2866,19 +3877,37 @@ public partial class ViewportView : UserControl
                 _renderer.ReplaceToolpath(entry.Toolpath, entry.Node, entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
 
             SliceLogger.Step("pose/transform");
+            // Add/Replace always parks the node at the pure geometry-centroid translation.
+            // Keep that as the origin for scrub/IK and for PreserveRelativePose on the next
+            // re-slice — never substitute the full node translation (which may include user
+            // gizmo offsets and would double-count on the next update).
             var centroidLocal = entry.Node.LocalTransform;
+            var geometryCentroid = new NVec3(
+                centroidLocal.Row3.X, centroidLocal.Row3.Y, centroidLocal.Row3.Z);
 
             if (entry.PreserveRelativePose
                 && entry.PreservedLocalTransform is Matrix4 preservedLocal
                 && entry.PreservedOrigin is NVec3 preservedOrigin)
             {
+                // Re-apply the old node pose relative to the old geometry centroid, then
+                // re-base onto the new centroid so a re-slice keeps user placement.
                 var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
                 Matrix4.Invert(oldOriginT, out var invOldOrigin);
                 entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
             }
             else if (entry.LocalTransformOverride is Matrix4 lt)
             {
-                entry.Node.LocalTransform = lt;
+                // Workspace restore: apply the saved node transform unless it is effectively
+                // identity while the geometry lives far from the origin (a bad save would
+                // pin the toolpath at robot-root / world zero).
+                bool nearIdentity =
+                    MathF.Abs(lt.Row3.X) < 1f && MathF.Abs(lt.Row3.Y) < 1f && MathF.Abs(lt.Row3.Z) < 1f
+                    && MathF.Abs(lt.Row0.X - 1f) < 1e-3f && MathF.Abs(lt.Row1.Y - 1f) < 1e-3f
+                    && MathF.Abs(lt.Row2.Z - 1f) < 1e-3f;
+                bool geometryFar =
+                    geometryCentroid.LengthSquared() > 100f * 100f; // >100 mm from origin
+                if (!(nearIdentity && geometryFar))
+                    entry.Node.LocalTransform = lt;
             }
 
             SliceLogger.Step("ComputeOverhangPerFlatMove");
@@ -2890,23 +3919,80 @@ public partial class ViewportView : UserControl
             SliceLogger.Step("UpdateToolpathBeadOrientation");
             _renderer.UpdateToolpathBeadOrientation(entry.Node, orientationRates);
 
-            // Scrub/IK un-localise against the geometry centroid, not the user translation component.
-            var originRow = entry.PreserveRelativePose || entry.LocalTransformOverride is null
-                ? centroidLocal.Row3
-                : entry.Node.LocalTransform.Row3;
-            _toolpathOriginByNode[entry.Node] = new NVec3(originRow.X, originRow.Y, originRow.Z);
+            // Always the geometry centroid used when building the VBO (points are relative to it).
+            _toolpathOriginByNode[entry.Node] = geometryCentroid;
             SliceLogger.EndSession("UploadToolpathEntry done");
         }
         catch (Exception ex)
         {
             SliceLogger.Error("UploadToolpathEntry", ex);
             // Swallow so the GL thread survives — the toolpath just won't render.
-            Dispatcher.UIThread.Post(() =>
-            {
-                if (_vm is { } vm)
-                    SetSliceStatus(vm, $"Render error: {ex.GetType().Name}: {ex.Message}", isError: true);
-            });
+            // Full multi-line detail goes to the console (per-line copy) so shader
+            // logs are not lost in the truncated status bar overlay.
+            LogRenderExceptionToConsole(ex);
         }
+    }
+
+    /// <summary>
+    /// Writes a render/shader failure to the app console as separate error lines
+    /// (easy to copy one-by-one) and sets a short status-bar summary.
+    /// </summary>
+    private void LogRenderExceptionToConsole(Exception ex)
+    {
+        var lines = new List<string>
+        {
+            $"[gl] Render error: {ex.GetType().Name}: {FirstLine(ex.Message)}",
+        };
+        // Shader compilers put the useful log after the first line / in the message body.
+        foreach (var part in SplitLines(ex.Message).Skip(1))
+            lines.Add($"[gl]   {part}");
+        if (ex.InnerException is { } inner)
+        {
+            lines.Add($"[gl]   inner: {FirstLine(inner.Message)}");
+            foreach (var part in SplitLines(inner.Message).Skip(1))
+                lines.Add($"[gl]     {part}");
+        }
+        if (ex.StackTrace is { Length: > 0 } st)
+        {
+            lines.Add("[gl]   stack:");
+            foreach (var frame in SplitLines(st).Take(12))
+                lines.Add($"[gl]     {frame.Trim()}");
+        }
+
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_vm is { } vm)
+                SetSliceStatus(vm,
+                    $"Render error: {ex.GetType().Name}: {FirstLine(ex.Message)}",
+                    isError: true);
+
+            if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            {
+                foreach (var line in lines)
+                    mvm.Console.LogError(line);
+            }
+            else if (_vm?.OnDevLog is { } log)
+            {
+                foreach (var line in lines)
+                    log(line);
+            }
+        });
+    }
+
+    private static string FirstLine(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        int n = s.IndexOfAny(['\r', '\n']);
+        return n < 0 ? s : s[..n];
+    }
+
+    private static IEnumerable<string> SplitLines(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) yield break;
+        using var reader = new StringReader(s);
+        while (reader.ReadLine() is { } line)
+            if (line.Length > 0)
+                yield return line;
     }
 
     private void ApplyToolpathStats(ViewportViewModel vm, Toolpath smoothedToolpath)
@@ -2917,7 +4003,9 @@ public partial class ViewportView : UserControl
 
     private static void ApplyToolpathStats(ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel s)
     {
-        var (t, w, c, layerStats) = ComputeToolpathStats(toolpath, s);
+        var (t, w, c, layerStats, massKg) = ComputeToolpathStats(toolpath, s, vm.Erp.PricingConfig);
+        vm.StatsTimeSeconds        = layerStats.TotalTimeSeconds;
+        vm.StatsWeightKg           = massKg;
         vm.StatsTime               = t;
         vm.StatsWeight             = w;
         vm.StatsCost               = c;
@@ -2964,6 +4052,48 @@ public partial class ViewportView : UserControl
         });
     }
 
+    private void LogFormboundEmitStats(Toolpath tp, SliceSettings settings)
+    {
+        bool formbound = MassiveSlicer.Core.Slicing.Lightning.LightningPlanner
+            .IsFormboundPattern(settings.InfillPattern);
+        if (!formbound && !settings.XBracingEnabled)
+            return;
+        int lightningMoves = 0;
+        foreach (var lyr in tp.Layers)
+            foreach (var mv in lyr.Moves)
+                if (mv.IsLightning) lightningMoves++;
+        void Log(string msg)
+        {
+            if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+                mvm.Console.Log(msg);
+            else
+                System.Console.WriteLine(msg);
+        }
+        // Planner diagnostics (demand / coverage / inherit / x-bracing).
+        if (tp.FormboundStats is { } stats)
+        {
+            Log(stats.ToLogLine());
+            foreach (var line in stats.UncoveredLog)
+                Log(line);
+        }
+        // X-bracing logs live on UncoveredLog even when FormboundStats is null —
+        // re-emit any x-bracing lines from toolpath if present via FormboundStats only.
+        bool zigZag = settings.ZigZagSeam;
+        Log($"[formbound] emit: {lightningMoves} lightning bead segment(s) / {tp.Layers.Count} layer(s) " +
+            $"(bar={settings.LightningButtressBarMm:0.#}mm" +
+            (settings.XBracingEnabled
+                ? $", xBracing depth={settings.XBracingDepthMm:0.#} span={settings.XBracingSpanMm:0.#}"
+                : "") +
+            (zigZag ? ", zigZag single-skin" : "") +
+            ")");
+        // Zig-zag X-bracing inserts hairpin detours into open paths (not IsLightning moves).
+        // Do not treat lightningMoves==0 as failure in that mode.
+        if (settings.XBracingEnabled && lightningMoves == 0 && !zigZag)
+            Log("[x-bracing] no lightning geometry emitted — try lower Depth, or enable Formbound bridges visibility");
+        else if (settings.XBracingEnabled && zigZag)
+            Log("[x-bracing] zig-zag single-skin: hairpins are open-path detours (not formbound lightning beads)");
+    }
+
     private static string SliceMethodLabel(SliceMethod method) => method switch
     {
         SliceMethod.Curved   => "Curved (Sweep)",
@@ -2975,6 +4105,7 @@ public partial class ViewportView : UserControl
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
         if (vm.IsSlicing || vm.OutlinerItems.Count == 0) return;
+        var cancel = BeginSliceCancellation();
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
         vm.SliceStatusIsError = false;
@@ -3030,13 +4161,18 @@ public partial class ViewportView : UserControl
                 }
             }
 
+            cancel.ThrowIfCancellationRequested();
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             ApplyEffectorSettings(vm, settings);
             SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing…");
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
-                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct),
+                cancel);
+
+            cancel.ThrowIfCancellationRequested();
+            LogFormboundEmitStats(smoothedToolpath, settings);
 
             int layerCount = smoothedToolpath.Layers.Count;
             if (layerCount == 0)
@@ -3045,12 +4181,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            var toolpathName = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            var toolpathName = ToolpathNameFrom(sourceItem.Name);
             var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
             vm.RegisterToolpathInOutliner(toolpathNode, sourceItem);
             var selectedPreset = vm.AdditiveSettings is { } asp
@@ -3079,7 +4210,13 @@ public partial class ViewportView : UserControl
 
             int moveCount = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
             SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+            vm.MarkWorkspaceDirty?.Invoke();
             ScheduleClearSliceStatus(vm);
+        }
+        catch (OperationCanceledException)
+        {
+            SetSliceStatus(vm, "Slice cancelled — applying latest changes…");
+            System.Console.WriteLine("[slice] cancelled (superseded by newer settings)");
         }
         catch (Exception ex)
         {
@@ -3200,6 +4337,9 @@ public partial class ViewportView : UserControl
         settings.EffectorPoints     = vm.GetActiveEffectorPositions();
         settings.EffectorRadiusMm   = (float)add.EffectorRange;
         settings.EffectorStrengthMm = (float)add.EffectorStrength;
+        settings.EffectorMode       = add.IsEffectorAmplify
+            ? MassiveSlicer.Core.Models.EffectorMode.Amplify
+            : MassiveSlicer.Core.Models.EffectorMode.Erase;
     }
 
     private static MassiveSlicer.Core.Models.MillSettings BuildMillSettings(SubtractiveSettingsViewModel s) => new()
@@ -3483,9 +4623,12 @@ public partial class ViewportView : UserControl
     // ── Realtime slicing (effector-style) ──────────────────────────────────
     // Any relevant parameter change re-slices the active model automatically,
     // debounced; updates replace the existing toolpath node in place.
+    // If a change arrives mid-slice, the in-flight run is cancelled and the
+    // latest settings are used for the next run (no stale queue).
 
     private DispatcherTimer? _realtimeSliceTimer;
-    private bool _realtimeSlicePending;   // a change arrived while realtime slicing was paused
+    private bool _realtimeSlicePending;   // need another pass after current/cancelled slice
+    private CancellationTokenSource? _sliceCts; // cancels ComputeToolpathAsync
 
     private static readonly HashSet<string> RealtimeSliceProps =
     [
@@ -3505,6 +4648,9 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
+        nameof(AdditiveSettingsViewModel.SeamMode),
+        nameof(AdditiveSettingsViewModel.PatternMapping),
+        nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
         nameof(AdditiveSettingsViewModel.PatternFrequency),
         nameof(AdditiveSettingsViewModel.PatternTwist),
@@ -3514,6 +4660,32 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.EffectorEnabled),
         nameof(AdditiveSettingsViewModel.EffectorRange),
         nameof(AdditiveSettingsViewModel.EffectorStrength),
+        nameof(AdditiveSettingsViewModel.EffectorMode),
+        nameof(AdditiveSettingsViewModel.LightningOverhangDeg),
+        nameof(AdditiveSettingsViewModel.LightningBranchSpacingMm),
+        nameof(AdditiveSettingsViewModel.LightningTipLoopRadiusMm),
+        nameof(AdditiveSettingsViewModel.LightningAffectInterior),
+        nameof(AdditiveSettingsViewModel.LightningAffectExterior),
+        nameof(AdditiveSettingsViewModel.LightningAnchorInterior),
+        nameof(AdditiveSettingsViewModel.LightningAnchorExterior),
+        nameof(AdditiveSettingsViewModel.LightningExteriorOverhangs),
+        nameof(AdditiveSettingsViewModel.LightningButtressBarMm),
+        nameof(AdditiveSettingsViewModel.LightningPreferInteriorMouths),
+        nameof(AdditiveSettingsViewModel.LightningTargetSupportSelections),
+        nameof(AdditiveSettingsViewModel.MultiPlanarStamp),
+        nameof(AdditiveSettingsViewModel.PaintStamp),
+        nameof(AdditiveSettingsViewModel.XBracingEnabled),
+        nameof(AdditiveSettingsViewModel.XBracingDepthMm),
+        nameof(AdditiveSettingsViewModel.XBracingSpanMm),
+        nameof(AdditiveSettingsViewModel.XBracingAngleDeg),
+        nameof(AdditiveSettingsViewModel.XBracingExtendEdges),
+        nameof(AdditiveSettingsViewModel.XBracingPlaneTiltY),
+        nameof(AdditiveSettingsViewModel.XBracingPlaneTiltX),
+        nameof(AdditiveSettingsViewModel.XBracingProjectionType),
+        nameof(AdditiveSettingsViewModel.XBracingCylinderDiameterMm),
+        nameof(AdditiveSettingsViewModel.XBracingCylinderX),
+        nameof(AdditiveSettingsViewModel.XBracingCylinderY),
+        nameof(AdditiveSettingsViewModel.XBracingCylinderFlipDirection),
         nameof(AdditiveSettingsViewModel.WaveEffect),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
@@ -3530,6 +4702,23 @@ public partial class ViewportView : UserControl
                     ScheduleRealtimeSlice(vm);
             };
         vm.OnModelGeometryChanged = () => ScheduleRealtimeSlice(vm);
+        vm.OnPaintDeselectRequested = () => DeselectPaintSelection(vm);
+        vm.OnPaintDeselectItemRequested = (layerIdx, moveStart, moveCount) =>
+            RemovePaintSelectionItem(vm, layerIdx, moveStart, moveCount);
+        vm.OnPaintModificationSelectRequested = id => ReselectPaintModification(vm, id);
+        vm.OnPaintModificationDeleteRequested = id => DeletePaintModification(vm, id);
+        vm.OnPaintModificationsClearRequested = () => ClearAllPaintModifications(vm);
+        vm.OnPaintModificationPickBridgeRequested = id => BeginPickBridgeTarget(vm, id);
+        vm.OnPaintModificationClearBridgeRequested = id => ClearBridgeTarget(vm, id);
+        vm.OnPaintModificationToggleExpandRequested = id => TogglePaintModificationExpand(vm, id);
+        vm.OnPaintModificationSupportTypeChanged = (id, type) =>
+            SetPaintModificationSupportType(vm, id, type);
+        vm.OnPaintModificationSupportSideChanged = (id, side) =>
+            SetPaintModificationSupportSide(vm, id, side);
+        vm.OnPaintApplyRequested = support => ApplyPaintSelection(vm, support);
+        vm.OnPaintResliceRequested = () => _ = ForcePaintResliceAsync(vm);
+        vm.CapturePaintModifications = CapturePaintModificationsState;
+        vm.RestorePaintModifications = RestorePaintModificationsState;
         vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
@@ -3541,18 +4730,161 @@ public partial class ViewportView : UserControl
         };
     }
 
+    /// <summary>
+    /// Edit-toolbar Reslice: bake paint marks into Formbound even while
+    /// <see cref="ViewportViewModel.RealtimeSlicingPaused"/> is held for edit mode.
+    /// </summary>
+    private async Task ForcePaintResliceAsync(ViewportViewModel vm)
+    {
+        // Cancel stale work and always run with the latest paint/settings.
+        if (vm.IsSlicing)
+        {
+            LogPaintConsole("[edit] reslice: cancelling in-flight slice for latest paint edits");
+            try { _sliceCts?.Cancel(); } catch { /* ignore */ }
+            // Wait briefly for IsSlicing to clear (cancel path).
+            for (int i = 0; i < 100 && vm.IsSlicing; i++)
+                await Task.Delay(20);
+        }
+        _realtimeSlicePending = false;
+
+        var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
+                   ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (item is null)
+        {
+            LogPaintConsole("[edit] reslice: no model to slice");
+            SetSliceStatus(vm, "Reslice failed: no model loaded.", isError: true);
+            return;
+        }
+
+        // Bridge paint only grows when InfillPattern is Formbound. Paint Support
+        // type / first Support mod drives that; never reslice with pattern=None.
+        EnsureFormboundForPaintReslice(vm);
+
+        int bridges = vm.AdditiveSettings?.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge) ?? 0;
+        int feet = vm.AdditiveSettings?.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && m.BridgeRole == Core.Models.PaintBridgeRole.ColumnFoot) ?? 0;
+        int bars = vm.AdditiveSettings?.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && m.BridgeRole == Core.Models.PaintBridgeRole.SupportBar) ?? 0;
+        LogPaintConsole(
+            $"[edit] reslice: marks bridge={bridges} (bar={bars} foot={feet}) " +
+            $"pattern={vm.AdditiveSettings?.InfillPattern ?? "?"} " +
+            $"mods={_paintModifications.Count}");
+
+        if (bridges == 0)
+            LogPaintConsole("[edit] reslice: WARNING — no Bridge paint marks; Support will not grow");
+
+        // Show Formbound layer so the buttress is not invisible after bake.
+        if (!vm.ShowLightningMoves)
+        {
+            vm.ShowLightningMoves = true;
+            LogPaintConsole("[edit] reslice: turned on Formbound bridges visibility");
+        }
+
+        var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+        LogPaintConsole(toolpathChild is not null
+            ? "[edit] reslice: updating toolpath with paint edits…"
+            : "[edit] reslice: slicing model with paint edits…");
+
+        // Keep auto-slice paused for further edits; this call bypasses the pause.
+        var keepPaused = vm.IsPaintEditOpen;
+        try
+        {
+            if (toolpathChild is not null)
+                await RunUpdateSliceAsync(vm, (item, toolpathChild));
+            else
+                await RunSliceAsync(vm);
+        }
+        finally
+        {
+            if (keepPaused)
+                vm.RealtimeSlicingPaused = true;
+        }
+    }
+
+    /// <summary>
+    /// Paint Support force-enables the right pipeline from marks. Formbound paint
+    /// soft-sets FILL PATTERN from mark styles; Tree paint does not steal the dropdown.
+    /// </summary>
+    private void EnsureFormboundForPaintReslice(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is null) return;
+
+        bool hasBridge = vm.AdditiveSettings.PaintMarks.Any(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge);
+        if (!hasBridge) return;
+
+        if (!string.Equals(vm.PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase))
+            vm.PaintModificationMode = "Support";
+
+        // With Target Support Selections, Formbound is paint-driven at slice time
+        // (ResolveInfillPatternForSlice) — do not overwrite the UI FILL PATTERN so
+        // the saved dropdown value survives save/reopen and reslice.
+        if (!vm.AdditiveSettings.LightningTargetSupportSelections
+            && Core.Models.PaintSupportStyleUtil.ResolveFormboundPatternFromPaint(
+                vm.AdditiveSettings.PaintMarks) is { } formPat)
+        {
+            string label = formPat == InfillPattern.LightningBridge
+                ? Core.Models.PaintSupportStyleUtil.LabelBridge
+                : Core.Models.PaintSupportStyleUtil.LabelButtress;
+            var cur = vm.AdditiveSettings.InfillPattern ?? "";
+            if (cur is "None" or "")
+            {
+                vm.AdditiveSettings.InfillPattern = label;
+                LogPaintConsole($"[edit] reslice: seed FILL PATTERN → {label} (was None)");
+            }
+        }
+
+        int treeN = vm.AdditiveSettings.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && m.SupportStyle == Core.Models.PaintSupportStyle.Tree);
+        int formN = vm.AdditiveSettings.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && Core.Models.PaintSupportStyleUtil.IsFormbound(m.SupportStyle));
+        if (treeN > 0 || formN > 0)
+            LogPaintConsole($"[edit] reslice: support paint formbound={formN} tree={treeN}");
+    }
+
     private void ScheduleRealtimeSlice(ViewportViewModel vm)
     {
-        if (vm.RealtimeSlicingPaused) { _realtimeSlicePending = true; return; }
+        // Always mark pending so a mid-slice change forces a follow-up with latest state.
+        _realtimeSlicePending = true;
+
+        if (vm.RealtimeSlicingPaused) return;
+
+        // Cancel in-flight slice so we do not wait for a stale result.
+        if (vm.IsSlicing)
+        {
+            try { _sliceCts?.Cancel(); }
+            catch { /* ignore */ }
+        }
+
         if (_realtimeSliceTimer is null)
         {
-            _realtimeSliceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+            _realtimeSliceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
             _realtimeSliceTimer.Tick += async (_, _) =>
             {
-                if (DataContext is not ViewportViewModel tickVm) { _realtimeSliceTimer!.Stop(); return; }
-                if (tickVm.IsSlicing) return;   // keep ticking until the current run finishes
+                if (DataContext is not ViewportViewModel tickVm)
+                {
+                    _realtimeSliceTimer!.Stop();
+                    return;
+                }
+                // Still running (cancel in progress) — keep polling until free.
+                if (tickVm.IsSlicing) return;
+
                 _realtimeSliceTimer!.Stop();
-                await RunRealtimeSliceAsync(tickVm);
+                // Drain: each completion may leave another pending if edits kept coming.
+                while (_realtimeSlicePending && !tickVm.RealtimeSlicingPaused)
+                {
+                    _realtimeSlicePending = false;
+                    await RunRealtimeSliceAsync(tickVm);
+                    if (tickVm.IsSlicing) break; // should not happen after await
+                }
+                // More changes arrived after we finished the loop's last run.
+                if (_realtimeSlicePending && !tickVm.RealtimeSlicingPaused)
+                    ScheduleRealtimeSlice(tickVm);
             };
         }
         _realtimeSliceTimer.Stop();
@@ -3572,6 +4904,15 @@ public partial class ViewportView : UserControl
             await RunSliceAsync(vm);
     }
 
+    /// <summary>Begin a new slice cancellation token (cancels any previous).</summary>
+    private CancellationToken BeginSliceCancellation()
+    {
+        try { _sliceCts?.Cancel(); } catch { /* ignore */ }
+        _sliceCts?.Dispose();
+        _sliceCts = new CancellationTokenSource();
+        return _sliceCts.Token;
+    }
+
     private async Task RunUpdateSliceAsync(ViewportViewModel vm)
         => await RunUpdateSliceAsync(vm, null);
 
@@ -3583,6 +4924,7 @@ public partial class ViewportView : UserControl
         var resolved = explicitSource ?? FindResliceSource(vm);
         if (resolved is not { } source) return;
 
+        var cancel = BeginSliceCancellation();
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
         vm.SliceStatusIsError = false;
@@ -3598,12 +4940,18 @@ public partial class ViewportView : UserControl
                 return;
             }
 
+            cancel.ThrowIfCancellationRequested();
+            // Build settings NOW so this run always uses latest UI values.
             var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
             var settings = BuildSliceSettings(vm.AdditiveSettings);
             ApplyEffectorSettings(vm, settings);
             var (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
                 meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
-                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct));
+                pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct),
+                cancel);
+
+            cancel.ThrowIfCancellationRequested();
+            LogFormboundEmitStats(smoothedToolpath, settings);
 
             if (smoothedToolpath.Layers.Count == 0)
             {
@@ -3611,12 +4959,7 @@ public partial class ViewportView : UserControl
                 return;
             }
 
-            toolpathNode.Name = method switch
-            {
-                SliceMethod.Angled  => $"Toolpath {settings.TiltAngle:0.##}deg W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                SliceMethod.Curved  => $"Toolpath Curved W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-                _                   => $"Toolpath W{settings.BeadWidth:0.##}mm H{settings.LayerHeight:0.##}mm",
-            };
+            toolpathNode.Name = ToolpathNameFrom(parentItem.Name);
 
             var selectedPreset = vm.AdditiveSettings is { } asp
                 && asp.SelectedPresetIndex >= 0
@@ -3648,11 +4991,31 @@ public partial class ViewportView : UserControl
             });
 
             ApplyToolpathStats(vm, smoothedToolpath);
-            vm.ResetScrubIndex(smoothedToolpath.Layers.Sum(l => l.Moves.Count), smoothedToolpath);
+            // Keep timeline scrub position across re-slice (clamp if path got shorter).
+            int newMax = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
+            bool keepScrub = vm.IsScrubSessionActive
+                             || ReferenceEquals(_activeScrubNode, toolpathNode);
+            _activeScrubNode = toolpathNode;
+            vm.IsScrubSessionActive = true;
+            vm.ResetScrubIndex(newMax, smoothedToolpath, preservePosition: keepScrub);
+            // Re-pose robot at the preserved index once scrub cache is rebuilt on GL thread.
+            int restoreIdx = vm.ToolpathScrubIndex;
+            Dispatcher.UIThread.Post(() =>
+            {
+                if (DataContext is ViewportViewModel v2
+                    && ReferenceEquals(_activeScrubNode, toolpathNode))
+                    ScrubIkForNode(toolpathNode, restoreIdx);
+            }, DispatcherPriority.Background);
             GlCanvas.RequestNextFrameRendering();
 
             SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+            vm.MarkWorkspaceDirty?.Invoke();
             ScheduleClearSliceStatus(vm);
+        }
+        catch (OperationCanceledException)
+        {
+            SetSliceStatus(vm, "Update cancelled — applying latest changes…");
+            System.Console.WriteLine("[slice] update cancelled (superseded by newer settings)");
         }
         catch (Exception ex)
         {
@@ -3754,8 +5117,46 @@ public partial class ViewportView : UserControl
         _         => new(0.95f, 0.95f, 0.95f),  // Other / no preset → white
     };
 
-    private static (string time, string weight, string cost, ToolpathStatsResult layerStats) ComputeToolpathStats(
-        Toolpath toolpath, AdditiveSettingsViewModel s)
+    /// <summary>
+    /// Runs the analytical thermomechanical screen on the visible toolpath, fills the
+    /// Adaptive Speed low/high values from the safe layer-time window, and stamps the
+    /// per-layer interlayer temperatures for the Thermal view.
+    /// </summary>
+    private void RunThermalSimulation(ViewportViewModel vm, AdditiveSettingsViewModel s)
+    {
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            s.ThermalSummary = "Slice a model first — the simulation runs on the toolpath.";
+            return;
+        }
+
+        var settings = BuildSliceSettings(s);
+        var result = ThermalSimulator.Simulate(pair.Value, settings);
+
+        var sb = new System.Text.StringBuilder();
+        if (result.RecommendedMaxMmS > 0f)
+        {
+            // Setting these re-processes the toolpath, which re-stamps layer temps.
+            s.LayerSpeedBasisDisplay = "Cut length";
+            s.LayerSpeedMinMmS = Math.Round(result.RecommendedMinMmS, 1);
+            s.LayerSpeedMaxMmS = Math.Round(result.RecommendedMaxMmS, 1);
+            s.LayerSpeedAdaptEnabled = true;
+
+            sb.Append($"Deposit {result.DepositTempC:0}°C, cooling τ {result.TimeConstantS:0} s. ");
+            sb.Append($"Safe layer time {result.MinLayerTimeS:0}–{result.MaxLayerTimeS:0} s ");
+            sb.Append($"(sag ≤{result.SagTempC:0}°C, bond ≥{result.BondTempC:0}°C); ");
+            sb.Append($"targeting {result.TargetLayerTimeS:0} s → interface ≈{result.PredictedInterfaceTempC:0}°C. ");
+            sb.Append($"Speeds set to {result.RecommendedMinMmS:0.#}–{result.RecommendedMaxMmS:0.#} mm/s.");
+        }
+        foreach (var w in result.Warnings)
+            sb.Append($"\n⚠ {w}");
+        sb.Append("\nAnalytical lumped-capacitance model — verify on the part.");
+        s.ThermalSummary = sb.ToString();
+    }
+
+    private static (string time, string weight, string cost, ToolpathStatsResult layerStats, double massKg)
+        ComputeToolpathStats(Toolpath toolpath, AdditiveSettingsViewModel s, Erp.ErpPricingConfig? pricing)
     {
         var rates = new ToolpathMotionRates(s.PrintSpeed, s.TravelSpeed, s.WipeSpeed);
         var stats = ToolpathStatistics.Compute(toolpath, rates, s.BeadWidth, s.LayerHeight);
@@ -3767,13 +5168,32 @@ public partial class ViewportView : UserControl
         double costPerLb   = preset?.CostPerLb       ?? 0.0;
 
         double massLbs = stats.VolumeMm3 / 1000.0 * densityGCm3 / 453.592;
-        double cost    = massLbs * costPerLb;
+        double massKg  = massLbs * 0.453592;
+
+        // Live rough estimate from the cached ERP pricing config when connected —
+        // the authoritative number is always a POST /quote or a slice's costing block.
+        string costStr;
+        if (pricing is { RatePerHour: { } ratePerHour })
+        {
+            double machine = stats.TotalTimeSeconds / 3600.0 * ratePerHour;
+            var erpMat = pricing.MatchMaterial(preset?.Name) ?? pricing.MatchMaterial(preset?.MaterialType);
+            double? perKg = erpMat?.CostPerKg
+                ?? (erpMat?.CostPerLb is { } perLb ? perLb / 0.453592 : null);
+            double material = perKg is { } pk ? massKg * pk : massLbs * costPerLb;
+            double markup = 1.0 + (pricing.OverheadRate ?? 0.0) + (pricing.ProfitRate ?? 0.0);
+            costStr = $"${(machine + material) * markup:F2} (ERP est.)";
+        }
+        else
+            costStr = preset is not null ? $"${cost(massLbs, costPerLb):F2}" : "--";
 
         return (
             ToolpathStatistics.FormatDuration(stats.TotalTimeSeconds),
             $"{massLbs:F3} lbs",
-            preset is not null ? $"${cost:F2}" : "--",
-            stats);
+            costStr,
+            stats,
+            massKg);
+
+        static double cost(double lbs, double perLb) => lbs * perLb;
     }
 
     private static NVec3 TransformPoint(TkVector3 p, TkMatrix4 m)
@@ -4041,6 +5461,204 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    /// <summary>Root node being cut (kept while the interactive cut session is open).</summary>
+    private SceneNode? _cutToolRoot;
+
+    /// <summary>Enter interactive Cut Tool: ghosted plane + RGB gizmo, floating panel.</summary>
+    private void BeginCutToolInteractive()
+    {
+        if (_renderer.SelectedNode is not { } root) return;
+        if (DataContext is not ViewportViewModel vm) return;
+        if (!HasCleanableMeshes(root)) return;
+        if (vm.IsCutToolActive) return;
+
+        // World AABB of the whole selection for plane size + default center.
+        var min = new TkVector3(float.MaxValue);
+        var max = new TkVector3(float.MinValue);
+        double modelMinZ = double.MaxValue, modelMaxZ = double.MinValue;
+        bool has = false;
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.Mesh?.PickingData is not { } mesh) continue;
+            var world = n.WorldTransform;
+            var (bMin, bMax) = mesh.LocalBounds;
+            modelMinZ = Math.Min(modelMinZ, bMin.Z);
+            modelMaxZ = Math.Max(modelMaxZ, bMax.Z);
+            for (int ci = 0; ci < 8; ci++)
+            {
+                var pLocal = new TkVector3(
+                    (ci & 1) == 0 ? bMin.X : bMax.X,
+                    (ci & 2) == 0 ? bMin.Y : bMax.Y,
+                    (ci & 4) == 0 ? bMin.Z : bMax.Z);
+                var w = TkVector3.TransformPosition(pLocal, world);
+                min = TkVector3.ComponentMin(min, w);
+                max = TkVector3.ComponentMax(max, w);
+            }
+            has = true;
+        }
+        if (!has) return;
+
+        var center = (min + max) * 0.5f;
+        float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.25f;
+
+        var session = new CutToolDialogViewModel
+        {
+            ModelName = root.Name,
+            ModelMinZ = modelMinZ,
+            ModelMaxZ = modelMaxZ,
+            PlaneSize = size,
+        };
+        session.SetPose(new System.Numerics.Vector3(center.X, center.Y, center.Z),
+                        System.Numerics.Vector3.UnitZ);
+        session.OnChanged = () => GlCanvas.RequestNextFrameRendering();
+
+        _cutToolRoot = root;
+        vm.BeginCutToolSession(session);
+        // Ensure selection stays on the model so the RGB gizmo draws.
+        _renderer.Select(root);
+        vm.SetOutlinerSelection(root);
+        if (vm.ActiveGizmoModeInternal is GizmoMode.None or GizmoMode.Scale)
+            SetGizmoMode(GizmoMode.Translate);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void CancelCutToolInteractive()
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        _cutToolRoot = null;
+        vm.EndCutToolSession();
+        _renderer.SetPlanePreview(null, null);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void PerformCutToolInteractive()
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        if (vm.CutToolSession is not { } result) return;
+        if (_cutToolRoot is not { } root) return;
+
+        var planeN = new TkVector3((float)result.NormalX, (float)result.NormalY, (float)result.NormalZ);
+        if (planeN.LengthSquared < 1e-10f) planeN = TkVector3.UnitZ;
+        planeN = TkVector3.Normalize(planeN);
+        var planePointWorld = new TkVector3((float)result.CenterX, (float)result.CenterY, (float)result.CenterZ);
+
+        var outlinerItem = vm.FindOutlinerItem(root);
+        var newNodes = new List<SceneNode>();
+        int totalConnectors = 0;
+
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (n.Mesh?.PickingData is not { } mesh) continue;
+            var w = n.WorldTransform;
+            var inv = w.Inverted();
+
+            var localPt = TkVector3.TransformPosition(planePointWorld, inv);
+            var localN = TkVector3.Normalize(TkVector3.TransformNormal(planeN, inv));
+
+            var split = PlanarMeshSplitter.Split(mesh, localPt, localN);
+            MeshData meshA = split.Positive;
+            MeshData meshB = split.Negative;
+
+            if (result.AddConnectors && split.CutLoops.Count > 0)
+            {
+                var conn = CutConnectorBuilder.Apply(
+                    meshA, meshB, split.CutLoops, localPt, localN,
+                    new CutConnectorBuilder.Options
+                    {
+                        SpacingMm = (float)result.ConnectorSpacing,
+                        TabWidthMm = (float)result.TabWidth,
+                        TabDepthMm = (float)result.TabDepth,
+                        TabHeightMm = (float)result.TabHeight,
+                        BoltDiameterMm = (float)result.BoltDiameter,
+                        BoltLugDiameterMm = (float)result.BoltLugDiameter,
+                        MinCornerRadiusMm = (float)result.MinCornerRadius,
+                    });
+                meshA = conn.PositiveWithConnectors;
+                meshB = conn.NegativeWithConnectors;
+                totalConnectors += conn.ConnectorCount;
+            }
+
+            var ta = w;
+            var tb = w;
+            if (!result.PlaceOnCut)
+            {
+                ta = w * TkMatrix4.CreateTranslation(planeN * 30f);
+                tb = w * TkMatrix4.CreateTranslation(planeN * -30f);
+            }
+
+            newNodes.Add(new SceneNode
+            {
+                Name = meshA.Name,
+                PendingMesh = meshA,
+                LocalTransform = ta,
+                Selectable = root.Selectable,
+                CullFaces = false,
+                Visible = root.Visible,
+                LayerPreview = root.LayerPreview,
+                SourceFilePath = root.SourceFilePath,
+            });
+            newNodes.Add(new SceneNode
+            {
+                Name = meshB.Name,
+                PendingMesh = meshB,
+                LocalTransform = tb,
+                Selectable = root.Selectable,
+                CullFaces = false,
+                Visible = root.Visible,
+                LayerPreview = root.LayerPreview,
+                SourceFilePath = root.SourceFilePath,
+            });
+        }
+
+        _cutToolRoot = null;
+        vm.EndCutToolSession();
+        _renderer.SetPlanePreview(null, null);
+
+        if (newNodes.Count == 0 || outlinerItem is null) return;
+
+        vm.OutlinerItems.Remove(outlinerItem);
+        foreach (var child in outlinerItem.Children)
+            vm.PendingRemoveNodes.Enqueue(child.Node);
+        vm.PendingRemoveNodes.Enqueue(root);
+
+        for (int i = 0; i < newNodes.Count; i++)
+            vm.AttachUserNode(newNodes[i], i == 0 ? outlinerItem : null);
+
+        _renderer.Select(newNodes[0]);
+        UpdateFocusOverlay();
+
+        var msg = $"[cut] Split into {newNodes.Count} part(s)" +
+                  (totalConnectors > 0 ? $", {totalConnectors} connector site(s)" : "") + ".";
+        if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log(msg);
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Ghosted cut plane + gizmo pivot while the interactive Cut Tool is open.</summary>
+    private void UpdateCutToolOverlay(ViewportViewModel vm)
+    {
+        if (!vm.IsCutToolActive || vm.CutToolSession is not { } s)
+        {
+            // Only clear if we own the preview (angled mode will set its own).
+            return;
+        }
+
+        var c = new TkVector3((float)s.CenterX, (float)s.CenterY, (float)s.CenterZ);
+        var n = new TkVector3((float)s.NormalX, (float)s.NormalY, (float)s.NormalZ);
+        if (n.LengthSquared < 1e-10f) n = TkVector3.UnitZ;
+        else n = TkVector3.Normalize(n);
+
+        _renderer.SetPlanePreview(c, n, s.PlaneSize);
+        _renderer.GizmoPivotWorld = c;
+        // Keep gizmo on for cut session.
+        if (vm.ActiveGizmoModeInternal == GizmoMode.None)
+            SetGizmoMode(GizmoMode.Translate);
+        else
+            _renderer.GizmoMode = vm.ActiveGizmoModeInternal;
+        _renderer.GizmoEnabled = true;
+    }
+
     private async Task MeshCleanupSelectedAsync()
     {
         if (_renderer.SelectedNode is not { } root) return;
@@ -4292,8 +5910,15 @@ public partial class ViewportView : UserControl
 
         bool isUserContent = node is not null && vm.IsUserModelSceneNode(node);
 
+        // Dev mode: registered environment props (print bed, stands, docks) are pickable —
+        // resolve the mesh-leaf hit to its dev root so the gizmo transforms the whole prop.
+        if (!isUserContent && node is not null && vm.IsDevMode
+            && FindDevNodeRoot(node) is { } devRoot)
+        {
+            node = devRoot;
+        }
         // LFAM production cells block infrastructure picks unless they are user imports/scans.
-        if (!isUserContent && node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
+        else if (!isUserContent && node is not null && IsLfamProductionCell(vm) && IsLfamInfrastructureNode(node))
         {
             if (_currentToolNode is not null)
                 node = _currentToolNode;
@@ -4323,8 +5948,10 @@ public partial class ViewportView : UserControl
             node = _currentToolNode;
         }
 
-        // Locked outliner rows (robot, bed, locked toolheads) can't be selected.
-        if (node is not null && vm.IsNodeLockedInOutliner(node))
+        // Locked outliner rows (robot, bed, locked toolheads) can't be selected —
+        // except dev-editable props while dev mode is on.
+        if (node is not null && vm.IsNodeLockedInOutliner(node)
+            && !(vm.IsDevMode && IsDevNode(node)))
             node = null;
 
         if (node is not null && OutlinerModelOps.IsScan(node) && vm.SelectedScanCount >= 1)
@@ -4462,6 +6089,7 @@ public partial class ViewportView : UserControl
         _gizmoDragPlaneNormal  = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
         _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
         _gizmoDragInitialLocal = node.LocalTransform;
+        BeginTransformLink(node);
 
         var startRay = _renderer.Camera.GetPickRay(
             (float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y, vpW, vpH);
@@ -4518,6 +6146,3231 @@ public partial class ViewportView : UserControl
         if (_activeScrubNode is not { } node) return;
         if (_toolpathByNode.TryGetValue(node, out var tp))
             ValidateToolpathAsync(node, tp);
+    }
+
+    // ── Toolpath paint brush ───────────────────────────────────────────────────
+
+    private bool _paintStroking, _paintResizing, _paintStrokeChanged;
+    private float _paintResizeStartX;
+    private double _paintResizeStartRadius;
+    private Avalonia.Point _lastPaintPx;
+    private TkVector3? _paintHoverWorld;        // bead under cursor (brush circle)
+    private List<TkVector3>? _paintHoverLine;   // contour a line tool would pick
+    private List<TkVector3>? _paintSelectedLine; // last clicked contour (sticky highlight)
+    private TkVector3 _paintSelectedColor = new(1f, 0.55f, 0.08f); // amber = selected
+    // Shift+click accumulates: previous selections stay lit so multiple lines can
+    // be marked in one editing pass.
+    private readonly List<(List<TkVector3> Pts, TkVector3 Color)> _paintMultiLines = [];
+    // Region-select (square marquee / lasso) drag state.
+    private bool _paintBoxDragging;
+    private Avalonia.Point _paintBoxStart;
+    private readonly List<Avalonia.Point> _paintLassoPts = [];
+    /// <summary>Applied modifications (reselectable from the MODIFICATIONS panel).</summary>
+    private readonly List<PaintModificationRecord> _paintModifications = [];
+
+    /// <summary>One path/point span inside a grouped modification (Shift multi-select).</summary>
+    private sealed class PaintModMember
+    {
+        public required ToolpathLayer Layer { get; init; }
+        public required ContourSpan Span { get; init; }
+        public required System.Numerics.Vector3 Origin { get; init; }
+        public required TkMatrix4 Wt { get; init; }
+        public required List<TkVector3> World { get; init; }
+        public required List<System.Numerics.Vector3> MarkCenters { get; init; }
+    }
+
+    private sealed class PaintModificationRecord
+    {
+        public required Guid Id { get; init; }
+        public required Core.Models.PaintMarkKind Kind { get; init; }
+        /// <summary>Primary (first) span — kept for bridge/offset compat.</summary>
+        public required ToolpathLayer Layer { get; init; }
+        public required ContourSpan Span { get; init; }
+        public required System.Numerics.Vector3 Origin { get; init; }
+        public required TkMatrix4 Wt { get; init; }
+        public required List<TkVector3> World { get; init; }
+        /// <summary>Union of all member mark centres (restyle / delete / style apply).</summary>
+        public required List<System.Numerics.Vector3> MarkCenters { get; init; }
+        public required string Title { get; set; }
+        public required string Detail { get; set; }
+
+        /// <summary>
+        /// All spans in this modification. Shift multi-select Apply creates one card
+        /// with multiple members so Support type / side / delete apply to the group.
+        /// Empty = legacy single-span mod (use Layer/Span only).
+        /// </summary>
+        public List<PaintModMember> Members { get; } = [];
+
+        public int MemberCount => Members.Count > 0 ? Members.Count : 1;
+        public bool IsGroup => MemberCount > 1;
+
+        /// <summary>Optional second anchor for multi-layer Formbound scaffold.</summary>
+        public ToolpathLayer? TargetLayer { get; set; }
+        public ContourSpan? TargetSpan { get; set; }
+        public System.Numerics.Vector3 TargetOrigin { get; set; }
+        public TkMatrix4 TargetWt { get; set; } = TkMatrix4.Identity;
+        public List<TkVector3>? TargetWorld { get; set; }
+        public List<System.Numerics.Vector3> TargetMarkCenters { get; } = [];
+        public List<System.Numerics.Vector3> ScaffoldMarkCenters { get; } = [];
+        public int ScaffoldLayerCount { get; set; }
+        public bool IsExpanded { get; set; }
+        public bool HasBridgeTarget => TargetLayer is not null;
+
+        /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+        public string SupportType { get; set; } = "Formbound Buttress";
+
+        /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
+        public string SupportSide { get; set; } = "Inside";
+
+        /// <summary>Enumerate spans (members if present, else primary only).</summary>
+        public IEnumerable<PaintModMember> EnumerateMembers()
+        {
+            if (Members.Count > 0)
+            {
+                foreach (var m in Members) yield return m;
+                yield break;
+            }
+            yield return new PaintModMember
+            {
+                Layer = Layer,
+                Span = Span,
+                Origin = Origin,
+                Wt = Wt,
+                World = World,
+                MarkCenters = MarkCenters,
+            };
+        }
+    }
+
+    // The actionable edit selection: picks the toolbar's Support/Remove apply to.
+    private readonly List<(ToolpathLayer Layer, ContourSpan Span,
+        System.Numerics.Vector3 Origin, TkMatrix4 Wt, List<TkVector3> World)> _paintSelection = [];
+    private DateTime _paintHoverAt = DateTime.MinValue;
+    /// <summary>Stable id of the sticky selection — used for console feedback + undo.</summary>
+    private PaintLineId? _paintSelectedId;
+    private bool _paintSelectionUndoSuppress;
+
+    /// <summary>
+    /// Point-mode range anchor: first click (or last non-range pick). Shift+click another
+    /// point on the same contour selects every bead on the shortest path between them.
+    /// </summary>
+    private ToolpathLayer? _paintPointAnchorLayer;
+    private int _paintPointAnchorMove = -1;
+    private System.Numerics.Vector3 _paintPointAnchorOrigin;
+    private TkMatrix4 _paintPointAnchorWt = TkMatrix4.Identity;
+
+    /// <summary>Hover feedback while the Edit menu is open (or a paint tool is armed)
+    /// and no stroke is active: yellow contour under the pointer for line-select, or
+    /// the brush circle under a brush tool. Throttled — full-path pick is expensive.</summary>
+    private void UpdatePaintHover(ViewportViewModel vm, Avalonia.Point pos)
+    {
+        // ~12 Hz hover: path pick walks every move; higher rates freeze 50k+ move paths.
+        if ((DateTime.UtcNow - _paintHoverAt).TotalMilliseconds < 80) return;
+        _paintHoverAt = DateTime.UtcNow;
+        // Line tools, or edit open with no brush → contour/point hover.
+        // Brush tools → bead-sphere cursor.
+        if (vm.PaintLineToolActive || !vm.PaintBrushActive)
+        {
+            _paintHoverWorld = null;
+            _paintHoverLine = PickSpanUnderCursor(pos) is { } pick
+                ? SpanWorldHighlight(pick, pointMode: vm.PaintPointGranularityActive)
+                : null;
+        }
+        else
+        {
+            _paintHoverLine = null;
+            _paintHoverWorld = PickBeadUnderCursor(pos)?.World;
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Per-frame (GL thread) paint overlay: mark spheres (cyan = bridge,
+    /// red = remove), the brush cursor circle, hovered-line highlight, and sticky
+    /// selected-line highlight after a click.</summary>
+    private void UpdatePaintOverlay(ViewportViewModel vm)
+    {
+        // While the edit menu is open always draw the overlay (white-bead edit mode
+        // + selection feedback), even before any marks exist.
+        bool show = vm.ViewMode == "Preview" && vm.AdditiveSettings is not null
+            && (vm.IsPaintEditOpen
+                || vm.PaintBrushActive
+                || (vm.AdditiveSettings?.PaintMarks.Count ?? 0) > 0);
+        if (!show)
+        {
+            _renderer.SetPaintOverlay([], null);
+            return;
+        }
+        var add = vm.AdditiveSettings!;
+        var segs = new List<(TkVector3 Pos, TkVector3 Color)>();
+        // Point-mode hover/select: yellow bead recolour (GL points), not line spheres.
+        var hlPts = new List<(TkVector3 Pos, TkVector3 Color)>();
+
+        // Raw toolpath coords → display world via the first visible toolpath node.
+        System.Numerics.Vector3 origin = default;
+        var wt = TkMatrix4.Identity;
+        foreach (var (node, _) in _toolpathByNode)
+        {
+            if (!node.Visible) continue;
+            _toolpathOriginByNode.TryGetValue(node, out origin);
+            wt = node.WorldTransform;
+            break;
+        }
+
+        var cBridge = new TkVector3(0.15f, 0.85f, 1f);   // cyan = bridge / buttress
+        var cRemove = new TkVector3(1f, 0.28f, 0.2f);    // red = remove
+        // Cap mark spheres — thousands of line-bridge dabs would freeze every frame.
+        // Honour ShowPaintMarkers so the user can hide Support/Remove dabs while editing.
+        // Visual radius is ~10× smaller than the stored dab radius (planning still uses
+        // full m.Radius for coverage / half-band projection).
+        const float paintMarkDisplayScale = 0.1f;
+        if (vm.ShowPaintMarkers)
+        {
+            int markCount = add.PaintMarks.Count;
+            int markStep = markCount <= 400 ? 1 : (markCount + 399) / 400;
+            for (int mi = 0; mi < markCount; mi += markStep)
+            {
+                var m = add.PaintMarks[mi];
+                var w = TransformPoint(new TkVector3(
+                    m.Center.X - origin.X, m.Center.Y - origin.Y, m.Center.Z - origin.Z), wt);
+                float rVis = MathF.Max(0.35f, m.Radius * paintMarkDisplayScale);
+                AddMarkSphere(segs, new TkVector3(w.X, w.Y, w.Z), rVis,
+                    m.Kind == Core.Models.PaintMarkKind.Bridge ? cBridge : cRemove);
+            }
+        }
+
+        bool pointMode = vm.PaintPointGranularityActive;
+        float pointR = MathF.Max(1.4f, (float)(vm.AdditiveSettings?.BeadWidth ?? 6) * 0.28f);
+        // Bright yellow for hover + selected beads (over lime path points).
+        var cYellow = new TkVector3(1f, 0.92f, 0.18f);
+        var cSelAmber = new TkVector3(1f, 0.55f, 0.08f);
+
+        // Only light the portion of each selection that is inside the current
+        // layer-slider / timeline scrub window (hidden layers stay un-highlighted).
+        int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart = GetPaintScrubMoveStart();
+
+        void DrawSelectionHighlight(List<TkVector3> pts, TkVector3 col, bool sticky)
+        {
+            if (pts.Count == 0) return;
+            if (pointMode || pts.Count == 1)
+            {
+                foreach (var p in pts)
+                {
+                    hlPts.Add((p, cYellow));
+                    AddMarkSphere(segs, p, sticky ? pointR : pointR * 0.85f,
+                        col.LengthSquared > 0.01f ? col : cSelAmber);
+                }
+            }
+            else if (sticky)
+            {
+                AddThickPolyline(segs, pts, col, radiusMm: 0.8f, fat: true);
+                float tipR = MathF.Max(0.8f, (float)(vm.AdditiveSettings?.BeadWidth ?? 6) * 0.15f);
+                AddMarkSphere(segs, pts[0], tipR, col);
+                AddMarkSphere(segs, pts[^1], tipR, col);
+            }
+            else
+                AddThickPolyline(segs, pts, col, radiusMm: 0.5f, fat: false);
+        }
+
+        if (_paintSelection.Count > 0)
+        {
+            var fallbackCol = _paintSelectedColor.LengthSquared > 0.01f
+                ? _paintSelectedColor : cSelAmber;
+            for (int si = 0; si < _paintSelection.Count; si++)
+            {
+                var sel = _paintSelection[si];
+                if (!TryClipSpanToScrubWindow(sel.Layer, sel.Span, scrubStart, scrubLimit,
+                        out var clipped))
+                    continue;
+                var poly = SpanWorldHighlight(
+                    (sel.Layer, clipped, sel.Origin, sel.Wt), pointMode);
+                bool sticky = si == _paintSelection.Count - 1;
+                DrawSelectionHighlight(poly, fallbackCol, sticky);
+            }
+        }
+        else
+        {
+            // Fallback when selection list is empty but sticky/multi caches exist.
+            foreach (var (mpts, mcol) in _paintMultiLines)
+                DrawSelectionHighlight(mpts, mcol, sticky: false);
+            if (_paintSelectedLine is { Count: > 0 } sel)
+                DrawSelectionHighlight(sel, _paintSelectedColor, sticky: true);
+        }
+
+        // Live hover: path → yellow contour; point → yellow bead only (no sphere).
+        // Hover is already pick-filtered to the scrub window.
+        var cHover = new TkVector3(1f, 0.95f, 0.15f);
+        bool lineHover = vm.PaintLineToolActive || !vm.PaintBrushActive;
+        if (lineHover && _paintHoverLine is { Count: > 0 } hl)
+        {
+            if (pointMode || hl.Count == 1)
+            {
+                foreach (var p in hl)
+                    hlPts.Add((p, cYellow));
+            }
+            else
+                AddThickPolyline(segs, hl, cHover, radiusMm: 0.6f, fat: false);
+        }
+        if (!lineHover && _paintHoverWorld is { } hw && vm.PaintBrushActive)
+            AddMarkSphere(segs, hw, (float)vm.PaintBrushRadiusMm, cHover);
+
+        _renderer.SetPaintOverlay(segs, hlPts.Count > 0 ? hlPts : null);
+    }
+
+    /// <summary>
+    /// Highlight polyline for paint overlay. Default is a single centre-line
+    /// (fast). When <paramref name="fat"/> is true, adds one parallel offset pair
+    /// so the stroke still reads on dense toolpaths without the old 9× tube cost.
+    /// </summary>
+    private static void AddThickPolyline(
+        List<(TkVector3 Pos, TkVector3 Color)> segs,
+        IReadOnlyList<TkVector3> pts,
+        TkVector3 color,
+        float radiusMm,
+        bool fat = false)
+    {
+        if (pts.Count < 2) return;
+        // Downsample very long picks so a full-layer wall can't stall the GL thread.
+        const int maxPts = 256;
+        int step = pts.Count <= maxPts ? 1 : (pts.Count + maxPts - 1) / maxPts;
+
+        for (int i = step; i < pts.Count; i += step)
+        {
+            int i0 = i - step;
+            segs.Add((pts[i0], color));
+            segs.Add((pts[i], color));
+        }
+        // Always include the true tip.
+        if ((pts.Count - 1) % step != 0)
+        {
+            segs.Add((pts[^2], color));
+            segs.Add((pts[^1], color));
+        }
+
+        if (!fat || radiusMm < 0.2f) return;
+        // One offset pair only (was four axes × two sides = 8× extra).
+        for (int i = step; i < pts.Count; i += step)
+        {
+            int i0 = i - step;
+            var d = pts[i] - pts[i0];
+            float len2 = d.LengthSquared;
+            if (len2 < 1e-10f) continue;
+            d /= MathF.Sqrt(len2);
+            var side = TkVector3.Cross(d, TkVector3.UnitZ);
+            if (side.LengthSquared < 1e-8f)
+                side = TkVector3.Cross(d, TkVector3.UnitY);
+            if (side.LengthSquared < 1e-8f) continue;
+            side = TkVector3.Normalize(side) * radiusMm;
+            segs.Add((pts[i0] + side, color));
+            segs.Add((pts[i] + side, color));
+            segs.Add((pts[i0] - side, color));
+            segs.Add((pts[i] - side, color));
+        }
+    }
+
+    /// <summary>Three orthogonal circles — reads as a sphere from any camera angle.</summary>
+    private static void AddMarkSphere(
+        List<(TkVector3 Pos, TkVector3 Color)> segs, TkVector3 c, float r, TkVector3 col)
+    {
+        const int N = 16;
+        ReadOnlySpan<(TkVector3 E1, TkVector3 E2)> bases =
+        [
+            (TkVector3.UnitX, TkVector3.UnitY),
+            (TkVector3.UnitX, TkVector3.UnitZ),
+            (TkVector3.UnitY, TkVector3.UnitZ),
+        ];
+        foreach (var (e1, e2) in bases)
+        {
+            var prev = c + e1 * r;
+            for (int k = 1; k <= N; k++)
+            {
+                float a = MathF.Tau * k / N;
+                var p = c + e1 * (r * MathF.Cos(a)) + e2 * (r * MathF.Sin(a));
+                segs.Add((prev, col));
+                segs.Add((p, col));
+                prev = p;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Pointer position and size in the same space as the GL host (DIP), so picks
+    /// line up with the rendered beads regardless of parent chrome / DPI.
+    /// </summary>
+    private (float mx, float my, float vpW, float vpH) GetGlPickViewport(Avalonia.Point posOnViewport)
+    {
+        // Convert from ViewportView space → GlCanvas space (they usually match, but
+        // any inset/scale must not drift the ray vs the painted beads).
+        var inGl = this.TranslatePoint(posOnViewport, GlCanvas) ?? posOnViewport;
+        float mx = (float)inGl.X;
+        float my = (float)inGl.Y;
+        float vpW = (float)Math.Max(1.0, GlCanvas.Bounds.Width);
+        float vpH = (float)Math.Max(1.0, GlCanvas.Bounds.Height);
+        return (mx, my, vpW, vpH);
+    }
+
+    /// <summary>
+    /// Global move index at which the active scrub hides further geometry
+    /// (moves with index ≥ this are not drawn and must not be pickable).
+    /// <see cref="int.MaxValue"/> = no scrub limit.
+    /// In 2D slice view only the <em>active</em> layer is pickable — neighbours
+    /// (three below + dashed above) are drawn for context but not selectable.
+    /// </summary>
+    private int GetPaintScrubMoveLimit()
+    {
+        if (DataContext is not ViewportViewModel vm) return int.MaxValue;
+        if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return int.MaxValue;
+        if (vm.ToolpathScrubMax <= 0) return int.MaxValue;
+        // ScrubCount uses cumulative[scrubIndex]: vertices for moves [0, scrubIndex).
+        // Match that — at scrub S, move S and above are not yet printed.
+        int hi = Math.Clamp(vm.ToolpathScrubIndex, 0, vm.ToolpathScrubMax);
+
+        // 2D slice: exclusive end of the active layer only (no layer above).
+        if (vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen
+            && vm.ScrubLayerEnds is { Length: > 0 } ends)
+        {
+            int cur = Math.Clamp(vm.CurrentScrubLayerIndex, 0, ends.Length - 1);
+            hi = ends[cur];
+        }
+        return hi;
+    }
+
+    /// <summary>Lower bound of the pickable move window.
+    /// In 2D slice view this is the start of the active layer only — layers below
+    /// remain visible for context but are not hoverable/selectable.</summary>
+    private int GetPaintScrubMoveStart()
+    {
+        if (DataContext is not ViewportViewModel vm) return 0;
+        if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return 0;
+
+        if (vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen
+            && vm.ScrubLayerEnds is { Length: > 0 } ends)
+        {
+            int cur = Math.Clamp(vm.CurrentScrubLayerIndex, 0, ends.Length - 1);
+            // Exclusive end of previous layer = start of current.
+            return cur <= 0 ? 0 : ends[cur - 1];
+        }
+
+        return Math.Max(0, vm.ToolpathScrubLowIndex);
+    }
+
+    /// <summary>
+    /// Global move index where <paramref name="layer"/> begins in its toolpath
+    /// (sum of prior layers' move counts). Used to clip selection highlights to the
+    /// scrub window.
+    /// </summary>
+    private bool TryGetLayerGlobalMoveStart(ToolpathLayer layer, out int globalStart)
+    {
+        foreach (var (_, tp) in _toolpathByNode)
+        {
+            int g = 0;
+            foreach (var l in tp.Layers)
+            {
+                if (ReferenceEquals(l, layer))
+                {
+                    globalStart = g;
+                    return true;
+                }
+                g += l.Moves.Count;
+            }
+        }
+        globalStart = 0;
+        return false;
+    }
+
+    /// <summary>
+    /// Clips a layer-local span to the visible scrub window
+    /// <c>[scrubStart, scrubLimit)</c>. Returns false when the span is fully hidden.
+    /// </summary>
+    private bool TryClipSpanToScrubWindow(
+        ToolpathLayer layer, ContourSpan span, int scrubStart, int scrubLimit,
+        out ContourSpan clipped)
+    {
+        clipped = span;
+        if (span.Count <= 0) return false;
+        // No scrub isolation → everything is visible.
+        if (scrubLimit == int.MaxValue && scrubStart <= 0) return true;
+        if (!TryGetLayerGlobalMoveStart(layer, out int g0))
+            return true; // unknown owner — keep highlight rather than drop it
+
+        int spanG0 = g0 + span.Start;
+        int spanG1 = spanG0 + span.Count; // exclusive
+        int visG0 = Math.Max(spanG0, scrubStart);
+        int visG1 = Math.Min(spanG1, scrubLimit);
+        if (visG1 <= visG0) return false;
+
+        clipped = new ContourSpan(
+            visG0 - g0,
+            visG1 - visG0,
+            Closed: false, // clipped portion is an open section even if parent was closed
+            EntryTravelIndex: span.EntryTravelIndex);
+        return true;
+    }
+
+    /// <summary>Nearest visible extrude-bead midpoint under the cursor: raw
+    /// toolpath coordinates (for marks) + display world (for the cursor circle).</summary>
+    private (System.Numerics.Vector3 Raw, TkVector3 World)? PickBeadUnderCursor(Avalonia.Point pos)
+    {
+        var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
+        if (vpW <= 1f || vpH <= 1f) return null;
+        int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        const float pickPx = 30f;
+        const float tightPx = 9f;
+        // Same tiered rule as the line picker: within the tight radius the FRONT
+        // bead wins (depth bucketed); the wide ring is a nearest-on-screen fallback.
+        const float depthBucket = 12f;
+        long t1Bucket = long.MaxValue;
+        float t1Screen = float.MaxValue;
+        (System.Numerics.Vector3, TkVector3)? t1Hit = null;
+        float bestD = pickPx;
+        (System.Numerics.Vector3, TkVector3)? hit = null;
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            // Match SceneRenderer toolpath draw (LocalTransform * worldMVP).
+            var wt = node.LocalTransform;
+            float ox = origin.X, oy = origin.Y, oz = origin.Z;
+            int globalMove = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                int layerCount = moves.Count;
+                if (globalMove + layerCount <= scrubStart0)
+                {
+                    globalMove += layerCount;
+                    continue;
+                }
+                if (globalMove >= scrubLimit) break;
+
+                int i0 = Math.Max(0, scrubStart0 - globalMove);
+                int i1 = Math.Min(layerCount, scrubLimit - globalMove);
+                for (int i = i0; i < i1; i++)
+                {
+                    var mv = moves[i];
+                    if (mv.Kind != MoveKind.Extrude) continue;
+                    if (DataContext is ViewportViewModel bpVm && !PaintPickAllowed(mv, bpVm)) continue;
+                    var mid = (mv.From + mv.To) * 0.5f;
+                    var world = TransformPoint(
+                        new TkVector3(mid.X - ox, mid.Y - oy, mid.Z - oz), wt);
+                    var wp = new TkVector3(world.X, world.Y, world.Z);
+                    var p = _renderer.ProjectToScreenDepth(
+                        new Vector3(wp.X, wp.Y, wp.Z), viewProj, vpW, vpH);
+                    if (float.IsNaN(p.X)) continue;
+                    float d = MathF.Sqrt((p.X - mx) * (p.X - mx) + (p.Y - my) * (p.Y - my));
+                    if (d <= tightPx)
+                    {
+                        long bucket = (long)(p.Z / depthBucket);
+                        if (bucket < t1Bucket || (bucket == t1Bucket && d < t1Screen))
+                        {
+                            t1Bucket = bucket;
+                            t1Screen = d;
+                            t1Hit = (mid, wp);
+                        }
+                    }
+                    if (d < bestD) { bestD = d; hit = (mid, wp); }
+                }
+                globalMove += layerCount;
+            }
+        }
+        return t1Hit ?? hit;
+    }
+
+    /// <summary>Paints (or Alt-erases) one brush dab at the toolpath bead under the
+    /// cursor. Marks are stored in RAW toolpath coordinates (the slicer's own world
+    /// space) so <see cref="MassiveSlicer.Core.Slicing.ToolpathPaintFilter"/> and the
+    /// planner compare like with like across re-slices.</summary>
+    private void TryPaintAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        if (vm.AdditiveSettings is not { } add) return;
+        _lastPaintPx = pos;
+        if (PickBeadUnderCursor(pos) is not { } pick)
+        {
+            _paintHoverWorld = null;
+            return;
+        }
+        _paintHoverWorld = pick.World;
+        var h = pick.Raw;
+
+        float radius = (float)vm.PaintBrushRadiusMm;
+        if (erase)
+        {
+            int removed = add.PaintMarks.RemoveAll(m =>
+                System.Numerics.Vector3.Distance(m.Center, h) < m.Radius + radius * 0.5f);
+            if (removed > 0) _paintStrokeChanged = true;
+            return;
+        }
+
+        var markKind = vm.PaintBridgeActive
+            ? Core.Models.PaintMarkKind.Bridge
+            : Core.Models.PaintMarkKind.Remove;
+        // Dab spam control: skip when an equal mark already covers this spot.
+        foreach (var m in add.PaintMarks)
+            if (m.Kind == markKind
+                && System.Numerics.Vector3.Distance(m.Center, h) < radius * 0.4f)
+                return;
+        var brushRole = markKind == Core.Models.PaintMarkKind.Bridge
+            ? Core.Models.PaintBridgeRole.SupportBar
+            : Core.Models.PaintBridgeRole.None;
+        var brushStyle = markKind == Core.Models.PaintMarkKind.Bridge
+            ? Core.Models.PaintSupportStyleUtil.FromLabel(vm.PaintSupportType)
+            : Core.Models.PaintSupportStyle.FormboundButtress;
+        add.PaintMarks.Add(new Core.Models.PaintMark(h, radius, markKind, brushRole, brushStyle));
+        _paintStrokeChanged = true;
+    }
+
+    /// <summary>Clears the actionable edit selection and its highlights.</summary>
+    private void DeselectPaintSelection(ViewportViewModel vm)
+    {
+        _paintSelection.Clear();
+        _paintMultiLines.Clear();
+        _paintSelectedLine = null;
+        _paintSelectedId = null;
+        ClearPaintPointAnchor();
+        SyncPaintSelectionUi(vm);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void ClearPaintPointAnchor()
+    {
+        _paintPointAnchorLayer = null;
+        _paintPointAnchorMove = -1;
+    }
+
+    private void SetPaintPointAnchor(
+        ToolpathLayer layer, int moveIndex,
+        System.Numerics.Vector3 origin, TkMatrix4 wt)
+    {
+        _paintPointAnchorLayer = layer;
+        _paintPointAnchorMove = moveIndex;
+        _paintPointAnchorOrigin = origin;
+        _paintPointAnchorWt = wt;
+    }
+
+    /// <summary>Rebuild multi + sticky highlights from the current selection list.</summary>
+    private void RebuildPaintSelectionHighlights(TkVector3 color)
+    {
+        _paintMultiLines.Clear();
+        _paintSelectedColor = color;
+        for (int i = 0; i < _paintSelection.Count - 1; i++)
+            _paintMultiLines.Add((_paintSelection[i].World, color));
+        if (_paintSelection.Count > 0)
+        {
+            _paintSelectedLine = new List<TkVector3>(_paintSelection[^1].World);
+            _paintHoverLine = _paintSelectedLine;
+        }
+        else
+        {
+            _paintSelectedLine = null;
+            _paintHoverLine = null;
+        }
+    }
+
+    /// <summary>Drops one selected path/point from the multi-selection (popup ✕).</summary>
+    private void RemovePaintSelectionItem(
+        ViewportViewModel vm, int layerIndex, int moveStart, int moveCount)
+    {
+        int idx = _paintSelection.FindIndex(s =>
+            s.Layer.Index == layerIndex
+            && s.Span.Start == moveStart
+            && s.Span.Count == moveCount);
+        if (idx < 0) return;
+
+        _paintSelection.RemoveAt(idx);
+        // Rebuild highlights: multi-lines = all but last; sticky = last (or clear).
+        var col = _paintSelectedColor;
+        _paintMultiLines.Clear();
+        for (int i = 0; i < _paintSelection.Count - 1; i++)
+            _paintMultiLines.Add((_paintSelection[i].World, col));
+        if (_paintSelection.Count > 0)
+        {
+            _paintSelectedLine = new List<TkVector3>(_paintSelection[^1].World);
+            _paintHoverLine = _paintSelectedLine;
+        }
+        else
+        {
+            _paintSelectedLine = null;
+            _paintHoverLine = null;
+            _paintSelectedId = null;
+        }
+        SyncPaintSelectionUi(vm);
+        LogPaintConsole($"[edit] deselected L{layerIndex + 1} m{moveStart}+{moveCount} "
+            + $"→ {_paintSelection.Count} remaining");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Pushes the live selection into the ViewModel popup list + count label.</summary>
+    private void SyncPaintSelectionUi(ViewportViewModel vm)
+    {
+        bool pointMode = vm.PaintPointGranularityActive;
+        var rows = new List<(int, int, int, float, bool, string, string)>(_paintSelection.Count);
+        int pointBeads = 0;
+        foreach (var s in _paintSelection)
+        {
+            int layerNum = s.Layer.Index + 1;
+            bool isPoint = pointMode || s.Span.Count <= 1;
+            int beadN = Math.Max(1, s.Span.Count);
+            if (pointMode) pointBeads += beadN;
+            string kind = !isPoint ? "Path"
+                : beadN == 1 ? "Point"
+                : $"{beadN} points";
+            rows.Add((
+                s.Layer.Index,
+                s.Span.Start,
+                s.Span.Count,
+                s.Layer.Z,
+                isPoint,
+                $"Layer {layerNum} · {kind}",
+                $"Z {s.Layer.Z:0.#} · m{s.Span.Start}+{s.Span.Count}"));
+        }
+        vm.SetPaintSelectionItems(rows);
+        // Point mode counts beads (a shift-range is one row with many points).
+        if (pointMode && pointBeads > 0)
+            vm.PaintSelectionCount = pointBeads;
+    }
+
+    /// <summary>
+    /// CREATE MODIFICATION → Offset path: insert parallel copies of each selected
+    /// span into its layer, re-upload the toolpath, and record a MODIFICATIONS entry.
+    /// </summary>
+    private void ApplyOffsetPathToSelection(ViewportViewModel vm)
+    {
+        if (_paintSelection.Count == 0)
+        {
+            LogPaintConsole("[edit] Offset path needs a path selection first.");
+            return;
+        }
+        if (_activeScrubNode is not { } node
+            || !_toolpathByNode.TryGetValue(node, out var toolpath))
+        {
+            LogPaintConsole("[edit] Offset path: no active toolpath.");
+            return;
+        }
+
+        float distance = (float)vm.OffsetDistanceMm;
+        int count = Math.Max(1, vm.OffsetCount);
+        var side = vm.OffsetSide switch
+        {
+            "Left" => MassiveSlicer.Core.Slicing.PathOffsetSide.Left,
+            "Right" => MassiveSlicer.Core.Slicing.PathOffsetSide.Right,
+            _ => MassiveSlicer.Core.Slicing.PathOffsetSide.Both,
+        };
+
+        int pathsAdded = 0;
+        int segsAdded = 0;
+        foreach (var existing in _paintModifications)
+            existing.IsExpanded = false;
+
+        // Process highest span starts first so earlier inserts don't shift later indices
+        // when multiple selections share a layer.
+        var ordered = _paintSelection
+            .Select((s, i) => (s, i))
+            .OrderByDescending(t => t.s.Layer.Index)
+            .ThenByDescending(t => t.s.Span.Start)
+            .ToList();
+
+        foreach (var (sel, _) in ordered)
+        {
+            if (sel.Span.Count < 1) continue;
+            var polylines = MassiveSlicer.Core.Slicing.PathOffsetter.OffsetSpan(
+                sel.Layer, sel.Span, distance, count, side);
+            if (polylines.Count == 0) continue;
+
+            ToolpathMove? template = null;
+            int end = Math.Min(sel.Layer.Moves.Count, sel.Span.Start + sel.Span.Count);
+            for (int i = sel.Span.Start; i < end; i++)
+            {
+                if (sel.Layer.Moves[i].Kind == MoveKind.Extrude)
+                {
+                    template = sel.Layer.Moves[i];
+                    break;
+                }
+            }
+
+            // Insert after the selected span.
+            int insertAt = Math.Min(sel.Layer.Moves.Count, sel.Span.Start + sel.Span.Count);
+            var block = new List<ToolpathMove>();
+            NVec3? cursor = insertAt > 0
+                ? sel.Layer.Moves[insertAt - 1].To
+                : null;
+
+            for (int pi = 0; pi < polylines.Count; pi++)
+            {
+                var poly = polylines[pi];
+                var extrudes = MassiveSlicer.Core.Slicing.PathOffsetter.PolylineToExtrudes(
+                    poly, template);
+                if (extrudes.Count == 0) continue;
+                if (cursor is { } c
+                    && NVec3.Distance(c, extrudes[0].From) > 0.05f)
+                    block.Add(new ToolpathMove(c, extrudes[0].From, MoveKind.Travel));
+                block.AddRange(extrudes);
+                cursor = extrudes[^1].To;
+                pathsAdded++;
+                segsAdded += extrudes.Count;
+            }
+
+            if (block.Count == 0) continue;
+            sel.Layer.Moves.InsertRange(insertAt, block);
+
+            // Shift contour records that start after the insert point.
+            for (int ci = 0; ci < sel.Layer.Contours.Count; ci++)
+            {
+                var c = sel.Layer.Contours[ci];
+                if (c.Start >= insertAt)
+                    sel.Layer.Contours[ci] = c with { Start = c.Start + block.Count };
+            }
+            // Record new contour for the inserted block (extrudes only region).
+            int extrudeStart = insertAt;
+            while (extrudeStart < insertAt + block.Count
+                   && sel.Layer.Moves[extrudeStart].Kind != MoveKind.Extrude)
+                extrudeStart++;
+            int extrudeCount = 0;
+            for (int i = extrudeStart; i < insertAt + block.Count; i++)
+                if (sel.Layer.Moves[i].Kind == MoveKind.Extrude) extrudeCount++;
+                else if (extrudeCount > 0) break;
+            if (extrudeCount > 0)
+                sel.Layer.Contours.Add(new ContourSpan(
+                    extrudeStart, extrudeCount, Closed: false, EntryTravelIndex: -1));
+
+            // Highlight of the first offset poly for the list entry.
+            var world = new List<TkVector3>();
+            if (polylines[0].Count >= 2)
+            {
+                foreach (var p in polylines[0])
+                {
+                    var w = TransformPoint(new TkVector3(
+                        p.X - sel.Origin.X, p.Y - sel.Origin.Y, p.Z - sel.Origin.Z), sel.Wt);
+                    world.Add(new TkVector3(w.X, w.Y, w.Z));
+                }
+            }
+
+            int layerNum = sel.Layer.Index + 1;
+            var rec = new PaintModificationRecord
+            {
+                Id = Guid.NewGuid(),
+                Kind = Core.Models.PaintMarkKind.Offset,
+                Layer = sel.Layer,
+                Span = sel.Span,
+                Origin = sel.Origin,
+                Wt = sel.Wt,
+                World = world.Count > 0 ? world : new List<TkVector3>(sel.World),
+                MarkCenters = [],
+                Title = $"Offset · Layer {layerNum}",
+                Detail = $"{distance:0.##} mm · ×{count} · {side} · {polylines.Count} path(s)",
+                IsExpanded = false,
+                SupportType = "Formbound Buttress",
+            };
+            _paintModifications.Add(rec);
+        }
+
+        if (pathsAdded == 0)
+        {
+            LogPaintConsole("[edit] Offset path produced no geometry (need ≥2 points per path).");
+            return;
+        }
+
+        // Re-upload so the GPU/scrub match the mutated toolpath.
+        _toolpathByNode.TryGetValue(node, out _);
+        if (!_toolpathMetaByNode.TryGetValue(node, out var meta))
+            meta = (6f, 3f, default);
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+        var preservedLocal = node.LocalTransform;
+        if (!_toolpathOriginByNode.TryGetValue(node, out var preservedOrigin))
+        {
+            preservedOrigin = new NVec3(
+                preservedLocal.M41, preservedLocal.M42, preservedLocal.M43);
+        }
+        vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+        {
+            Toolpath = toolpath,
+            RawToolpath = raw ?? toolpath,
+            Node = node,
+            BeadWidth = meta.BeadWidth > 0 ? meta.BeadWidth : 6f,
+            LayerHeight = meta.LayerHeight > 0 ? meta.LayerHeight : 3f,
+            MaterialColor = meta.MaterialColor,
+            PreserveRelativePose = true,
+            PreservedLocalTransform = preservedLocal,
+            PreservedOrigin = preservedOrigin,
+        });
+
+        int newMax = toolpath.Layers.Sum(l => l.Moves.Count);
+        vm.ResetScrubIndex(newMax, toolpath, preservePosition: true);
+        vm.IsScrubSessionActive = true;
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole(
+            $"[edit] Offset path → {pathsAdded} path(s), {segsAdded} segments "
+            + $"({distance:0.##} mm ×{count}, {side})");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Toolbar Support/Remove: lays marks along EVERY selected path and records
+    /// them as one MODIFICATIONS card. Shift multi-select becomes a group so
+    /// Support type / side / delete apply to all members together.
+    /// </summary>
+    private void ApplyPaintSelection(ViewportViewModel vm, bool support)
+    {
+        if (vm.AdditiveSettings is not { } add || _paintSelection.Count == 0) return;
+        var kind = support ? Core.Models.PaintMarkKind.Bridge : Core.Models.PaintMarkKind.Remove;
+        int added = 0;
+        // Collapse existing cards so newly applied ones stand out.
+        foreach (var existing in _paintModifications)
+            existing.IsExpanded = false;
+        var applyStyle = support
+            ? Core.Models.PaintSupportStyleUtil.FromLabel(vm.PaintSupportType)
+            : Core.Models.PaintSupportStyle.FormboundButtress;
+        var applyStyleLabel = Core.Models.PaintSupportStyleUtil.ToLabel(applyStyle);
+        // Default new Formbound selections to Inside; user can flip per-mod later.
+        var applySide = Core.Models.PaintSupportSide.Inside;
+        var applySideLabel = Core.Models.PaintSupportSideUtil.ToLabel(applySide);
+
+        var members = new List<PaintModMember>(_paintSelection.Count);
+        var allCenters = new List<System.Numerics.Vector3>();
+        var allWorld = new List<TkVector3>();
+        var role = support
+            ? Core.Models.PaintBridgeRole.SupportBar
+            : Core.Models.PaintBridgeRole.None;
+
+        foreach (var sel in _paintSelection)
+        {
+            var centers = new List<System.Numerics.Vector3>();
+            int n = MarkPickedSpanDabs(add, sel.Layer, sel.Span, kind, centers, role, applyStyle, applySide);
+            added += n;
+            var world = new List<TkVector3>(sel.World);
+            members.Add(new PaintModMember
+            {
+                Layer = sel.Layer,
+                Span = sel.Span,
+                Origin = sel.Origin,
+                Wt = sel.Wt,
+                World = world,
+                MarkCenters = centers,
+            });
+            allCenters.AddRange(centers);
+            allWorld.AddRange(world);
+        }
+
+        var primary = members[0];
+        string kindLabel = support ? "Support" : "Remove";
+        var rec = new PaintModificationRecord
+        {
+            Id = Guid.NewGuid(),
+            Kind = kind,
+            Layer = primary.Layer,
+            Span = primary.Span,
+            Origin = primary.Origin,
+            Wt = primary.Wt,
+            World = allWorld.Count > 0 ? allWorld : new List<TkVector3>(primary.World),
+            MarkCenters = allCenters,
+            Title = kindLabel, // RefreshModificationLabels fills title/detail
+            Detail = "",
+            IsExpanded = true,
+            SupportType = support ? applyStyleLabel
+                : Core.Models.PaintSupportStyleUtil.LabelButtress,
+            SupportSide = support ? applySideLabel
+                : Core.Models.PaintSupportSideUtil.LabelInside,
+        };
+        rec.Members.AddRange(members);
+        RefreshModificationLabels(rec);
+        _paintModifications.Add(rec);
+
+        // Re-tint highlights to the action colour so the state reads at a glance.
+        var col = support ? new TkVector3(0.2f, 0.9f, 1f) : new TkVector3(1f, 0.45f, 0.15f);
+        for (int i = 0; i < _paintMultiLines.Count; i++)
+            _paintMultiLines[i] = (_paintMultiLines[i].Pts, col);
+        _paintSelectedColor = col;
+        if (added > 0) add.BumpPaintStamp();
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        int treeN = add.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && m.SupportStyle == Core.Models.PaintSupportStyle.Tree);
+        int formN = add.PaintMarks.Count(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge
+            && Core.Models.PaintSupportStyleUtil.IsFormbound(m.SupportStyle));
+        LogPaintConsole($"[edit] {(support ? "support" : "remove")} applied → "
+            + $"group of {members.Count} path(s), {added} mark(s), 1 modification"
+            + (support ? $" · paint tree={treeN} formbound={formN}" : ""));
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Lays Bridge/Remove dabs along one picked span (raw toolpath coords).
+    /// Returns how many marks were added; <paramref name="centersOut"/> receives their centres.
+    /// Support-bar Bridge dabs are denser so Formbound can open a full-width T.</summary>
+    private int MarkPickedSpanDabs(
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        ToolpathLayer layer, ContourSpan span, Core.Models.PaintMarkKind kind,
+        List<System.Numerics.Vector3>? centersOut = null,
+        Core.Models.PaintBridgeRole bridgeRole = Core.Models.PaintBridgeRole.None,
+        Core.Models.PaintSupportStyle supportStyle = Core.Models.PaintSupportStyle.FormboundButtress,
+        Core.Models.PaintSupportSide supportSide = Core.Models.PaintSupportSide.Inside)
+    {
+        float bead = (float)add.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        float dabRadius = kind == Core.Models.PaintMarkKind.Bridge ? bead * 1.5f : bead * 1.2f;
+        // Column foot: one mark at geometric mid of the target span (single mouth).
+        if (kind == Core.Models.PaintMarkKind.Bridge
+            && bridgeRole == Core.Models.PaintBridgeRole.ColumnFoot)
+        {
+            var mid = SpanCenterRaw(layer, span);
+            if (TryAddPaintMark(add, mid, dabRadius, kind,
+                    Core.Models.PaintBridgeRole.ColumnFoot, supportStyle, supportSide))
+            {
+                centersOut?.Add(mid);
+                return 1;
+            }
+            return 0;
+        }
+
+        var role = kind == Core.Models.PaintMarkKind.Bridge
+            ? (bridgeRole == Core.Models.PaintBridgeRole.None
+                ? Core.Models.PaintBridgeRole.SupportBar
+                : bridgeRole)
+            : Core.Models.PaintBridgeRole.None;
+        // Target Support Selections: dense dabs (sub-bead) so Formbound can cover
+        // the entire selected line, not sparse midpoints only.
+        bool aggressive = add.LightningTargetSupportSelections
+                          && kind == Core.Models.PaintMarkKind.Bridge;
+        float spacing = aggressive ? MathF.Max(1.5f, bead * 0.4f) : bead * 1.5f;
+        float accum = spacing; // force a dab on the first extrude
+        int added = 0;
+        System.Numerics.Vector3? firstMid = null, lastMid = null;
+        for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[span.Start + i];
+            if (mv.Kind != MoveKind.Extrude || mv.IsWipe) continue;
+            float segLen = System.Numerics.Vector3.Distance(mv.From, mv.To);
+            firstMid ??= (mv.From + mv.To) * 0.5f;
+            lastMid = (mv.From + mv.To) * 0.5f;
+
+            if (aggressive && segLen > spacing * 0.5f)
+            {
+                // Walk the segment so long beads still get multiple support samples.
+                int n = Math.Max(1, (int)MathF.Ceiling(segLen / spacing));
+                for (int k = 0; k <= n; k++)
+                {
+                    float t = k / (float)n;
+                    var p = mv.From + (mv.To - mv.From) * t;
+                    if (TryAddPaintMark(add, p, dabRadius, kind, role, supportStyle, supportSide))
+                    {
+                        centersOut?.Add(p);
+                        added++;
+                    }
+                }
+                accum = 0f;
+                continue;
+            }
+
+            accum += segLen;
+            if (accum < spacing) continue;
+            accum = 0f;
+            var mid = (mv.From + mv.To) * 0.5f;
+            if (TryAddPaintMark(add, mid, dabRadius, kind, role, supportStyle, supportSide))
+            {
+                centersOut?.Add(mid);
+                added++;
+            }
+        }
+        if (firstMid is { } f && TryAddPaintMark(add, f, dabRadius, kind, role, supportStyle, supportSide))
+        { centersOut?.Add(f); added++; }
+        if (lastMid is { } l
+            && System.Numerics.Vector3.Distance(l, firstMid ?? l) > dabRadius * 0.25f
+            && TryAddPaintMark(add, l, dabRadius, kind, role, supportStyle, supportSide))
+        { centersOut?.Add(l); added++; }
+        return added;
+    }
+
+    private static bool TryAddPaintMark(
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        System.Numerics.Vector3 mid, float dabRadius, Core.Models.PaintMarkKind kind,
+        Core.Models.PaintBridgeRole bridgeRole = Core.Models.PaintBridgeRole.None,
+        Core.Models.PaintSupportStyle supportStyle = Core.Models.PaintSupportStyle.FormboundButtress,
+        Core.Models.PaintSupportSide supportSide = Core.Models.PaintSupportSide.Inside)
+    {
+        // Same-center collision: restyle in place. Previously we returned false and
+        // left Formbound dabs when the user re-applied as Tree Support — the slicer
+        // then grew short Formbound columns while the UI said "Tree Support".
+        for (int i = 0; i < add.PaintMarks.Count; i++)
+        {
+            var m = add.PaintMarks[i];
+            if (m.Kind != kind) continue;
+            if (System.Numerics.Vector3.Distance(m.Center, mid) >= dabRadius * 0.5f) continue;
+            if (m.BridgeRole == bridgeRole
+                && m.SupportStyle == supportStyle
+                && m.SupportSide == supportSide
+                && MathF.Abs(m.Radius - dabRadius) < 0.05f)
+                return false; // identical — no change
+            add.PaintMarks[i] = m with
+            {
+                Radius = dabRadius,
+                BridgeRole = bridgeRole,
+                SupportStyle = supportStyle,
+                SupportSide = supportSide,
+            };
+            return true;
+        }
+        add.PaintMarks.Add(new Core.Models.PaintMark(
+            mid, dabRadius, kind, bridgeRole, supportStyle, supportSide));
+        return true;
+    }
+
+    private void SyncPaintModificationsUi(ViewportViewModel vm)
+    {
+        var rows = _paintModifications.Select(m => new ViewportViewModel.PaintModRow(
+            m.Id,
+            m.Kind == Core.Models.PaintMarkKind.Bridge,
+            m.Kind == Core.Models.PaintMarkKind.Offset,
+            m.Title,
+            m.Detail,
+            FormatGroupAnchorSummary(m),
+            m.HasBridgeTarget,
+            m.TargetLayer is { } tl && m.TargetSpan is { } ts
+                ? FormatAnchorSummary(tl, ts)
+                : "",
+            m.ScaffoldLayerCount,
+            m.ScaffoldMarkCenters.Count,
+            m.IsExpanded,
+            m.SupportType,
+            m.SupportSide)).ToList();
+        vm.SetPaintModifications(rows);
+    }
+
+    /// <summary>
+    /// Revise support style on a modification: re-stamp that mod's paint marks only
+    /// (does not change other areas). Soft-syncs FILL PATTERN for Formbound styles.
+    /// </summary>
+    private void SetPaintModificationSupportType(ViewportViewModel vm, Guid id, string type)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null || rec.Kind != Core.Models.PaintMarkKind.Bridge) return;
+        var style = Core.Models.PaintSupportStyleUtil.FromLabel(type);
+        var v = Core.Models.PaintSupportStyleUtil.ToLabel(style);
+        if (string.Equals(rec.SupportType, v, StringComparison.Ordinal)) return;
+        rec.SupportType = v;
+
+        // Re-stamp SupportStyle on this mod's marks (match by center).
+        if (vm.AdditiveSettings is { } add)
+        {
+            for (int i = 0; i < add.PaintMarks.Count; i++)
+            {
+                var m = add.PaintMarks[i];
+                if (m.Kind != Core.Models.PaintMarkKind.Bridge) continue;
+                bool hit = rec.MarkCenters.Any(c =>
+                    System.Numerics.Vector3.Distance(c, m.Center) < MathF.Max(m.Radius, 0.5f) * 1.1f);
+                if (!hit) continue;
+                add.PaintMarks[i] = m with { SupportStyle = style };
+            }
+            // Also re-stamp ColumnFoot marks from bridge target for this mod.
+            foreach (var tc in rec.TargetMarkCenters)
+            {
+                for (int i = 0; i < add.PaintMarks.Count; i++)
+                {
+                    var m = add.PaintMarks[i];
+                    if (m.Kind != Core.Models.PaintMarkKind.Bridge) continue;
+                    if (System.Numerics.Vector3.Distance(tc, m.Center) < MathF.Max(m.Radius, 0.5f) * 1.1f)
+                        add.PaintMarks[i] = m with { SupportStyle = style };
+                }
+            }
+            add.BumpPaintStamp();
+        }
+
+        vm.PaintSupportType = v;
+        vm.ApplyPaintSupportTypeToSettings();
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole($"[edit] modification support type → {v} (reslice to bake)");
+        SyncPaintModificationsUi(vm);
+    }
+
+    /// <summary>
+    /// Revise Inside/Outside wall side on a Formbound modification; re-stamps marks.
+    /// </summary>
+    private void SetPaintModificationSupportSide(ViewportViewModel vm, Guid id, string side)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null || rec.Kind != Core.Models.PaintMarkKind.Bridge) return;
+        var sideEnum = Core.Models.PaintSupportSideUtil.FromLabel(side);
+        var v = Core.Models.PaintSupportSideUtil.ToLabel(sideEnum);
+        if (string.Equals(rec.SupportSide, v, StringComparison.Ordinal)) return;
+        rec.SupportSide = v;
+
+        if (vm.AdditiveSettings is { } add)
+        {
+            for (int i = 0; i < add.PaintMarks.Count; i++)
+            {
+                var m = add.PaintMarks[i];
+                if (m.Kind != Core.Models.PaintMarkKind.Bridge) continue;
+                bool hit = rec.MarkCenters.Any(c =>
+                    System.Numerics.Vector3.Distance(c, m.Center) < MathF.Max(m.Radius, 0.5f) * 1.1f);
+                if (!hit) continue;
+                add.PaintMarks[i] = m with { SupportSide = sideEnum };
+            }
+            foreach (var tc in rec.TargetMarkCenters)
+            {
+                for (int i = 0; i < add.PaintMarks.Count; i++)
+                {
+                    var m = add.PaintMarks[i];
+                    if (m.Kind != Core.Models.PaintMarkKind.Bridge) continue;
+                    if (System.Numerics.Vector3.Distance(tc, m.Center) < MathF.Max(m.Radius, 0.5f) * 1.1f)
+                        add.PaintMarks[i] = m with { SupportSide = sideEnum };
+                }
+            }
+            add.BumpPaintStamp();
+        }
+
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole($"[edit] modification wall side → {v} (reslice to bake)");
+        SyncPaintModificationsUi(vm);
+    }
+
+    /// <summary>Serialize MODIFICATIONS for workspace save.</summary>
+    private List<Core.Models.WorkspacePaintModification> CapturePaintModificationsState()
+    {
+        static List<float[]> Pts(IEnumerable<System.Numerics.Vector3> src) =>
+            src.Select(p => new[] { p.X, p.Y, p.Z }).ToList();
+        static List<float[]> WorldPts(IEnumerable<TkVector3> src) =>
+            src.Select(p => new[] { p.X, p.Y, p.Z }).ToList();
+
+        return _paintModifications.Select(m =>
+        {
+            var dto = new Core.Models.WorkspacePaintModification
+            {
+                Id = m.Id,
+                Kind = m.Kind.ToString(),
+                LayerIndex = m.Layer.Index,
+                LayerZ = m.Layer.Z,
+                SpanStart = m.Span.Start,
+                SpanCount = m.Span.Count,
+                SpanClosed = m.Span.Closed,
+                SpanEntryTravelIndex = m.Span.EntryTravelIndex,
+                MarkCenters = Pts(m.MarkCenters),
+                Title = m.Title,
+                Detail = m.Detail,
+                IsExpanded = m.IsExpanded,
+                SupportType = m.SupportType,
+                SupportSide = m.SupportSide,
+                WorldPoints = WorldPts(m.World),
+                ScaffoldLayerCount = m.ScaffoldLayerCount,
+                ScaffoldMarkCenters = Pts(m.ScaffoldMarkCenters),
+            };
+            if (m.Members.Count > 0)
+            {
+                dto.Members = m.Members.Select(mem => new Core.Models.WorkspacePaintModMember
+                {
+                    LayerIndex = mem.Layer.Index,
+                    LayerZ = mem.Layer.Z,
+                    SpanStart = mem.Span.Start,
+                    SpanCount = mem.Span.Count,
+                    SpanClosed = mem.Span.Closed,
+                    SpanEntryTravelIndex = mem.Span.EntryTravelIndex,
+                    MarkCenters = Pts(mem.MarkCenters),
+                    WorldPoints = WorldPts(mem.World),
+                }).ToList();
+            }
+            if (m.TargetLayer is { } tl && m.TargetSpan is { } ts)
+            {
+                dto.TargetLayerIndex = tl.Index;
+                dto.TargetLayerZ = tl.Z;
+                dto.TargetSpanStart = ts.Start;
+                dto.TargetSpanCount = ts.Count;
+                dto.TargetSpanClosed = ts.Closed;
+                dto.TargetSpanEntryTravelIndex = ts.EntryTravelIndex;
+                dto.TargetMarkCenters = Pts(m.TargetMarkCenters);
+                if (m.TargetWorld is { } tw)
+                    dto.TargetWorldPoints = WorldPts(tw);
+            }
+            return dto;
+        }).ToList();
+    }
+
+    /// <summary>Rebuild MODIFICATIONS after workspace load when toolpaths are ready.</summary>
+    private void RestorePaintModificationsState(
+        IReadOnlyList<Core.Models.WorkspacePaintModification> saved)
+    {
+        _paintModifications.Clear();
+        if (saved.Count == 0)
+        {
+            if (DataContext is ViewportViewModel emptyVm)
+                SyncPaintModificationsUi(emptyVm);
+            return;
+        }
+
+        // Index layers by Index and by Z for robust rebinding after re-slice.
+        var byIndex = new Dictionary<int, ToolpathLayer>();
+        var byZ = new List<(float Z, ToolpathLayer Layer)>();
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible && !ReferenceEquals(node, _activeScrubNode)) continue;
+            foreach (var layer in tp.Layers)
+            {
+                byIndex[layer.Index] = layer;
+                byZ.Add((layer.Z, layer));
+            }
+        }
+
+        ToolpathLayer? FindLayer(int index, float z)
+        {
+            if (byIndex.TryGetValue(index, out var exact)) return exact;
+            ToolpathLayer? best = null;
+            float bestD = float.MaxValue;
+            foreach (var (lz, layer) in byZ)
+            {
+                float d = MathF.Abs(lz - z);
+                if (d < bestD) { bestD = d; best = layer; }
+            }
+            return bestD < 2f ? best : null;
+        }
+
+        static ContourSpan MakeSpan(int start, int count, bool closed, int entry) =>
+            new(start, Math.Max(1, count), closed, entry);
+
+        static List<System.Numerics.Vector3> ReadPts(List<float[]>? src)
+        {
+            var list = new List<System.Numerics.Vector3>();
+            if (src is null) return list;
+            foreach (var a in src)
+            {
+                if (a is { Length: >= 3 })
+                    list.Add(new System.Numerics.Vector3(a[0], a[1], a[2]));
+            }
+            return list;
+        }
+
+        static List<TkVector3> ReadWorld(List<float[]>? src)
+        {
+            var list = new List<TkVector3>();
+            if (src is null) return list;
+            foreach (var a in src)
+            {
+                if (a is { Length: >= 3 })
+                    list.Add(new TkVector3(a[0], a[1], a[2]));
+            }
+            return list;
+        }
+
+        System.Numerics.Vector3 origin = default;
+        var wt = TkMatrix4.Identity;
+        foreach (var (node, _) in _toolpathByNode)
+        {
+            _toolpathOriginByNode.TryGetValue(node, out origin);
+            wt = node.LocalTransform;
+            break;
+        }
+
+        foreach (var s in saved)
+        {
+            var layer = FindLayer(s.LayerIndex, s.LayerZ);
+            if (layer is null) continue;
+            var span = MakeSpan(s.SpanStart, s.SpanCount, s.SpanClosed, s.SpanEntryTravelIndex);
+            // Clamp span into layer.
+            if (span.Start >= layer.Moves.Count) continue;
+            int count = Math.Min(span.Count, layer.Moves.Count - span.Start);
+            span = new ContourSpan(span.Start, Math.Max(1, count), span.Closed, span.EntryTravelIndex);
+
+            var kind = string.Equals(s.Kind, "Remove", StringComparison.OrdinalIgnoreCase)
+                ? Core.Models.PaintMarkKind.Remove
+                : Core.Models.PaintMarkKind.Bridge;
+
+            var world = ReadWorld(s.WorldPoints);
+            if (world.Count == 0)
+                world = SpanWorldHighlight((layer, span, origin, wt),
+                    pointMode: span.Count <= 1);
+
+            var rec = new PaintModificationRecord
+            {
+                Id = s.Id == Guid.Empty ? Guid.NewGuid() : s.Id,
+                Kind = kind,
+                Layer = layer,
+                Span = span,
+                Origin = origin,
+                Wt = wt,
+                World = world,
+                MarkCenters = ReadPts(s.MarkCenters),
+                Title = s.Title,
+                Detail = s.Detail,
+                IsExpanded = s.IsExpanded,
+                ScaffoldLayerCount = s.ScaffoldLayerCount,
+                SupportType = string.IsNullOrWhiteSpace(s.SupportType)
+                    ? "Formbound Buttress"
+                    : s.SupportType,
+                SupportSide = string.IsNullOrWhiteSpace(s.SupportSide)
+                    ? Core.Models.PaintSupportSideUtil.LabelInside
+                    : s.SupportSide,
+            };
+            rec.ScaffoldMarkCenters.AddRange(ReadPts(s.ScaffoldMarkCenters));
+
+            // Restore group members (Shift multi-select). Fall back to primary only.
+            if (s.Members is { Count: > 0 })
+            {
+                foreach (var sm in s.Members)
+                {
+                    var mLayer = FindLayer(sm.LayerIndex, sm.LayerZ);
+                    if (mLayer is null) continue;
+                    var mSpan = MakeSpan(sm.SpanStart, sm.SpanCount, sm.SpanClosed, sm.SpanEntryTravelIndex);
+                    if (mSpan.Start >= mLayer.Moves.Count) continue;
+                    int mCount = Math.Min(mSpan.Count, mLayer.Moves.Count - mSpan.Start);
+                    mSpan = new ContourSpan(mSpan.Start, Math.Max(1, mCount), mSpan.Closed, mSpan.EntryTravelIndex);
+                    var mWorld = ReadWorld(sm.WorldPoints);
+                    if (mWorld.Count == 0)
+                        mWorld = SpanWorldHighlight((mLayer, mSpan, origin, wt),
+                            pointMode: mSpan.Count <= 1);
+                    rec.Members.Add(new PaintModMember
+                    {
+                        Layer = mLayer,
+                        Span = mSpan,
+                        Origin = origin,
+                        Wt = wt,
+                        World = mWorld,
+                        MarkCenters = ReadPts(sm.MarkCenters),
+                    });
+                }
+                // If members restored, rebuild union MarkCenters/World when empty.
+                if (rec.Members.Count > 0 && rec.MarkCenters.Count == 0)
+                {
+                    foreach (var mem in rec.Members)
+                        rec.MarkCenters.AddRange(mem.MarkCenters);
+                }
+            }
+            else
+            {
+                // Legacy single: seed Members so EnumerateMembers stays consistent.
+                rec.Members.Add(new PaintModMember
+                {
+                    Layer = layer,
+                    Span = span,
+                    Origin = origin,
+                    Wt = wt,
+                    World = world,
+                    MarkCenters = rec.MarkCenters,
+                });
+            }
+
+            if (s.TargetLayerIndex is int tli && s.TargetLayerZ is float tlz
+                && s.TargetSpanStart is int tss && s.TargetSpanCount is int tsc)
+            {
+                var tLayer = FindLayer(tli, tlz);
+                if (tLayer is not null)
+                {
+                    var tSpan = MakeSpan(tss, tsc, s.TargetSpanClosed, s.TargetSpanEntryTravelIndex);
+                    if (tSpan.Start < tLayer.Moves.Count)
+                    {
+                        tSpan = new ContourSpan(tSpan.Start,
+                            Math.Min(tSpan.Count, tLayer.Moves.Count - tSpan.Start),
+                            tSpan.Closed, tSpan.EntryTravelIndex);
+                        rec.TargetLayer = tLayer;
+                        rec.TargetSpan = tSpan;
+                        rec.TargetOrigin = origin;
+                        rec.TargetWt = wt;
+                        rec.TargetWorld = ReadWorld(s.TargetWorldPoints);
+                        if (rec.TargetWorld.Count == 0)
+                            rec.TargetWorld = SpanWorldHighlight(
+                                (tLayer, tSpan, origin, wt), pointMode: tSpan.Count <= 1);
+                        rec.TargetMarkCenters.AddRange(ReadPts(s.TargetMarkCenters));
+                    }
+                }
+            }
+
+            RefreshModificationLabels(rec);
+            _paintModifications.Add(rec);
+        }
+
+        if (DataContext is ViewportViewModel vm)
+        {
+            SyncPaintModificationsUi(vm);
+            LogPaintConsole(
+                $"[workspace] restored {_paintModifications.Count} paint modification(s)");
+        }
+    }
+
+    private static string FormatAnchorSummary(ToolpathLayer layer, ContourSpan span)
+    {
+        bool isPoint = span.Count <= 1;
+        string kind = isPoint ? "Point" : "Path";
+        return $"Layer {layer.Index + 1} · {kind} · Z {layer.Z:0.#} · m{span.Start}+{span.Count}";
+    }
+
+    private static string FormatGroupAnchorSummary(PaintModificationRecord rec)
+    {
+        if (!rec.IsGroup)
+            return FormatAnchorSummary(rec.Layer, rec.Span);
+        var layers = rec.Members
+            .Select(m => m.Layer.Index + 1)
+            .Distinct()
+            .OrderBy(n => n)
+            .ToList();
+        string layerTxt = layers.Count <= 4
+            ? string.Join(", ", layers.Select(n => $"L{n}"))
+            : $"L{layers.First()}…L{layers.Last()}";
+        return $"Group · {rec.MemberCount} paths · {layerTxt}";
+    }
+
+    private static void RefreshModificationLabels(PaintModificationRecord rec)
+    {
+        string kindLabel = rec.Kind switch
+        {
+            Core.Models.PaintMarkKind.Bridge => "Support",
+            Core.Models.PaintMarkKind.Offset => "Offset",
+            _ => "Remove",
+        };
+        int marks = rec.MarkCenters.Count + rec.TargetMarkCenters.Count + rec.ScaffoldMarkCenters.Count;
+
+        if (rec.IsGroup)
+        {
+            var layers = rec.Members
+                .Select(m => m.Layer.Index + 1)
+                .Distinct()
+                .OrderBy(n => n)
+                .ToList();
+            string layerTxt = layers.Count <= 3
+                ? string.Join(",", layers.Select(n => $"L{n}"))
+                : $"L{layers.First()}–L{layers.Last()}";
+            rec.Title = $"{kindLabel} · Group · {rec.MemberCount}";
+            rec.Detail = $"{layerTxt}"
+                + (marks > 0 ? $" · {marks} mark(s)" : "")
+                + (rec.Kind == Core.Models.PaintMarkKind.Bridge && !string.IsNullOrWhiteSpace(rec.SupportType)
+                    ? $" · {rec.SupportType}"
+                    : "");
+            if (rec.HasBridgeTarget && rec.TargetLayer is { } tlg)
+                rec.Detail += $" · bridge→L{tlg.Index + 1}";
+            return;
+        }
+
+        int layerNum = rec.Layer.Index + 1;
+        bool isPoint = rec.Span.Count <= 1;
+        string section = isPoint ? "Point" : "Path";
+
+        if (rec.HasBridgeTarget && rec.TargetLayer is { } tl && rec.TargetSpan is not null)
+        {
+            rec.Title = $"{kindLabel} · L{layerNum} → L{tl.Index + 1}";
+            rec.Detail = $"{section} · Z {rec.Layer.Z:0.#}→{tl.Z:0.#}"
+                + (rec.ScaffoldLayerCount > 0
+                    ? $" · {rec.ScaffoldLayerCount} mid-layer(s)"
+                    : "")
+                + (marks > 0 ? $" · {marks} mark(s)" : "");
+        }
+        else
+        {
+            rec.Title = $"{kindLabel} · Layer {layerNum}";
+            rec.Detail = $"{section} · Z {rec.Layer.Z:0.#} · m{rec.Span.Start}+{rec.Span.Count}"
+                + (rec.MarkCenters.Count > 0 ? $" · {rec.MarkCenters.Count} mark(s)" : "");
+        }
+    }
+
+    /// <summary>Toggle expand + reselect so the user can inspect options.</summary>
+    private void TogglePaintModificationExpand(ViewportViewModel vm, Guid id)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null) return;
+        rec.IsExpanded = !rec.IsExpanded;
+        // Collapse siblings so only one card is open at a time (cleaner panel).
+        if (rec.IsExpanded)
+        {
+            foreach (var other in _paintModifications)
+                if (other.Id != id) other.IsExpanded = false;
+        }
+        ReselectPaintModification(vm, id);
+        SyncPaintModificationsUi(vm);
+    }
+
+    /// <summary>Restores the selection for a stored modification so it can be edited.
+    /// Groups reselect every member so Create Mod / re-Apply hit the whole set.</summary>
+    private void ReselectPaintModification(ViewportViewModel vm, Guid id)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null) return;
+
+        _paintSelection.Clear();
+        _paintMultiLines.Clear();
+        var col = rec.Kind == Core.Models.PaintMarkKind.Bridge
+            ? new TkVector3(0.2f, 0.9f, 1f)
+            : new TkVector3(1f, 0.45f, 0.15f);
+
+        // Restore every group member (or the single primary span).
+        foreach (var mem in rec.EnumerateMembers())
+        {
+            var w = new List<TkVector3>(mem.World);
+            _paintSelection.Add((mem.Layer, mem.Span, mem.Origin, mem.Wt, w));
+        }
+
+        // Bridge target (extra anchor) after group members.
+        if (rec.TargetWorld is { Count: > 0 } tw
+            && rec.TargetLayer is { } tLayer
+            && rec.TargetSpan is { } tSpan)
+        {
+            _paintMultiLines.Add((new List<TkVector3>(tw), col));
+            _paintSelection.Add((tLayer, tSpan, rec.TargetOrigin, rec.TargetWt,
+                new List<TkVector3>(tw)));
+        }
+
+        // Sticky highlight = last selection; multi = earlier members.
+        _paintMultiLines.Clear();
+        for (int i = 0; i < _paintSelection.Count - 1; i++)
+            _paintMultiLines.Add((new List<TkVector3>(_paintSelection[i].World), col));
+        var sticky = _paintSelection.Count > 0
+            ? new List<TkVector3>(_paintSelection[^1].World)
+            : new List<TkVector3>(rec.World);
+        _paintSelectedLine = sticky;
+        _paintHoverLine = sticky;
+        _paintSelectedColor = col;
+        _paintSelectedId = null;
+        vm.PaintModificationMode = rec.Kind == Core.Models.PaintMarkKind.Bridge ? "Support" : "Remove";
+        if (rec.Kind == Core.Models.PaintMarkKind.Bridge)
+        {
+            vm.PaintSupportType = rec.SupportType;
+            vm.ApplyPaintSupportTypeToSettings();
+        }
+
+        // Jump timeline / LAYERS dual-slider to the anchor layer(s) so the
+        // reselected paths are inside the visible layer window.
+        int loLayer = int.MaxValue, hiLayer = int.MinValue;
+        foreach (var mem in rec.EnumerateMembers())
+        {
+            int li = mem.Layer.Index;
+            if (li < loLayer) loLayer = li;
+            if (li > hiLayer) hiLayer = li;
+        }
+        // Include bridge target layer if present (second anchor may be elsewhere).
+        if (rec.TargetLayer is { } bridgeLayer)
+        {
+            int bli = bridgeLayer.Index;
+            if (bli < loLayer) loLayer = bli;
+            if (bli > hiLayer) hiLayer = bli;
+        }
+        if (loLayer <= hiLayer)
+            vm.FocusScrubOnLayers(loLayer, hiLayer);
+
+        SyncPaintSelectionUi(vm);
+        LogPaintConsole($"[edit] reselected modification: {rec.Title} · {rec.Detail}"
+            + (rec.IsGroup ? $" ({rec.MemberCount} paths)" : "")
+            + (loLayer <= hiLayer
+                ? $" · scrub L{loLayer + 1}" + (loLayer != hiLayer ? $"–L{hiLayer + 1}" : "")
+                : ""));
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void BeginPickBridgeTarget(ViewportViewModel vm, Guid id)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null) return;
+        if (rec.Kind != Core.Models.PaintMarkKind.Bridge)
+        {
+            LogPaintConsole("[edit] bridge targets are only for Support modifications");
+            return;
+        }
+
+        // Toggle off if already picking this mod.
+        if (vm.PaintBridgePickModificationId == id)
+        {
+            vm.PaintBridgePickModificationId = null;
+            LogPaintConsole("[edit] bridge target pick cancelled");
+            return;
+        }
+
+        rec.IsExpanded = true;
+        vm.PaintBridgePickModificationId = id;
+        // Clear other tools so a click is a clean path pick.
+        vm.PaintHandActive = false;
+        vm.PaintBoxSelectActive = false;
+        vm.PaintBridgeActive = false;
+        vm.PaintRemoveActive = false;
+        vm.PaintLineBridgeActive = false;
+        vm.PaintLineRemoveActive = false;
+        ReselectPaintModification(vm, id);
+        SyncPaintModificationsUi(vm);
+        LogPaintConsole("[edit] pick bridge target: click a path/point on another layer (Esc cancels)");
+    }
+
+    private void ClearBridgeTarget(ViewportViewModel vm, Guid id)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null || !rec.HasBridgeTarget) return;
+
+        if (vm.AdditiveSettings is { } add)
+        {
+            int removed = RemoveMarksNearCenters(add, rec.Kind, rec.TargetMarkCenters);
+            removed += RemoveMarksNearCenters(add, rec.Kind, rec.ScaffoldMarkCenters);
+            if (removed > 0) add.BumpPaintStamp();
+        }
+
+        rec.TargetLayer = null;
+        rec.TargetSpan = null;
+        rec.TargetWorld = null;
+        rec.TargetMarkCenters.Clear();
+        rec.ScaffoldMarkCenters.Clear();
+        rec.ScaffoldLayerCount = 0;
+        RefreshModificationLabels(rec);
+        if (vm.PaintBridgePickModificationId == id)
+            vm.PaintBridgePickModificationId = null;
+        ReselectPaintModification(vm, id);
+        SyncPaintModificationsUi(vm);
+        LogPaintConsole("[edit] bridge target cleared");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Attach a second path/point as the bridge end of a Support modification and
+    /// plant Formbound Bridge marks through every intermediate layer along the column.
+    /// </summary>
+    private void AttachBridgeTarget(
+        ViewportViewModel vm, Guid id,
+        ToolpathLayer targetLayer, ContourSpan targetSpan,
+        System.Numerics.Vector3 origin, TkMatrix4 wt, List<TkVector3> world)
+    {
+        var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
+        if (rec is null) return;
+        if (rec.Kind != Core.Models.PaintMarkKind.Bridge)
+        {
+            LogPaintConsole("[edit] bridge targets are only for Support modifications");
+            vm.PaintBridgePickModificationId = null;
+            return;
+        }
+
+        // Same span re-picked — ignore.
+        if (ReferenceEquals(rec.Layer, targetLayer)
+            && rec.Span.Start == targetSpan.Start && rec.Span.Count == targetSpan.Count)
+        {
+            LogPaintConsole("[edit] bridge target is the same as the anchor — pick a different path/point");
+            return;
+        }
+
+        if (vm.AdditiveSettings is not { } add)
+        {
+            vm.PaintBridgePickModificationId = null;
+            return;
+        }
+
+        // Drop previous target + scaffold dabs.
+        RemoveMarksNearCenters(add, rec.Kind, rec.TargetMarkCenters);
+        RemoveMarksNearCenters(add, rec.Kind, rec.ScaffoldMarkCenters);
+        rec.TargetMarkCenters.Clear();
+        rec.ScaffoldMarkCenters.Clear();
+
+        rec.TargetLayer = targetLayer;
+        rec.TargetSpan = targetSpan;
+        rec.TargetOrigin = origin;
+        rec.TargetWt = wt;
+        rec.TargetWorld = new List<TkVector3>(world);
+
+        // Single ColumnFoot at the mid of the target line — ONE perimeter mouth.
+        // Support-bar marks on the upper selection already define full-width T.
+        var targetCenters = new List<System.Numerics.Vector3>();
+        MarkPickedSpanDabs(add, targetLayer, targetSpan, Core.Models.PaintMarkKind.Bridge,
+            targetCenters, Core.Models.PaintBridgeRole.ColumnFoot);
+        rec.TargetMarkCenters.AddRange(targetCenters);
+
+        // No intermediate scaffold demand — inheritance carries one vertical column.
+        int midLayers = GenerateScaffoldMarks(add, rec);
+        rec.ScaffoldLayerCount = midLayers;
+        rec.IsExpanded = true;
+        RefreshModificationLabels(rec);
+
+        add.BumpPaintStamp();
+        vm.PaintBridgePickModificationId = null;
+        ReselectPaintModification(vm, id);
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole(
+            $"[edit] bridge L{rec.Layer.Index + 1} → L{targetLayer.Index + 1}"
+            + $" · {midLayers} intermediate layer(s)"
+            + $" · {rec.ScaffoldMarkCenters.Count} scaffold mark(s) — reslice to bake Formbound");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Bridge-target scaffolding: do <b>not</b> plant demand on intermediate layers.
+    /// Intermediate ribbon marks caused Formbound to re-birth a new mouth every
+    /// few layers (stop/start columns). The planner now births once under the
+    /// painted selection and inherits the same tree downward via MaxStep.
+    /// Target-end marks are planted separately by <see cref="MarkPickedSpanDabs"/>.
+    /// </summary>
+    private int GenerateScaffoldMarks(
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        PaintModificationRecord rec)
+    {
+        // Intentionally no intermediate marks — inheritance carries the column.
+        _ = add;
+        _ = rec;
+        return 0;
+    }
+
+    /// <summary>Ordered midpoints along a path/point span for scaffold ribbons.</summary>
+    private static List<System.Numerics.Vector3> SampleSpanPolyline(
+        ToolpathLayer layer, ContourSpan span, float stepMm)
+    {
+        var pts = new List<System.Numerics.Vector3>();
+        float accum = stepMm; // include first
+        for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[span.Start + i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            accum += System.Numerics.Vector3.Distance(mv.From, mv.To);
+            if (accum < stepMm && pts.Count > 0) continue;
+            accum = 0f;
+            pts.Add((mv.From + mv.To) * 0.5f);
+        }
+        if (pts.Count == 0)
+            pts.Add(new System.Numerics.Vector3(0, 0, layer.Z));
+        // Ensure last bead is represented.
+        for (int i = span.Count - 1; i >= 0; i--)
+        {
+            int mi = span.Start + i;
+            if (mi < 0 || mi >= layer.Moves.Count) continue;
+            var mv = layer.Moves[mi];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            var last = (mv.From + mv.To) * 0.5f;
+            if (System.Numerics.Vector3.Distance(pts[^1], last) > stepMm * 0.25f)
+                pts.Add(last);
+            break;
+        }
+        return pts;
+    }
+
+    private static List<System.Numerics.Vector3> ResamplePolyline(
+        List<System.Numerics.Vector3> poly, int count)
+    {
+        if (count <= 1) return [poly[0]];
+        if (poly.Count == 1)
+        {
+            var one = new List<System.Numerics.Vector3>(count);
+            for (int i = 0; i < count; i++) one.Add(poly[0]);
+            return one;
+        }
+        float total = 0f;
+        for (int i = 1; i < poly.Count; i++)
+            total += System.Numerics.Vector3.Distance(poly[i - 1], poly[i]);
+        if (total < 1e-4f)
+        {
+            var flat = new List<System.Numerics.Vector3>(count);
+            for (int i = 0; i < count; i++) flat.Add(poly[0]);
+            return flat;
+        }
+
+        var result = new List<System.Numerics.Vector3>(count);
+        for (int s = 0; s < count; s++)
+        {
+            float target = total * (s / (float)(count - 1));
+            float acc = 0f;
+            for (int i = 1; i < poly.Count; i++)
+            {
+                float seg = System.Numerics.Vector3.Distance(poly[i - 1], poly[i]);
+                if (acc + seg >= target - 1e-5f || i == poly.Count - 1)
+                {
+                    float u = seg < 1e-6f ? 0f : Math.Clamp((target - acc) / seg, 0f, 1f);
+                    result.Add(System.Numerics.Vector3.Lerp(poly[i - 1], poly[i], u));
+                    break;
+                }
+                acc += seg;
+            }
+        }
+        return result;
+    }
+
+    private static System.Numerics.Vector3 SpanCenterRaw(ToolpathLayer layer, ContourSpan span)
+    {
+        System.Numerics.Vector3 sum = default;
+        int n = 0;
+        for (int i = 0; i < span.Count && span.Start + i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[span.Start + i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            sum += (mv.From + mv.To) * 0.5f;
+            n++;
+        }
+        if (n == 0)
+            return new System.Numerics.Vector3(0, 0, layer.Z);
+        return sum / n;
+    }
+
+    private static int RemoveMarksNearCenters(
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        Core.Models.PaintMarkKind kind,
+        List<System.Numerics.Vector3> centers)
+    {
+        if (centers.Count == 0) return 0;
+        float tol = (float)(add.BeadWidth > 0.5 ? add.BeadWidth : 6f) * 0.75f;
+        return add.PaintMarks.RemoveAll(m =>
+            m.Kind == kind
+            && centers.Any(c => System.Numerics.Vector3.Distance(m.Center, c) < tol));
+    }
+
+    /// <summary>Removes one modification and its paint-mark dabs (anchor + target + scaffold).</summary>
+    private void DeletePaintModification(ViewportViewModel vm, Guid id)
+    {
+        int idx = _paintModifications.FindIndex(m => m.Id == id);
+        if (idx < 0) return;
+        var rec = _paintModifications[idx];
+        _paintModifications.RemoveAt(idx);
+
+        if (vm.PaintBridgePickModificationId == id)
+            vm.PaintBridgePickModificationId = null;
+
+        if (vm.AdditiveSettings is { } add)
+        {
+            int removed = RemoveMarksNearCenters(add, rec.Kind, rec.MarkCenters);
+            removed += RemoveMarksNearCenters(add, rec.Kind, rec.TargetMarkCenters);
+            removed += RemoveMarksNearCenters(add, rec.Kind, rec.ScaffoldMarkCenters);
+            if (removed > 0) add.BumpPaintStamp();
+            LogPaintConsole($"[edit] deleted modification · {removed} mark(s) removed");
+        }
+        else
+            LogPaintConsole("[edit] deleted modification");
+
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void ClearAllPaintModifications(ViewportViewModel vm)
+    {
+        _paintModifications.Clear();
+        vm.PaintBridgePickModificationId = null;
+        if (vm.AdditiveSettings is { } add && add.PaintMarks.Count > 0)
+        {
+            add.PaintMarks.Clear();
+            add.BumpPaintStamp();
+        }
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole("[edit] all modifications cleared");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private static double Dist2D(Avalonia.Point a, Avalonia.Point b)
+    {
+        double dx = a.X - b.X, dy = a.Y - b.Y;
+        return Math.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>Square marquee: paths with a sample point inside the screen rect join selection.</summary>
+    private void SelectSpansInRect(ViewportViewModel vm, Avalonia.Rect rect, bool additive = false)
+    {
+        var (rx, ry, vpW, vpH) = GetGlPickViewport(new Avalonia.Point(rect.X, rect.Y));
+        if (vpW <= 1f || vpH <= 1f) return;
+        var (rx2, ry2, _, _) = GetGlPickViewport(new Avalonia.Point(rect.Right, rect.Bottom));
+        float x0 = MathF.Min(rx, rx2), x1 = MathF.Max(rx, rx2);
+        float y0 = MathF.Min(ry, ry2), y1 = MathF.Max(ry, ry2);
+        SelectSpansInRegion(vm, additive, (sx, sy) => sx >= x0 && sx <= x1 && sy >= y0 && sy <= y1,
+            label: "box");
+    }
+
+    /// <summary>Lasso: freehand polygon (viewport px); midpoints inside the loop join selection.</summary>
+    private void SelectSpansInLasso(
+        ViewportViewModel vm, List<Avalonia.Point> lassoPts, bool additive = false)
+    {
+        if (lassoPts.Count < 3) return;
+        // Convert each lasso vertex into GL-pick space once.
+        var poly = new List<(float X, float Y)>(lassoPts.Count);
+        float vpW = 0, vpH = 0;
+        foreach (var p in lassoPts)
+        {
+            var (x, y, w, h) = GetGlPickViewport(p);
+            vpW = w; vpH = h;
+            poly.Add((x, y));
+        }
+        if (vpW <= 1f || vpH <= 1f) return;
+        SelectSpansInRegion(vm, additive, (sx, sy) => PointInPolygon(sx, sy, poly), label: "lasso");
+    }
+
+    /// <summary>
+    /// Shared region test: for every visible extrude bead (in scrub window + filter),
+    /// if its screen midpoint is inside the region, add a short local section (or whole
+    /// contour when Contours exist and path mode wants full loops inside the region).
+    /// </summary>
+    private void SelectSpansInRegion(
+        ViewportViewModel vm, bool additive,
+        Func<float, float, bool> screenInside, string label)
+    {
+        float vpW = (float)Math.Max(1.0, GlCanvas.Bounds.Width);
+        float vpH = (float)Math.Max(1.0, GlCanvas.Bounds.Height);
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+        int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
+        if (!additive)
+        {
+            _paintSelection.Clear();
+            _paintMultiLines.Clear();
+        }
+        int before = _paintSelection.Count;
+        var selCol = new TkVector3(1f, 0.55f, 0.08f);
+        float beadMm = (float)(vm.AdditiveSettings?.BeadWidth ?? 6);
+        if (beadMm < 0.5f) beadMm = 6f;
+        bool pointMode = vm.PaintPointGranularityActive;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (node.Visible == false && !ReferenceEquals(node, _activeScrubNode)) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            var wt = node.LocalTransform;
+            int globalMove = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                int layerCount = moves.Count;
+                if (globalMove + layerCount <= scrubStart0)
+                {
+                    globalMove += layerCount;
+                    continue;
+                }
+                if (globalMove >= scrubLimit) break;
+
+                int i0 = Math.Max(0, scrubStart0 - globalMove);
+                int i1 = Math.Min(layerCount, scrubLimit - globalMove);
+
+                // Prefer recorded contours when present (whole loops inside the region).
+                if (layer.Contours.Count > 0 && !pointMode)
+                {
+                    foreach (var span in layer.Contours)
+                    {
+                        if (span.Count < 1 || span.Start < 0
+                            || span.Start + span.Count > layer.Moves.Count) continue;
+                        int spanGlobal = globalMove + span.Start;
+                        if (spanGlobal >= scrubLimit || spanGlobal + span.Count <= scrubStart0)
+                            continue;
+                        if (_paintSelection.Any(sel =>
+                            ReferenceEquals(sel.Layer, layer) && sel.Span.Start == span.Start
+                            && sel.Span.Count == span.Count)) continue;
+
+                        int stride = Math.Max(1, span.Count / 48);
+                        bool hit = false;
+                        for (int i = 0; i < span.Count && !hit; i += stride)
+                        {
+                            var mv = layer.Moves[span.Start + i];
+                            if (mv.Kind != MoveKind.Extrude) continue;
+                            // continue (not break): mixed contours may start with a
+                            // filtered bead type then contain allowed ones.
+                            if (!PaintPickAllowed(mv, vm)) continue;
+                            if (!TryProjectMoveMid(mv, origin, wt, viewProj, vpW, vpH,
+                                    out float sx, out float sy)) continue;
+                            if (screenInside(sx, sy)) hit = true;
+                        }
+                        if (!hit) continue;
+
+                        var poly = SpanWorldHighlight((layer, span, origin, wt), pointMode: false);
+                        _paintSelection.Add((layer, span, origin, wt, poly));
+                        _paintMultiLines.Add((poly, selCol));
+                    }
+                }
+                else
+                {
+                    // No contours / point mode: every extrude mid inside → local section or bead.
+                    for (int i = i0; i < i1; i++)
+                    {
+                        var mv = moves[i];
+                        if (mv.Kind != MoveKind.Extrude) continue;
+                        if (mv.IsLayerStitch || mv.IsLayerChange) continue;
+                        if (!PaintPickAllowed(mv, vm)) continue;
+                        if (!TryProjectMoveMid(mv, origin, wt, viewProj, vpW, vpH,
+                                out float sx, out float sy)) continue;
+                        if (!screenInside(sx, sy)) continue;
+
+                        ContourSpan span = pointMode
+                            ? new ContourSpan(i, 1, false, -1)
+                            : ExpandLocalSection(layer, i, beadMm, i1 - 1,
+                                maxMovesCap: 32, minMoveInclusive: i0);
+                        if (_paintSelection.Any(sel =>
+                            ReferenceEquals(sel.Layer, layer) && sel.Span.Start == span.Start
+                            && sel.Span.Count == span.Count)) continue;
+
+                        var poly = SpanWorldHighlight((layer, span, origin, wt), pointMode);
+                        _paintSelection.Add((layer, span, origin, wt, poly));
+                        _paintMultiLines.Add((poly, selCol));
+                        // Skip ahead past this section so we don't add overlapping slices.
+                        if (!pointMode) i = Math.Max(i, span.Start + span.Count - 1);
+                    }
+                }
+
+                globalMove += layerCount;
+            }
+        }
+
+        // Sticky highlight = last selected.
+        if (_paintSelection.Count > 0)
+        {
+            _paintSelectedLine = new List<TkVector3>(_paintSelection[^1].World);
+            _paintSelectedColor = selCol;
+            // Multi-lines: everything except last
+            _paintMultiLines.Clear();
+            for (int i = 0; i < _paintSelection.Count - 1; i++)
+                _paintMultiLines.Add((_paintSelection[i].World, selCol));
+        }
+
+        SyncPaintSelectionUi(vm);
+        if (_paintSelection.Count != before)
+            LogPaintConsole($"[edit] {label} select → {_paintSelection.Count} path(s)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private bool TryProjectMoveMid(
+        ToolpathMove mv, System.Numerics.Vector3 origin, TkMatrix4 wt,
+        TkMatrix4 viewProj, float vpW, float vpH, out float sx, out float sy)
+    {
+        sx = sy = 0;
+        var mid = (mv.From + mv.To) * 0.5f;
+        var world = TransformPoint(new TkVector3(
+            mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
+        var sp = _renderer.ProjectToScreen(
+            new Vector3(world.X, world.Y, world.Z), viewProj, vpW, vpH);
+        if (float.IsNaN(sp.X)) return false;
+        sx = sp.X; sy = sp.Y;
+        return true;
+    }
+
+    /// <summary>Ray-cast point-in-polygon (screen space).</summary>
+    private static bool PointInPolygon(float x, float y, List<(float X, float Y)> poly)
+    {
+        bool inside = false;
+        int n = poly.Count;
+        for (int i = 0, j = n - 1; i < n; j = i++)
+        {
+            float xi = poly[i].X, yi = poly[i].Y;
+            float xj = poly[j].X, yj = poly[j].Y;
+            if (((yi > y) != (yj > y))
+                && (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12f) + xi))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    /// <summary>Pick filter from the toolbar: what hover/click/box may select.
+    /// Wipes are never selectable (pre-travel purge paths, not part geometry).</summary>
+    private static bool PaintPickAllowed(ToolpathMove mv, ViewportViewModel vm)
+    {
+        if (mv.IsWipe) return false;
+        return vm.PaintPickFilter switch
+        {
+            "Formbound" => mv.IsLightning,
+            "Perimeter" => !mv.IsLightning,
+            _ => true,
+        };
+    }
+
+    /// <summary>Nearest local path <em>section</em> under the cursor (not the whole
+    /// layer contour). Screen-space proximity is the primary gate (cursor must sit on
+    /// the bead), with 3D ray depth as a tie-break so front geometry wins. Timeline
+    /// scrub hides not-yet-printed moves — those are not pickable.
+    /// <para>
+    /// When <paramref name="fullConnectedPath"/> is true (2D slice double-click), expand
+    /// to the full connected contour / extrusion run instead of a short local section.
+    /// </para>
+    /// <para>
+    /// Performance: view×projection is built once per call (never per-move — that
+    /// froze 10k+ bead paths). Layers fully outside the scrub window are skipped.
+    /// Midpoint reject uses a single transform+project before the full segment test.
+    /// </para></summary>
+    private (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt)?
+        PickSpanUnderCursor(Avalonia.Point pos, bool fullConnectedPath = false)
+    {
+        var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
+        if (vpW <= 1f || vpH <= 1f) return null;
+
+        var vmPick = DataContext as ViewportViewModel;
+        float beadMm = (float)(vmPick?.AdditiveSettings?.BeadWidth ?? 6);
+        if (beadMm < 0.5f) beadMm = 6f;
+        // Screen pick radius — generous so thin centre-lines in path-edit mode are hittable.
+        float pickPx = MathF.Max(36f, MathF.Min(64f, beadMm * 5f));
+        // Midpoint early-out: must be wide enough that clicks near either END of a long
+        // projected bead still reach the full segment test. The old pickPx*3 gate
+        // rejected most zoomed-in wall clicks (midpoint hundreds of px from the tip).
+        float midGate = MathF.Max(pickPx * 14f, MathF.Min(vpW, vpH) * 0.45f);
+        float midRejectPx2 = midGate * midGate;
+        // 3D ray gate: centre-line pick can sit farther from the bead axis than the
+        // brush sphere did; keep this soft so screen-near segments still win.
+        float looseRayDist = beadMm * 24f;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        var rayO = ray.Origin;
+        var rayD = ray.Direction;
+        int scrubLimit = GetPaintScrubMoveLimit();
+        int scrubStart0 = GetPaintScrubMoveStart();
+
+        // ONE matrix for the whole pick — ProjectToScreen used to rebuild this every move.
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        // Tier 1 — TIGHT radius (the line under the cursor): the FRONT candidate
+        // wins. Depth is bucketed to ~2 beads so pixel jitter along one line can't
+        // flip the pick; screen distance breaks ties inside a bucket.
+        const float tightPx = 14f;
+        float depthBucket = MathF.Max(beadMm * 2f, 4f);
+        long t1Bucket = long.MaxValue;
+        float t1Screen = float.MaxValue;
+        ToolpathLayer? t1Layer = null;
+        int t1Move = -1, t1Global = -1;
+        System.Numerics.Vector3 t1Origin = default;
+        TkMatrix4 t1Wt = TkMatrix4.Identity;
+
+        // Tier 2 — forgiving ring out to pickPx: nearest on screen, depth tie-break.
+        float bestScreenD = pickPx;
+        float bestRayT = float.MaxValue;
+        ToolpathLayer? bestLayer = null;
+        int bestMove = -1;
+        int bestGlobal = -1;
+        System.Numerics.Vector3 bestOrigin = default;
+        TkMatrix4 bestWt = TkMatrix4.Identity;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            // Scrub session often shows toolpaths while the mesh/TCP is selected —
+            // don't require node.Visible (hidden-in-outliner paths still draw under scrub).
+            if (node.Visible == false && !ReferenceEquals(node, _activeScrubNode)) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            // Match draw path: toolpath MVP uses LocalTransform, not full WorldTransform.
+            var wt = node.LocalTransform;
+            float ox = origin.X, oy = origin.Y, oz = origin.Z;
+            int globalMove = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                int layerCount = moves.Count;
+                // Whole layer outside the scrub window → skip without per-move work.
+                if (globalMove + layerCount <= scrubStart0)
+                {
+                    globalMove += layerCount;
+                    continue;
+                }
+                if (globalMove >= scrubLimit)
+                    break;
+
+                int i0 = Math.Max(0, scrubStart0 - globalMove);
+                int i1 = Math.Min(layerCount, scrubLimit - globalMove); // exclusive
+                for (int i = i0; i < i1; i++)
+                {
+                    var mv = moves[i];
+                    if (mv.Kind != MoveKind.Extrude) continue;
+                    if (mv.IsLayerStitch || mv.IsLayerChange) continue;
+                    if (vmPick is not null && !PaintPickAllowed(mv, vmPick)) continue;
+
+                    // Midpoint only first (1 transform + 1 project) — rejects far-away moves.
+                    float midx = (mv.From.X + mv.To.X) * 0.5f - ox;
+                    float midy = (mv.From.Y + mv.To.Y) * 0.5f - oy;
+                    float midz = (mv.From.Z + mv.To.Z) * 0.5f - oz;
+                    var wMid = TransformPoint(new TkVector3(midx, midy, midz), wt);
+                    var sM = _renderer.ProjectToScreen(
+                        new Vector3(wMid.X, wMid.Y, wMid.Z), viewProj, vpW, vpH);
+                    if (float.IsNaN(sM.X)) continue;
+                    float midDx = sM.X - mx, midDy = sM.Y - my;
+                    if (midDx * midDx + midDy * midDy > midRejectPx2)
+                        continue;
+
+                    // Near the cursor: full segment ends for accurate screen distance.
+                    var nFrom = TransformPoint(
+                        new TkVector3(mv.From.X - ox, mv.From.Y - oy, mv.From.Z - oz), wt);
+                    var nTo = TransformPoint(
+                        new TkVector3(mv.To.X - ox, mv.To.Y - oy, mv.To.Z - oz), wt);
+                    var wFrom = new Vector3(nFrom.X, nFrom.Y, nFrom.Z);
+                    var wTo = new Vector3(nTo.X, nTo.Y, nTo.Z);
+
+                    var sA = _renderer.ProjectToScreen(wFrom, viewProj, vpW, vpH);
+                    var sB = _renderer.ProjectToScreen(wTo, viewProj, vpW, vpH);
+                    if (float.IsNaN(sA.X) || float.IsNaN(sB.X)) continue;
+                    float screenD = DistPointToSegment2D(mx, my, sA.X, sA.Y, sB.X, sB.Y);
+                    if (screenD > pickPx) continue;
+
+                    float dist3 = DistanceRayToSegment(rayO, rayD, wFrom, wTo, out float rayT);
+                    // Screen proximity already proved the click is on the line; only
+                    // reject when the ray clearly misses behind the camera or is absurdly far.
+                    if (rayT < 0f || dist3 > looseRayDist) continue;
+
+                    int g = globalMove + i;
+                    if (screenD <= tightPx)
+                    {
+                        long bucket = (long)(rayT / depthBucket);
+                        if (bucket < t1Bucket
+                            || (bucket == t1Bucket && screenD < t1Screen))
+                        {
+                            t1Bucket = bucket;
+                            t1Screen = screenD;
+                            t1Layer = layer;
+                            t1Move = i;
+                            t1Global = g;
+                            t1Origin = origin;
+                            t1Wt = wt;
+                        }
+                    }
+
+                    bool better = screenD < bestScreenD - 0.5f
+                        || (MathF.Abs(screenD - bestScreenD) <= 0.5f && rayT < bestRayT);
+                    if (!better) continue;
+
+                    bestScreenD = screenD;
+                    bestRayT = rayT;
+                    bestLayer = layer;
+                    bestMove = i;
+                    bestGlobal = g;
+                    bestOrigin = origin;
+                    bestWt = wt;
+                }
+
+                globalMove += layerCount;
+            }
+        }
+
+        // The tight front pick trumps the forgiving ring whenever it exists.
+        if (t1Layer is not null)
+        {
+            bestLayer = t1Layer;
+            bestMove = t1Move;
+            bestGlobal = t1Global;
+            bestOrigin = t1Origin;
+            bestWt = t1Wt;
+        }
+        if (bestLayer is null || bestMove < 0) return null;
+        // Point granularity: exactly one bead — never expand into a multi-metre section
+        // (that was freezing the UI on long walls / formbound runs).
+        // 2D slice + fullConnectedPath still expands (double-click path select).
+        bool pointGran = vmPick?.PaintSelectGranularity == "Point";
+        if (pointGran && !fullConnectedPath)
+            return (bestLayer, new ContourSpan(bestMove, 1, Closed: false, EntryTravelIndex: -1),
+                bestOrigin, bestWt);
+
+        // Do not expand the section into moves the scrub has hidden (below or above).
+        int layerStartGlobal = bestGlobal - bestMove;
+        int maxMoveInLayer = scrubLimit == int.MaxValue
+            ? bestLayer.Moves.Count - 1
+            : Math.Min(bestLayer.Moves.Count - 1, scrubLimit - 1 - layerStartGlobal);
+        int minMoveInLayer = scrubStart0 <= 0
+            ? 0
+            : Math.Max(0, scrubStart0 - layerStartGlobal);
+
+        // Double-click (2D slice): entire connected contour / extrusion run.
+        if (fullConnectedPath)
+        {
+            var full = ExpandFullConnectedPath(bestLayer, bestMove, beadMm, maxMoveInLayer,
+                minMoveInclusive: minMoveInLayer);
+            return (bestLayer, full, bestOrigin, bestWt);
+        }
+
+        // Single-click Path mode: local section. In 2D slice multiplanar paths have
+        // larger 3D gaps / corners — use a looser expand so we get a real line, not
+        // a one-bead "point" pick.
+        bool sliceNav = vmPick is { IsSlicePlaneViewerActive: true, IsPaintEditOpen: true };
+        var section = sliceNav
+            ? ExpandLocalSection(bestLayer, bestMove, beadMm, maxMoveInLayer,
+                maxMovesCap: 256, minMoveInclusive: minMoveInLayer,
+                slicePlaneLoose: true)
+            : ExpandLocalSection(bestLayer, bestMove, beadMm, maxMoveInLayer,
+                maxMovesCap: 32, minMoveInclusive: minMoveInLayer);
+        return (bestLayer, section, bestOrigin, bestWt);
+    }
+
+    private static float DistPointToSegment2D(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay;
+        float len2 = abx * abx + aby * aby;
+        float t = len2 < 1e-12f ? 0f : Math.Clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0f, 1f);
+        float cx = ax + t * abx, cy = ay + t * aby;
+        float dx = px - cx, dy = py - cy;
+        return MathF.Sqrt(dx * dx + dy * dy);
+    }
+
+    /// <summary>Shortest distance from ray (origin + t·dir, t≥0) to segment AB.
+    /// <paramref name="rayT"/> is the ray parameter of the closest point on the ray.</summary>
+    private static float DistanceRayToSegment(
+        Vector3 rayO, Vector3 rayD, Vector3 a, Vector3 b, out float rayT)
+    {
+        var ab = b - a;
+        float abLen2 = ab.LengthSquared;
+        if (abLen2 < 1e-12f)
+        {
+            // Degenerate segment → point-to-ray.
+            var toPt = a - rayO;
+            rayT = MathF.Max(0f, Vector3.Dot(toPt, rayD));
+            return (a - (rayO + rayD * rayT)).Length;
+        }
+
+        // Closest points between infinite line and infinite segment-line, then clamp.
+        // Ray: P(s) = rayO + s·rayD  (s ≥ 0). Segment: Q(u) = a + u·ab  (u ∈ [0,1]).
+        var w0 = rayO - a;
+        float ra = 1f; // rayD assumed unit
+        float rb = Vector3.Dot(rayD, ab);
+        float rc = abLen2;
+        float rd = Vector3.Dot(rayD, w0);
+        float re = Vector3.Dot(ab, w0);
+        float denom = ra * rc - rb * rb;
+
+        float s, u;
+        if (MathF.Abs(denom) < 1e-10f)
+        {
+            // Nearly parallel — pin segment param by projecting ray origin onto AB.
+            u = Math.Clamp(Vector3.Dot(rayO - a, ab) / abLen2, 0f, 1f);
+            s = Vector3.Dot(a + ab * u - rayO, rayD);
+        }
+        else
+        {
+            s = (rb * re - rc * rd) / denom;
+            u = (ra * re - rb * rd) / denom;
+            if (u < 0f)
+            {
+                u = 0f;
+                s = Vector3.Dot(a - rayO, rayD);
+            }
+            else if (u > 1f)
+            {
+                u = 1f;
+                s = Vector3.Dot(b - rayO, rayD);
+            }
+        }
+
+        if (s < 0f) s = 0f;
+        rayT = s;
+        var closestRay = rayO + rayD * s;
+        var closestSeg = a + ab * u;
+        return (closestRay - closestSeg).Length;
+    }
+
+    /// <summary>
+    /// Grow a short local section around <paramref name="hitMove"/> for path/line select.
+    /// Stops at corners, gaps, and a tight length budget so a click does not grab a
+    /// long run of the layer contour.
+    /// </summary>
+    /// <param name="maxMoveInclusive">Last move index that may be included (scrub high).</param>
+    /// <param name="maxMovesCap">Hard cap on span length in moves (each side of the hit).</param>
+    /// <param name="minMoveInclusive">First move index that may be included (scrub low).</param>
+    /// <param name="slicePlaneLoose">2D slice multiplanar: larger gap / softer corners so
+    /// Path mode selects a real line segment, not a single bead "point".</param>
+    private static ContourSpan ExpandLocalSection(
+        ToolpathLayer layer, int hitMove, float beadMm, int maxMoveInclusive = int.MaxValue,
+        int maxMovesCap = 32, int minMoveInclusive = 0, bool slicePlaneLoose = false)
+    {
+        var moves = layer.Moves;
+        if (hitMove < 0 || hitMove >= moves.Count)
+            return new ContourSpan(0, 0, false, -1);
+        int loCap = Math.Clamp(minMoveInclusive, 0, Math.Max(0, moves.Count - 1));
+        int hiCap = Math.Min(moves.Count - 1, maxMoveInclusive);
+        if (hiCap < loCap) return new ContourSpan(0, 0, false, -1);
+        if (hitMove > hiCap) hitMove = hiCap;
+        if (hitMove < loCap) hitMove = loCap;
+
+        // Snap hit onto nearest non-wipe extrude if needed.
+        int hit = hitMove;
+        if (moves[hit].Kind != MoveKind.Extrude || moves[hit].IsWipe)
+        {
+            int found = -1;
+            for (int d = 0; d < moves.Count; d++)
+            {
+                int a = hitMove - d, b = hitMove + d;
+                if (a >= loCap && a <= hiCap
+                    && moves[a].Kind == MoveKind.Extrude && !moves[a].IsWipe) { found = a; break; }
+                if (b >= loCap && b <= hiCap
+                    && moves[b].Kind == MoveKind.Extrude && !moves[b].IsWipe) { found = b; break; }
+            }
+            if (found < 0) return new ContourSpan(hitMove, 1, false, -1);
+            hit = found;
+        }
+
+        // Stay inside the recorded contour that contains the hit (when present),
+        // further clamped to the scrub window [loCap, hiCap].
+        int loBound = loCap, hiBound = hiCap;
+        if (layer.Contours.Count > 0)
+        {
+            for (int ci = 0; ci < layer.Contours.Count; ci++)
+            {
+                var c = layer.Contours[ci];
+                int cEnd = c.Start + Math.Max(0, c.Count) - 1;
+                if (hit >= c.Start && hit <= cEnd)
+                {
+                    loBound = Math.Max(loCap, c.Start);
+                    hiBound = Math.Min(hiCap, cEnd);
+                    break;
+                }
+            }
+        }
+
+        bool lightning = moves[hit].IsLightning;
+        // Short local section (~a few beads / tens of mm). Slice multiplanar uses a
+        // longer budget so Path mode still lights a continuous arc, not one bead.
+        float maxLen = slicePlaneLoose
+            ? (lightning ? MathF.Max(200f, beadMm * 40f) : MathF.Max(160f, beadMm * 28f))
+            : (lightning ? MathF.Max(48f, beadMm * 10f) : MathF.Max(36f, beadMm * 6f));
+        float gapTol = slicePlaneLoose ? beadMm * 4f : beadMm * 1.25f;
+        // cos(~60°) in slice — multiplanar turns freely; cos(~30°) elsewhere.
+        float minCornerDot = slicePlaneLoose ? 0.50f : 0.85f;
+
+        int lo = hit, hi = hit;
+        float lenLo = 0f, lenHi = 0f;
+        int halfCap = Math.Max(1, maxMovesCap / 2);
+
+        while (lo > loBound && (hit - lo) < halfCap)
+        {
+            int prev = lo - 1;
+            if (!CanJoinSection(moves, prev, lo, lightning, gapTol, minCornerDot)) break;
+            float seg = System.Numerics.Vector3.Distance(moves[prev].From, moves[prev].To);
+            if (lenLo + seg > maxLen) break;
+            lenLo += seg;
+            lo = prev;
+        }
+        while (hi < hiBound && (hi - hit) < halfCap)
+        {
+            int next = hi + 1;
+            if (!CanJoinSection(moves, hi, next, lightning, gapTol, minCornerDot)) break;
+            float seg = System.Numerics.Vector3.Distance(moves[next].From, moves[next].To);
+            if (lenHi + seg > maxLen) break;
+            lenHi += seg;
+            hi = next;
+        }
+
+        int count = hi - lo + 1;
+        return new ContourSpan(lo, count, Closed: false, EntryTravelIndex: -1);
+    }
+
+    /// <summary>
+    /// Entire connected path around <paramref name="hitMove"/>: prefer the recorded
+    /// contour that contains the hit; otherwise grow through all gap-joined extrudes
+    /// (no length/move cap, no corner stops) within the scrub window.
+    /// Used by 2D slice double-click select.
+    /// </summary>
+    private static ContourSpan ExpandFullConnectedPath(
+        ToolpathLayer layer, int hitMove, float beadMm, int maxMoveInclusive = int.MaxValue,
+        int minMoveInclusive = 0)
+    {
+        var moves = layer.Moves;
+        if (hitMove < 0 || hitMove >= moves.Count)
+            return new ContourSpan(0, 0, false, -1);
+        int loCap = Math.Clamp(minMoveInclusive, 0, Math.Max(0, moves.Count - 1));
+        int hiCap = Math.Min(moves.Count - 1, maxMoveInclusive);
+        if (hiCap < loCap) return new ContourSpan(0, 0, false, -1);
+        if (hitMove > hiCap) hitMove = hiCap;
+        if (hitMove < loCap) hitMove = loCap;
+
+        int hit = hitMove;
+        if (moves[hit].Kind != MoveKind.Extrude || moves[hit].IsWipe)
+        {
+            int found = -1;
+            for (int d = 0; d < moves.Count; d++)
+            {
+                int a = hitMove - d, b = hitMove + d;
+                if (a >= loCap && a <= hiCap
+                    && moves[a].Kind == MoveKind.Extrude && !moves[a].IsWipe) { found = a; break; }
+                if (b >= loCap && b <= hiCap
+                    && moves[b].Kind == MoveKind.Extrude && !moves[b].IsWipe) { found = b; break; }
+            }
+            if (found < 0) return new ContourSpan(hitMove, 1, false, -1);
+            hit = found;
+        }
+
+        // Prefer the slicer-recorded contour that contains the hit (true full path).
+        if (layer.Contours.Count > 0)
+        {
+            for (int ci = 0; ci < layer.Contours.Count; ci++)
+            {
+                var c = layer.Contours[ci];
+                int cEnd = c.Start + Math.Max(0, c.Count) - 1;
+                if (hit < c.Start || hit > cEnd) continue;
+                int lo = Math.Max(loCap, c.Start);
+                int hi = Math.Min(hiCap, cEnd);
+                if (hi < lo) break;
+                // Closed only if the full contour is visible in the scrub window.
+                bool closed = c.Closed && lo == c.Start && hi == cEnd;
+                return new ContourSpan(lo, hi - lo + 1, closed, c.EntryTravelIndex);
+            }
+        }
+
+        // No Contours (or hit outside them): grow along continuous extrudes until a gap.
+        bool lightning = moves[hit].IsLightning;
+        float gapTol = beadMm * 1.25f;
+        // minCornerDot = -1 → never stop on corners; only gap / kind / lightning split.
+        const float noCornerStop = -1f;
+        int loGrow = hit, hiGrow = hit;
+        while (loGrow > loCap)
+        {
+            int prev = loGrow - 1;
+            if (!CanJoinSection(moves, prev, loGrow, lightning, gapTol, noCornerStop)) break;
+            loGrow = prev;
+        }
+        while (hiGrow < hiCap)
+        {
+            int next = hiGrow + 1;
+            if (!CanJoinSection(moves, hiGrow, next, lightning, gapTol, noCornerStop)) break;
+            hiGrow = next;
+        }
+
+        // Closed if ends meet (within gap) inside the grown span.
+        bool endsMeet = loGrow < hiGrow
+            && System.Numerics.Vector3.Distance(moves[hiGrow].To, moves[loGrow].From) <= gapTol;
+        return new ContourSpan(loGrow, hiGrow - loGrow + 1, endsMeet, EntryTravelIndex: -1);
+    }
+
+    /// <summary>Whether two consecutive moves belong to the same pickable section.</summary>
+    private static bool CanJoinSection(
+        IReadOnlyList<ToolpathMove> moves, int a, int b,
+        bool wantLightning, float gapTol, float minCornerDot)
+    {
+        if ((uint)a >= (uint)moves.Count || (uint)b >= (uint)moves.Count) return false;
+        var ma = moves[a];
+        var mb = moves[b];
+        if (ma.Kind != MoveKind.Extrude || mb.Kind != MoveKind.Extrude) return false;
+        // Wipes are pre-travel purge — never part of a selectable support/remove span.
+        if (ma.IsWipe || mb.IsWipe) return false;
+        if (ma.IsLayerStitch || mb.IsLayerStitch || ma.IsLayerChange || mb.IsLayerChange)
+            return false;
+        // Formbound vs wall must not cross.
+        if (ma.IsLightning != wantLightning || mb.IsLightning != wantLightning) return false;
+
+        float gap = System.Numerics.Vector3.Distance(ma.To, mb.From);
+        if (gap > gapTol) return false;
+
+        // Lightning / formbound: join through corners (T mouths, elbows).
+        if (wantLightning) return true;
+
+        // Wall: stop at sharp direction changes so a rim click is a local arc.
+        var da = ma.To - ma.From;
+        var db = mb.To - mb.From;
+        float la2 = da.LengthSquared(), lb2 = db.LengthSquared();
+        if (la2 < 1e-6f || lb2 < 1e-6f) return true; // micro-segments don't force a split
+        da /= MathF.Sqrt(la2);
+        db /= MathF.Sqrt(lb2);
+        float dot = System.Numerics.Vector3.Dot(da, db);
+        return dot >= minCornerDot;
+    }
+
+    /// <summary>Build contour spans from contiguous Extrude runs separated by Travels
+    /// or layer stitches — used when the slicer did not record Contours.</summary>
+    private static List<ContourSpan> SynthesizeContourSpans(ToolpathLayer layer)
+    {
+        var spans = new List<ContourSpan>();
+        int i = 0;
+        var moves = layer.Moves;
+        while (i < moves.Count)
+        {
+            // Skip non-extrude lead-in.
+            while (i < moves.Count && moves[i].Kind != MoveKind.Extrude) i++;
+            if (i >= moves.Count) break;
+            int start = i;
+            int entryTravel = (start > 0 && moves[start - 1].Kind == MoveKind.Travel)
+                ? start - 1 : -1;
+            while (i < moves.Count && moves[i].Kind == MoveKind.Extrude
+                   && !moves[i].IsLayerStitch && !moves[i].IsLayerChange)
+                i++;
+            int count = i - start;
+            if (count >= 1)
+            {
+                // Closed if the run ends near its start (need ≥2 moves for a loop).
+                bool closed = false;
+                if (count >= 2)
+                {
+                    var a = moves[start].From;
+                    var b = moves[start + count - 1].To;
+                    closed = System.Numerics.Vector3.DistanceSquared(a, b) < 1.0f; // ~1 mm²
+                }
+                spans.Add(new ContourSpan(start, count, closed, entryTravel));
+            }
+        }
+        return spans;
+    }
+
+    /// <summary>
+    /// World highlight for a pick. In point mode (or a single-bead span) returns one
+    /// midpoint so the overlay draws a sphere — never a From→To segment that looks
+    /// like a line selection.
+    /// </summary>
+    private List<TkVector3> SpanWorldHighlight(
+        (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick,
+        bool pointMode)
+    {
+        if (pointMode || pick.Span.Count <= 1)
+            return SpanWorldMidpoints(pick);
+        return SpanWorldPolyline(pick);
+    }
+
+    /// <summary>One world-space midpoint per extrude bead in the span (point picks).</summary>
+    private List<TkVector3> SpanWorldMidpoints(
+        (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick)
+    {
+        var pts = new List<TkVector3>();
+        int end = Math.Min(pick.Layer.Moves.Count, pick.Span.Start + Math.Max(0, pick.Span.Count));
+        for (int i = pick.Span.Start; i < end; i++)
+        {
+            var mv = pick.Layer.Moves[i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            var mid = (mv.From + mv.To) * 0.5f;
+            var w = TransformPoint(new TkVector3(
+                mid.X - pick.Origin.X, mid.Y - pick.Origin.Y, mid.Z - pick.Origin.Z), pick.Wt);
+            pts.Add(new TkVector3(w.X, w.Y, w.Z));
+        }
+        return pts;
+    }
+
+    /// <summary>World polyline of a picked path span (hover / selection highlight).</summary>
+    private List<TkVector3> SpanWorldPolyline(
+        (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick)
+    {
+        var pts = new List<TkVector3>();
+        if (pick.Span.Count <= 0) return pts;
+        // Single bead → midpoint only (never From+To, which draws as a short line).
+        if (pick.Span.Count == 1)
+            return SpanWorldMidpoints(pick);
+
+        int stride = Math.Max(1, pick.Span.Count / 400);
+        for (int i = 0; i < pick.Span.Count; i += stride)
+        {
+            var mv = pick.Layer.Moves[pick.Span.Start + i];
+            var w = TransformPoint(new TkVector3(
+                mv.From.X - pick.Origin.X, mv.From.Y - pick.Origin.Y, mv.From.Z - pick.Origin.Z), pick.Wt);
+            pts.Add(new TkVector3(w.X, w.Y, w.Z));
+        }
+        // Close with last segment's To so the highlight covers the full contour end.
+        var last = pick.Layer.Moves[pick.Span.Start + pick.Span.Count - 1];
+        var wTo = TransformPoint(new TkVector3(
+            last.To.X - pick.Origin.X, last.To.Y - pick.Origin.Y, last.To.Z - pick.Origin.Z), pick.Wt);
+        var end = new TkVector3(wTo.X, wTo.Y, wTo.Z);
+        if (pts.Count == 0 || (pts[^1] - end).LengthSquared > 1e-4f)
+            pts.Add(end);
+        return pts;
+    }
+
+    /// <summary>Stable identity for a picked contour — console feedback + undo/redo.</summary>
+    private sealed record PaintLineId(
+        int LayerIndex,
+        float LayerZ,
+        int ContourIndex,
+        int MoveStart,
+        int MoveCount,
+        bool Closed,
+        bool IsFormbound,
+        float LengthMm,
+        System.Numerics.Vector3 Mid,
+        string Action)
+    {
+        public string ShortId =>
+            $"L{LayerIndex} C{ContourIndex} m{MoveStart}+{MoveCount}";
+
+        public string Describe()
+        {
+            // Local picks are open sections carved out of a larger contour.
+            string kind = IsFormbound ? "formbound" : (Closed ? "loop" : "section");
+            return $"{ShortId}  {kind}  z={LayerZ:0.#}  len={LengthMm:0}mm  " +
+                   $"mid=({Mid.X:0},{Mid.Y:0},{Mid.Z:0})";
+        }
+    }
+
+    /// <summary>Click-a-line: picks the contour under the cursor, sticky-highlights it,
+    /// broadcasts identity to the console, and (when <paramref name="applyMarks"/>) lays
+    /// Bridge/Remove marks along it. Edit menu open with no tool → select-only.
+    /// <paramref name="fullConnectedPath"/> (2D slice double-click) selects the entire
+    /// connected path instead of a short local section.</summary>
+    private DateTime _paintMissHintAt = DateTime.MinValue;
+
+    private void TryPaintLineAt(ViewportViewModel vm, Avalonia.Point pos, bool erase,
+        bool applyMarks = true, bool additive = false, bool fullConnectedPath = false)
+    {
+        // Selection highlight works even without AdditiveSettings; marks need it.
+        if (PickSpanUnderCursor(pos, fullConnectedPath) is not { } pickHit)
+        {
+            _paintHoverLine = null;
+            // Quiet miss is confusing — nudge when the pick filter is likely the cause.
+            if (!string.Equals(vm.PaintPickFilter, "All", StringComparison.OrdinalIgnoreCase)
+                && (DateTime.UtcNow - _paintMissHintAt).TotalSeconds > 2.5)
+            {
+                _paintMissHintAt = DateTime.UtcNow;
+                LogPaintConsole(
+                    $"[edit] no path under cursor (filter={vm.PaintPickFilter}). "
+                    + "Switch filter to All to pick wall paths, or Formbound for support fingers.");
+            }
+            // Keep sticky selection so a miss doesn't blank the previous pick.
+            return;
+        }
+
+        // Bridge-target pick: attach this span as the second anchor of a Support mod.
+        if (vm.PaintBridgePickModificationId is Guid bridgeModId)
+        {
+            var bridgePoly = SpanWorldHighlight(pickHit, pointMode: vm.PaintPointGranularityActive);
+            AttachBridgeTarget(vm, bridgeModId, pickHit.Layer, pickHit.Span,
+                pickHit.Origin, pickHit.Wt, bridgePoly);
+            return;
+        }
+
+        string action = !applyMarks
+            ? "select"
+            : erase
+                ? "erase-marks"
+                : vm.PaintLineBridgeActive ? "line-bridge" : "line-remove";
+
+        var id = BuildPaintLineId(pickHit, action);
+        // Point mode → single midpoint sphere; path mode → polyline section.
+        var poly = SpanWorldHighlight(pickHit, pointMode: vm.PaintPointGranularityActive);
+        var newColor = !applyMarks
+            ? new TkVector3(1f, 0.55f, 0.08f)   // amber = select-only
+            : erase
+                ? new TkVector3(1f, 0.35f, 0.25f)   // red-ish when erasing marks
+                : vm.PaintLineBridgeActive
+                    ? new TkVector3(0.2f, 0.9f, 1f) // cyan = bridge / buttress
+                    : new TkVector3(1f, 0.45f, 0.15f); // orange = remove
+
+        // Snapshot previous selection for undo before mutating.
+        var prevPoly = _paintSelectedLine is { } pp ? new List<TkVector3>(pp) : null;
+        var prevColor = _paintSelectedColor;
+        var prevId = _paintSelectedId;
+
+        // ── Point mode + Shift: range-select shortest path between anchor and click ──
+        // Pick A (sets anchor) → Shift+click B → every bead on the shortest route A↔B.
+        bool pointMode = vm.PaintPointGranularityActive;
+        float beadForPath = (float)(vm.AdditiveSettings?.BeadWidth ?? 6);
+        if (beadForPath < 0.5f) beadForPath = 6f;
+
+        if (pointMode && additive
+            && _paintPointAnchorLayer is not null
+            && _paintPointAnchorMove >= 0
+            && ReferenceEquals(_paintPointAnchorLayer, pickHit.Layer)
+            && Core.Slicing.ContourPointPath.ShortestPath(
+                    pickHit.Layer, _paintPointAnchorMove, pickHit.Span.Start, beadForPath)
+                is { Count: > 0 } pathSpans)
+        {
+            // Drop prior entries on the same contour (the range replaces them).
+            if (Core.Slicing.ContourPointPath.TryResolveSharedContour(
+                    pickHit.Layer, _paintPointAnchorMove, pickHit.Span.Start, beadForPath,
+                    out var sharedContour))
+            {
+                int c0 = sharedContour.Start;
+                int c1 = sharedContour.Start + Math.Max(0, sharedContour.Count) - 1;
+                _paintSelection.RemoveAll(sel =>
+                    ReferenceEquals(sel.Layer, pickHit.Layer)
+                    && sel.Span.Start >= c0
+                    && sel.Span.Start + Math.Max(0, sel.Span.Count) - 1 <= c1);
+            }
+
+            int totalPts = 0;
+            foreach (var span in pathSpans)
+            {
+                if (span.Count <= 0) continue;
+                totalPts += span.Count;
+                var pathPoly = SpanWorldHighlight(
+                    (pickHit.Layer, span, pickHit.Origin, pickHit.Wt), pointMode: true);
+                bool already = _paintSelection.Any(sel =>
+                    ReferenceEquals(sel.Layer, pickHit.Layer)
+                    && sel.Span.Start == span.Start
+                    && sel.Span.Count == span.Count);
+                if (!already)
+                    _paintSelection.Add(
+                        (pickHit.Layer, span, pickHit.Origin, pickHit.Wt, pathPoly));
+            }
+
+            RebuildPaintSelectionHighlights(newColor);
+            _paintSelectedId = id;
+            // Keep the original anchor so further Shift+clicks re-range from first pick.
+            SyncPaintSelectionUi(vm);
+            LogPaintConsole(
+                $"[edit] shift-range · {totalPts} point(s) on shortest path "
+                + $"(m{_paintPointAnchorMove} → m{pickHit.Span.Start})");
+
+            int markDeltaRange = 0;
+            if (applyMarks && vm.AdditiveSettings is { } addRange)
+            {
+                foreach (var sel in _paintSelection)
+                {
+                    if (!ReferenceEquals(sel.Layer, pickHit.Layer)) continue;
+                    markDeltaRange += ApplyPaintMarksAlongSpan(
+                        vm, addRange, sel.Layer, sel.Span, erase);
+                }
+            }
+
+            BroadcastPaintLineSelection(id, markDeltaRange);
+            PushPaintLineSelectionUndo(vm, prevPoly, prevColor, prevId,
+                _paintSelectedLine is { } sl ? new List<TkVector3>(sl) : poly,
+                newColor, id);
+            return;
+        }
+
+        // Shift keeps earlier picks lit (multi-line marking); a plain click starts over.
+        if (additive)
+        {
+            if (prevPoly is not null)
+                _paintMultiLines.Add((prevPoly, prevColor));
+        }
+        else
+            _paintMultiLines.Clear();
+
+        _paintHoverLine = poly;
+        _paintSelectedLine = poly;
+        _paintSelectedColor = newColor;
+        _paintSelectedId = id;
+
+        // Actionable selection list: replace on plain click, accumulate on shift.
+        if (!additive) _paintSelection.Clear();
+        bool dupPick = _paintSelection.Any(sel =>
+            ReferenceEquals(sel.Layer, pickHit.Layer) && sel.Span.Start == pickHit.Span.Start
+            && sel.Span.Count == pickHit.Span.Count);
+        if (!dupPick)
+            _paintSelection.Add((pickHit.Layer, pickHit.Span, pickHit.Origin, pickHit.Wt, poly));
+
+        // Point-mode anchor: plain click (or non-path shift add) becomes the range start.
+        if (pointMode)
+            SetPaintPointAnchor(pickHit.Layer, pickHit.Span.Start, pickHit.Origin, pickHit.Wt);
+        else
+            ClearPaintPointAnchor();
+
+        SyncPaintSelectionUi(vm);
+
+        int markDelta = 0;
+        if (applyMarks && vm.AdditiveSettings is { } add)
+            markDelta = ApplyPaintMarksAlongSpan(vm, add, pickHit.Layer, pickHit.Span, erase);
+
+        BroadcastPaintLineSelection(id, markDelta);
+        PushPaintLineSelectionUndo(vm, prevPoly, prevColor, prevId, poly, newColor, id);
+    }
+
+    /// <summary>
+    /// Lay Bridge/Remove dabs (or erase them) along a span. Returns +added or −removed.
+    /// </summary>
+    private int ApplyPaintMarksAlongSpan(
+        ViewportViewModel vm,
+        AdditiveSettingsViewModel add,
+        ToolpathLayer layer,
+        ContourSpan span,
+        bool erase)
+    {
+        float bead = (float)add.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        int delta = 0;
+
+        if (erase)
+        {
+            int removed = 0;
+            for (int i = 0; i < span.Count; i++)
+            {
+                int mi = span.Start + i;
+                if ((uint)mi >= (uint)layer.Moves.Count) break;
+                var mv = layer.Moves[mi];
+                var mid = (mv.From + mv.To) * 0.5f;
+                removed += add.PaintMarks.RemoveAll(m =>
+                    System.Numerics.Vector3.Distance(m.Center, mid) < m.Radius + bead);
+            }
+            if (removed > 0) { _paintStrokeChanged = true; delta = -removed; }
+            return delta;
+        }
+
+        var markKind = vm.PaintLineBridgeActive
+            ? Core.Models.PaintMarkKind.Bridge
+            : Core.Models.PaintMarkKind.Remove;
+        float dabRadius = markKind == Core.Models.PaintMarkKind.Bridge ? bead * 1.5f : bead * 1.2f;
+        float spacing   = markKind == Core.Models.PaintMarkKind.Bridge ? bead * 3f : bead * 1.5f;
+        float accum = spacing;
+        int added = 0;
+        for (int i = 0; i < span.Count; i++)
+        {
+            int mi = span.Start + i;
+            if ((uint)mi >= (uint)layer.Moves.Count) break;
+            var mv = layer.Moves[mi];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            accum += System.Numerics.Vector3.Distance(mv.From, mv.To);
+            if (accum < spacing) continue;
+            accum = 0f;
+            var mid = (mv.From + mv.To) * 0.5f;
+            bool covered = false;
+            foreach (var m in add.PaintMarks)
+                if (m.Kind == markKind
+                    && System.Numerics.Vector3.Distance(m.Center, mid) < dabRadius * 0.5f)
+                { covered = true; break; }
+            if (covered) continue;
+            var lineRole = markKind == Core.Models.PaintMarkKind.Bridge
+                ? Core.Models.PaintBridgeRole.SupportBar
+                : Core.Models.PaintBridgeRole.None;
+            var lineStyle = markKind == Core.Models.PaintMarkKind.Bridge
+                ? Core.Models.PaintSupportStyleUtil.FromLabel(vm.PaintSupportType)
+                : Core.Models.PaintSupportStyle.FormboundButtress;
+            add.PaintMarks.Add(new Core.Models.PaintMark(mid, dabRadius, markKind, lineRole, lineStyle));
+            _paintStrokeChanged = true;
+            added++;
+        }
+        return added;
+    }
+
+    private static PaintLineId BuildPaintLineId(
+        (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick,
+        string action)
+    {
+        var layer = pick.Layer;
+        var span = pick.Span;
+        int contourIndex = IndexOfSpan(layer, span);
+
+        float len = 0f;
+        int lightning = 0, extrudes = 0;
+        var sum = System.Numerics.Vector3.Zero;
+        int n = 0;
+        int end = Math.Min(layer.Moves.Count, span.Start + Math.Max(0, span.Count));
+        for (int i = span.Start; i < end; i++)
+        {
+            var mv = layer.Moves[i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            len += System.Numerics.Vector3.Distance(mv.From, mv.To);
+            extrudes++;
+            if (mv.IsLightning) lightning++;
+            sum += (mv.From + mv.To) * 0.5f;
+            n++;
+        }
+        var mid = n > 0 ? sum / n : System.Numerics.Vector3.Zero;
+        bool formbound = extrudes > 0 && lightning * 2 >= extrudes; // majority lightning
+        return new PaintLineId(
+            LayerIndex: layer.Index,
+            LayerZ: layer.Z,
+            ContourIndex: contourIndex,
+            MoveStart: span.Start,
+            MoveCount: span.Count,
+            Closed: span.Closed,
+            IsFormbound: formbound,
+            LengthMm: len,
+            Mid: mid,
+            Action: action);
+    }
+
+    /// <summary>Parent contour index that contains this local section, or -1.
+    /// Never synthesizes full-layer contours (that walked every move on large walls).</summary>
+    private static int IndexOfSpan(ToolpathLayer layer, ContourSpan span)
+    {
+        // Exact match first (full contour still possible for tiny loops).
+        for (int i = 0; i < layer.Contours.Count; i++)
+        {
+            var c = layer.Contours[i];
+            if (c.Start == span.Start && c.Count == span.Count) return i;
+        }
+        // Local section → contour that fully contains its move range.
+        int secEnd = span.Start + Math.Max(0, span.Count);
+        for (int i = 0; i < layer.Contours.Count; i++)
+        {
+            var c = layer.Contours[i];
+            if (c.Start <= span.Start && c.Start + c.Count >= secEnd) return i;
+        }
+        // No Contours metadata (or section spans gaps): O(1) synthetic index from start.
+        return span.Start >= 0 ? span.Start : -1;
+    }
+
+    private void BroadcastPaintLineSelection(PaintLineId id, int markDelta)
+    {
+        string marks = markDelta switch
+        {
+            > 0 => $"  +{markDelta} mark(s)",
+            < 0 => $"  cleared {-markDelta} mark(s)",
+            _   => "",
+        };
+        string msg = $"[edit] {id.Action}  {id.Describe()}{marks}";
+        LogPaintConsole(msg);
+    }
+
+    private void LogPaintConsole(string msg)
+    {
+        if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log(msg);
+        else
+            System.Console.WriteLine(msg);
+    }
+
+    private void PushPaintLineSelectionUndo(
+        ViewportViewModel vm,
+        List<TkVector3>? prevPoly, TkVector3 prevColor, PaintLineId? prevId,
+        List<TkVector3> newPoly, TkVector3 newColor, PaintLineId newId)
+    {
+        if (_paintSelectionUndoSuppress) return;
+        // Same line re-clicked → no undo entry (still logged above).
+        if (prevId is { } p
+            && p.LayerIndex == newId.LayerIndex
+            && p.MoveStart == newId.MoveStart
+            && p.MoveCount == newId.MoveCount
+            && p.Action == newId.Action)
+            return;
+
+        string desc = prevId is null
+            ? $"Select line {newId.ShortId}"
+            : $"Select line {newId.ShortId} (was {prevId.ShortId})";
+
+        // Capture copies — undo stack must not share mutable lists with live state.
+        var beforePoly = prevPoly is null ? null : new List<TkVector3>(prevPoly);
+        var afterPoly  = new List<TkVector3>(newPoly);
+        var beforeId   = prevId;
+        var afterId    = newId;
+        var beforeCol  = prevColor;
+        var afterCol   = newColor;
+
+        vm.UndoRedo?.Push(new PaintLineSelectionAction(
+            desc,
+            undo: () => ApplyPaintLineSelection(beforePoly, beforeCol, beforeId, fromUndo: true),
+            redo: () => ApplyPaintLineSelection(afterPoly, afterCol, afterId, fromUndo: true)));
+    }
+
+    private void ApplyPaintLineSelection(
+        List<TkVector3>? poly, TkVector3 color, PaintLineId? id, bool fromUndo)
+    {
+        _paintSelectionUndoSuppress = true;
+        try
+        {
+            _paintSelectedLine = poly is null ? null : new List<TkVector3>(poly);
+            _paintSelectedColor = color;
+            _paintSelectedId = id;
+            _paintHoverLine = _paintSelectedLine;
+            if (fromUndo)
+            {
+                if (id is { } restored)
+                    LogPaintConsole($"[edit] undo/redo → {restored.Action}  {restored.Describe()}");
+                else
+                    LogPaintConsole("[edit] undo/redo → selection cleared");
+            }
+            GlCanvas.RequestNextFrameRendering();
+        }
+        finally
+        {
+            _paintSelectionUndoSuppress = false;
+        }
+    }
+
+    /// <summary>
+    /// Hit-tests the rendered toolpath seam points (each closed contour's start vertex).
+    /// On a hit within 12 px, grabs that contour for the slide-along-the-path seam drag.
+    /// </summary>
+    private bool TryBeginSeamPointDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        if (vm.IsSeamEditorActive || vm.IsToolpathSeamEditActive || vm.IsBoundaryEditorActive)
+            return false;
+        if (!vm.ShowSeam || vm.ViewMode is "Body" or "Preview")
+            return false;
+
+        const float pickPx = 12f;
+        float bestD = pickPx;
+        SceneNode? bestNode = null;
+        Toolpath? bestTp = null;
+        ToolpathLayer? bestLayer = null;
+        ContourSpan? bestSpan = null;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            // Seam points only render on the selected toolpath — and requiring selection
+            // keeps a plain click near the seam free to do normal scene selection.
+            if (!node.Visible || !ReferenceEquals(node, _renderer.SelectedNode)) continue;
+            _toolpathOriginByNode.TryGetValue(node, out var origin);
+            var wt = node.WorldTransform;
+            foreach (var layer in tp.Layers)
+            {
+                foreach (var span in layer.Contours)
+                {
+                    if (!span.Closed || span.Count < 3) continue;
+                    if (span.Start < 0 || span.Start + span.Count > layer.Moves.Count) continue;
+                    var v = layer.Moves[span.Start].From;
+                    var world = TransformPoint(
+                        new TkVector3(v.X - origin.X, v.Y - origin.Y, v.Z - origin.Z), wt);
+                    var p = _renderer.ProjectToScreen(new TkVector3(world.X, world.Y, world.Z), vpW, vpH);
+                    if (float.IsNaN(p.X)) continue;
+                    float d = MathF.Sqrt((p.X - mx) * (p.X - mx) + (p.Y - my) * (p.Y - my));
+                    if (d < bestD)
+                    {
+                        bestD = d; bestNode = node; bestTp = tp;
+                        bestLayer = layer; bestSpan = span;
+                    }
+                }
+            }
+        }
+        if (bestNode is null || bestTp is null || bestLayer is null || bestSpan is null)
+            return false;
+
+        // Cache the grabbed loop: vertex 0 = the current seam. World positions drive the
+        // preview marker and pixel scale; toolpath-local XY feeds ApplySeams on release.
+        _seamDragLoopWorld.Clear();
+        _seamDragLoopLocalXY.Clear();
+        _toolpathOriginByNode.TryGetValue(bestNode, out var org);
+        var w = bestNode.WorldTransform;
+        var span2 = bestSpan;
+        var cum = new float[span2.Count + 1];
+        for (int i = 0; i < span2.Count; i++)
+        {
+            var v = bestLayer.Moves[span2.Start + i].From;
+            var wp = TransformPoint(new TkVector3(v.X - org.X, v.Y - org.Y, v.Z - org.Z), w);
+            _seamDragLoopWorld.Add(new TkVector3(wp.X, wp.Y, wp.Z));
+            _seamDragLoopLocalXY.Add(new System.Numerics.Vector2(v.X, v.Y));
+            if (i > 0)
+                cum[i] = cum[i - 1] + TkVector3.Distance(_seamDragLoopWorld[i - 1], _seamDragLoopWorld[i]);
+        }
+        cum[span2.Count] = cum[span2.Count - 1]
+            + TkVector3.Distance(_seamDragLoopWorld[^1], _seamDragLoopWorld[0]);
+        if (cum[span2.Count] < 1f) return false;   // degenerate loop
+
+        // World size of one screen pixel at the seam point (for a natural drag feel).
+        var s0 = _renderer.ProjectToScreen(_seamDragLoopWorld[0], vpW, vpH);
+        var sx = _renderer.ProjectToScreen(_seamDragLoopWorld[0] + TkVector3.UnitX, vpW, vpH);
+        var sy = _renderer.ProjectToScreen(_seamDragLoopWorld[0] + TkVector3.UnitY, vpW, vpH);
+        float pxPerMm = MathF.Max(
+            MathF.Sqrt((sx.X - s0.X) * (sx.X - s0.X) + (sx.Y - s0.Y) * (sx.Y - s0.Y)),
+            MathF.Sqrt((sy.X - s0.X) * (sy.X - s0.X) + (sy.Y - s0.Y) * (sy.Y - s0.Y)));
+        _seamDragMmPerPixel = pxPerMm > 0.01f ? 1f / pxPerMm : 1f;
+
+        _seamPointDragging = true;
+        _seamDragNode      = bestNode;
+        _seamDragCumLen    = cum;
+        _seamDragOffsetMm  = 0f;
+        _seamDragVertex    = 0;
+        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], 0);
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    /// <summary>Slides the seam preview along the grabbed contour by the horizontal mouse delta.</summary>
+    private void UpdateSeamPointDrag(float deltaX)
+    {
+        if (!_seamPointDragging || _seamDragLoopWorld.Count == 0) return;
+
+        float total = _seamDragCumLen[^1];
+        _seamDragOffsetMm += deltaX * _seamDragMmPerPixel;
+        float off = ((_seamDragOffsetMm % total) + total) % total;
+
+        // Nearest vertex to the arc-length offset (cum[] is ascending).
+        int idx = Array.BinarySearch(_seamDragCumLen, off);
+        if (idx < 0) idx = ~idx;
+        int n = _seamDragLoopWorld.Count;
+        int vertex;
+        if (idx <= 0) vertex = 0;
+        else if (idx >= n) vertex = 0;   // wrapped past the closing edge — back to start
+        else vertex = off - _seamDragCumLen[idx - 1] < _seamDragCumLen[idx] - off ? idx - 1 : idx % n;
+
+        if (vertex != _seamDragVertex)
+        {
+            _seamDragVertex = vertex;
+            _renderer.SetSeamGuides([_seamDragLoopWorld[vertex]], 0);
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Applies the dragged seam position to the whole toolpath: every closed loop re-seams
+    /// to its vertex nearest the new XY (same semantics as the seam-point editor), the raw
+    /// export toolpath follows, and the geometry re-uploads without a re-slice.
+    /// </summary>
+    private void FinishSeamPointDrag(ViewportViewModel vm)
+    {
+        bool moved = _seamPointDragging && _seamDragVertex != 0 && _seamDragNode is not null;
+        var node   = _seamDragNode;
+        var xy     = moved ? _seamDragLoopLocalXY[_seamDragVertex] : default;
+
+        _seamPointDragging = false;
+        _seamDragNode      = null;
+        _seamDragLoopWorld.Clear();
+        _seamDragLoopLocalXY.Clear();
+        _seamDragCumLen    = [];
+        UpdateSeamGuideMarkers(vm);   // restore the regular guide markers
+
+        if (!moved || node is null || !_toolpathByNode.TryGetValue(node, out var tp))
+        {
+            GlCanvas.RequestNextFrameRendering();
+            return;
+        }
+
+        var pts = new List<System.Numerics.Vector2> { xy };
+        MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(tp, pts);
+
+        _rawToolpathByNode.TryGetValue(node, out var raw);
+        if (raw is not null && !ReferenceEquals(raw, tp))
+            MassiveSlicer.Core.Slicing.ToolpathSeamEditor.ApplySeams(raw, pts);
+
+        var snap = GetToolpathSnapshot(node);
+        if (snap is not null)
+        {
+            vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
+            {
+                Toolpath      = tp,
+                RawToolpath   = raw ?? tp,
+                Node          = node,
+                BeadWidth     = snap.BeadWidth,
+                LayerHeight   = snap.LayerHeight,
+                MaterialColor = snap.MaterialColor,
+            });
+        }
+        GlCanvas.RequestNextFrameRendering();
     }
 
     /// <summary>
@@ -4607,6 +9460,7 @@ public partial class ViewportView : UserControl
                 KbScale(node, dx, vpW);
                 break;
         }
+        ApplyTransformLink(node);
 
         if (_toolIsDragging)
             RunIkForToolDrag();
@@ -4794,6 +9648,14 @@ public partial class ViewportView : UserControl
         foreach (var node in _devNodeKinds.Keys)
             node.Selectable = enabled;
 
+        // Unlock the matching outliner rows (e.g. "Print Bed") while dev mode is on;
+        // re-lock them the moment it turns off.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is ViewportViewModel lockVm)
+                lockVm.SetCellEnvironmentDevLock(IsDevNode, locked: !enabled);
+        });
+
         if (!enabled && _renderer.SelectedNode is { } sel && IsDevNode(sel))
         {
             _renderer.Select(null);
@@ -4803,6 +9665,15 @@ public partial class ViewportView : UserControl
 
     private bool IsDevNode(SceneNode? node)
         => node is not null && _devNodeKinds.ContainsKey(node);
+
+    /// <summary>Nearest ancestor (or self) registered as a dev-editable prop, else null.</summary>
+    private SceneNode? FindDevNodeRoot(SceneNode? node)
+    {
+        for (var cur = node; cur is not null; cur = cur.Parent)
+            if (_devNodeKinds.ContainsKey(cur))
+                return cur;
+        return null;
+    }
 
     private string DevLabel(SceneNode node)
     {
@@ -4986,6 +9857,7 @@ public partial class ViewportView : UserControl
     }
 
     private SceneNode? _lastOutlinerSyncedNode;
+    private bool _wasToolNodeSelected;
 
     private void UpdateFocusOverlay()
     {
@@ -5004,6 +9876,7 @@ public partial class ViewportView : UserControl
         bool isDevNode        = vm.IsDevMode && IsDevNode(selected);
         bool multiToolpath    = _renderer.SelectedToolpathCount >= 2;
         vm.CanMergeToolpaths  = multiToolpath;
+        vm.SyncSequenceRowHighlights(_renderer.SelectedToolpaths);
         vm.IsToolpathSelected = isToolpath && !multiToolpath;
         bool isMerged = isToolpath && selected is not null && _mergedByNode.ContainsKey(selected);
         vm.IsMergedToolpathSelected = isMerged;
@@ -5024,6 +9897,7 @@ public partial class ViewportView : UserControl
         vm.CanUngroup         = selected is not null && !isToolpath && !isToolNode && selected.Children.Count > 0;
         vm.CanExplode         = selected is not null && !isToolpath && !isToolNode && HasExplodableMeshes(selected);
         vm.CanMeshCleanup     = selected is not null && !isToolpath && !isToolNode && HasCleanableMeshes(selected);
+        vm.CanCutTool         = selected is not null && !isToolpath && !isToolNode && HasCleanableMeshes(selected);
 
         if (selected is null)
             SetGizmoMode(GizmoMode.None);
@@ -5032,6 +9906,9 @@ public partial class ViewportView : UserControl
             vm.Robot?.Desync();
             SetGizmoMode(GizmoMode.Translate);
         }
+        if (isToolNode && !_wasToolNodeSelected)
+            vm.OnToolheadSelected?.Invoke();
+        _wasToolNodeSelected = isToolNode;
 
         // Use ResetScrubIndex (not the public setters) so the IK callback is NOT triggered
         // by the programmatic reset -- the robot only follows scrubbing the user initiates.
@@ -5067,6 +9944,103 @@ public partial class ViewportView : UserControl
         }
 
         SyncSelectionTransformDisplay(vm);
+    }
+
+    // -- Speed/RPM value tags ------------------------------------------------------
+
+    private const float ViewTagBandMm = 152.4f;   // 6 inches
+    private DispatcherTimer? _viewTagTimer;
+    private Toolpath? _viewTagCachedToolpath;
+    private readonly List<(NVec3 Local, float Scale, float TempC)> _viewTagBands = [];
+
+    private void StartViewTagTimer(ViewportViewModel vm)
+    {
+        _viewTagTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _viewTagTimer.Tick += (_, _) => UpdateViewTags(vm);
+        _viewTagTimer.Start();
+    }
+
+    /// <summary>Projects one value tag per 6" of height beside the toolpath: layer speed
+    /// (Speed view) or extrusion RPM % with the material flow rate (RPM view).</summary>
+    private void UpdateViewTags(ViewportViewModel vm)
+    {
+        if (vm.ViewMode is not ("Speed" or "RPM" or "Thermal"))
+        {
+            if (vm.ViewTags.Count > 0) vm.ViewTags = [];
+            return;
+        }
+
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            if (vm.ViewTags.Count > 0) vm.ViewTags = [];
+            return;
+        }
+        var (node, toolpath) = (pair.Key, pair.Value);
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        // Rebuild band samples when the toolpath changes: one sample per height band,
+        // at the band layer's +X-most extrude endpoint (origin-relative local space).
+        if (!ReferenceEquals(_viewTagCachedToolpath, toolpath))
+        {
+            _viewTagCachedToolpath = toolpath;
+            _viewTagBands.Clear();
+            if (toolpath.Layers.Count > 0)
+            {
+                float nextBand = toolpath.Layers[0].Z;
+                foreach (var layer in toolpath.Layers)
+                {
+                    if (layer.Z < nextBand) continue;
+                    NVec3 best = default; bool found = false; float scale = 1f;
+                    int stride = Math.Max(1, layer.Moves.Count / 400);
+                    for (int i = 0; i < layer.Moves.Count; i += stride)
+                    {
+                        var m = layer.Moves[i];
+                        if (m.Kind != MoveKind.Extrude) continue;
+                        if (!found || m.To.X > best.X) { best = m.To; found = true; scale = m.PrintSpeedScale; }
+                    }
+                    if (found)
+                    {
+                        _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
+                                           scale, layer.ThermalTempC));
+                        nextBand += ViewTagBandMm;
+                    }
+                }
+            }
+        }
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 10 || vpH < 10) return;
+
+        float baseSpeed = (float)(vm.AdditiveSettings?.PrintSpeed ?? 100.0);
+        float rpmBase   = vm.AdditiveSettings?.GetEffectiveExtrusionSpeedPercent() ?? 100f;
+        float flow      = (float)(vm.AdditiveSettings?.SelectedPreset?.FlowRateFor(
+                              vm.AdditiveSettings?.ActiveExtruderIsHf ?? false) ?? 0.463);
+
+        var wt   = node.WorldTransform;
+        var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
+        foreach (var (local, scale, tempC) in _viewTagBands)
+        {
+            var world = new TkVector3(
+                local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
+                local.X * wt.M12 + local.Y * wt.M22 + local.Z * wt.M32 + wt.M42,
+                local.X * wt.M13 + local.Y * wt.M23 + local.Z * wt.M33 + wt.M43);
+            var p = _renderer.ProjectToScreen(world, vpW, vpH);
+            if (float.IsNaN(p.X) || p.X < -50 || p.X > vpW + 50 || p.Y < -20 || p.Y > vpH + 20)
+                continue;
+
+            var overlayPt = this.TranslatePoint(new Point(p.X + 14, p.Y - 9), OverlayView)
+                            ?? new Point(p.X + 14, p.Y - 9);
+            string text = vm.ViewMode switch
+            {
+                "Speed"   => $"{baseSpeed * scale:0} mm/s",
+                "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
+                _         => $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})",
+            };
+            tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
+        }
+        vm.ViewTags = tags;
     }
 
     // -- TCP keyframes -----------------------------------------------------------
@@ -5224,7 +10198,8 @@ public partial class ViewportView : UserControl
             PreservedLocalTransform = preservedLocal,
             PreservedOrigin         = preservedOrigin,
         });
-        vm.ReplaceScrubToolpathInPlace(toolpath);
+        if (ReferenceEquals(node, _activeScrubNode))
+            vm.ReplaceScrubToolpathInPlace(toolpath);
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -5275,6 +10250,49 @@ public partial class ViewportView : UserControl
         return dst;
     }
 
+    /// <summary>
+    /// X-key delete: removes the selected user mesh or toolpath without confirmation
+    /// and pushes a <see cref="NodeDeleteAction"/> so Cmd/Ctrl+Z restores it (outliner
+    /// row, meshes re-uploaded from retained CPU data, toolpaths rebuilt from snapshots).
+    /// </summary>
+    private bool TryDeleteSelectedWithUndo()
+    {
+        if (DataContext is not ViewportViewModel vm) return false;
+        var selected = _renderer.SelectedNode;
+        if (selected is null) return false;
+
+        bool isToolpath = _renderer.IsToolpathNode(selected);
+        var  node       = selected;
+        if (!isToolpath)
+        {
+            // Only user imports — never the robot/toolhead/bed/dev objects; effectors
+            // have their own toggle lifecycle (pattern panel buttons).
+            var userItem = vm.FindUserMeshOutlinerItem(selected);
+            if (userItem is null || userItem.IsEffector) return false;
+            if (IsToolNodeSelected() || IsDevNode(selected)) return false;
+            node = userItem.Node;
+        }
+
+        if (vm.CaptureOutlinerContext(node) is not { } ctx) return false;
+
+        // Snapshot every toolpath being deleted so undo can rebuild the renderers.
+        var restores = new List<NodeDeleteAction.ToolpathRestore>();
+        void Capture(SceneNode n)
+        {
+            if (GetToolpathSnapshot(n) is not { } snap) return;
+            _toolpathOriginByNode.TryGetValue(n, out var origin);
+            restores.Add(new NodeDeleteAction.ToolpathRestore(n, snap, n.LocalTransform, origin));
+        }
+        if (isToolpath) Capture(node);
+        else
+            foreach (var child in ctx.Item.Children)
+                if (child.IsToolpath) Capture(child.Node);
+
+        vm.RequestDeleteNode(node);
+        vm.UndoRedo?.Push(new NodeDeleteAction(vm, ctx.Item, ctx.Parent, ctx.Index, node, isToolpath, restores));
+        return true;
+    }
+
     // -- Scrub IK --------------------------------------------------------------
 
     /// <summary>
@@ -5292,6 +10310,16 @@ public partial class ViewportView : UserControl
 
     /// <summary>Simulate-timeline hook: drives the robot along the first visible
     /// toolpath (no selection required), mapping 0–1 progress onto its move range.</summary>
+    /// <summary>Toolpath display name = the source mesh's name (file extension stripped),
+    /// so KRL export dialogs carry it straight through to the .src filename.</summary>
+    private static string ToolpathNameFrom(string meshName)
+    {
+        var n = meshName.Trim();
+        foreach (var ext in new[] { ".stl", ".obj", ".glb", ".gltf", ".3mf", ".ply", ".step", ".stp" })
+            if (n.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { n = n[..^ext.Length].TrimEnd(); break; }
+        return n.Length > 0 ? n : "Toolpath";
+    }
+
     private void SimScrubIk(double progress)
     {
         foreach (var (node, cache) in _scrubCacheByNode)
@@ -5714,8 +10742,9 @@ public partial class ViewportView : UserControl
         foreach (var (node, raw) in _rawToolpathByNode)
         {
             var smoothed = RebuildProcessedToolpath(raw, s);
-            _toolpathByNode[node]   = smoothed;
-            _scrubCacheByNode[node] = BuildScrubCache(smoothed);
+            // Swap in place AND re-upload — the Speed/RPM gradients are baked into the
+            // line VBOs at upload, so without a replace the view keeps stale colours.
+            SwapScrubbedToolpath(vm, node, smoothed);
             _pendingOrientationUpdate.Enqueue((node, ComputeOrientationRatePerFlatMove(smoothed)));
         }
 
@@ -5736,39 +10765,64 @@ public partial class ViewportView : UserControl
     {
         int total = tp.Layers.Sum(l => l.Moves.Count);
         var result = new float[total];
-        if (total == 0) return result;
+        if (total == 0 || beadWidth <= 0f) return result;
 
-        // O(n×m) per-layer search — too slow for wave-expanded toolpaths.
-        // Skip and return all-zero (no overhang highlight) above threshold.
-        if (total > 600_000) return result;
-
-        List<(NVec3 from, NVec3 to)>? prevSegs = null;
+        // Spatial hash over the previous layer's cut segments (cell = bead width).
+        // Any segment outside the 3×3 neighbourhood is ≥ one bead away, which already
+        // clamps to score 1 — so the ring query is exact, and the whole pass is O(n).
+        // (The old per-layer pairwise search was O(n×m) and silently bailed above
+        // 600k moves, leaving wave-expanded toolpaths entirely white.)
+        float cell = MathF.Max(beadWidth, 0.5f);
+        Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>? prevGrid = null;
         int fi = 0;
         foreach (var layer in tp.Layers)
         {
-            var curSegs = new List<(NVec3, NVec3)>();
+            var curGrid = new Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>();
             foreach (var move in layer.Moves)
             {
                 if (ToolpathMoveKinds.IsCutSegment(move.Kind))
                 {
-                    if (prevSegs is { Count: > 0 })
+                    if (prevGrid is { Count: > 0 })
                     {
                         var mid = (move.From + move.To) * 0.5f;
+                        int cx = (int)MathF.Floor(mid.X / cell);
+                        int cy = (int)MathF.Floor(mid.Y / cell);
                         float minD = float.MaxValue;
-                        foreach (var (a, b) in prevSegs)
-                        {
-                            float d = SegDist2D(mid, a, b);
-                            if (d < minD) minD = d;
-                        }
-                        result[fi] = Math.Clamp(minD / beadWidth, 0f, 1f);
+                        for (int gx = cx - 1; gx <= cx + 1; gx++)
+                        for (int gy = cy - 1; gy <= cy + 1; gy++)
+                            if (prevGrid.TryGetValue((gx, gy), out var segs))
+                                foreach (var (a, b) in segs)
+                                {
+                                    float d = SegDist2D(mid, a, b);
+                                    if (d < minD) minD = d;
+                                }
+                        result[fi] = minD == float.MaxValue
+                            ? 1f
+                            : Math.Clamp(minD / beadWidth, 0f, 1f);
                     }
-                    curSegs.Add((move.From, move.To));
+                    InsertSegment(curGrid, move.From, move.To, cell);
                 }
                 fi++;
             }
-            prevSegs = curSegs;
+            prevGrid = curGrid;
         }
         return result;
+
+        static void InsertSegment(
+            Dictionary<(int, int), List<(NVec3 a, NVec3 b)>> grid, NVec3 a, NVec3 b, float cell)
+        {
+            int x0 = (int)MathF.Floor(MathF.Min(a.X, b.X) / cell);
+            int x1 = (int)MathF.Floor(MathF.Max(a.X, b.X) / cell);
+            int y0 = (int)MathF.Floor(MathF.Min(a.Y, b.Y) / cell);
+            int y1 = (int)MathF.Floor(MathF.Max(a.Y, b.Y) / cell);
+            for (int x = x0; x <= x1; x++)
+            for (int y = y0; y <= y1; y++)
+            {
+                if (!grid.TryGetValue((x, y), out var list))
+                    grid[(x, y)] = list = [];
+                list.Add((a, b));
+            }
+        }
 
         static float SegDist2D(NVec3 p, NVec3 a, NVec3 b)
         {
@@ -5993,14 +11047,64 @@ public partial class ViewportView : UserControl
         return (timesMs, vPeak);
     }
 
+    // Multi-Planar guide planes (world space) — cached for viewport hit-testing.
+    private readonly List<TkVector3> _guidePlaneCenters = [];
+    private readonly List<TkVector3> _guidePlaneNormals = [];
+    private readonly List<MultiPlanarPlaneRow> _guidePlaneRows = [];
+    private float _guidePlaneSize;
+    private bool  _guidePlanesActive;
+    private int   _guidePlaneSelected = -1;
+    private bool  _guidePlaneDragging;
+    private MultiPlanarPlaneRow? _guidePlaneDragRow;
+    private Toolpath? _spineCachedToolpath;
+    private TkMatrix4 _spineCachedWorld;
+
+    private bool _xBraceCylinderSelected;
+    private bool _xBraceCylinderDragging;
+    private float _xBraceCylinderDragGrabDx, _xBraceCylinderDragGrabDy;
+    private float _xBraceCylZMin, _xBraceCylZMax, _xBraceCylRadius;
+
     private void UpdateAnglePlanePreview(ViewportViewModel vm)
     {
         var node = _renderer.SelectedNode;
-        if (node is null
-            || vm.AdditiveSettings?.Method != SliceMethod.Angled
-            || _renderer.IsToolpathNode(node))
+        bool multiPlanar = vm.AdditiveSettings?.Method == SliceMethod.MultiPlanar;
+        if (!multiPlanar && _guidePlanesActive)
+        {
+            _guidePlanesActive = false;
+            _guidePlaneSelected = -1;
+            _renderer.SetGuidePlanes([], 0f);
+            _renderer.SetMultiPlanarSpine([]);
+        }
+        if (multiPlanar)
+        {
+            UpdateMultiPlanarOverlay(vm);
+            _renderer.SetPlanePreview(null, null);
+            _renderer.SetCylinderPreview(TkVector3.Zero, 0f, 0f, 0f);
+            _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
+            return;
+        }
+
+        bool angled = vm.AdditiveSettings?.Method == SliceMethod.Angled;
+        // Helper hidden → treat as no X-brace overlay (clears cylinder/plane/arrow);
+        // slicing still uses the projection, this is visual only.
+        bool xBrace = vm.AdditiveSettings is { XBracingEnabled: true, XBracingShowHelper: true }
+            && !angled;
+        bool xBraceCyl = xBrace
+            && string.Equals(vm.AdditiveSettings!.XBracingProjectionType, "Cylinder",
+                StringComparison.OrdinalIgnoreCase);
+        bool xBracePlane = xBrace && !xBraceCyl;
+
+        // Prefer model geometry for X-bracing overlays even when a toolpath is selected.
+        SceneNode? planeNode = node;
+        if (xBrace && (planeNode is null || _renderer.IsToolpathNode(planeNode)))
+            planeNode = vm.GetUserModelItems().FirstOrDefault()?.Node;
+
+        if (planeNode is null
+            || (!angled && !xBrace)
+            || (angled && _renderer.IsToolpathNode(planeNode)))
         {
             _renderer.SetPlanePreview(null, null);
+            _renderer.SetCylinderPreview(TkVector3.Zero, 0f, 0f, 0f);
             _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
             return;
         }
@@ -6010,7 +11114,7 @@ public partial class ViewportView : UserControl
         var max = new TkVector3(float.MinValue);
         Span<TkVector3> corners = stackalloc TkVector3[8];
         bool hasGeometry = false;
-        foreach (var n in node.SelfAndDescendants())
+        foreach (var n in planeNode.SelfAndDescendants())
         {
             if (n.Mesh?.PickingData is not { } mesh) continue;
             var world = n.WorldTransform;
@@ -6034,15 +11138,55 @@ public partial class ViewportView : UserControl
         if (!hasGeometry)
         {
             _renderer.SetPlanePreview(null, null);
+            _renderer.SetCylinderPreview(TkVector3.Zero, 0f, 0f, 0f);
             _renderer.SetSliceDirectionArrow(false, TkVector3.Zero, TkVector3.Zero, 0f);
             return;
         }
 
+        // ── Cylinder projection: vertical cage on the bed, height = part AABB ──
+        if (xBraceCyl)
+        {
+            _renderer.SetPlanePreview(null, null);
+            float z0 = min.Z;
+            float z1 = max.Z;
+            if (z1 < z0 + 1f) z1 = z0 + 50f;
+            float r = (float)(vm.AdditiveSettings!.XBracingCylinderDiameterMm * 0.5);
+            var cxy = new TkVector3(
+                (float)vm.AdditiveSettings.XBracingCylinderX,
+                (float)vm.AdditiveSettings.XBracingCylinderY,
+                0f);
+            _xBraceCylZMin = z0;
+            _xBraceCylZMax = z1;
+            _xBraceCylRadius = r;
+            _renderer.SetCylinderPreview(cxy, r, z0, z1, _xBraceCylinderSelected || _xBraceCylinderDragging);
+            // Direction cue: default pull toward axis (inward); flip = radiate outward.
+            var radial = new TkVector3(1f, 0f, 0f);
+            var cueDir = vm.AdditiveSettings.XBracingCylinderFlipDirection ? radial : -radial;
+            var cueOrigin = new TkVector3(
+                cxy.X + (vm.AdditiveSettings.XBracingCylinderFlipDirection ? 0f : r * 0.85f),
+                cxy.Y,
+                0.5f * (z0 + z1));
+            _renderer.SetSliceDirectionArrow(
+                true,
+                cueOrigin,
+                cueDir,
+                MathF.Max(r * 0.8f, 40f));
+            return;
+        }
+
+        _renderer.SetCylinderPreview(TkVector3.Zero, 0f, 0f, 0f);
+
         var center = (min + max) * 0.5f;
         float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.3f;
 
-        float ty = (float)(vm.AdditiveSettings.TiltAngle  * Math.PI / 180.0);
-        float tx = (float)(vm.AdditiveSettings.TiltAngleX * Math.PI / 180.0);
+        float tiltY = angled
+            ? (float)vm.AdditiveSettings!.TiltAngle
+            : (float)vm.AdditiveSettings!.XBracingPlaneTiltY;
+        float tiltX = angled
+            ? (float)vm.AdditiveSettings!.TiltAngleX
+            : (float)vm.AdditiveSettings!.XBracingPlaneTiltX;
+        float ty = (float)(tiltY * Math.PI / 180.0);
+        float tx = (float)(tiltX * Math.PI / 180.0);
         var normal = new TkVector3(
             MathF.Sin(ty),
             -MathF.Sin(tx) * MathF.Cos(ty),
@@ -6050,8 +11194,7 @@ public partial class ViewportView : UserControl
 
         _renderer.SetPlanePreview(center, normal, size);
 
-        // Slice-direction helper arrow: the angled layers advance along the plane normal's
-        // XY projection. Sit it at the upstream perimeter of the plane pointing across.
+        // Direction arrow: layer advance (angled) or brace grow direction (X-bracing).
         var dirXY = new TkVector3(normal.X, normal.Y, 0f);
         if (dirXY.LengthSquared > 1e-6f)
         {
@@ -6064,51 +11207,590 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private void FocusSelected()
+    /// <summary>
+    /// Multi-Planar viewport overlay: three guide-plane quads (base / middle / top,
+    /// click-and-drag horizontally to rotate one) plus the spine — a polyline through
+    /// every layer's centre coloured by wedge distortion (green = uniform thickness,
+    /// red = the thin side nearing self-crossing or the thick side nearing a gap).
+    /// </summary>
+    private void UpdateMultiPlanarOverlay(ViewportViewModel vm)
     {
-        if (_renderer.SelectedNode is not { } node) return;
+        // Note: model BODIES are hidden in the toolpath views — the guide planes must
+        // still show, so take the first user model regardless of visibility.
+        var model = vm.GetUserModelItems().FirstOrDefault()?.Node;
+        if (model is null || vm.AdditiveSettings is not { } s || s.MultiPlanarPlanes.Count < 2)
+        {
+            ClearMultiPlanarOverlay();
+            return;
+        }
 
-        var min = new Vector3(float.MaxValue);
-        var max = new Vector3(float.MinValue);
+        // World AABB of the model.
+        var min = new TkVector3(float.MaxValue);
+        var max = new TkVector3(float.MinValue);
         bool hasGeometry = false;
-
-        Span<Vector3> corners = stackalloc Vector3[8];
-        foreach (var n in node.SelfAndDescendants())
+        foreach (var n in model.SelfAndDescendants())
         {
             if (n.Mesh?.PickingData is not { } mesh) continue;
             var world = n.WorldTransform;
             var (bMin, bMax) = mesh.LocalBounds;
-
-            corners[0] = new(bMin.X, bMin.Y, bMin.Z); corners[1] = new(bMax.X, bMin.Y, bMin.Z);
-            corners[2] = new(bMin.X, bMax.Y, bMin.Z); corners[3] = new(bMax.X, bMax.Y, bMin.Z);
-            corners[4] = new(bMin.X, bMin.Y, bMax.Z); corners[5] = new(bMax.X, bMin.Y, bMax.Z);
-            corners[6] = new(bMin.X, bMax.Y, bMax.Z); corners[7] = new(bMax.X, bMax.Y, bMax.Z);
-
-            foreach (var p in corners)
+            for (int ci = 0; ci < 8; ci++)
             {
-                var w = new Vector3(
-                    p.X * world.M11 + p.Y * world.M21 + p.Z * world.M31 + world.M41,
-                    p.X * world.M12 + p.Y * world.M22 + p.Z * world.M32 + world.M42,
-                    p.X * world.M13 + p.Y * world.M23 + p.Z * world.M33 + world.M43);
-                min = Vector3.ComponentMin(min, w);
-                max = Vector3.ComponentMax(max, w);
+                var pLocal = new TkVector3(
+                    (ci & 1) == 0 ? bMin.X : bMax.X,
+                    (ci & 2) == 0 ? bMin.Y : bMax.Y,
+                    (ci & 4) == 0 ? bMin.Z : bMax.Z);
+                var w = TransformTk(pLocal, world);
+                min = TkVector3.ComponentMin(min, w);
+                max = TkVector3.ComponentMax(max, w);
             }
             hasGeometry = true;
         }
-
         if (!hasGeometry)
         {
-            _renderer.Camera.Target = node.WorldTransform.Row3.Xyz;
-        }
-        else
-        {
-            var center = (min + max) * 0.5f;
-            float radius = (max - min).Length * 0.75f;
-            _renderer.Camera.Target = center;
-            _renderer.Camera.Radius = Math.Max(radius, 50f);
+            ClearMultiPlanarOverlay();
+            return;
         }
 
+        float cx = (min.X + max.X) * 0.5f, cy = (min.Y + max.Y) * 0.5f;
+        float size = Math.Max(max.X - min.X, Math.Max(max.Y - min.Y, max.Z - min.Z)) * 1.15f;
+        bool axisX = s.MultiPlanarAxisX;
+
+        _guidePlaneCenters.Clear();
+        _guidePlaneNormals.Clear();
+        _guidePlaneRows.Clear();
+        var planes = new List<(TkVector3 Center, TkVector3 Normal)>();
+        foreach (var row in s.MultiPlanarPlanes.OrderBy(r => r.HeightPct))
+        {
+            float t = (float)(row.AngleDeg * Math.PI / 180.0);
+            var nrm = axisX
+                ? new TkVector3(0f, -MathF.Sin(t), MathF.Cos(t))
+                : new TkVector3(MathF.Sin(t), 0f, MathF.Cos(t));
+            float h = min.Z + (float)(row.HeightPct / 100.0) * (max.Z - min.Z);
+            var c = new TkVector3(cx, cy, h);
+            planes.Add((c, nrm));
+            _guidePlaneCenters.Add(c);
+            _guidePlaneNormals.Add(nrm);
+            _guidePlaneRows.Add(row);
+        }
+        _guidePlaneSize = size;
+        if (_guidePlaneSelected >= planes.Count) _guidePlaneSelected = -1;
+        // Viewport toggle: hide the quads (and the drag hit-testing with them) while
+        // keeping the distortion spine visible.
+        _guidePlanesActive = vm.ShowMultiPlanarPlanes;
+        _renderer.SetGuidePlanes(_guidePlanesActive ? planes : [], size, _guidePlaneSelected);
+
+        // Combined rotate+translate affordance on the selected plane: a rotation ring
+        // about the tilt axis plus a vertical height arrow, drawn as one polyline.
+        if (_guidePlaneSelected >= 0 && _guidePlanesActive)
+        {
+            var c = _guidePlaneCenters[_guidePlaneSelected];
+            var gizmo = new List<(TkVector3, TkVector3)>();
+            var yellow = new TkVector3(1f, 0.85f, 0.1f);
+            float r = size * 0.28f;
+            // Ring in the plane perpendicular to the tilt axis (XZ for Y-tilt, YZ for X-tilt).
+            for (int i = 0; i <= 32; i++)
+            {
+                float a = MathF.Tau * i / 32f;
+                var pt = axisX
+                    ? new TkVector3(c.X, c.Y + r * MathF.Cos(a), c.Z + r * MathF.Sin(a))
+                    : new TkVector3(c.X + r * MathF.Cos(a), c.Y, c.Z + r * MathF.Sin(a));
+                gizmo.Add((pt, yellow));
+            }
+            // Height arrow: ring → up spike → down spike (drawn within the same strip).
+            float ah = size * 0.38f;
+            gizmo.Add((c, yellow));
+            gizmo.Add((c + new TkVector3(0, 0, ah), yellow));
+            gizmo.Add((c + new TkVector3(0, 0, -ah), yellow));
+            gizmo.Add((c, yellow));
+            _renderer.SetGuidePlaneGizmo(gizmo);
+        }
+        else
+            _renderer.SetGuidePlaneGizmo([]);
+
+        // The Planes toggle governs the whole overlay: hide the spine with the quads.
+        if (!vm.ShowMultiPlanarPlanes)
+        {
+            _spineCachedToolpath = null;   // rebuild when re-enabled
+            _renderer.SetMultiPlanarSpine([]);
+            return;
+        }
+
+        // Spine from the sliced toolpath: layer centres coloured by wedge distortion.
+        // Rebuilt only when the toolpath or its pose changes — this runs per frame.
+        var pair = _toolpathByNode.FirstOrDefault(kv => kv.Key.Visible);
+        if (pair.Value is null)
+        {
+            _spineCachedToolpath = null;
+            _renderer.SetMultiPlanarSpine([]);
+            return;
+        }
+        if (ReferenceEquals(pair.Value, _spineCachedToolpath)
+            && pair.Key.WorldTransform == _spineCachedWorld)
+            return;
+        _spineCachedToolpath = pair.Value;
+        _spineCachedWorld    = pair.Key.WorldTransform;
+        _toolpathOriginByNode.TryGetValue(pair.Key, out var origin);
+        var wt = pair.Key.WorldTransform;
+        var spine = new List<(TkVector3 Pos, TkVector3 Color)>(pair.Value.Layers.Count);
+        foreach (var layer in pair.Value.Layers)
+        {
+            float minS = float.MaxValue, maxS = float.MinValue;
+            var sum = System.Numerics.Vector3.Zero;
+            int cnt = 0;
+            foreach (var m in layer.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsWipe) continue;
+                sum += (m.From + m.To) * 0.5f;
+                cnt++;
+                if (m.HeightScale < minS) minS = m.HeightScale;
+                if (m.HeightScale > maxS) maxS = m.HeightScale;
+            }
+            if (cnt == 0) continue;
+            var centroid = sum / cnt;
+            var world = TransformTk(new TkVector3(
+                centroid.X - origin.X, centroid.Y - origin.Y, centroid.Z - origin.Z), wt);
+
+            // Distortion 0…1: thin side approaching the 0.25 crossing clamp, or thick
+            // side approaching the 3× gap clamp.
+            float thin  = Math.Clamp((1f - minS) / 0.75f, 0f, 1f);
+            float thick = Math.Clamp((maxS - 1f) / 2f, 0f, 1f);
+            float d = MathF.Max(thin, thick);
+            var color = d < 0.5f
+                ? TkVector3.Lerp(new TkVector3(0.15f, 0.85f, 0.25f), new TkVector3(1f, 0.85f, 0.1f), d * 2f)
+                : TkVector3.Lerp(new TkVector3(1f, 0.85f, 0.1f), new TkVector3(1f, 0.15f, 0.1f), (d - 0.5f) * 2f);
+            spine.Add((world, color));
+        }
+        _renderer.SetMultiPlanarSpine(SmoothSpine(spine));
+    }
+
+    /// <summary>Denoises the per-layer spine (seam wobble makes raw layer centroids
+    /// zigzag) with a moving average, then interpolates a Catmull-Rom spline through
+    /// the result so the curve renders butter-smooth. Colors ride along.</summary>
+    private static List<(TkVector3 Pos, TkVector3 Color)> SmoothSpine(
+        List<(TkVector3 Pos, TkVector3 Color)> raw)
+    {
+        if (raw.Count < 4) return raw;
+
+        // Moving average (window 7, clamped at the ends).
+        var avg = new List<(TkVector3 Pos, TkVector3 Color)>(raw.Count);
+        const int half = 3;
+        for (int i = 0; i < raw.Count; i++)
+        {
+            var pSum = TkVector3.Zero; var cSum = TkVector3.Zero; int n = 0;
+            for (int k = Math.Max(0, i - half); k <= Math.Min(raw.Count - 1, i + half); k++)
+            {
+                pSum += raw[k].Pos; cSum += raw[k].Color; n++;
+            }
+            avg.Add((pSum / n, cSum / n));
+        }
+
+        // Catmull-Rom through the averaged points, 6 subdivisions per segment.
+        var smooth = new List<(TkVector3 Pos, TkVector3 Color)>((avg.Count - 1) * 6 + 1);
+        for (int i = 0; i < avg.Count - 1; i++)
+        {
+            var p0 = avg[Math.Max(0, i - 1)].Pos;
+            var p1 = avg[i].Pos;
+            var p2 = avg[i + 1].Pos;
+            var p3 = avg[Math.Min(avg.Count - 1, i + 2)].Pos;
+            for (int sdiv = 0; sdiv < 6; sdiv++)
+            {
+                float t = sdiv / 6f, t2 = t * t, t3 = t2 * t;
+                var pos = 0.5f * ((2f * p1)
+                    + (p2 - p0) * t
+                    + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2
+                    + (3f * p1 - p3 - 3f * p2 + p0) * t3);
+                var col = TkVector3.Lerp(avg[i].Color, avg[i + 1].Color, t);
+                smooth.Add((pos, col));
+            }
+        }
+        smooth.Add(avg[^1]);
+        return smooth;
+    }
+
+    private void ClearMultiPlanarOverlay()
+    {
+        if (!_guidePlanesActive) return;
+        _guidePlanesActive = false;
+        _guidePlaneSelected = -1;
+        _guidePlaneRows.Clear();
+        _renderer.SetGuidePlanes([], 0f);
+        _renderer.SetMultiPlanarSpine([]);
+        _renderer.SetGuidePlaneGizmo([]);
+    }
+
+    private static TkVector3 TransformTk(TkVector3 p, TkMatrix4 m) => new(
+        p.X * m.M11 + p.Y * m.M21 + p.Z * m.M31 + m.M41,
+        p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
+        p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
+
+    /// <summary>Ray-tests the guide-plane quads; grabs the nearest for the combined
+    /// rotate (horizontal drag) + height slide (vertical drag) interaction.</summary>
+    private bool TryBeginGuidePlaneDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        if (!_guidePlanesActive || vm.AdditiveSettings is not { } s) return false;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        int best = -1; float bestT = float.MaxValue;
+        for (int k = 0; k < _guidePlaneCenters.Count; k++)
+        {
+            var n = _guidePlaneNormals[k];
+            var c = _guidePlaneCenters[k];
+            float denom = TkVector3.Dot(ray.Direction, n);
+            if (MathF.Abs(denom) < 1e-6f) continue;
+            float t = TkVector3.Dot(c - ray.Origin, n) / denom;
+            if (t <= 0f || t >= bestT) continue;
+            var hit = ray.Origin + ray.Direction * t;
+            var up = MathF.Abs(n.Y) < 0.9f ? TkVector3.UnitY : TkVector3.UnitX;
+            var u = TkVector3.Normalize(TkVector3.Cross(n, up));
+            var v = TkVector3.Cross(n, u);
+            var rel = hit - c;
+            float hu = MathF.Abs(TkVector3.Dot(rel, u));
+            float hv = MathF.Abs(TkVector3.Dot(rel, v));
+            if (hu <= _guidePlaneSize * 0.5f && hv <= _guidePlaneSize * 0.5f)
+            {
+                best = k; bestT = t;
+            }
+        }
+        if (best < 0) return false;
+
+        _guidePlaneSelected = best;
+        _guidePlaneDragging = true;
+        _guidePlaneDragRow  = _guidePlaneRows[best];
+        vm.RealtimeSlicingPaused = true;   // one re-slice on release, not per pixel
+        // No GL calls here (UI thread) — the per-frame overlay pass redraws.
         GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    private void UpdateGuidePlaneDrag(ViewportViewModel vm, float deltaX, float deltaY)
+    {
+        if (!_guidePlaneDragging || _guidePlaneDragRow is not { } row) return;
+        row.AngleDeg  += deltaX * 0.2;        // horizontal → rotate
+        row.HeightPct -= deltaY * 0.12;       // vertical → slide the plane up/down
+        GlCanvas.RequestNextFrameRendering();  // overlay refreshes on the GL thread
+    }
+
+    private void FinishGuidePlaneDrag(ViewportViewModel vm)
+    {
+        if (!_guidePlaneDragging) return;
+        _guidePlaneDragging = false;
+        _guidePlaneDragRow  = null;
+        vm.RealtimeSlicingPaused = false;   // fires the deferred re-slice
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Select / begin translating the X-bracing projection cylinder on the bed plane.
+    /// Hit-test: ray vs vertical cylinder shell (or axis cross within radius).
+    /// </summary>
+    private bool TryBeginXBraceCylinderDrag(ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        // Hidden helper can't be grabbed (and must not swallow clicks).
+        if (vm.AdditiveSettings is not { XBracingShowHelper: true }) return false;
+        if (vm.AdditiveSettings is not { XBracingEnabled: true } s) return false;
+        if (!string.Equals(s.XBracingProjectionType, "Cylinder", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        float cx = (float)s.XBracingCylinderX;
+        float cy = (float)s.XBracingCylinderY;
+        float r  = MathF.Max(_xBraceCylRadius, (float)(s.XBracingCylinderDiameterMm * 0.5));
+        float z0 = _xBraceCylZMin;
+        float z1 = _xBraceCylZMax;
+        if (z1 <= z0 + 1f) { z0 = _renderer.BedZ; z1 = z0 + 100f; }
+
+        // Infinite vertical cylinder pick (XY circle), then clamp Z to [z0,z1] band.
+        // Ray: O + t D. Solve |Oxy + t Dxy - Cxy|^2 = r^2.
+        float ox = ray.Origin.X - cx, oy = ray.Origin.Y - cy;
+        float dx = ray.Direction.X, dy = ray.Direction.Y;
+        float a = dx * dx + dy * dy;
+        bool hit = false;
+        float hitT = 0f;
+        if (a > 1e-10f)
+        {
+            float b = 2f * (ox * dx + oy * dy);
+            float c = ox * ox + oy * oy - r * r;
+            float disc = b * b - 4f * a * c;
+            if (disc >= 0f)
+            {
+                float sqrt = MathF.Sqrt(disc);
+                float t0 = (-b - sqrt) / (2f * a);
+                float t1 = (-b + sqrt) / (2f * a);
+                foreach (float t in new[] { t0, t1 })
+                {
+                    if (t <= 0f) continue;
+                    float z = ray.Origin.Z + ray.Direction.Z * t;
+                    if (z < z0 - r * 0.1f || z > z1 + r * 0.1f) continue;
+                    hit = true;
+                    hitT = t;
+                    break;
+                }
+            }
+        }
+        // Also allow grabbing the axis cross via bed-plane hit near center.
+        if (!hit && SceneRenderer.TryPickHorizontalPlane(ray, z0, out var bedHit))
+        {
+            float ddx = bedHit.X - cx, ddy = bedHit.Y - cy;
+            if (ddx * ddx + ddy * ddy <= (r * 0.35f) * (r * 0.35f))
+            {
+                hit = true;
+                // grab offset so drag keeps relative position
+                _xBraceCylinderDragGrabDx = ddx;
+                _xBraceCylinderDragGrabDy = ddy;
+                _xBraceCylinderSelected = true;
+                _xBraceCylinderDragging = true;
+                vm.RealtimeSlicingPaused = true;
+                GlCanvas.RequestNextFrameRendering();
+                return true;
+            }
+        }
+        if (!hit) return false;
+
+        var hitPt = ray.Origin + ray.Direction * hitT;
+        _xBraceCylinderDragGrabDx = hitPt.X - cx;
+        _xBraceCylinderDragGrabDy = hitPt.Y - cy;
+        _xBraceCylinderSelected = true;
+        _xBraceCylinderDragging = true;
+        vm.RealtimeSlicingPaused = true;
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    private void UpdateXBraceCylinderDrag(ViewportViewModel vm, Ray ray)
+    {
+        if (!_xBraceCylinderDragging || vm.AdditiveSettings is not { } s) return;
+        float z = _xBraceCylZMin;
+        if (!SceneRenderer.TryPickHorizontalPlane(ray, z, out var hit)
+            && !SceneRenderer.TryPickHorizontalPlane(ray, _renderer.BedZ, out hit))
+            return;
+        s.XBracingCylinderX = hit.X - _xBraceCylinderDragGrabDx;
+        s.XBracingCylinderY = hit.Y - _xBraceCylinderDragGrabDy;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void FinishXBraceCylinderDrag(ViewportViewModel vm)
+    {
+        if (!_xBraceCylinderDragging) return;
+        _xBraceCylinderDragging = false;
+        vm.RealtimeSlicingPaused = false;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+
+    // ── Frame / orbit-on-selection (F key + double-click) ────────────────────
+
+    /// <summary>Minimum orbit radius so a single bead/point still has useful zoom.</summary>
+    private const float FrameMinRadiusMm = 40f;
+
+    /// <summary>
+    /// Sets the orbit target to the AABB centre and zooms so the bounds fill most of
+    /// the view. Used for meshes, toolpath layers, paths, and multi-point selections.
+    /// </summary>
+    private void FrameCameraToWorldAabb(Vector3 min, Vector3 max)
+    {
+        var extent = max - min;
+        // Degenerate / single-point selection → tight framing around the centre.
+        if (extent.LengthSquared < 1e-4f)
+        {
+            FrameCameraToPoint((min + max) * 0.5f, FrameMinRadiusMm * 2f);
+            return;
+        }
+
+        var center = (min + max) * 0.5f;
+        // 0.75 of diagonal matches the existing Frame All / Focus behaviour.
+        float radius = extent.Length * 0.75f;
+        _renderer.Camera.Target = center;
+        _renderer.Camera.Radius = Math.Max(radius, FrameMinRadiusMm);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Centres orbit on a world point and sets zoom so the point is comfortably framed.
+    /// </summary>
+    private void FrameCameraToPoint(Vector3 worldPoint, float radiusMm)
+    {
+        _renderer.Camera.Target = worldPoint;
+        _renderer.Camera.Radius = Math.Max(radiusMm, FrameMinRadiusMm);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Frames an arbitrary set of world points (selection polylines, layer beads…).</summary>
+    private bool FrameCameraToWorldPoints(IEnumerable<Vector3> points, float pointFallbackRadiusMm = 120f)
+    {
+        var min = new Vector3(float.MaxValue);
+        var max = new Vector3(float.MinValue);
+        int n = 0;
+        foreach (var p in points)
+        {
+            min = Vector3.ComponentMin(min, p);
+            max = Vector3.ComponentMax(max, p);
+            n++;
+        }
+        if (n == 0) return false;
+        if (n == 1 || (max - min).LengthSquared < 1e-2f)
+        {
+            FrameCameraToPoint(n == 1 ? min : (min + max) * 0.5f, pointFallbackRadiusMm);
+            return true;
+        }
+        FrameCameraToWorldAabb(min, max);
+        return true;
+    }
+
+    /// <summary>Zoom-to-fit a scene node (mesh subtree, toolpath, or empty transform pivot).</summary>
+    private void FrameNode(SceneNode node)
+    {
+        // Toolpath geometry lives outside Mesh — special-case it.
+        if (_toolpathByNode.TryGetValue(node, out var tp))
+        {
+            FrameToolpathNode(node, tp);
+            return;
+        }
+
+        if (SceneBounds.TryComputeSubtreeWorldAabb(node, out var min, out var max))
+        {
+            FrameCameraToWorldAabb(min, max);
+            return;
+        }
+
+        // No mesh: still make the node the orbit centre (robot TCP, empty group, etc.).
+        FrameCameraToPoint(node.WorldTransform.Row3.Xyz, Math.Max(_renderer.Camera.Radius * 0.5f, 200f));
+    }
+
+    /// <summary>Frames every extrusion move on a toolpath node.</summary>
+    private void FrameToolpathNode(SceneNode node, Toolpath tp)
+    {
+        _toolpathOriginByNode.TryGetValue(node, out var origin);
+        var wt = node.LocalTransform;
+        var pts = new List<Vector3>(Math.Max(64, tp.Layers.Sum(l => l.Moves.Count)));
+        foreach (var layer in tp.Layers)
+            CollectLayerWorldPoints(layer, origin, wt, pts);
+        if (!FrameCameraToWorldPoints(pts, pointFallbackRadiusMm: 200f))
+            FrameCameraToPoint(node.WorldTransform.Row3.Xyz, 200f);
+    }
+
+    /// <summary>Frames one layer of a toolpath (all extrusions on that layer).</summary>
+    private void FrameToolpathLayer(
+        ToolpathLayer layer, System.Numerics.Vector3 origin, TkMatrix4 wt)
+    {
+        var pts = new List<Vector3>(Math.Max(16, layer.Moves.Count * 2));
+        CollectLayerWorldPoints(layer, origin, wt, pts);
+        if (!FrameCameraToWorldPoints(pts, pointFallbackRadiusMm: 150f))
+            return;
+    }
+
+    private static void CollectLayerWorldPoints(
+        ToolpathLayer layer, System.Numerics.Vector3 origin, TkMatrix4 wt, List<Vector3> pts)
+    {
+        foreach (var mv in layer.Moves)
+        {
+            if (mv.Kind != MoveKind.Extrude) continue;
+            if (mv.IsLayerStitch || mv.IsLayerChange) continue;
+            var a = TransformPoint(
+                new TkVector3(mv.From.X - origin.X, mv.From.Y - origin.Y, mv.From.Z - origin.Z), wt);
+            var b = TransformPoint(
+                new TkVector3(mv.To.X - origin.X, mv.To.Y - origin.Y, mv.To.Z - origin.Z), wt);
+            pts.Add(new Vector3(a.X, a.Y, a.Z));
+            pts.Add(new Vector3(b.X, b.Y, b.Z));
+        }
+    }
+
+    /// <summary>
+    /// Double-click / universal frame: zoom to fit whatever is under the cursor
+    /// (or the current selection) and make it the orbit centre.
+    /// </summary>
+    private void FrameUnderCursorOrSelection(Avalonia.Point pos)
+    {
+        var vm = DataContext as ViewportViewModel;
+        float beadMm = (float)(vm?.AdditiveSettings?.BeadWidth ?? 6f);
+        if (beadMm < 0.5f) beadMm = 6f;
+        float pointRadius = MathF.Max(FrameMinRadiusMm * 2f, beadMm * 12f);
+
+        // 1) Edit selection (paths / points) takes priority — frame the sticky picks.
+        if (vm is { IsPaintEditOpen: true })
+        {
+            if (_paintSelection.Count > 0)
+            {
+                var all = new List<TkVector3>();
+                foreach (var s in _paintSelection)
+                    all.AddRange(s.World);
+                if (FrameCameraToWorldPoints(all, pointRadius))
+                    return;
+            }
+            if (_paintSelectedLine is { Count: > 0 } sticky)
+            {
+                if (FrameCameraToWorldPoints(sticky, pointRadius))
+                    return;
+            }
+
+            // Nothing sticky yet — pick under cursor (point = single bead, path = section,
+            // otherwise the whole layer around that bead).
+            if (PickSpanUnderCursor(pos) is { } hit)
+            {
+                var poly = SpanWorldHighlight(hit, pointMode: vm.PaintPointGranularityActive);
+                if (poly is { Count: > 0 } && FrameCameraToWorldPoints(poly, pointRadius))
+                    return;
+                // Layer frame for anything else under the cursor in edit mode.
+                FrameToolpathLayer(hit.Layer, hit.Origin, hit.Wt);
+                return;
+            }
+        }
+
+        // 2) Toolpath bead under cursor → frame that layer (isolated layer window).
+        if (PickSpanUnderCursor(pos) is { } layerHit)
+        {
+            FrameToolpathLayer(layerHit.Layer, layerHit.Origin, layerHit.Wt);
+            return;
+        }
+
+        // 3) Whole toolpath node under cursor.
+        var (mx, my, vpW, vpH) = GetGlPickViewport(pos);
+        if (vpW > 1f && vpH > 1f)
+        {
+            var tpNode = _renderer.PickToolpath(mx, my, vpW, vpH);
+            if (tpNode is not null && _toolpathByNode.TryGetValue(tpNode, out var tp))
+            {
+                FrameToolpathNode(tpNode, tp);
+                return;
+            }
+
+            // 4) Mesh / scene node under cursor.
+            var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+            SceneNode? meshHit = vm is not null
+                ? PickForSceneSelection(vm, ray)
+                : _renderer.Pick(ray);
+            if (meshHit is not null)
+            {
+                FrameNode(meshHit);
+                return;
+            }
+        }
+
+        // 5) Fall back to whatever is currently selected / scrubbed.
+        if (_renderer.SelectedNode is { } sel)
+        {
+            FrameNode(sel);
+            return;
+        }
+        if (_activeScrubNode is { } scrub && _toolpathByNode.TryGetValue(scrub, out var scrubTp))
+        {
+            FrameToolpathNode(scrub, scrubTp);
+            return;
+        }
+    }
+
+    private void FocusSelected()
+    {
+        // Prefer current selection; fall back to the live scrub toolpath.
+        if (_renderer.SelectedNode is { } node)
+        {
+            FrameNode(node);
+            return;
+        }
+        if (_activeScrubNode is { } scrub && _toolpathByNode.TryGetValue(scrub, out var tp))
+        {
+            FrameToolpathNode(scrub, tp);
+            return;
+        }
     }
 
     private Point _lastPointerPos;
@@ -6116,6 +11798,11 @@ public partial class ViewportView : UserControl
     /// <summary>Applies a named camera preset (view pie menu / shortcuts).</summary>
     private void ApplyViewPreset(string name)
     {
+        // 2D slice plane is fixed top-down: only Frame (fit) is allowed; orientation
+        // presets would fight the per-frame lock and feel like rotate.
+        if (IsSlicePlaneNavLocked && name != "Frame")
+            return;
+
         var cam = _renderer.Camera;
         switch (name)
         {
@@ -6131,48 +11818,427 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private void FrameAll()
+    // Saved camera projection when entering the 2D Slice Plane Viewer.
+    private float _sliceViewerSavedElevation = 30f;
+    private float _sliceViewerSavedAzimuth = 45f;
+    private float _sliceViewerLockedAzimuth; // frozen while slice view is active (no rotate)
+    private bool  _sliceViewerSavedOrtho;
+    private bool  _sliceViewerHasSavedCamera;
+
+    // Layer-follow while scrubbing in 2D slice (zoom/Radius preserved; Target tracks geometry).
+    private int     _sliceFollowLayerIndex = -1;
+    private Vector3 _sliceFollowLayerCenter;
+
+    // Scene visibility restored when leaving 2D slice view (robot, env, solid meshes).
+    private bool _sliceViewerHidScene;
+    private readonly List<(SceneNode Node, bool WasVisible)> _sliceViewerHiddenNodes = [];
+    private bool _sliceViewerSavedContactShadows = true;
+
+    /// <summary>
+    /// Enters top-down orthographic for the slice plane viewer, restoring the previous
+    /// elevation/projection/azimuth when leaving. Hides robot / cell / solid meshes so only
+    /// toolpath centre-lines remain for the multi-pass stack.
+    /// Default azimuth is square to the robot rail with the rail/robot side at the top.
+    /// </summary>
+    private void ApplySlicePlaneViewerCamera(bool active)
     {
+        var cam = _renderer.Camera;
+        if (active)
+        {
+            if (!_sliceViewerHasSavedCamera)
+            {
+                _sliceViewerSavedElevation = cam.Elevation;
+                _sliceViewerSavedAzimuth   = cam.Azimuth;
+                _sliceViewerSavedOrtho     = cam.IsOrthographic;
+                // Square to the rail, then +90° CCW on screen (azimuth −90° at top-down).
+                _sliceViewerLockedAzimuth  = NormalizeAzimuth(
+                    ComputeSliceViewerAzimuthRailUp(cam.Target) - 90f);
+                _sliceViewerHasSavedCamera = true;
+            }
+            // Exactly 90° so the pole up-vector matches azimuth with no residual twist.
+            cam.Elevation      = 90f;
+            cam.Azimuth        = _sliceViewerLockedAzimuth;
+            cam.IsOrthographic = true;
+            EnforceSlicePlaneSceneHiding(hide: true);
+            // Seed follow state so the first scrub delta is measured from this layer.
+            _sliceFollowLayerIndex = -1;
+        }
+        else
+        {
+            if (_sliceViewerHasSavedCamera)
+            {
+                cam.Elevation      = _sliceViewerSavedElevation;
+                cam.Azimuth        = _sliceViewerSavedAzimuth;
+                cam.IsOrthographic = _sliceViewerSavedOrtho;
+                _sliceViewerHasSavedCamera = false;
+            }
+            EnforceSlicePlaneSceneHiding(hide: false);
+            _sliceFollowLayerIndex = -1;
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// When the LAYERS dual-slider or timeline moves to another layer, translate the
+    /// camera target by the change in that layer's world centre so the slice stays in
+    /// view. Zoom (<see cref="OrbitCamera.Radius"/>) is never modified. User pan is
+    /// preserved as an offset relative to the geometry centre.
+    /// </summary>
+    private void FollowSliceLayerCamera(ViewportViewModel vm, OrbitCamera cam)
+    {
+        if (vm.ActiveScrubToolpath is not { Layers.Count: > 0 } tp) return;
+        int li = Math.Clamp(vm.CurrentScrubLayerIndex, 0, tp.Layers.Count - 1);
+        if (li == _sliceFollowLayerIndex) return;
+
+        if (!TryGetSliceLayerWorldCenter(tp.Layers[li], out var center))
+            return;
+
+        if (_sliceFollowLayerIndex >= 0)
+        {
+            // Keep zoom; slide target with the geometry so multiplanar stacks track.
+            cam.Target += center - _sliceFollowLayerCenter;
+        }
+
+        _sliceFollowLayerIndex = li;
+        _sliceFollowLayerCenter = center;
+    }
+
+    /// <summary>World-space AABB centre of extrusions on a layer (toolpath local + origin).</summary>
+    private bool TryGetSliceLayerWorldCenter(ToolpathLayer layer, out Vector3 center)
+    {
+        center = default;
+        System.Numerics.Vector3 origin = default;
+        var wt = TkMatrix4.Identity;
+        if (_activeScrubNode is not null)
+        {
+            _toolpathOriginByNode.TryGetValue(_activeScrubNode, out origin);
+            wt = _activeScrubNode.LocalTransform;
+        }
+
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
-        bool hasGeometry = false;
-
-        Span<Vector3> corners = stackalloc Vector3[8];
-        foreach (var child in _renderer.SceneRoot.Children)
+        int n = 0;
+        var moves = layer.Moves;
+        // Stride long layers — centre only needs a stable average, not every bead.
+        int stride = moves.Count > 400 ? Math.Max(1, moves.Count / 200) : 1;
+        for (int i = 0; i < moves.Count; i += stride)
         {
-            foreach (var n in child.SelfAndDescendants())
+            var mv = moves[i];
+            if (mv.Kind != MoveKind.Extrude) continue;
+            if (mv.IsLayerStitch || mv.IsLayerChange) continue;
+            var mid = (mv.From + mv.To) * 0.5f;
+            var w = TransformPoint(new TkVector3(
+                mid.X - origin.X, mid.Y - origin.Y, mid.Z - origin.Z), wt);
+            var p = new Vector3(w.X, w.Y, w.Z);
+            min = Vector3.ComponentMin(min, p);
+            max = Vector3.ComponentMax(max, p);
+            n++;
+        }
+
+        if (n == 0)
+        {
+            // Empty / travel-only layer: fall back to nominal layer Z at toolpath origin.
+            float z = layer.Z - origin.Z;
+            var w = TransformPoint(new TkVector3(-origin.X, -origin.Y, z), wt);
+            center = new Vector3(w.X, w.Y, w.Z);
+            return true;
+        }
+
+        center = (min + max) * 0.5f;
+        return true;
+    }
+
+    /// <summary>
+    /// Azimuth for a top-down 2D view that is square to the robot rail, with the
+    /// rail / robot side toward the top of the screen.
+    /// <para>
+    /// Prefer the cell's linear-rail axis (X/Y) so the view is orthogonal to the rail —
+    /// NOT the diagonal vector from the part to the robot base (that left a skew angle
+    /// on LFAM1 where the base sits off-axis from the bed).
+    /// </para>
+    /// At elevation = 90°, OrbitCamera screen-up is (-cos az, -sin az) in world XY.
+    /// </summary>
+    private float ComputeSliceViewerAzimuthRailUp(OpenTK.Mathematics.Vector3 lookTarget)
+    {
+        var robot = _robotBaseNode?.WorldTransform.Row3.Xyz ?? _robrootWorldPos;
+        float toRobotX = robot.X - lookTarget.X;
+        float toRobotY = robot.Y - lookTarget.Y;
+
+        // Unit screen-up direction in world XY (will point toward the top of the view).
+        float upX, upY;
+        if (_robotRail is { } rail)
+        {
+            // Rail axis is world-aligned (X or Y). Use it so the view is square to the rail.
+            switch (rail.Axis.ToUpperInvariant())
             {
-                if (n.Mesh?.PickingData is not { } mesh) continue;
-                var world = n.WorldTransform;
-                var (bMin, bMax) = mesh.LocalBounds;
+                case "X":
+                    upX = 1f; upY = 0f;
+                    break;
+                case "Y":
+                    upX = 0f; upY = 1f;
+                    break;
+                default:
+                    // Z-axis rail has no in-plane direction — fall through to robot vector.
+                    upX = 0f; upY = 0f;
+                    break;
+            }
 
-                corners[0] = new(bMin.X, bMin.Y, bMin.Z); corners[1] = new(bMax.X, bMin.Y, bMin.Z);
-                corners[2] = new(bMin.X, bMax.Y, bMin.Z); corners[3] = new(bMax.X, bMax.Y, bMin.Z);
-                corners[4] = new(bMin.X, bMin.Y, bMax.Z); corners[5] = new(bMax.X, bMin.Y, bMax.Z);
-                corners[6] = new(bMin.X, bMax.Y, bMax.Z); corners[7] = new(bMax.X, bMax.Y, bMax.Z);
-
-                foreach (var p in corners)
+            if (upX * upX + upY * upY > 0.5f)
+            {
+                // Flip so the robot sits toward the top half (not the bottom).
+                if (toRobotX * upX + toRobotY * upY < 0f)
                 {
-                    var w = new Vector3(
-                        p.X * world.M11 + p.Y * world.M21 + p.Z * world.M31 + world.M41,
-                        p.X * world.M12 + p.Y * world.M22 + p.Z * world.M32 + world.M42,
-                        p.X * world.M13 + p.Y * world.M23 + p.Z * world.M33 + world.M43);
-                    min = Vector3.ComponentMin(min, w);
-                    max = Vector3.ComponentMax(max, w);
+                    upX = -upX;
+                    upY = -upY;
                 }
-                hasGeometry = true;
+            }
+            else
+            {
+                upX = toRobotX;
+                upY = toRobotY;
+            }
+        }
+        else
+        {
+            // No linear rail (e.g. LFAM3): aim screen-up at the robot base, but snap to
+            // the nearest world axis so the view stays square (no residual skew).
+            upX = toRobotX;
+            upY = toRobotY;
+            float ax = MathF.Abs(upX), ay = MathF.Abs(upY);
+            if (ax * ax + ay * ay > 1e-4f)
+            {
+                if (ax >= ay)
+                {
+                    upX = upX >= 0f ? 1f : -1f;
+                    upY = 0f;
+                }
+                else
+                {
+                    upX = 0f;
+                    upY = upY >= 0f ? 1f : -1f;
+                }
             }
         }
 
-        if (hasGeometry)
+        if (upX * upX + upY * upY < 1e-8f)
+            return 90f; // degenerate: default quarter-turn
+
+        // screen-up = (-cos az, -sin az) = (upX, upY)
+        // ⇒ cos az = -upX, sin az = -upY
+        float az = MathF.Atan2(-upY, -upX) * (180f / MathF.PI);
+        return NormalizeAzimuth(az);
+    }
+
+    private static float NormalizeAzimuth(float az)
+    {
+        az %= 360f;
+        if (az < 0f) az += 360f;
+        return az;
+    }
+
+    /// <summary>
+    /// While 2D slice is on, hide everything that is not a registered toolpath
+    /// (robot, pedestal, env, solid part meshes). Re-assert every frame so a later
+    /// cell/tool attach cannot resurrect the arm mid-view.
+    /// </summary>
+    private void EnforceSlicePlaneSceneHiding(bool hide)
+    {
+        if (hide)
         {
-            var center = (min + max) * 0.5f;
-            float radius = (max - min).Length * 0.75f;
-            _renderer.Camera.Target = center;
-            _renderer.Camera.Radius = Math.Max(radius, 50f);
+            if (!_sliceViewerHidScene)
+            {
+                _sliceViewerHiddenNodes.Clear();
+                foreach (var child in _renderer.SceneRoot.Children)
+                {
+                    // Keep toolpath nodes (multi-pass draws them).
+                    if (_toolpathByNode.ContainsKey(child)) continue;
+                    _sliceViewerHiddenNodes.Add((child, child.Visible));
+                    child.Visible = false;
+                }
+                _sliceViewerHidScene = true;
+            }
+            else
+            {
+                // Re-assert: hide anything newly attached that isn't a toolpath.
+                foreach (var child in _renderer.SceneRoot.Children)
+                {
+                    if (_toolpathByNode.ContainsKey(child)) continue;
+                    if (child.Visible)
+                    {
+                        if (!_sliceViewerHiddenNodes.Any(h => ReferenceEquals(h.Node, child)))
+                            _sliceViewerHiddenNodes.Add((child, true));
+                        child.Visible = false;
+                    }
+                }
+            }
+            if (DataContext is ViewportViewModel vmHide)
+                vmHide.RefreshRobotOutlinerVisibilityFromScene();
+        }
+        else if (_sliceViewerHidScene)
+        {
+            foreach (var (node, wasVisible) in _sliceViewerHiddenNodes)
+                node.Visible = wasVisible;
+            _sliceViewerHiddenNodes.Clear();
+            _sliceViewerHidScene = false;
+            if (DataContext is ViewportViewModel vmShow)
+                vmShow.RefreshRobotOutlinerVisibilityFromScene();
+        }
+    }
+
+    /// <summary>
+    /// Makes sure the edit-mode LAYERS dual-slider has a real toolpath + layer ends.
+    /// Without an armed scrub session <see cref="ViewportViewModel.ToolpathScrubLayerCount"/>
+    /// falls back to 1 and the control paints the empty 1–2 range (drag is a no-op).
+    /// </summary>
+    private void EnsureScrubArmedForEdit(ViewportViewModel vm)
+    {
+        // Prefer the already-armed node if its GPU toolpath is still registered.
+        if (_activeScrubNode is { } armed
+            && _toolpathByNode.TryGetValue(armed, out var armedTp)
+            && armedTp.Layers.Count > 0)
+        {
+            int max = armedTp.Layers.Sum(l => l.Moves.Count);
+            // Rebuild ends even when the toolpath object is the same — layer ends can
+            // be null after a failed session or mid-slice race.
+            bool blankWindow = vm.ToolpathScrubIndex <= 0
+                               || vm.ToolpathScrubIndex <= vm.ToolpathScrubLowIndex;
+            bool needsRebuild = !vm.IsScrubSessionActive
+                                || vm.ActiveScrubToolpath is null
+                                || !ReferenceEquals(vm.ActiveScrubToolpath, armedTp)
+                                || (vm.ToolpathScrubLayerCount <= 1 && armedTp.Layers.Count > 1)
+                                || blankWindow;
+            if (needsRebuild)
+            {
+                // Preserve only when we already have a non-empty visible window.
+                bool preserve = vm.IsScrubSessionActive && !blankWindow;
+                vm.ResetScrubIndex(max, armedTp, preservePosition: preserve);
+                vm.IsScrubSessionActive = true;
+            }
+            else
+            {
+                vm.IsScrubSessionActive = true;
+            }
+            return;
+        }
+
+        // Pick the first uploaded toolpath (prefer more layers if several exist).
+        SceneNode? bestNode = null;
+        Toolpath?  bestTp   = null;
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (tp.Layers.Count == 0) continue;
+            if (bestTp is null || tp.Layers.Count > bestTp.Layers.Count)
+            {
+                bestNode = node;
+                bestTp   = tp;
+            }
+        }
+
+        if (bestNode is null || bestTp is null)
+            return;
+
+        _activeScrubNode = bestNode;
+        vm.ResetScrubIndex(bestTp.Layers.Sum(l => l.Moves.Count), bestTp, preservePosition: false);
+        vm.IsScrubSessionActive = true;
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    // ── Number-key view presets (CAD-style ortho / perspective toggle) ────────
+
+    /// <summary>Last number-key view ("1"…"5") so a second press toggles projection.</summary>
+    private string? _activeNumberViewKey;
+
+    /// <summary>
+    /// Handles D1–D5 / NumPad1–5. Returns true if consumed.
+    /// First press: jump to that view in orthographic. Same key again: flip to
+    /// perspective (and back). Switching to another number key starts in ortho.
+    /// </summary>
+    private bool TryHandleViewNumberKey(Key key)
+    {
+        string? id = key switch
+        {
+            Key.D1 or Key.NumPad1 => "1",
+            Key.D2 or Key.NumPad2 => "2",
+            Key.D3 or Key.NumPad3 => "3",
+            Key.D4 or Key.NumPad4 => "4",
+            Key.D5 or Key.NumPad5 => "5",
+            _ => null,
+        };
+        if (id is null) return false;
+
+        var cam = _renderer.Camera;
+        bool sameView = _activeNumberViewKey == id && MatchesNumberViewOrientation(id);
+        if (sameView)
+        {
+            // Toggle ortho ↔ perspective while staying on this standard view.
+            cam.IsOrthographic = !cam.IsOrthographic;
+        }
+        else
+        {
+            ApplyNumberViewOrientation(id);
+            cam.IsOrthographic = true; // first entry into a view is always orthographic
+            _activeNumberViewKey = id;
         }
 
         GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    private void ApplyNumberViewOrientation(string id)
+    {
+        var cam = _renderer.Camera;
+        switch (id)
+        {
+            case "1": // Top
+                cam.Elevation = 89.9f;
+                break;
+            case "2": // Front
+                cam.Azimuth   = 270f;
+                cam.Elevation = 0f;
+                break;
+            case "3": // Right
+                cam.Azimuth   = 0f;
+                cam.Elevation = 0f;
+                break;
+            case "4": // 3D framed iso
+                cam.Azimuth   = 45f;
+                cam.Elevation = 30f;
+                FrameAll();
+                break;
+            case "5": // Left
+                cam.Azimuth   = 180f;
+                cam.Elevation = 0f;
+                break;
+        }
+    }
+
+    private bool MatchesNumberViewOrientation(string id)
+    {
+        var cam = _renderer.Camera;
+        static bool NearAz(float a, float b)
+        {
+            float d = MathF.Abs(((a - b) % 360f + 540f) % 360f - 180f);
+            return d < 3f;
+        }
+        static bool NearEl(float a, float b) => MathF.Abs(a - b) < 3f;
+
+        return id switch
+        {
+            "1" => cam.Elevation > 87f, // top pole
+            "2" => NearAz(cam.Azimuth, 270f) && NearEl(cam.Elevation, 0f),
+            "3" => NearAz(cam.Azimuth, 0f)   && NearEl(cam.Elevation, 0f),
+            "4" => NearAz(cam.Azimuth, 45f)  && NearEl(cam.Elevation, 30f),
+            "5" => NearAz(cam.Azimuth, 180f) && NearEl(cam.Elevation, 0f),
+            _   => false,
+        };
+    }
+
+    private void FrameAll()
+    {
+        if (SceneBounds.TryComputeSubtreeWorldAabb(_renderer.SceneRoot, out var min, out var max))
+            FrameCameraToWorldAabb(min, max);
+        else
+            GlCanvas.RequestNextFrameRendering();
     }
 
     private void RunIkForToolDrag()
@@ -6224,10 +12290,22 @@ public partial class ViewportView : UserControl
             };
         }
 
+        // Cut tool: gizmo drives the cut plane, not the mesh transform.
+        if (DataContext is ViewportViewModel { IsCutToolActive: true, CutToolSession: { } cutS })
+        {
+            _gizmoDragPlanePoint = new Vector3(
+                (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
+            _toolIsDragging = false;
+            _transformLinkFollowers = null;
+            SetupCutPlaneGizmoDrag(mx, my, vpW, vpH);
+            return;
+        }
+
         if (_renderer.SelectedNode is not { } node) return;
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal = node.LocalTransform;
         _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
+        BeginTransformLink(node);
         BeginToolIkDrag(node);
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
@@ -6264,8 +12342,48 @@ public partial class ViewportView : UserControl
         }
     }
 
+    private void SetupCutPlaneGizmoDrag(float mx, float my, float vpW, float vpH)
+    {
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        switch (dragOp)
+        {
+            case GizmoMode.Translate:
+            case GizmoMode.Scale:
+            {
+                var camFwd = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+                var n = camFwd - Vector3.Dot(camFwd, _gizmoDragAxisDir) * _gizmoDragAxisDir;
+                _gizmoDragPlaneNormal = n.LengthSquared > 1e-6f ? Vector3.Normalize(n) : Vector3.UnitZ;
+                var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+                float denom = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
+                _gizmoDragStartHit = MathF.Abs(denom) > 1e-5f
+                    ? startRay.At(Vector3.Dot(_gizmoDragPlanePoint - startRay.Origin, _gizmoDragPlaneNormal) / denom)
+                    : _gizmoDragPlanePoint;
+                break;
+            }
+            case GizmoMode.Rotate:
+            {
+                _gizmoDragPlaneNormal = _gizmoDragAxisDir;
+                var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+                float denom = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
+                _gizmoDragStartHit = MathF.Abs(denom) > 1e-5f
+                    ? startRay.At(Vector3.Dot(_gizmoDragPlanePoint - startRay.Origin, _gizmoDragPlaneNormal) / denom)
+                    : _gizmoDragPlanePoint;
+                var rel = _gizmoDragStartHit - _gizmoDragPlanePoint;
+                _gizmoDragStartAngle = AxisAngle(_gizmoDragAxis, rel);
+                break;
+            }
+        }
+    }
+
     private void ProcessGizmoDrag(float mx, float my)
     {
+        // Interactive cut plane: translate/rotate the ghost plane only.
+        if (DataContext is ViewportViewModel { IsCutToolActive: true, CutToolSession: { } cutS })
+        {
+            ProcessCutPlaneGizmoDrag(cutS, mx, my);
+            return;
+        }
+
         if (_renderer.SelectedNode is not { } node) return;
 
         _gizmoDragCurrScreenX = mx;
@@ -6285,6 +12403,137 @@ public partial class ViewportView : UserControl
             case GizmoMode.Translate: ProcessTranslateDrag(node, hitWorld); break;
             case GizmoMode.Scale:     ProcessScaleDrag(node, hitWorld);     break;
             case GizmoMode.Rotate:    ProcessRotateDrag(node, hitWorld);    break;
+        }
+        ApplyTransformLink(node);
+    }
+
+    private void ProcessCutPlaneGizmoDrag(CutToolDialogViewModel session, float mx, float my)
+    {
+        _gizmoDragCurrScreenX = mx;
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        float denom = Vector3.Dot(ray.Direction, _gizmoDragPlaneNormal);
+        if (MathF.Abs(denom) < 1e-5f) return;
+        float t = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
+        var hitWorld = ray.At(t);
+
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        var center = new Vector3((float)session.CenterX, (float)session.CenterY, (float)session.CenterZ);
+        var normal = new Vector3((float)session.NormalX, (float)session.NormalY, (float)session.NormalZ);
+        if (normal.LengthSquared < 1e-10f) normal = Vector3.UnitZ;
+        else normal = Vector3.Normalize(normal);
+
+        if (dragOp == GizmoMode.Rotate)
+        {
+            var rel = hitWorld - _gizmoDragPlanePoint;
+            float angle = AxisAngle(_gizmoDragAxis, rel);
+            float delta = angle - _gizmoDragStartAngle;
+            _gizmoDragStartAngle = angle;
+            // Rotate normal about the dragged axis (world axes).
+            var rot = _gizmoDragAxis switch
+            {
+                GizmoAxis.X => Matrix4.CreateRotationX(delta),
+                GizmoAxis.Y => Matrix4.CreateRotationY(delta),
+                _           => Matrix4.CreateRotationZ(delta),
+            };
+            var n4 = new Vector4(normal, 0f) * rot;
+            normal = Vector3.Normalize(new Vector3(n4.X, n4.Y, n4.Z));
+            session.SetPose(
+                new System.Numerics.Vector3(center.X, center.Y, center.Z),
+                new System.Numerics.Vector3(normal.X, normal.Y, normal.Z));
+        }
+        else
+        {
+            // Translate: project movement onto the active axis.
+            var delta = hitWorld - _gizmoDragStartHit;
+            float along = Vector3.Dot(delta, _gizmoDragAxisDir);
+            center += _gizmoDragAxisDir * along;
+            _gizmoDragStartHit += _gizmoDragAxisDir * along;
+            _gizmoDragPlanePoint = center;
+            session.SetPose(
+                new System.Numerics.Vector3(center.X, center.Y, center.Z),
+                new System.Numerics.Vector3(normal.X, normal.Y, normal.Z));
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    // ── Model ↔ toolpath transform linking ───────────────────────────────────
+    // A model and its toolpath(s) move as one rigid assembly: dragging either one
+    // carries the others along. They are scene-graph siblings with independent
+    // transforms (and different parents on rotary cells), so the link is applied
+    // as a world-space delta re-expressed in each follower's parent frame.
+    private List<(SceneNode Node, Matrix4 InitialWorld, Matrix4 InvParentWorld)>? _transformLinkFollowers;
+    private Matrix4 _transformLinkDraggedInvInitialWorld;
+
+    /// <summary>All nodes rigidly linked to <paramref name="node"/>: for a model, its
+    /// toolpaths; for a toolpath, its model plus sibling toolpaths.</summary>
+    private static List<SceneNode> ResolveLinkedNodes(ViewportViewModel vm, SceneNode node)
+    {
+        var result = new List<SceneNode>();
+        foreach (var item in vm.GetUserModelItems())
+        {
+            var toolpaths = item.Children.Where(c => c.IsToolpath).ToList();
+            bool isModel    = ReferenceEquals(item.Node, node);
+            bool isToolpath = toolpaths.Any(c => ReferenceEquals(c.Node, node));
+            if (!isModel && !isToolpath) continue;
+
+            if (!isModel) result.Add(item.Node);
+            foreach (var c in toolpaths)
+                if (!ReferenceEquals(c.Node, node))
+                    result.Add(c.Node);
+            break;
+        }
+        return result;
+    }
+
+    /// <summary>Captures follower baselines at drag start.</summary>
+    private void BeginTransformLink(SceneNode node)
+    {
+        _transformLinkFollowers = null;
+        if (DataContext is not ViewportViewModel vm) return;
+        var linked = ResolveLinkedNodes(vm, node);
+        if (linked.Count == 0) return;
+
+        Matrix4.Invert(node.WorldTransform, out _transformLinkDraggedInvInitialWorld);
+        var followers = new List<(SceneNode, Matrix4, Matrix4)>(linked.Count);
+        foreach (var ln in linked)
+        {
+            var parentWorld = ln.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(parentWorld, out var invParent);
+            followers.Add((ln, ln.WorldTransform, invParent));
+        }
+        _transformLinkFollowers = followers;
+    }
+
+    /// <summary>Re-poses every follower from the dragged node's current transform.</summary>
+    private void ApplyTransformLink(SceneNode node)
+    {
+        if (_transformLinkFollowers is not { Count: > 0 } followers) return;
+        // Row-vector convention: worldDelta applied on the right.
+        var worldDelta = _transformLinkDraggedInvInitialWorld * node.WorldTransform;
+        foreach (var (fn, initialWorld, invParent) in followers)
+            fn.LocalTransform = initialWorld * worldDelta * invParent;
+    }
+
+    private void EndTransformLink() => _transformLinkFollowers = null;
+
+    /// <summary>One-shot link for typed coordinate edits (no drag session).</summary>
+    private void MirrorTypedTransformDelta(ViewportViewModel vm, SceneNode node, Matrix4 oldLocal)
+    {
+        var linked = ResolveLinkedNodes(vm, node);
+        if (linked.Count == 0) return;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        var oldWorld    = oldLocal * parentWorld;
+        Matrix4.Invert(oldWorld, out var invOldWorld);
+        var worldDelta = invOldWorld * node.WorldTransform;
+
+        foreach (var ln in linked)
+        {
+            var lp = ln.Parent?.WorldTransform ?? Matrix4.Identity;
+            Matrix4.Invert(lp, out var invLp);
+            ln.LocalTransform = ln.WorldTransform * worldDelta * invLp;
         }
     }
 
@@ -6465,6 +12714,77 @@ public partial class ViewportView : UserControl
             $"[scan-merge] {label}: {result.PointCount:N0} points, {result.TriangleCount:N0} triangles");
     }
 
+    /// <summary>Toolpath node used for sequence selection: the node itself when it is a
+    /// toolpath, else the picked model's toolpath child (shift+click on a mesh).</summary>
+    private SceneNode? ResolveSequenceToolpath(ViewportViewModel vm, SceneNode picked)
+    {
+        if (_renderer.IsToolpathNode(picked)) return picked;
+        var item = vm.FindUserMeshOutlinerItem(picked);
+        return item?.Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+    }
+
+    /// <summary>
+    /// Shift+click sequence toggle (viewport pick or outliner row). Selection order
+    /// defines the print order; when starting from a plain single selection, that
+    /// object's toolpath is added first so "select A, shift+click B" yields A → B.
+    /// </summary>
+    private void ToggleSequenceSelection(ViewportViewModel vm, SceneNode picked)
+    {
+        var tp = ResolveSequenceToolpath(vm, picked);
+        if (tp is null) return;
+
+        if (_renderer.SelectedToolpathCount == 0 && _renderer.SelectedNode is { } cur)
+        {
+            var curTp = ResolveSequenceToolpath(vm, cur);
+            if (curTp is not null && curTp != tp)
+                _renderer.ToggleToolpathSelection(curTp);
+        }
+        _renderer.ToggleToolpathSelection(tp);
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Outliner shift+click: standard range extension — selects every user model's
+    /// toolpath from the anchor (current selection / first sequence member) through
+    /// the clicked row, in outliner order. No anchor falls back to a single toggle.
+    /// </summary>
+    private void SequenceRangeSelect(ViewportViewModel vm, OutlinerItemViewModel clicked)
+    {
+        var clickedModel = clicked.IsToolpath ? vm.OwningModelItem(clicked) : clicked;
+        if (clickedModel is null) return;
+
+        var models = vm.GetUserModelItems();
+        int target = models.IndexOf(clickedModel);
+        if (target < 0) return;
+
+        OutlinerItemViewModel? anchorModel = null;
+        if (_renderer.SelectedToolpathCount > 0 &&
+            vm.FindOutlinerItem(_renderer.SelectedToolpaths[0]) is { } firstItem)
+            anchorModel = vm.OwningModelItem(firstItem);
+        else if (_renderer.SelectedNode is { } cur
+                 && vm.FindUserMeshOutlinerItem(cur) is { } curItem)
+            anchorModel = curItem.IsToolpath ? vm.OwningModelItem(curItem) : curItem;
+
+        int a = anchorModel is not null ? models.IndexOf(anchorModel) : -1;
+        if (a < 0)
+        {
+            ToggleSequenceSelection(vm, clickedModel.Node);
+            return;
+        }
+
+        int step = target >= a ? 1 : -1;
+        for (int i = a; i != target + step; i += step)
+        {
+            var tp = models[i].Children.FirstOrDefault(c => c.IsToolpath)?.Node;
+            if (tp is null) continue;
+            if (!_renderer.SelectedToolpaths.Contains(tp))
+                _renderer.ToggleToolpathSelection(tp);
+        }
+        UpdateFocusOverlay();
+        GlCanvas.RequestNextFrameRendering();
+    }
+
     private void MergeToolpaths(ViewportViewModel vm)
     {
         var nodes = _renderer.SelectedToolpaths.ToList();
@@ -6561,9 +12881,11 @@ public partial class ViewportView : UserControl
 
         if (_renderer.SelectedNode == node)
         {
-            vm.ResetScrubIndex(merged.Layers.Sum(l => l.Moves.Count), merged);
+            int newMax = merged.Layers.Sum(l => l.Moves.Count);
+            vm.ResetScrubIndex(newMax, merged, preservePosition: vm.IsScrubSessionActive);
             ApplyToolpathStats(vm, merged);
             ValidateToolpathAsync(node, merged);
+            ScrubIkForNode(node, vm.ToolpathScrubIndex);
         }
         GlCanvas.RequestNextFrameRendering();
     }
@@ -6836,6 +13158,23 @@ public partial class ViewportView : UserControl
         await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
     }
 
+    /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
+    /// the source geometry; returns the path or null when no toolpath is active.</summary>
+    private async Task<string?> ExportKrlToDirectoryAsync(ViewportViewModel vm, string dir, int rev)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || node is null || cell is null || settings is null) return null;
+
+        // Rev in the filename (and therefore the KRL program name) so the operator
+        // can tell revisions apart on the controller, e.g. "… Rev04.src".
+        string path = Path.Combine(dir, $"{RobotKrlPaths.SuggestedFileName(node.Name)} Rev{rev:00}.src");
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+        return path;
+    }
+
     private async Task SendToRobotAsync(ViewportViewModel vm)
     {
         var toolpath = vm.ActiveScrubToolpath;
@@ -6845,33 +13184,50 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        var mvm = topLevel?.DataContext as MainWindowViewModel;
+
+        var cfg = vm.RobotSmb.ActiveConfig;
+        if (cfg is null || !vm.RobotSmb.IsConfigured)
+        {
+            mvm?.Console.LogError(
+                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+            return;
+        }
+
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
-        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
-        if (topLevel is null) return;
-
-        var robotFolder = RobotKrlPaths.UncDFolder(cell);
-        var startFolder = await topLevel.StorageProvider.TryGetFolderFromPathAsync(robotFolder);
-
-        var file = await topLevel.StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
+        // receives the same Rev-numbered filename; temp fallback when the workspace
+        // has never been saved to the share.
+        string srcPath;
+        string fileName;
+        var nasSrc = mvm is not null ? await mvm.ExportSrcToPrintFilesAsync() : null;
+        if (nasSrc is { } n)
         {
-            Title                  = $"Send to Robot — {cell.Name}",
-            DefaultExtension       = "src",
-            SuggestedFileName      = RobotKrlPaths.SuggestedFileName(node.Name),
-            SuggestedStartLocation = startFolder,
-            FileTypeChoices        = [new("KRL Source") { Patterns = ["*.src"] }],
-        });
-        if (file is null) return;
+            srcPath  = n.Path;
+            fileName = Path.GetFileName(n.Path);
+        }
+        else
+        {
+            fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
+            srcPath  = Path.Combine(Path.GetTempPath(), fileName);
+            await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
+            mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
+        }
+        byte[] content = await File.ReadAllBytesAsync(srcPath);
 
-        var path = file.TryGetLocalPath();
-        if (path is null) return;
-        path = SavePathUtil.Normalize(path, "src");
+        mvm?.Console.Log($"[robot] Uploading {fileName} to \\\\{cfg.Host}\\{cfg.Share} ({cell.Name})…");
+        var (ok, message) = await Task.Run(() => RobotSmbUploader.Upload(cfg, fileName, content));
+        if (!ok)
+        {
+            mvm?.Console.LogError($"[robot] Upload failed — {message}");
+            return;
+        }
+        mvm?.Console.Log($"[robot] Sent to {cell.Name}: {message}");
 
-        path = RobotKrlPaths.ToExtendedUncPath(path);
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
-
-        if (topLevel.DataContext is MainWindowViewModel mvm)
-            mvm.Console.Log($"[krl] Sent to {cell.Name} ({cell.BridgeIp}): {path}");
+        if (mvm is not null)
+            await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
     }
 
     private async Task WriteKrlAsync(

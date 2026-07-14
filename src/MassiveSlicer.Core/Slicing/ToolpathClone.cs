@@ -7,14 +7,16 @@ public static class ToolpathClone
 {
     public static Toolpath Copy(Toolpath source)
     {
-        var copy = new Toolpath();
+        var copy = new Toolpath { FormboundStats = source.FormboundStats };
         foreach (var layer in source.Layers)
         {
             var layerCopy = new ToolpathLayer(layer.Index, layer.Z)
             {
-                Height      = layer.Height,
-                PlaneNormal = layer.PlaneNormal,
+                Height       = layer.Height,
+                PlaneNormal  = layer.PlaneNormal,
+                ThermalTempC = layer.ThermalTempC,
             };
+            layerCopy.Contours.AddRange(layer.Contours);
             foreach (var move in layer.Moves)
             {
                 layerCopy.Moves.Add(new ToolpathMove(move.From, move.To, move.Kind)
@@ -31,6 +33,8 @@ public static class ToolpathClone
                     IsMergeConnector  = move.IsMergeConnector,
                     TravelSpeedMps    = move.TravelSpeedMps,
                     PrintSpeedScale   = move.PrintSpeedScale,
+                    IsLightning       = move.IsLightning,
+                    HeightScale       = move.HeightScale,
                 });
             }
             copy.Layers.Add(layerCopy);

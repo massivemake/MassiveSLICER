@@ -100,6 +100,93 @@ public sealed class RightPanelViewModel : ViewModelBase
         set => SetField(ref _stepSliceExpanded, value);
     }
 
+    private bool _stepToolpathExpanded;
+    /// <summary>Step 4 TOOLPATH card expansion (auto-opened when the toolhead is selected).</summary>
+    public bool StepToolpathExpanded
+    {
+        get => _stepToolpathExpanded;
+        set => SetField(ref _stepToolpathExpanded, value);
+    }
+
+    private bool _stepPatternExpanded;
+    /// <summary>Step 3 PATTERN AND TEXTURE card expansion.</summary>
+    public bool StepPatternExpanded
+    {
+        get => _stepPatternExpanded;
+        set => SetField(ref _stepPatternExpanded, value);
+    }
+
+    private bool _stepModificationsExpanded = true;
+    /// <summary>Edit-mode MODIFICATIONS card (visible only while paint edit is open).</summary>
+    public bool StepModificationsExpanded
+    {
+        get => _stepModificationsExpanded;
+        set => SetField(ref _stepModificationsExpanded, value);
+    }
+
+    private bool _stepCreateModificationExpanded = true;
+    /// <summary>Edit-mode CREATE MODIFICATION card (visible only while paint edit is open).</summary>
+    public bool StepCreateModificationExpanded
+    {
+        get => _stepCreateModificationExpanded;
+        set => SetField(ref _stepCreateModificationExpanded, value);
+    }
+
+    /// <summary>
+    /// Entering paint edit collapses workflow cards 1–4 and expands the modification cards.
+    /// Leaving edit hides the modification cards (visibility is bound to IsPaintEditOpen).
+    /// </summary>
+    public void ApplyPaintEditMode(bool editOpen)
+    {
+        if (editOpen)
+        {
+            StepModelExpanded = false;
+            StepSliceExpanded = false;
+            StepPatternExpanded = false;
+            StepToolpathExpanded = false;
+            StepModificationsExpanded = true;
+            StepCreateModificationExpanded = true;
+        }
+    }
+
+    private bool _globalSectionExpanded;
+    /// <summary>GLOBAL section inside step 4 (home position + toolhead orientation).</summary>
+    public bool GlobalSectionExpanded
+    {
+        get => _globalSectionExpanded;
+        set => SetField(ref _globalSectionExpanded, value);
+    }
+
+    private bool _highlightToolheadOrientation;
+    /// <summary>Drives the attention flash around TOOLHEAD GLOBAL ORIENTATION.</summary>
+    public bool HighlightToolheadOrientation
+    {
+        get => _highlightToolheadOrientation;
+        private set => SetField(ref _highlightToolheadOrientation, value);
+    }
+
+    private Avalonia.Threading.DispatcherTimer? _flashTimer;
+
+    /// <summary>Opens step 4 + GLOBAL and flashes a green border around the toolhead
+    /// orientation settings, fading out after a moment (user guidance).</summary>
+    public void FlashToolheadOrientation()
+    {
+        StepToolpathExpanded  = true;
+        GlobalSectionExpanded = true;
+        HighlightToolheadOrientation = true;
+        _flashTimer?.Stop();
+        _flashTimer = new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2.5),
+        };
+        _flashTimer.Tick += (_, _) =>
+        {
+            _flashTimer!.Stop();
+            HighlightToolheadOrientation = false;
+        };
+        _flashTimer.Start();
+    }
+
     /// <summary>Settings for additive (print) slicing operations.</summary>
     public AdditiveSettingsViewModel Additive { get; } = new();
 

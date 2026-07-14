@@ -160,6 +160,82 @@ public sealed class AppPreferences
     public double InfillSpacingMm { get; set; }
     public double InfillAngleDeg { get; set; }
 
+    /// <summary>Lightning Bridge: max unsupported overhang angle (deg).</summary>
+    public double LightningOverhangDeg { get; set; } = 30.0;
+
+    /// <summary>Lightning Bridge: finger root spacing (mm). 0 = auto.</summary>
+    public double LightningBranchSpacingMm { get; set; }
+
+    /// <summary>Lightning Bridge: tip support-pad loop radius (mm). 0 = off.</summary>
+    public double LightningTipLoopRadiusMm { get; set; }
+
+    /// <summary>Lightning Bridge: root fingers on interior boundaries (hidden notches).</summary>
+    public bool LightningAnchorInterior { get; set; } = true;
+
+    /// <summary>Lightning Bridge: root fingers on the outer perimeter.</summary>
+    public bool LightningAnchorExterior { get; set; } = true;
+
+    /// <summary>Lightning Bridge: sacrificial external fins under outward overhangs.</summary>
+    public bool LightningExteriorOverhangs { get; set; }
+
+    /// <summary>Formbound Buttress: horizontal support bar length (mm), single bead.</summary>
+    public double LightningButtressBarMm { get; set; } = 40.0;
+
+    /// <summary>Formbound Buttress: prefer interior mouths over exterior face cuts.</summary>
+    public bool LightningPreferInteriorMouths { get; set; } = true;
+
+    /// <summary>
+    /// Formbound Bridge/Buttress: only grow support under edit-mode Support
+    /// selections (skip automatic overhang detection).
+    /// </summary>
+    public bool LightningTargetSupportSelections { get; set; }
+
+    /// <summary>Multi-Planar guide planes as [heightPct, angleDeg] pairs.</summary>
+    public List<double[]> MultiPlanarPlanes { get; set; } =
+        [[0, 0], [50, 15], [100, 30]];
+
+    /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
+    public bool MultiPlanarAxisX { get; set; }
+
+    /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
+    public bool XBracingEnabled { get; set; }
+
+    /// <summary>Brace depth into the wall from the perimeter (mm).</summary>
+    public double XBracingDepthMm { get; set; } = 50.0;
+
+    /// <summary>Horizontal span of one X cell (mm).</summary>
+    public double XBracingSpanMm { get; set; } = 120.0;
+
+    /// <summary>Brace angle from vertical (deg) — lower is more printable.</summary>
+    public double XBracingAngleDeg { get; set; } = 30.0;
+
+    /// <summary>Partial X cells on left/right wall ends (not top/bottom).</summary>
+    public bool XBracingExtendEdges { get; set; } = true;
+
+    /// <summary>Show the brace plane / cylinder helper in the viewport.</summary>
+    public bool XBracingShowHelper { get; set; } = true;
+
+    /// <summary>X-bracing direction plane tilt about Y (deg).</summary>
+    public double XBracingPlaneTiltY { get; set; }
+
+    /// <summary>X-bracing direction plane tilt about X (deg).</summary>
+    public double XBracingPlaneTiltX { get; set; }
+
+    /// <summary>X-bracing projection: Planar or Cylinder.</summary>
+    public string XBracingProjectionType { get; set; } = "Planar";
+
+    /// <summary>Cylinder projection diameter (mm).</summary>
+    public double XBracingCylinderDiameterMm { get; set; } = 200.0;
+
+    /// <summary>Cylinder axis X on the bed (mm).</summary>
+    public double XBracingCylinderX { get; set; }
+
+    /// <summary>Cylinder axis Y on the bed (mm).</summary>
+    public double XBracingCylinderY { get; set; }
+
+    /// <summary>When true, cylinder braces radiate outward; default is pull toward axis.</summary>
+    public bool XBracingCylinderFlipDirection { get; set; }
+
     /// <summary>Wave effect display: None, Sine, Sawtooth, Triangle.</summary>
     public string WaveEffect { get; set; } = "None";
 
@@ -177,6 +253,27 @@ public sealed class AppPreferences
     public double WaveWavelengthTop { get; set; } = 20.0;
     public double WaveGradientCenter { get; set; } = 0.5;
     public string WaveGradientCurve { get; set; } = "Linear";
+
+    /// <summary>Pattern &amp; Texture card: selected pattern tile (matches Core PatternType).</summary>
+    public string PatternType { get; set; } = "Smooth";
+
+    /// <summary>Pattern distribution: "Wavelength (mm)", "Even (path length)", or "Radial (angle)".</summary>
+    public string PatternMapping { get; set; } = "Wavelength (mm)";
+
+    public double PatternWavelengthMm { get; set; } = 60.0;
+    public double PatternAmplitude { get; set; }
+    public double PatternFrequency { get; set; } = 15.0;
+    public double PatternTwist { get; set; }
+    public double PatternOffset { get; set; }
+    public double PatternFadeIn { get; set; }
+    public double PatternFadeOut { get; set; }
+
+    /// <summary>KRL export: ±°C adjustment applied to all zones ("" = no change).</summary>
+    public string TemperatureOffset { get; set; } = "";
+
+    /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
+    public string ExtrusionSpeedOffset { get; set; } = "";
+
 
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
@@ -214,7 +311,9 @@ public sealed class AppPreferences
     public double WipeLengthMm { get; set; } = 10.0;
     public double WipeRampMm { get; set; } = 5.0;
     public double WipeSpeed { get; set; } = 120.0;
-    public double ExtrusionStartWaitSec { get; set; } = 1.0;
+    /// <summary>Skip wipe when the following travel is shorter than 2× layer height.</summary>
+    public bool WipeSkipShortTravels { get; set; }
+    public double ExtrusionStartWaitSec { get; set; }
     public double ExtrusionResumeWaitSec { get; set; }
 
     public bool ResumeRampEnabled { get; set; }
@@ -230,6 +329,12 @@ public sealed class AppPreferences
 
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
+
+    /// <summary>Toolpath paint marks as [x, y, z, radius, kind, bridgeRole?] where
+    /// kind is (float)PaintMarkKind and optional bridgeRole is (float)PaintBridgeRole
+    /// (SupportBar / ColumnFoot). Bridge marks grow Formbound under painted beads;
+    /// Remove marks delete them.</summary>
+    public List<float[]> PaintMarks { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";
@@ -283,6 +388,28 @@ public sealed class AppPreferences
     /// <summary>Path to the last workspace saved via Save As (.mass). Restored on next launch.</summary>
     public string? LastWorkspacePath { get; set; }
 
+    /// <summary>Most-recently opened/saved workspaces, newest first (File → Open Recent).</summary>
+    public List<string> RecentWorkspaces { get; set; } = [];
+
+    // -- ERP connection (MassiveSLICER ↔ ERP API, /api/slicer/v1) -----------
+
+    /// <summary>Base URL of the ERP slicer API. Defaults to the published production
+    /// ERP (same host the MCP integration targets); ErpClient tolerates the URL with
+    /// or without the /api/slicer/v1 suffix.</summary>
+    public string ErpBaseUrl { get; set; } = "https://lab.massivemake.com/api/slicer/v1";
+
+    /// <summary>Bearer token for the ERP slicer API. Kept in local prefs only —
+    /// scrubbed from workspace (.mass) settings snapshots.</summary>
+    public string? ErpApiToken { get; set; }
+
+    /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.
+    /// Passwords are scrubbed from workspace (.mass) settings snapshots.</summary>
+    public List<RobotSmbConfig> RobotSmb { get; set; } = [];
+
+    /// <summary>Root of the project folders on the UNAS share. ERP-linked workspaces
+    /// save into "&lt;root&gt;/&lt;number&gt; - …/06-Production Documents" automatically.</summary>
+    public string UnasProjectsRoot { get; set; } = "/Volumes/MassiveFILES/Projects";
+
     // ── UI layout state ───────────────────────────────────────────────────
 
     /// <summary>
@@ -291,4 +418,26 @@ public sealed class AppPreferences
     /// <c>PersistExpander</c> attached behaviour.
     /// </summary>
     public Dictionary<string, bool> ExpandedPanels { get; set; } = [];
+}
+
+/// <summary>
+/// SMB connection details for one robot cell's controller share (KRC "D drive").
+/// Keyed by the cell's display name. The password lives in local prefs.json only —
+/// WorkspaceService scrubs it from .mass settings snapshots.
+/// </summary>
+public sealed class RobotSmbConfig
+{
+    public string CellName { get; set; } = "";
+
+    /// <summary>Controller IP (defaults to the cell's bridge IP when first opened).</summary>
+    public string Host { get; set; } = "";
+
+    /// <summary>SMB share name on the controller, e.g. "d" or "D$".</summary>
+    public string Share { get; set; } = "d";
+
+    /// <summary>Folder inside the share to drop programs into (blank = share root).</summary>
+    public string Folder { get; set; } = "";
+
+    public string Username { get; set; } = "";
+    public string? Password { get; set; }
 }

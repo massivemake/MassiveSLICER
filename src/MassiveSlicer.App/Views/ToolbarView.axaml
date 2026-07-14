@@ -1,5 +1,6 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:MassiveSlicer.ViewModels"
              xmlns:ia="https://github.com/projektanker/icons.avalonia"
              x:Class="MassiveSlicer.App.Views.ToolbarView"
              x:CompileBindings="False">
@@ -37,6 +38,19 @@
                         <MenuItem Header="_Open..."
                                   Command="{Binding OpenWorkspaceCommand}"
                                   InputGesture="Ctrl+O"/>
+                        <MenuItem Header="Open _Recent"
+                                  ItemsSource="{Binding RecentWorkspaces}"
+                                  IsEnabled="{Binding HasRecentWorkspaces}">
+                            <MenuItem.ItemContainerTheme>
+                                <ControlTheme TargetType="MenuItem"
+                                              BasedOn="{StaticResource {x:Type MenuItem}}"
+                                              x:DataType="vm:RecentWorkspaceItem">
+                                    <Setter Property="Header" Value="{Binding Label}"/>
+                                    <Setter Property="Command" Value="{Binding OpenCommand}"/>
+                                    <Setter Property="(ToolTip.Tip)" Value="{Binding Path}"/>
+                                </ControlTheme>
+                            </MenuItem.ItemContainerTheme>
+                        </MenuItem>
                         <MenuItem Header="_Save"
                                   Command="{Binding SaveWorkspaceCommand}"
                                   InputGesture="Ctrl+S"/>
@@ -59,6 +73,10 @@
                         <MenuItem Header="_Redo"
                                   Command="{Binding RedoCommand}"
                                   InputGesture="Ctrl+Y"/>
+                        <Separator/>
+                        <MenuItem Header="_Cut Tool..."
+                                  Command="{Binding Viewport.CutToolCommand}"
+                                  ToolTip.Tip="Split selected model into two parts with Formbound tabs and bolt lugs"/>
                     </MenuItem>
                 </Menu>
             </StackPanel>
@@ -90,14 +108,25 @@
                     </Panel>
                 </ToggleButton>
 
-                <Button Grid.Column="1" Classes="ExportCta" Padding="10,4"
-                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
-                        ToolTip.Tip="Export the selected toolpath as a KUKA KRL program (.src)">
-                    <StackPanel Orientation="Horizontal" Spacing="5">
-                        <ia:Icon Value="mdi-robot-industrial" FontSize="12"/>
-                        <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11"/>
-                    </StackPanel>
-                </Button>
+                <!-- Split export: main = SMB upload straight to the cell's controller,
+                     caret = classic save-.src-to-disk dialog -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1">
+                    <Button Classes="ExportCta" Padding="10,4"
+                            CornerRadius="4,0,0,4"
+                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"
+                            ToolTip.Tip="Send the program to the selected cell's robot (D drive over SMB) and report it to the ERP">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
+                            <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="ExportCta" Padding="5,4"
+                            CornerRadius="0,4,4,0"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
+                            ToolTip.Tip="Download the KRL program (.src) to a file instead">
+                        <ia:Icon Value="mdi-chevron-down" FontSize="12" Foreground="#242424"/>
+                    </Button>
+                </StackPanel>
 
                 <Button Grid.Column="3" Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
                     <ia:Icon Value="mdi-console" FontSize="13"/>

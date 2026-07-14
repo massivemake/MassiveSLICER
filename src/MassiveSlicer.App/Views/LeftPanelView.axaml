@@ -14,11 +14,23 @@
     <!-- Individual floating cards — no sidebar container. -->
     <StackPanel>
 
-    <Expander Classes="StepCard" IsExpanded="True">
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="ROBOT CELL" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
+                    <!-- Active cell illustration (assets/images), watermark-style -->
+                    <Border IsVisible="{Binding HasCellIcon}"
+                            Height="120"
+                            Margin="0,0,0,6"
+                            CornerRadius="5"
+                            ClipToBounds="True">
+                        <Image Source="{Binding SelectedCellIcon}"
+                               Stretch="Uniform"
+                               Opacity="0.30"/>
+                    </Border>
                     <ComboBox ItemsSource="{Binding CellNames}"
                               SelectedIndex="{Binding SelectedCellIndex, Mode=TwoWay}"
                               HorizontalAlignment="Stretch"
@@ -37,7 +49,9 @@
                 
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="True">
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="IMPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -66,13 +80,25 @@
     </Expander>
     <Expander Classes="StepCard" IsExpanded="True">
         <Expander.Header>
-            <TextBlock Text="OUTLINER" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="OUTLINER" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+                <ToggleButton Grid.Column="2"
+                              IsChecked="{Binding FilterToolpathsOnly, Mode=TwoWay}"
+                              Padding="5,2" Margin="0,0,6,0" CornerRadius="5"
+                              Background="Transparent"
+                              ToolTip.Tip="Show toolpaths only — a flat list where shift+click range-selects across all toolpaths">
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <ia:Icon Value="mdi-filter-variant" FontSize="12"/>
+                        <TextBlock Text="Toolpaths" FontSize="9" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
+            </Grid>
         </Expander.Header>
         <StackPanel Margin="10,2,10,10">
 <ScrollViewer MaxHeight="420"                               VerticalScrollBarVisibility="Auto"
                               HorizontalScrollBarVisibility="Disabled"
                               Background="Transparent">
-                    <ItemsControl ItemsSource="{Binding OutlinerItems}" Padding="0">
+                    <ItemsControl ItemsSource="{Binding VisibleOutlinerRows}" Padding="0">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <views:OutlinerItemView Margin="6,0,0,0"/>
@@ -84,7 +110,185 @@
                 <!-- Viewport tab -->
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="False">
+
+    <!-- Edit mode: SELECTION below OUTLINER (robot/import/viewport cards hide while open) -->
+    <Expander Classes="StepCard" IsExpanded="True"
+              IsVisible="{Binding DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+        <Expander.Header>
+            <TextBlock Text="SELECTION" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
+        </Expander.Header>
+        <StackPanel Margin="10,4,10,10" Spacing="8">
+
+            <!-- ACTIVE SELECTION -->
+            <Grid ColumnDefinitions="*,Auto,Auto">
+                <TextBlock Grid.Column="0" Text="ACTIVE SELECTION"
+                           FontSize="10" FontWeight="SemiBold" Opacity="0.65"
+                           VerticalAlignment="Center" LetterSpacing="0.5"/>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="6,3" Margin="0,0,4,0"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Clear selection">
+                    <ia:Icon Value="mdi-refresh" FontSize="13"/>
+                </Button>
+                <Button Grid.Column="2" Classes="ToolbarButton" Padding="6,3"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Deselect all">
+                    <ia:Icon Value="mdi-delete-outline" FontSize="13"/>
+                </Button>
+            </Grid>
+
+            <Border Background="{DynamicResource Bg3}" CornerRadius="6" Padding="10,8"
+                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                <StackPanel Spacing="2">
+                    <TextBlock FontSize="12" FontWeight="SemiBold"
+                               Text="{Binding DataContext.Viewport.PaintActiveSelectionSummary,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                    <TextBlock FontSize="10" Opacity="0.6"
+                               Text="{Binding DataContext.Viewport.PaintSelectionLabel,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Selected items list -->
+            <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto"
+                          IsVisible="{Binding DataContext.Viewport.HasPaintSelection,
+                                      RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <ItemsControl ItemsSource="{Binding DataContext.Viewport.PaintSelectionItems,
+                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{DynamicResource Bg3}" CornerRadius="4"
+                                    Padding="8,5" Margin="0,0,0,3"
+                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <StackPanel Grid.Column="0" Spacing="1">
+                                        <TextBlock Text="{Binding Title}" FontSize="11" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding Detail}" FontSize="10" Opacity="0.6"
+                                                   FontFamily="Consolas,Courier New,monospace"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
+                                            Command="{Binding RemoveCommand}"
+                                            ToolTip.Tip="Remove from selection">
+                                        <ia:Icon Value="mdi-close" FontSize="12" Foreground="#ff8a8a"/>
+                                    </Button>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- ADD FILTER -->
+            <TextBlock Text="ADD FILTER" FontSize="10" FontWeight="SemiBold"
+                       Opacity="0.65" LetterSpacing="0.5" Margin="0,4,0,0"/>
+            <TextBlock Text="Tool path type" FontSize="10" Opacity="0.55" Margin="0,2,0,2"/>
+            <ComboBox HorizontalAlignment="Stretch"
+                      ItemsSource="{Binding DataContext.Viewport.PaintPickFilterOptions,
+                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                      SelectedItem="{Binding DataContext.Viewport.PaintPickFilter,
+                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                     Mode=TwoWay}"
+                      ToolTip.Tip="What hover / click / box may pick"/>
+
+            <!-- OPTIONS -->
+            <TextBlock Text="OPTIONS" FontSize="10" FontWeight="SemiBold"
+                       Opacity="0.65" LetterSpacing="0.5" Margin="0,6,0,0"/>
+            <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
+                <TextBlock Grid.Column="0" Text="Mode" FontSize="11" VerticalAlignment="Center"
+                           Opacity="0.75" Margin="0,0,10,0"/>
+                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding DataContext.Viewport.PaintModificationModeOptions,
+                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                          SelectedItem="{Binding DataContext.Viewport.PaintModificationMode,
+                                         RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                         Mode=TwoWay}"
+                          ToolTip.Tip="Support = Formbound marks · Remove = delete selected paths"/>
+            </Grid>
+            <Grid ColumnDefinitions="Auto,*" Margin="0,6,0,0"
+                  IsVisible="{Binding DataContext.Viewport.ShowPaintSupportTypePicker,
+                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <TextBlock Grid.Column="0" Text="Support type" FontSize="11" VerticalAlignment="Center"
+                           Opacity="0.75" Margin="0,0,10,0"/>
+                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                          ItemsSource="{Binding DataContext.Viewport.PaintSupportTypeOptions,
+                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                          SelectedItem="{Binding DataContext.Viewport.PaintSupportType,
+                                         RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                         Mode=TwoWay}"
+                          ToolTip.Tip="Stored per applied area. Formbound Buttress = wall T-column. Formbound Bridge = radial fingers. Tree Support = bed-rooted branching columns."/>
+            </Grid>
+
+            <!-- Support bridge proximity helper (Mode = Support + selection) -->
+            <Border Margin="0,8,0,0" Padding="10,8" CornerRadius="6"
+                    Background="{DynamicResource Bg3}"
+                    BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                    IsVisible="{Binding DataContext.Viewport.ShowSupportBridgeHelper,
+                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
+                <StackPanel Spacing="4">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="BRIDGE ESTIMATE"
+                                   FontSize="10" FontWeight="SemiBold" Opacity="0.65"
+                                   LetterSpacing="0.5" VerticalAlignment="Center"/>
+                        <TextBlock Grid.Column="1"
+                                   FontSize="10" Opacity="0.55" VerticalAlignment="Center"
+                                   Text="{Binding DataContext.Viewport.SupportBridgeOverhangDeg,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                           StringFormat={}{0:0.#}° overhang}"/>
+                    </Grid>
+                    <TextBlock FontSize="12" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimary}"
+                               Text="{Binding DataContext.Viewport.SupportBridgeSummary,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                               TextWrapping="Wrap"
+                               ToolTip.Tip="{Binding DataContext.Viewport.SupportBridgeDetail,
+                                             RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                    <Grid ColumnDefinitions="*,*" Margin="0,2,0,0">
+                        <StackPanel Grid.Column="0" Spacing="1">
+                            <TextBlock Text="Layers needed" FontSize="9" Opacity="0.5"/>
+                            <TextBlock FontSize="14" FontWeight="SemiBold"
+                                       Text="{Binding DataContext.Viewport.SupportBridgeLayers,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Spacing="1">
+                            <TextBlock Text="Max gap / MaxStep" FontSize="9" Opacity="0.5"/>
+                            <TextBlock FontSize="11" FontWeight="SemiBold"
+                                       FontFamily="Consolas,Courier New,monospace"
+                                       Text="{Binding DataContext.Viewport.SupportBridgeGapStepLabel,
+                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock FontSize="10" Opacity="0.5" TextWrapping="Wrap" Margin="0,2,0,0"
+                               Text="{Binding DataContext.Viewport.SupportBridgeDetail,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                </StackPanel>
+            </Border>
+
+            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.5" Margin="0,4,0,0"
+                       Text="Select paths (Shift adds to a group), set Support type, Apply. One group → one MODIFICATIONS card so type/side/delete apply to all members. Reslice force-enables support from marks."/>
+
+            <!-- Actions -->
+            <Grid ColumnDefinitions="*,*" Margin="0,8,0,0" ColumnSpacing="8">
+                <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Content="Close"
+                        Command="{Binding DataContext.Viewport.DeselectPaintCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Clear the current selection"/>
+                <Button Grid.Column="1" Classes="ToolbarButton" Padding="10,6"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                        Content="Apply"
+                        Command="{Binding DataContext.Viewport.ApplyPaintModificationCommand,
+                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                        ToolTip.Tip="Apply Support or Remove marks to the selection"/>
+            </Grid>
+        </StackPanel>
+    </Expander>
+
+    <Expander Classes="StepCard" IsExpanded="False"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="ROBOT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -247,6 +451,56 @@
                                 Classes="PrimaryButton"
                                 HorizontalAlignment="Stretch"
                                 Margin="8,4,8,8"/>
+
+                        <!-- Per-cell SMB credentials for direct Export-to-Robot uploads -->
+                        <Expander Classes="SectionExpander" Header="ROBOT NETWORK" IsExpanded="False" Margin="0,4,0,0">
+                          <StackPanel>
+                            <TextBlock Text="SMB credentials for this cell's controller — Export to Robot writes the .src straight onto the robot's D drive. The password stays in local preferences only."
+                                       TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
+                                       FontSize="11" Margin="8,2,8,6"/>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Robot IP" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="192.168.0.152"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Host,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Share" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="d"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Share,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Folder" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Watermark="(share root)"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Folder,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Username" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Username,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="70,*">
+                                <TextBlock Grid.Column="0" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Padding="4,2" VerticalContentAlignment="Center"
+                                           PasswordChar="•"
+                                           Text="{Binding DataContext.Viewport.RobotSmb.Password,
+                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                            </Grid>
+                            <Button Content="Test Connection"
+                                    Command="{Binding DataContext.Viewport.RobotSmb.TestCommand,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                    Classes="SecondaryButton" HorizontalAlignment="Stretch" Margin="8,6,8,2"/>
+                            <TextBlock Text="{Binding DataContext.Viewport.RobotSmb.Status,
+                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       TextWrapping="Wrap" FontSize="10" Opacity="0.75" Margin="8,2,8,6"/>
+                          </StackPanel>
+                        </Expander>
 
                         <!-- All bed settings (manual adjust + calibration) grouped, collapsed by default. -->
                         <Expander Classes="SectionExpander" Header="BED SETTINGS" IsExpanded="False" Margin="0,4,0,0">
@@ -574,7 +828,9 @@
                 </ScrollViewer>
         </StackPanel>
     </Expander>
-    <Expander Classes="StepCard" IsExpanded="False">
+    <Expander Classes="StepCard" IsExpanded="False"
+              IsVisible="{Binding !DataContext.Viewport.IsPaintEditOpen,
+                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
         <Expander.Header>
             <TextBlock Text="VIEWPORT" FontSize="11" LetterSpacing="1.5" VerticalAlignment="Center"/>
         </Expander.Header>
@@ -934,6 +1190,14 @@
                                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
                             </StackPanel>
                         </Grid>
+                        <CheckBox Content="Shade toolpaths" FontSize="11" Margin="0,0,0,2"
+                                  IsChecked="{Binding DataContext.Viewport.CavityShadeToolpaths,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                  ToolTip.Tip="Apply cavity shading over toolpath lines and the bead surface. Off = toolpaths stay clean while the cell keeps its shading."/>
+                        <CheckBox Content="Shade imported meshes" FontSize="11" Margin="0,0,0,4"
+                                  IsChecked="{Binding DataContext.Viewport.CavityShadeImportedMeshes,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
+                                  ToolTip.Tip="Apply cavity shading on imported models. Cell geometry (print bed, robot) always shades."/>
                         <TextBlock Text="World Space" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,2"/>
                         <Grid Margin="0,0,0,2">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="8"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>

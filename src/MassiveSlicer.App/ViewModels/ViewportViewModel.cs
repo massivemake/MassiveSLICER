@@ -71,6 +71,24 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showBedGrid, value);
     }
 
+    private bool _cavityShadeToolpaths = true;
+
+    /// <summary>Include toolpaths (lines + bead) in cavity shading.</summary>
+    public bool CavityShadeToolpaths
+    {
+        get => _cavityShadeToolpaths;
+        set { if (SetField(ref _cavityShadeToolpaths, value)) NotifyRenderNeeded(); }
+    }
+
+    private bool _cavityShadeImportedMeshes = true;
+
+    /// <summary>Include user-imported meshes in cavity shading (cell geometry always shades).</summary>
+    public bool CavityShadeImportedMeshes
+    {
+        get => _cavityShadeImportedMeshes;
+        set { if (SetField(ref _cavityShadeImportedMeshes, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showTcpFrame = true;
 
     /// <summary>Whether the TCP X/Y/Z orientation axes are visible.</summary>
@@ -274,6 +292,22 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showTravelMoves, value);
     }
 
+    private bool _showWipeMoves = true;
+    /// <summary>Wipe extrusion segments (pre-travel filament wipes) as their own display layer.</summary>
+    public bool ShowWipeMoves
+    {
+        get => _showWipeMoves;
+        set => SetField(ref _showWipeMoves, value);
+    }
+
+    private bool _showLightningMoves = true;
+    /// <summary>Lightning Bridge finger segments (orange display layer).</summary>
+    public bool ShowLightningMoves
+    {
+        get => _showLightningMoves;
+        set => SetField(ref _showLightningMoves, value);
+    }
+
     private bool _showSeam = true;
     public bool ShowSeam
     {
@@ -376,6 +410,12 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Plasticity live-bridge state, surfaced as a collapsible section in the N-key HUD.</summary>
     public PlasticityViewModel Plasticity { get; } = new();
 
+    /// <summary>MassiveBRAIN sync server (Blender/Rhino push bridge), below Plasticity in the N-key HUD.</summary>
+    public MassiveBrainViewModel MassiveBrain { get; } = new();
+
+    /// <summary>ERP project-attachment dock (bottom-left of the viewport).</summary>
+    public ErpViewModel Erp { get; } = new();
+
     /// <summary>
     /// Scene nodes queued for addition to the scene graph. The producer enqueues after
     /// CPU-side loading; the render loop dequeues on the GL thread, uploads PendingMesh
@@ -422,7 +462,25 @@ public sealed class ViewportViewModel : ViewModelBase
     /// The active cell configuration. Set at startup after loading the cell JSON.
     /// The viewport render loop applies bed boundary settings on the GL thread.
     /// </summary>
-    public CellConfig? ActiveCell { get; set; }
+    public CellConfig? ActiveCell
+    {
+        get => _activeCell;
+        set
+        {
+            _activeCell = value;
+            if (value is not null)
+                RobotSmb.SetActiveCell(value.Name, value.BridgeIp);
+        }
+    }
+    private CellConfig? _activeCell;
+
+    /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.</summary>
+    public RobotSmbViewModel RobotSmb { get; } = new();
+
+    /// <summary>Writes the active toolpath's KRL program into the given directory,
+    /// named "&lt;geometry&gt; RevNN.src", and returns the written path — or null when
+    /// no toolpath is active. Wired by the viewport view.</summary>
+    internal Func<string, int, Task<string?>>? ExportKrlToDirectory { get; set; }
 
     /// <summary>File path of the active cell JSON. Set alongside <see cref="ActiveCell"/>.</summary>
     public string? ActiveCellPath { get; set; }
@@ -609,6 +667,27 @@ public sealed class ViewportViewModel : ViewModelBase
     public string MillParamLine2 => IsMillStepActive ? "Spindle · mounted" : "Spindle · on dock";
 
     public LiveIoMonitorViewModel LiveIo { get; } = new();
+
+    /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
+    public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
+
+    private Avalonia.Thickness _bottomDockMargin = new(8, 8, 8, 8);
+    /// <summary>Margin for the bottom corner docks (ERP left, Live I/O right). The overlay
+    /// code-behind lifts them 16px above whichever bottom timeline bar is visible.</summary>
+    public Avalonia.Thickness BottomDockMargin
+    {
+        get => _bottomDockMargin;
+        set => SetField(ref _bottomDockMargin, value);
+    }
+
+    private Avalonia.Thickness _bottomRightLegendMargin = new(8, 8, 8, 8);
+    /// <summary>Margin for bottom-right legends (bead overhang) — code-behind stacks them
+    /// above the Live I/O dock, which itself floats above the timeline bars.</summary>
+    public Avalonia.Thickness BottomRightLegendMargin
+    {
+        get => _bottomRightLegendMargin;
+        set => SetField(ref _bottomRightLegendMargin, value);
+    }
 
     /// <summary>Viewport inset for workflow bar — 20px sides/bottom; lifts above scrubber when a toolpath is selected.</summary>
     public Avalonia.Thickness Lfam3WorkflowMargin
@@ -914,6 +993,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
         KrlToolChangeSequenceParser.KrcRootOverride = ActiveCell?.KrcRoot;
         OnPropertyChanged(nameof(ShowLfam3ToolPicker));
+        OnPropertyChanged(nameof(ShowStandaloneLiveIo));
         if (ShowLfam3ToolPicker)
             IsLfam3WorkflowExpanded = true;
         else
@@ -1250,6 +1330,9 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
     internal UndoRedoService? UndoRedo { get; set; }
 
+    /// <summary>Marks the open .mass as having unsaved changes (status-bar yellow dot).</summary>
+    internal Action? MarkWorkspaceDirty { get; set; }
+
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
 
@@ -1272,6 +1355,1179 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _hasSelection;
         set => SetField(ref _hasSelection, value);
     }
+
+    private bool _showMultiPlanarPlanes = true;
+    /// <summary>Viewport toggle: show/hide the Multi-Planar guide plane quads.</summary>
+    public bool ShowMultiPlanarPlanes
+    {
+        get => _showMultiPlanarPlanes;
+        set { if (SetField(ref _showMultiPlanarPlanes, value)) NotifyRenderNeeded(); }
+    }
+
+    // ── Toolpath edit menu: paint brushes + line marking (preview view) ────────
+
+    private bool _isPaintEditOpen;
+    /// <summary>Expands the Edit toolbar in the Preview view. Realtime slicing is
+    /// PAUSED while the menu is open (edits accumulate); collapsing the menu (or
+    /// the Reslice button) fires the deferred re-slice.</summary>
+    public bool IsPaintEditOpen
+    {
+        get => _isPaintEditOpen;
+        set
+        {
+            if (!SetField(ref _isPaintEditOpen, value)) return;
+            if (!value)
+            {
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+                PaintBoxSelectActive = false;
+                PaintHandActive = false;
+                PaintBridgePickModificationId = null;
+                // Slice plane viewer is edit-mode only.
+                if (_isSlicePlaneViewerActive)
+                    IsSlicePlaneViewerActive = false;
+                // Restore normal toolpath display when leaving edit.
+                ToolpathLineOpacity = 1f;
+            }
+            else if (_viewMode == "Preview")
+            {
+                // Default to path-select with an unrestricted filter so click-to-select
+                // works immediately (Formbound/Perimeter filters often look "broken"
+                // when the user is aiming at wall paths).
+                PaintBoxSelectActive = false;
+                PaintHandActive = false;
+                if (!string.Equals(PaintPickFilter, "All", StringComparison.OrdinalIgnoreCase))
+                    PaintPickFilter = "All";
+                // Default support type for edit Apply only — do NOT overwrite the
+                // saved FILL PATTERN dropdown (that is restored from workspace prefs).
+                if (string.IsNullOrWhiteSpace(PaintSupportType))
+                    PaintSupportType = "Formbound Buttress";
+                // Path / Point granularity owns the display hierarchy while editing.
+                ApplyPaintEditDisplayMode();
+                // Arm the scrub/layer window so the LAYERS dual-slider has a real
+                // Maximum (otherwise it sticks at the empty 1–2 default).
+                OnEnsureEditScrub?.Invoke();
+                // Seed CREATE MODIFICATION catalog (search + Offset path, …).
+                EnsureCreateModificationCatalog();
+                // Layers-triple (2D slice plane) is on by default in edit mode.
+                // Session restore may override this immediately after.
+                IsSlicePlaneViewerActive = true;
+            }
+            RealtimeSlicingPaused = value;   // collapse → deferred re-slice fires
+            // Edit mode borrows the Toolpath view's display profile (dark,
+            // line-oriented); leaving restores the active view's own profile.
+            ApplyViewDisplayProfile();
+            OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+            OnPaintEditModeChanged?.Invoke(value);
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Notifies the right panel to swap workflow cards for edit-mode cards.</summary>
+    internal Action<bool>? OnPaintEditModeChanged { get; set; }
+
+    /// <summary>
+    /// Viewport arms the scrub session / layer ends for the edit-mode LAYERS slider.
+    /// Without this the dual-slider stays at the empty 1–2 default when no toolpath
+    /// was previously selected.
+    /// </summary>
+    internal Action? OnEnsureEditScrub { get; set; }
+
+    /// <summary>Closes paint edit mode (EXIT EDIT MODE floating card).</summary>
+    public RelayCommand ExitPaintEditCommand => _exitPaintEdit ??= new RelayCommand(() =>
+        IsPaintEditOpen = false);
+    private RelayCommand? _exitPaintEdit;
+
+    // ── 2D Slice Plane Viewer (edit mode only) ───────────────────────────────
+
+    private bool _isSlicePlaneViewerActive;
+
+    /// <summary>
+    /// Top-down orthographic slice context: current layer solid, one layer below
+    /// transparent, one layer above transparent + dashed. Only meaningful while
+    /// <see cref="IsPaintEditOpen"/>; the overlay button is hidden outside edit mode.
+    /// </summary>
+    public bool IsSlicePlaneViewerActive
+    {
+        get => _isSlicePlaneViewerActive;
+        set
+        {
+            // Outside edit mode the viewer cannot stay on.
+            if (value && !IsPaintEditOpen) value = false;
+            if (!SetField(ref _isSlicePlaneViewerActive, value)) return;
+            OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+            RefreshSlicePlaneStats();
+            OnSlicePlaneViewerChanged?.Invoke(value);
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>Camera lock / restore when the 2D slice plane viewer toggles.</summary>
+    internal Action<bool>? OnSlicePlaneViewerChanged { get; set; }
+
+    /// <summary>0-based layer index at the current scrub high handle.</summary>
+    internal int CurrentScrubLayerIndex => GetScrubLayerIndex();
+
+    /// <summary>Exclusive move-count ends per layer (prefix sums), or null.</summary>
+    internal int[]? ScrubLayerEnds => _scrubLayerEnds;
+
+    // ── 2D Slice Plane Viewer HUD stats ──────────────────────────────────────
+
+    /// <summary>True when the top-right slice stats panel should show.</summary>
+    public bool ShowSlicePlaneStatsOverlay =>
+        IsSlicePlaneViewerActive && IsPaintEditOpen && ActiveScrubToolpath is not null;
+
+    private string _slicePlaneStatsHeader = "";
+    public string SlicePlaneStatsHeader
+    {
+        get => _slicePlaneStatsHeader;
+        private set => SetField(ref _slicePlaneStatsHeader, value);
+    }
+
+    private string _slicePlaneStatsBody = "";
+    public string SlicePlaneStatsBody
+    {
+        get => _slicePlaneStatsBody;
+        private set => SetField(ref _slicePlaneStatsBody, value);
+    }
+
+    private string _slicePlaneStatsBelow = "";
+    public string SlicePlaneStatsBelow
+    {
+        get => _slicePlaneStatsBelow;
+        private set
+        {
+            if (!SetField(ref _slicePlaneStatsBelow, value)) return;
+            OnPropertyChanged(nameof(HasSlicePlaneStatsBelow));
+        }
+    }
+
+    public bool HasSlicePlaneStatsBelow => !string.IsNullOrEmpty(_slicePlaneStatsBelow);
+
+    /// <summary>
+    /// Rebuilds the 2D slice HUD from the active scrub toolpath and current layer.
+    /// Call when the slice viewer toggles, scrub layer changes, or toolpath updates.
+    /// </summary>
+    internal void RefreshSlicePlaneStats()
+    {
+        OnPropertyChanged(nameof(ShowSlicePlaneStatsOverlay));
+        if (!ShowSlicePlaneStatsOverlay || ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            SlicePlaneStatsHeader = "";
+            SlicePlaneStatsBody = "";
+            SlicePlaneStatsBelow = "";
+            return;
+        }
+
+        float bead = (float)(AdditiveSettings?.BeadWidth ?? 6.0);
+        float height = (float)(AdditiveSettings?.LayerHeight ?? 3.0);
+        if (bead < 0.1f) bead = 6f;
+        if (height < 0.05f) height = 3f;
+        var rates = new MassiveSlicer.Core.Slicing.ToolpathMotionRates(
+            AdditiveSettings?.PrintSpeed ?? 60,
+            AdditiveSettings?.TravelSpeed ?? 600,
+            AdditiveSettings?.WipeSpeed ?? 60);
+
+        int cur = Math.Clamp(CurrentScrubLayerIndex, 0, tp.Layers.Count - 1);
+        var s = MassiveSlicer.Core.Slicing.SliceLayerAnalyzer.Analyze(
+            tp, cur, bead, height, rates);
+
+        SlicePlaneStatsHeader =
+            $"SLICE  L{s.LayerNumber} / {tp.Layers.Count}    Z {s.Z:0.#} mm";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Path length     {FmtLen(s.ExtrudeLengthMm)}");
+        sb.AppendLine($"  Travel        {FmtLen(s.TravelLengthMm)}");
+        if (s.LightningLengthMm > 0.5)
+            sb.AppendLine($"  Formbound     {FmtLen(s.LightningLengthMm)}  ({s.FormboundPercent:0.#}%)");
+        if (s.WipeLengthMm > 0.5)
+            sb.AppendLine($"  Wipe          {FmtLen(s.WipeLengthMm)}");
+        sb.AppendLine($"Islands         {s.Islands}   ({s.ClosedLoops} closed · {s.OpenPaths} open)");
+        sb.AppendLine($"Moves           {s.ExtrudeMoves:N0} extrude · {s.TravelMoves:N0} travel");
+        if (cur > 0)
+            sb.AppendLine($"Overhang        {s.OverhangPercent:0.#}%   ({FmtLen(s.OverhangLengthMm)})");
+        else
+            sb.AppendLine("Overhang        —  (first layer)");
+        sb.AppendLine($"Est. time       {MassiveSlicer.Core.Slicing.ToolpathStatistics.FormatDuration(s.EstTimeSeconds)}");
+        sb.AppendLine($"Volume          {FmtVol(s.VolumeMm3)}");
+        if (s.BoundsWidthMm > 0 || s.BoundsDepthMm > 0)
+            sb.AppendLine($"Bounds          {s.BoundsWidthMm:0.#} × {s.BoundsDepthMm:0.#} mm");
+        if (s.BoundsHeightSpanMm > 0.5f)
+            sb.AppendLine($"Z span          {s.BoundsHeightSpanMm:0.#} mm");
+        SlicePlaneStatsBody = sb.ToString().TrimEnd();
+
+        // Compact readout for the three layers below (context in the 2D view).
+        var below = new System.Text.StringBuilder();
+        for (int d = 1; d <= 3; d++)
+        {
+            int li = cur - d;
+            if (li < 0) break;
+            var b = MassiveSlicer.Core.Slicing.SliceLayerAnalyzer.Analyze(
+                tp, li, bead, height, rates);
+            string oh = li > 0 ? $"{b.OverhangPercent:0.#}% OH" : "base";
+            below.AppendLine(
+                $"L{b.LayerNumber}  {FmtLen(b.ExtrudeLengthMm)}  ·  {b.Islands} isl  ·  {oh}");
+        }
+        SlicePlaneStatsBelow = below.Length > 0
+            ? "BELOW\n" + below.ToString().TrimEnd()
+            : "";
+    }
+
+    private static string FmtLen(double mm)
+        => MassiveSlicer.Core.Slicing.ToolpathStatistics.FormatCutLength(mm);
+
+    private static string FmtVol(double mm3)
+        => mm3 >= 1_000_000 ? $"{mm3 / 1_000_000.0:0.###} L"
+            : mm3 >= 1000 ? $"{mm3 / 1000.0:0.#} cm³"
+            : $"{mm3:0} mm³";
+
+    /// <summary>
+    /// Path granularity → centre-line only (no fat beads) unless
+    /// <see cref="PaintShowBeads"/> is on.
+    /// Point granularity → every bead midpoint as a point; lines grayed + thin.
+    /// (SceneRenderer.ShowAllPathPoints is set from the viewport each frame.)
+    /// </summary>
+    internal void ApplyPaintEditDisplayMode()
+    {
+        if (!IsPaintEditOpen || _viewMode != "Preview") return;
+        if (PaintPointGranularityActive)
+        {
+            // Points hierarchy: all bead points; centre-lines stay readable (thicker in
+            // the renderer when ShowAllPathPoints is on).
+            ShowBead = PaintShowBeads;
+            ShowExtrusionMoves = true;
+            ShowTravelMoves = false;
+            ShowWipeMoves = false;
+            // Seam-only overlay off — ShowAllPathPoints draws every extrude midpoint.
+            ShowSeam = false;
+            ToolpathLineOpacity = 0.65f;
+        }
+        else
+        {
+            // Line / path view: clean centre-lines only (beads optional via toggle).
+            ShowBead = PaintShowBeads;
+            ShowExtrusionMoves = true;
+            ShowTravelMoves = false;
+            ShowWipeMoves = false;
+            ShowSeam = false;
+            ToolpathLineOpacity = 1f;
+        }
+    }
+
+    // ── Edit-mode display toggles (eye menu: markers / beads / seams / …) ────
+
+    private bool _showPaintMarkers = true;
+    /// <summary>When true, Support/Remove paint mark spheres are drawn in the viewport.</summary>
+    public bool ShowPaintMarkers
+    {
+        get => _showPaintMarkers;
+        set
+        {
+            if (!SetField(ref _showPaintMarkers, value)) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _paintShowBeads;
+    /// <summary>
+    /// When true in edit mode, draw the full bead mesh on top of centre-lines.
+    /// Default off so path/point selection stays readable. Controlled from the
+    /// edit toolbar eye / Visibility menu.
+    /// </summary>
+    public bool PaintShowBeads
+    {
+        get => _paintShowBeads;
+        set
+        {
+            if (!SetField(ref _paintShowBeads, value)) return;
+            if (IsPaintEditOpen)
+            {
+                ShowBead = value;
+                NotifyRenderNeeded();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Multi-Planar "Planes" toggle — hidden in toolpath Edit mode so it does not
+    /// crowd the paint / line-select HUD.
+    /// </summary>
+    public bool ShowMultiPlanarPlanesButton =>
+        !IsPaintEditOpen && (AdditiveSettings?.ShowMultiPlanarControls ?? false);
+
+    private void SetPaintTool(ref bool field, bool value, [System.Runtime.CompilerServices.CallerMemberName] string? name = null)
+    {
+        if (field == value) return;
+        // Tools are mutually exclusive — turn the others off first.
+        if (value)
+        {
+            _paintBridgeActive = false;
+            _paintRemoveActive = false;
+            _paintLineBridgeActive = false;
+            _paintLineRemoveActive = false;
+            OnPropertyChanged(nameof(PaintBridgeActive));
+            OnPropertyChanged(nameof(PaintRemoveActive));
+            OnPropertyChanged(nameof(PaintLineBridgeActive));
+            OnPropertyChanged(nameof(PaintLineRemoveActive));
+        }
+        field = value;
+        OnPropertyChanged(name);
+        OnPropertyChanged(nameof(PaintBrushActive));
+        OnPropertyChanged(nameof(PaintLineToolActive));
+        OnPropertyChanged(nameof(PaintPathSelectActive));
+        NotifyRenderNeeded();
+    }
+
+    private bool _paintBridgeActive;
+    /// <summary>Brush: paint Bridge marks (fingers grow under painted beads).</summary>
+    public bool PaintBridgeActive
+    {
+        get => _paintBridgeActive;
+        set => SetPaintTool(ref _paintBridgeActive, value);
+    }
+
+    private bool _paintRemoveActive;
+    /// <summary>Brush: paint Remove marks (painted beads are deleted).</summary>
+    public bool PaintRemoveActive
+    {
+        get => _paintRemoveActive;
+        set => SetPaintTool(ref _paintRemoveActive, value);
+    }
+
+    private bool _paintLineBridgeActive;
+    /// <summary>Line tool: click one bead line to mark the whole contour as needing
+    /// support (Bridge marks along its length).</summary>
+    public bool PaintLineBridgeActive
+    {
+        get => _paintLineBridgeActive;
+        set => SetPaintTool(ref _paintLineBridgeActive, value);
+    }
+
+    private bool _paintLineRemoveActive;
+    /// <summary>Line tool: click one bead line to remove the whole contour from the
+    /// toolpath (Remove marks along its length).</summary>
+    public bool PaintLineRemoveActive
+    {
+        get => _paintLineRemoveActive;
+        set => SetPaintTool(ref _paintLineRemoveActive, value);
+    }
+
+    /// <summary>True while any paint tool is selected (camera drag disabled).</summary>
+    public bool PaintBrushActive =>
+        PaintBridgeActive || PaintRemoveActive || PaintLineBridgeActive || PaintLineRemoveActive;
+
+    /// <summary>True while a click-a-line tool is selected (click picks a contour).</summary>
+    public bool PaintLineToolActive => PaintLineBridgeActive || PaintLineRemoveActive;
+
+    private double _paintBrushRadiusMm = 15.0;
+    /// <summary>Brush radius in world millimetres. Right-click-drag horizontally
+    /// while a brush is active to resize; Alt+paint erases marks.</summary>
+    public double PaintBrushRadiusMm
+    {
+        get => _paintBrushRadiusMm;
+        set => SetField(ref _paintBrushRadiusMm, Math.Clamp(value, 3.0, 200.0));
+    }
+
+    // ── Edit-mode selection toolbar ────────────────────────────────────────────
+
+    private bool _paintHandActive;
+    /// <summary>Hand/navigate tool: clicks do nothing, camera drags as normal.</summary>
+    public bool PaintHandActive
+    {
+        get => _paintHandActive;
+        set
+        {
+            if (!SetField(ref _paintHandActive, value)) return;
+            if (value)
+            {
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+                PaintBoxSelectActive = false;
+            }
+            OnPropertyChanged(nameof(PaintPathSelectActive));
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _paintBoxSelectActive;
+    /// <summary>
+    /// Region select tool armed (square marquee or lasso — see
+    /// <see cref="PaintRegionSelectMode"/>). Long-press the toolbar icon to switch mode.
+    /// </summary>
+    public bool PaintBoxSelectActive
+    {
+        get => _paintBoxSelectActive;
+        set
+        {
+            if (!SetField(ref _paintBoxSelectActive, value)) return;
+            if (value)
+            {
+                PaintHandActive = false;
+                PaintBridgeActive = false;
+                PaintRemoveActive = false;
+                PaintLineBridgeActive = false;
+                PaintLineRemoveActive = false;
+            }
+            OnPropertyChanged(nameof(PaintPathSelectActive));
+            OnPropertyChanged(nameof(PaintRegionSelectIcon));
+            OnPropertyChanged(nameof(PaintRegionSelectToolTip));
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>"Square" (marquee) or "Lasso". Toggled by long-pressing the region-select icon.</summary>
+    private string _paintRegionSelectMode = "Square";
+    public string PaintRegionSelectMode
+    {
+        get => _paintRegionSelectMode;
+        set
+        {
+            if (!SetField(ref _paintRegionSelectMode, value is "Lasso" ? "Lasso" : "Square")) return;
+            OnPropertyChanged(nameof(PaintRegionSelectIsLasso));
+            OnPropertyChanged(nameof(PaintRegionSelectIcon));
+            OnPropertyChanged(nameof(PaintRegionSelectToolTip));
+            NotifyRenderNeeded();
+        }
+    }
+
+    public bool PaintRegionSelectIsLasso => PaintRegionSelectMode == "Lasso";
+    public bool PaintRegionSelectIsSquare => !PaintRegionSelectIsLasso;
+
+    public string PaintRegionSelectIcon =>
+        PaintRegionSelectIsLasso ? "mdi-lasso" : "mdi-selection";
+
+    public string PaintRegionSelectToolTip =>
+        PaintRegionSelectIsLasso
+            ? "Lasso select — drag a freehand loop. Long-press icon for square marquee."
+            : "Square select — drag a rectangle. Long-press icon for lasso.";
+
+    /// <summary>Cycle Square ↔ Lasso (long-press on the region-select button).</summary>
+    public void TogglePaintRegionSelectMode()
+    {
+        PaintRegionSelectMode = PaintRegionSelectIsLasso ? "Square" : "Lasso";
+        // Arm the tool if it was off so the mode change is immediately usable.
+        if (!PaintBoxSelectActive)
+            PaintBoxSelectActive = true;
+    }
+
+    /// <summary>Default click-a-path select mode (no other tool armed).</summary>
+    public bool PaintPathSelectActive =>
+        IsPaintEditOpen && !PaintHandActive && !PaintBoxSelectActive && !PaintBrushActive;
+
+    public RelayCommand SelectPathToolCommand => _selectPathTool ??= new RelayCommand(() =>
+    {
+        PaintHandActive = false;
+        PaintBoxSelectActive = false;
+        PaintBridgeActive = false;
+        PaintRemoveActive = false;
+        PaintLineBridgeActive = false;
+        PaintLineRemoveActive = false;
+        OnPropertyChanged(nameof(PaintPathSelectActive));
+    });
+    private RelayCommand? _selectPathTool;
+
+    private int _paintSelectionCount;
+    /// <summary>Paths in the current edit selection (set by the viewport).</summary>
+    public int PaintSelectionCount
+    {
+        get => _paintSelectionCount;
+        set
+        {
+            if (SetField(ref _paintSelectionCount, value))
+            {
+                OnPropertyChanged(nameof(PaintSelectionLabel));
+                OnPropertyChanged(nameof(HasPaintSelection));
+            }
+        }
+    }
+
+    public bool HasPaintSelection => PaintSelectionCount > 0;
+
+    public string PaintSelectionLabel
+    {
+        get
+        {
+            if (PaintSelectionCount == 0) return "0 paths selected";
+            if (PaintPointGranularityActive)
+                return PaintSelectionCount == 1
+                    ? "1 point selected"
+                    : $"{PaintSelectionCount} points selected";
+            return PaintSelectionCount == 1
+                ? "1 path selected"
+                : $"{PaintSelectionCount} paths selected";
+        }
+    }
+
+    /// <summary>Rows for the selection popup (layer / span list with per-item remove).</summary>
+    public ObservableCollection<PaintSelectionListItem> PaintSelectionItems { get; } = [];
+
+    /// <summary>Applied paint modifications (Support/Remove) — reselectable from MODIFICATIONS.</summary>
+    public ObservableCollection<PaintModificationListItem> PaintModifications { get; } = [];
+
+    public bool HasPaintModifications => PaintModifications.Count > 0;
+
+    public string PaintModificationsSummary =>
+        PaintModifications.Count == 0
+            ? "No modifications yet"
+            : $"{PaintModifications.Count} modification(s)";
+
+    /// <summary>
+    /// When set, the next viewport path/point pick attaches as the bridge target
+    /// for this modification (multi-layer Formbound scaffold).
+    /// </summary>
+    private Guid? _paintBridgePickModificationId;
+    public Guid? PaintBridgePickModificationId
+    {
+        get => _paintBridgePickModificationId;
+        set
+        {
+            if (!SetField(ref _paintBridgePickModificationId, value)) return;
+            OnPropertyChanged(nameof(IsPaintBridgePicking));
+            OnPropertyChanged(nameof(PaintBridgePickHint));
+            // Refresh per-row picking flags without rebuilding the list.
+            foreach (var item in PaintModifications)
+                item.IsPickingBridgeTarget = value.HasValue && item.Id == value.Value;
+        }
+    }
+
+    public bool IsPaintBridgePicking => PaintBridgePickModificationId.HasValue;
+
+    public string PaintBridgePickHint =>
+        IsPaintBridgePicking
+            ? "Click a path or point on another layer to bridge — Escape to cancel."
+            : "";
+
+    /// <summary>Viewport reselects / deletes a stored modification by id.</summary>
+    internal Action<Guid>? OnPaintModificationSelectRequested;
+    internal Action<Guid>? OnPaintModificationDeleteRequested;
+    internal Action? OnPaintModificationsClearRequested;
+    internal Action<Guid>? OnPaintModificationPickBridgeRequested;
+    internal Action<Guid>? OnPaintModificationClearBridgeRequested;
+    internal Action<Guid>? OnPaintModificationToggleExpandRequested;
+    internal Action<Guid, string>? OnPaintModificationSupportTypeChanged;
+    internal Action<Guid, string>? OnPaintModificationSupportSideChanged;
+
+    public RelayCommand ClearPaintModificationsCommand => _clearPaintMods ??= new RelayCommand(() =>
+        OnPaintModificationsClearRequested?.Invoke());
+    private RelayCommand? _clearPaintMods;
+
+    /// <summary>Row data for one applied modification (viewport → panel).</summary>
+    internal readonly record struct PaintModRow(
+        Guid Id,
+        bool IsSupport,
+        bool IsOffset,
+        string Title,
+        string Detail,
+        string AnchorSummary,
+        bool HasBridgeTarget,
+        string BridgeTargetSummary,
+        int ScaffoldLayerCount,
+        int ScaffoldMarkCount,
+        bool KeepExpanded,
+        string SupportType,
+        string SupportSide);
+
+    internal void SetPaintModifications(IReadOnlyList<PaintModRow> rows)
+    {
+        var expandedIds = PaintModifications
+            .Where(m => m.IsExpanded)
+            .Select(m => m.Id)
+            .ToHashSet();
+        var pickId = PaintBridgePickModificationId;
+
+        PaintModifications.Clear();
+        foreach (var r in rows)
+        {
+            var id = r.Id;
+            var item = new PaintModificationListItem
+            {
+                Id = id,
+                IsSupport = r.IsSupport,
+                IsOffset = r.IsOffset,
+                KindLabel = r.IsOffset ? "Offset" : r.IsSupport ? "Support" : "Remove",
+                Title = r.Title,
+                Detail = r.Detail,
+                AnchorSummary = r.AnchorSummary,
+                HasBridgeTarget = r.HasBridgeTarget,
+                BridgeTargetSummary = r.BridgeTargetSummary,
+                ScaffoldLayerCount = r.ScaffoldLayerCount,
+                ScaffoldMarkCount = r.ScaffoldMarkCount,
+                IsExpanded = r.KeepExpanded || expandedIds.Contains(id),
+                IsPickingBridgeTarget = pickId.HasValue && pickId.Value == id,
+                ToggleExpandCommand = new RelayCommand(() =>
+                    OnPaintModificationToggleExpandRequested?.Invoke(id)),
+                SelectCommand = new RelayCommand(() => OnPaintModificationSelectRequested?.Invoke(id)),
+                DeleteCommand = new RelayCommand(() => OnPaintModificationDeleteRequested?.Invoke(id)),
+                PickBridgeTargetCommand = new RelayCommand(() =>
+                    OnPaintModificationPickBridgeRequested?.Invoke(id)),
+                ClearBridgeTargetCommand = new RelayCommand(() =>
+                    OnPaintModificationClearBridgeRequested?.Invoke(id)),
+            };
+            // Init type/side first, then wire change handlers (avoids apply-on-rebuild).
+            item.SupportType = string.IsNullOrWhiteSpace(r.SupportType)
+                ? "Formbound Buttress"
+                : r.SupportType;
+            item.SupportSide = string.IsNullOrWhiteSpace(r.SupportSide)
+                ? Core.Models.PaintSupportSideUtil.LabelInside
+                : r.SupportSide;
+            item.SupportTypeChanged = (modId, type) =>
+                OnPaintModificationSupportTypeChanged?.Invoke(modId, type);
+            item.SupportSideChanged = (modId, side) =>
+                OnPaintModificationSupportSideChanged?.Invoke(modId, side);
+            PaintModifications.Add(item);
+        }
+        OnPropertyChanged(nameof(HasPaintModifications));
+        OnPropertyChanged(nameof(PaintModificationsSummary));
+    }
+
+    /// <summary>
+    /// Replaces the popup list from the viewport's live selection. Call after any
+    /// paint select / deselect / box-select change. Wires each row's RemoveCommand.
+    /// </summary>
+    internal void SetPaintSelectionItems(IReadOnlyList<(int LayerIndex, int MoveStart, int MoveCount, float LayerZ, bool IsPoint, string Title, string Detail)> rows)
+    {
+        PaintSelectionItems.Clear();
+        foreach (var r in rows)
+        {
+            int li = r.LayerIndex, ms = r.MoveStart, mc = r.MoveCount;
+            PaintSelectionItems.Add(new PaintSelectionListItem
+            {
+                LayerIndex = li,
+                MoveStart  = ms,
+                MoveCount  = mc,
+                LayerZ     = r.LayerZ,
+                IsPoint    = r.IsPoint,
+                Title      = r.Title,
+                Detail     = r.Detail,
+                RemoveCommand = new RelayCommand(() =>
+                    OnPaintDeselectItemRequested?.Invoke(li, ms, mc)),
+            });
+        }
+        PaintSelectionCount = rows.Count;
+        OnPropertyChanged(nameof(PaintSelectionLabel));
+        OnPropertyChanged(nameof(HasPaintSelection));
+        OnPropertyChanged(nameof(PaintActiveSelectionSummary));
+        ApplyPaintModificationCommand.RaiseCanExecuteChanged();
+        ApplyCreateModificationCommand.RaiseCanExecuteChanged();
+        RefreshSupportBridgeEstimate();
+    }
+
+    /// <summary>Viewport removes one entry identified by layer + span.</summary>
+    internal Action<int, int, int>? OnPaintDeselectItemRequested;
+
+    // ── Support-bridge proximity helper (SELECTION sidebar, Mode = Support) ──
+
+    private string _supportBridgeSummary = "";
+    /// <summary>Short line: layers needed / gap / already supported.</summary>
+    public string SupportBridgeSummary
+    {
+        get => _supportBridgeSummary;
+        private set => SetField(ref _supportBridgeSummary, value);
+    }
+
+    private string _supportBridgeDetail = "";
+    /// <summary>Longer MaxStep / angle / sample explanation.</summary>
+    public string SupportBridgeDetail
+    {
+        get => _supportBridgeDetail;
+        private set => SetField(ref _supportBridgeDetail, value);
+    }
+
+    private int _supportBridgeLayers;
+    public int SupportBridgeLayers
+    {
+        get => _supportBridgeLayers;
+        private set => SetField(ref _supportBridgeLayers, value);
+    }
+
+    private float _supportBridgeGapMm;
+    public float SupportBridgeGapMm
+    {
+        get => _supportBridgeGapMm;
+        private set => SetField(ref _supportBridgeGapMm, value);
+    }
+
+    private float _supportBridgeMaxStepMm;
+    public float SupportBridgeMaxStepMm
+    {
+        get => _supportBridgeMaxStepMm;
+        private set => SetField(ref _supportBridgeMaxStepMm, value);
+    }
+
+    private float _supportBridgeOverhangDeg = 30f;
+    public float SupportBridgeOverhangDeg
+    {
+        get => _supportBridgeOverhangDeg;
+        private set => SetField(ref _supportBridgeOverhangDeg, value);
+    }
+
+    private bool _supportBridgeAlreadyOk;
+    public bool SupportBridgeAlreadyOk
+    {
+        get => _supportBridgeAlreadyOk;
+        private set => SetField(ref _supportBridgeAlreadyOk, value);
+    }
+
+    private string _supportBridgeGapStepLabel = "";
+    /// <summary>e.g. "4.2 / 1.73 mm" (max gap / MaxStep).</summary>
+    public string SupportBridgeGapStepLabel
+    {
+        get => _supportBridgeGapStepLabel;
+        private set => SetField(ref _supportBridgeGapStepLabel, value);
+    }
+
+    /// <summary>Show the bridge helper when Mode=Support and something is selected.</summary>
+    public bool ShowSupportBridgeHelper =>
+        ShowPaintSupportTypePicker && HasPaintSelection && !string.IsNullOrEmpty(SupportBridgeSummary);
+
+    /// <summary>
+    /// From the current edit selection, estimate how many layers of steppable
+    /// support (at the Formbound overhang angle, default 30°) are needed to bridge
+    /// down to solid geometry or the bed.
+    /// </summary>
+    public void RefreshSupportBridgeEstimate()
+    {
+        if (!ShowPaintSupportTypePicker || PaintSelectionItems.Count == 0
+            || ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            SupportBridgeSummary = "";
+            SupportBridgeDetail = "";
+            SupportBridgeGapStepLabel = "";
+            SupportBridgeLayers = 0;
+            SupportBridgeGapMm = 0;
+            SupportBridgeAlreadyOk = false;
+            OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+            return;
+        }
+
+        float layerH = (float)(AdditiveSettings?.LayerHeight ?? 3.0);
+        if (layerH < 0.1f) layerH = 3f;
+        float bead = (float)(AdditiveSettings?.BeadWidth ?? 6.0);
+        if (bead < 0.5f) bead = 6f;
+        float deg = (float)(AdditiveSettings?.LightningOverhangDeg ?? 30.0);
+        if (deg < 5f) deg = 30f;
+
+        var spans = new List<(int, int, int)>(PaintSelectionItems.Count);
+        foreach (var item in PaintSelectionItems)
+            spans.Add((item.LayerIndex, item.MoveStart, item.MoveCount));
+
+        // Tree Support is bed-rooted — never stop the estimate at a mid-air solid plane.
+        bool toBed = Core.Models.PaintSupportStyleUtil.IsTree(
+            Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType));
+
+        var r = MassiveSlicer.Core.Slicing.SupportBridgeEstimate.Compute(
+            tp, spans, layerH, bead, overhangDeg: deg, capMaxStepToHalfBead: true,
+            toBedFoundation: toBed);
+
+        SupportBridgeSummary = r.Summary;
+        SupportBridgeDetail = r.Detail;
+        SupportBridgeLayers = r.LayersRequired;
+        SupportBridgeGapMm = r.MaxGapMm;
+        SupportBridgeMaxStepMm = r.MaxStepMm;
+        SupportBridgeOverhangDeg = r.OverhangDeg;
+        SupportBridgeAlreadyOk = r.AlreadySupported;
+        SupportBridgeGapStepLabel = $"{r.MaxGapMm:0.#} / {r.MaxStepMm:0.##} mm";
+        OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+    }
+
+    private string _paintSelectGranularity = "Path";
+    /// <summary>Selection granularity: "Path" picks a whole contour section per
+    /// click; "Point" picks the single bead under the cursor.</summary>
+    public string PaintSelectGranularity
+    {
+        get => _paintSelectGranularity;
+        set
+        {
+            if (!SetField(ref _paintSelectGranularity, value)) return;
+            OnPropertyChanged(nameof(PaintPathGranularityActive));
+            OnPropertyChanged(nameof(PaintPointGranularityActive));
+            OnPropertyChanged(nameof(PaintSelectionLabel));
+            ApplyPaintEditDisplayMode();
+            NotifyRenderNeeded();
+        }
+    }
+
+    public bool PaintPathGranularityActive  => PaintSelectGranularity == "Path";
+    public bool PaintPointGranularityActive => PaintSelectGranularity == "Point";
+
+    public RelayCommand SetPathGranularityCommand => _setPathGran ??= new RelayCommand(() =>
+        PaintSelectGranularity = "Path");
+    private RelayCommand? _setPathGran;
+
+    public RelayCommand SetPointGranularityCommand => _setPointGran ??= new RelayCommand(() =>
+        PaintSelectGranularity = "Point");
+    private RelayCommand? _setPointGran;
+
+    public string[] PaintPickFilterOptions { get; } = ["All", "Formbound", "Perimeter"];
+
+    private string _paintPickFilter = "All";
+    /// <summary>Restricts what hover/click/box selection can pick.</summary>
+    public string PaintPickFilter
+    {
+        get => _paintPickFilter;
+        set => SetField(ref _paintPickFilter, value);
+    }
+
+    /// <summary>Mark action for the left SELECTION panel Apply button.</summary>
+    public string[] PaintModificationModeOptions { get; } = ["Support", "Remove"];
+
+    private string _paintModificationMode = "Support";
+    public string PaintModificationMode
+    {
+        get => _paintModificationMode;
+        set
+        {
+            if (!SetField(ref _paintModificationMode, value ?? "Support")) return;
+            OnPropertyChanged(nameof(ShowPaintSupportTypePicker));
+            OnPropertyChanged(nameof(ShowSupportBridgeHelper));
+            RefreshSupportBridgeEstimate();
+        }
+    }
+
+    /// <summary>
+    /// Support strategy used when Mode = Support. Stored per applied modification
+    /// (and on each Bridge mark). Default: Formbound Buttress (T-column).
+    /// </summary>
+    public string[] PaintSupportTypeOptions { get; } =
+        Core.Models.PaintSupportStyleUtil.AllLabels;
+
+    private string _paintSupportType = Core.Models.PaintSupportStyleUtil.LabelButtress;
+    public string PaintSupportType
+    {
+        get => _paintSupportType;
+        set
+        {
+            var v = Core.Models.PaintSupportStyleUtil.ToLabel(
+                Core.Models.PaintSupportStyleUtil.FromLabel(value));
+            if (!SetField(ref _paintSupportType, v)) return;
+            // Do not overwrite FILL PATTERN here — that is a separate saved setting.
+            // Explicit Support Apply may soft-sync via ApplyPaintSupportTypeToSettings.
+            // Tree vs Formbound changes how the bridge estimate counts (bed vs plane).
+            RefreshSupportBridgeEstimate();
+        }
+    }
+
+    public bool ShowPaintSupportTypePicker =>
+        string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Soft-push the SELECTION support-type into FILL PATTERN only when the user
+    /// is explicitly applying Formbound Support and FILL PATTERN is still None.
+    /// Never clobbers a user-chosen Grid/None/etc. that was restored from a workspace.
+    /// With Target Support Selections on, Formbound is paint-driven — leave dropdown alone.
+    /// </summary>
+    public void ApplyPaintSupportTypeToSettings()
+    {
+        if (AdditiveSettings is null) return;
+        if (AdditiveSettings.LightningTargetSupportSelections)
+            return; // paint marks drive Formbound; FILL PATTERN is independent
+
+        bool supportMode = string.Equals(PaintModificationMode, "Support", StringComparison.OrdinalIgnoreCase);
+        bool hasBridgePaint = AdditiveSettings.PaintMarks.Any(m =>
+            m.Kind == Core.Models.PaintMarkKind.Bridge);
+        if (!supportMode && !hasBridgePaint) return;
+
+        var style = Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType);
+        if (Core.Models.PaintSupportStyleUtil.IsTree(style))
+            return; // Tree is paint-only; leave FILL PATTERN alone.
+
+        // Only seed Formbound when the user has not chosen another fill yet.
+        var cur = AdditiveSettings.InfillPattern ?? "None";
+        if (cur is not ("None" or "" or "Formbound Buttress" or "Formbound Bridge" or "Lightning Bridge"))
+            return;
+
+        AdditiveSettings.InfillPattern = Core.Models.PaintSupportStyleUtil.ToLabel(style);
+    }
+
+    /// <summary>Summary for ACTIVE SELECTION (e.g. layer numbers). Multi-select = group.</summary>
+    public string PaintActiveSelectionSummary
+    {
+        get
+        {
+            if (PaintSelectionItems.Count == 0)
+                return "Nothing selected";
+            if (PaintSelectionItems.Count == 1)
+                return PaintSelectionItems[0].Title;
+            var layers = PaintSelectionItems.Select(i => i.LayerNumber).Distinct().OrderBy(n => n).ToList();
+            string layerTxt = layers.Count <= 4
+                ? string.Join(", ", layers)
+                : $"{layers.First()}…{layers.Last()}";
+            // Shift multi-select is one Apply group on the MODIFICATIONS panel.
+            return $"Group · {PaintSelectionCount} paths · layers {layerTxt}";
+        }
+    }
+
+    public RelayCommand ApplyPaintModificationCommand => _applyPaintMod ??= new RelayCommand(() =>
+    {
+        bool support = !string.Equals(PaintModificationMode, "Remove", StringComparison.OrdinalIgnoreCase);
+        if (support)
+            ApplyPaintSupportTypeToSettings();
+        OnPaintApplyRequested?.Invoke(support);
+    }, () => HasPaintSelection);
+    private RelayCommand? _applyPaintMod;
+
+    /// <summary>Marquee rectangle (viewport logical px) while square-dragging.</summary>
+    private bool _paintMarqueeVisible;
+    public bool PaintMarqueeVisible { get => _paintMarqueeVisible; set => SetField(ref _paintMarqueeVisible, value); }
+    private double _paintMarqueeX, _paintMarqueeY, _paintMarqueeW, _paintMarqueeH;
+    public double PaintMarqueeX { get => _paintMarqueeX; set => SetField(ref _paintMarqueeX, value); }
+    public double PaintMarqueeY { get => _paintMarqueeY; set => SetField(ref _paintMarqueeY, value); }
+    public double PaintMarqueeW { get => _paintMarqueeW; set => SetField(ref _paintMarqueeW, value); }
+    public double PaintMarqueeH { get => _paintMarqueeH; set => SetField(ref _paintMarqueeH, value); }
+
+    /// <summary>Lasso polyline (viewport logical px) while freehand-dragging.</summary>
+    private bool _paintLassoVisible;
+    public bool PaintLassoVisible
+    {
+        get => _paintLassoVisible;
+        set => SetField(ref _paintLassoVisible, value);
+    }
+
+    /// <summary>
+    /// Bound to overlay <c>Polyline.Points</c>. Reassigned (not mutated) so Avalonia
+    /// refreshes the stroke each sample while dragging.
+    /// </summary>
+    private Avalonia.Points _paintLassoPoints = new();
+    public Avalonia.Points PaintLassoPoints
+    {
+        get => _paintLassoPoints;
+        private set => SetField(ref _paintLassoPoints, value);
+    }
+
+    /// <summary>Replace lasso geometry from freehand samples (closes the loop for fill).</summary>
+    public void SetPaintLassoPoints(IReadOnlyList<Avalonia.Point> samples)
+    {
+        var pts = new Avalonia.Points();
+        for (int i = 0; i < samples.Count; i++)
+            pts.Add(samples[i]);
+        if (samples.Count >= 3)
+            pts.Add(samples[0]);
+        PaintLassoPoints = pts;
+    }
+
+    public void ClearPaintLassoPoints()
+    {
+        PaintLassoPoints = new Avalonia.Points();
+    }
+
+    /// <summary>View hooks: the viewport owns the selection list.</summary>
+    internal Action? OnPaintDeselectRequested;
+    internal Action<bool>? OnPaintApplyRequested;   // true = Support, false = Remove
+
+    public RelayCommand DeselectPaintCommand => _deselectPaint ??= new RelayCommand(() =>
+        OnPaintDeselectRequested?.Invoke());
+    private RelayCommand? _deselectPaint;
+
+    public RelayCommand ApplySupportSelectionCommand => _applySupportSel ??= new RelayCommand(() =>
+    {
+        ApplyPaintSupportTypeToSettings();
+        OnPaintApplyRequested?.Invoke(true);
+    });
+    private RelayCommand? _applySupportSel;
+
+    public RelayCommand ApplyRemoveSelectionCommand => _applyRemoveSel ??= new RelayCommand(() =>
+        OnPaintApplyRequested?.Invoke(false));
+    private RelayCommand? _applyRemoveSel;
+
+    // ── CREATE MODIFICATION catalog (search + Offset path, …) ────────────────
+
+    /// <summary>Full catalog of edit-mode operations (search filters this).</summary>
+    public ObservableCollection<CreateModificationItem> CreateModificationCatalog { get; } = new();
+
+    /// <summary>Search-filtered operations bound to the CREATE MODIFICATION list.</summary>
+    public ObservableCollection<CreateModificationItem> FilteredCreateModifications { get; } = new();
+
+    private string _createModificationSearch = "";
+    /// <summary>Filter text for the CREATE MODIFICATION search bar.</summary>
+    public string CreateModificationSearch
+    {
+        get => _createModificationSearch;
+        set
+        {
+            if (!SetField(ref _createModificationSearch, value ?? "")) return;
+            RefreshFilteredCreateModifications();
+        }
+    }
+
+    private string? _selectedCreateModificationId;
+    public string? SelectedCreateModificationId
+    {
+        get => _selectedCreateModificationId;
+        set
+        {
+            if (!SetField(ref _selectedCreateModificationId, value)) return;
+            foreach (var item in CreateModificationCatalog)
+                item.IsSelected = string.Equals(item.Id, value, StringComparison.Ordinal);
+            OnPropertyChanged(nameof(ShowOffsetPathSettings));
+            OnPropertyChanged(nameof(ShowCreateModSettings));
+            OnPropertyChanged(nameof(SelectedCreateModificationTitle));
+            ApplyCreateModificationCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    public bool ShowCreateModSettings => !string.IsNullOrEmpty(SelectedCreateModificationId)
+        && CreateModificationCatalog.Any(c =>
+            c.Id == SelectedCreateModificationId && c.IsAvailable);
+
+    public bool ShowOffsetPathSettings =>
+        string.Equals(SelectedCreateModificationId, "offset", StringComparison.OrdinalIgnoreCase);
+
+    public string SelectedCreateModificationTitle =>
+        CreateModificationCatalog.FirstOrDefault(c => c.Id == SelectedCreateModificationId)?.Title
+        ?? "OPERATION";
+
+    // Offset path settings (AiBuild-style)
+    private double _offsetDistanceMm = -1.0;
+    public double OffsetDistanceMm
+    {
+        get => _offsetDistanceMm;
+        set => SetField(ref _offsetDistanceMm, value);
+    }
+
+    public string[] OffsetJoinTypeOptions { get; } = ["Miter", "Round", "Square"];
+    private string _offsetJoinType = "Miter";
+    public string OffsetJoinType
+    {
+        get => _offsetJoinType;
+        set => SetField(ref _offsetJoinType, value ?? "Miter");
+    }
+
+    public string[] OffsetModeOptions { get; } = ["Add offsets"];
+    private string _offsetMode = "Add offsets";
+    public string OffsetMode
+    {
+        get => _offsetMode;
+        set => SetField(ref _offsetMode, value ?? "Add offsets");
+    }
+
+    private int _offsetCount = 1;
+    public int OffsetCount
+    {
+        get => _offsetCount;
+        set => SetField(ref _offsetCount, Math.Clamp(value, 1, 32));
+    }
+
+    public string[] OffsetSideOptions { get; } = ["Both", "Left", "Right"];
+    private string _offsetSide = "Both";
+    public string OffsetSide
+    {
+        get => _offsetSide;
+        set => SetField(ref _offsetSide, value ?? "Both");
+    }
+
+    public RelayCommand<string> SelectCreateModificationCommand =>
+        _selectCreateMod ??= new RelayCommand<string>(id =>
+        {
+            if (string.IsNullOrEmpty(id)) return;
+            var item = CreateModificationCatalog.FirstOrDefault(c => c.Id == id);
+            if (item is null || !item.IsAvailable) return;
+            SelectedCreateModificationId =
+                string.Equals(SelectedCreateModificationId, id, StringComparison.Ordinal)
+                    ? null
+                    : id;
+        });
+    private RelayCommand<string>? _selectCreateMod;
+
+    public RelayCommand CancelCreateModificationCommand => _cancelCreateMod ??= new RelayCommand(() =>
+        SelectedCreateModificationId = null);
+    private RelayCommand? _cancelCreateMod;
+
+    public RelayCommand ApplyCreateModificationCommand => _applyCreateMod ??= new RelayCommand(() =>
+    {
+        if (ShowOffsetPathSettings)
+            OnApplyOffsetPathRequested?.Invoke();
+    }, () => ShowOffsetPathSettings && HasPaintSelection);
+    private RelayCommand? _applyCreateMod;
+
+    public RelayCommand<string> NudgeOffsetCountCommand => _nudgeOffsetCount ??= new RelayCommand<string>(delta =>
+    {
+        if (!int.TryParse(delta, out int d)) return;
+        OffsetCount = OffsetCount + d;
+    });
+    private RelayCommand<string>? _nudgeOffsetCount;
+
+    /// <summary>Viewport applies Offset path to the current selection.</summary>
+    internal Action? OnApplyOffsetPathRequested { get; set; }
+
+    private void EnsureCreateModificationCatalog()
+    {
+        if (CreateModificationCatalog.Count > 0) return;
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "offset",
+            Title = "Offset path",
+            Description = "Creates parallel copies of existing toolpaths.",
+            Icon = "mdi-vector-polyline",
+            IsAvailable = true,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "chamfer",
+            Title = "Chamfer",
+            Description = "Bevel sharp corners on selected paths.",
+            Icon = "mdi-angle-acute",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "clip-plane",
+            Title = "Clip by plane",
+            Description = "Trim paths with a cutting plane.",
+            Icon = "mdi-scissors-cutting",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "clip-sketch",
+            Title = "Clip with sketch",
+            Description = "Trim paths using a sketch boundary.",
+            Icon = "mdi-vector-curve",
+            IsAvailable = false,
+        });
+        CreateModificationCatalog.Add(new CreateModificationItem
+        {
+            Id = "cut-point",
+            Title = "Cut at point",
+            Description = "Split a path at a chosen point.",
+            Icon = "mdi-content-cut",
+            IsAvailable = false,
+        });
+        RefreshFilteredCreateModifications();
+    }
+
+    private void RefreshFilteredCreateModifications()
+    {
+        EnsureCreateModificationCatalog();
+        string q = (CreateModificationSearch ?? "").Trim();
+        FilteredCreateModifications.Clear();
+        foreach (var item in CreateModificationCatalog)
+        {
+            if (q.Length == 0
+                || item.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || item.Description.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || item.Id.Contains(q, StringComparison.OrdinalIgnoreCase))
+                FilteredCreateModifications.Add(item);
+        }
+    }
+
+    /// <summary>Re-slices NOW with the accumulated paint edits, keeping the edit
+    /// menu open and auto-slice paused afterwards.</summary>
+    public RelayCommand ReslicePaintCommand => _reslicePaint ??= new RelayCommand(() =>
+    {
+        AdditiveSettings?.BumpPaintStamp();
+        // Must force a real bake — the old pause/unpause dance left edit mode paused
+        // so ScheduleRealtimeSlice only set a pending flag and never started a slice.
+        OnPaintResliceRequested?.Invoke();
+    });
+    private RelayCommand? _reslicePaint;
+
+    /// <summary>ViewportView: force RunRealtimeSliceAsync ignoring edit-mode pause.</summary>
+    internal Action? OnPaintResliceRequested { get; set; }
 
     private bool _isDevMode;
 
@@ -1421,6 +2677,78 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _canCutTool;
+
+    /// <summary>True when the selection can be split with the Cut Tool.</summary>
+    public bool CanCutTool
+    {
+        get => _canCutTool;
+        set
+        {
+            if (SetField(ref _canCutTool, value))
+                CutToolCommand?.RaiseCanExecuteChanged();
+        }
+    }
+
+    private bool _isCutToolActive;
+    private CutToolDialogViewModel? _cutToolSession;
+
+    /// <summary>True while the interactive Cut Tool (ghost plane + gizmo) is open.</summary>
+    public bool IsCutToolActive
+    {
+        get => _isCutToolActive;
+        private set
+        {
+            if (SetField(ref _isCutToolActive, value))
+            {
+                OnPropertyChanged(nameof(ShowCutToolPanel));
+                CutToolCommand?.RaiseCanExecuteChanged();
+                CancelCutToolCommand?.RaiseCanExecuteChanged();
+                PerformCutToolCommand?.RaiseCanExecuteChanged();
+                CutToolNormalXCommand?.RaiseCanExecuteChanged();
+                CutToolNormalYCommand?.RaiseCanExecuteChanged();
+                CutToolNormalZCommand?.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Overlay panel visibility (same as <see cref="IsCutToolActive"/>).</summary>
+    public bool ShowCutToolPanel => _isCutToolActive;
+
+    /// <summary>Live cut-plane / connector parameters for the floating panel.</summary>
+    public CutToolDialogViewModel? CutToolSession
+    {
+        get => _cutToolSession;
+        private set => SetField(ref _cutToolSession, value);
+    }
+
+    public RelayCommand? CancelCutToolCommand { get; private set; }
+    public RelayCommand? PerformCutToolCommand { get; private set; }
+    public RelayCommand? CutToolNormalZCommand { get; private set; }
+    public RelayCommand? CutToolNormalYCommand { get; private set; }
+    public RelayCommand? CutToolNormalXCommand { get; private set; }
+
+    internal Action? OnCancelCutToolRequested { get; set; }
+    internal Action? OnPerformCutToolRequested { get; set; }
+
+    /// <summary>Enter interactive cut-tool mode with a plane session (viewport wires gizmo).</summary>
+    internal void BeginCutToolSession(CutToolDialogViewModel session)
+    {
+        CutToolSession = session;
+        IsCutToolActive = true;
+        // Prefer translate gizmo so the plane can be moved immediately.
+        if (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale)
+            ActiveGizmoModeInternal = GizmoMode.Translate;
+        NotifyRenderNeeded();
+    }
+
+    internal void EndCutToolSession()
+    {
+        CutToolSession = null;
+        IsCutToolActive = false;
+        NotifyRenderNeeded();
+    }
+
     private bool _isToolpathSelected;
 
     /// <summary>True when the active toolpath node is the current selection.</summary>
@@ -1541,6 +2869,101 @@ public sealed class ViewportViewModel : ViewModelBase
     private string _toolpathScrubText = "0";
     /// <summary>Guards against the index↔text two-way binding feedback loop.</summary>
     private bool   _scrubSyncing;
+    /// <summary>Exclusive end move index per layer (prefix sums) for O(log n) layer lookup.</summary>
+    private int[]? _scrubLayerEnds;
+
+    private int _toolpathScrubLowIndex;
+    /// <summary>Lower bound of the layer window (edit mode): moves below this are
+    /// hidden. 0 = show from the first layer. Clamped under the upper scrub.</summary>
+    public int ToolpathScrubLowIndex
+    {
+        get => _toolpathScrubLowIndex;
+        set
+        {
+            int clamped = Math.Clamp(value, 0, Math.Max(0, ToolpathScrubIndex - 1));
+            if (SetField(ref _toolpathScrubLowIndex, clamped))
+            {
+                OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+                NotifyRenderNeeded();
+            }
+        }
+    }
+
+    /// <summary>Layer number (1-based) at the low handle for display.</summary>
+    public string ToolpathScrubLowLayerLabel
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return "1";
+            int idx = 0;
+            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex) idx++;
+            return (idx + 1).ToString();
+        }
+    }
+
+    // ── Layer-unit range (the edit-mode LAYERS window binds in layers, not moves) ──
+
+    /// <summary>Total layers of the scrubbed toolpath (1 when none).</summary>
+    public int ToolpathScrubLayerCount =>
+        Math.Max(1, _scrubLayerEnds?.Length ?? ActiveScrubToolpath?.Layers.Count ?? 1);
+
+    /// <summary>Upper bound in LAYER units (1-based). Maps to the move scrub
+    /// (show moves through the end of this layer). Round-trips with the dual slider.</summary>
+    public double ToolpathScrubLayerHigh
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return ToolpathScrubLayerCount;
+            return GetScrubLayerIndex() + 1;
+        }
+        set
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+            int n = _scrubLayerEnds.Length;
+            int layer = Math.Clamp((int)Math.Round(value), 1, n);
+            // Keep at least one layer of window above the low handle.
+            int lowLayer = (int)Math.Round(ToolpathScrubLayerLow);
+            if (layer <= lowLayer) layer = Math.Min(n, lowLayer + 1);
+            // Exclusive end of this layer = show all of its moves.
+            int newIdx = _scrubLayerEnds[layer - 1];
+            if (newIdx != _toolpathScrubIndex)
+                ToolpathScrubIndex = newIdx;
+            else
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+            // Re-clamp low if high dropped under it (move index).
+            if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+            {
+                int lo = Math.Max(0, layer - 2);
+                ToolpathScrubLowIndex = lo < 0 ? 0 : (layer <= 1 ? 0 : _scrubLayerEnds[layer - 2]);
+            }
+        }
+    }
+
+    /// <summary>Lower bound in LAYER units (1-based). 1 = show from the first layer.</summary>
+    public double ToolpathScrubLayerLow
+    {
+        get
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return 1;
+            // First layer whose exclusive end is still above the low move cut.
+            int idx = 0;
+            while (idx < _scrubLayerEnds.Length && _scrubLayerEnds[idx] <= _toolpathScrubLowIndex)
+                idx++;
+            return Math.Min(_scrubLayerEnds.Length, idx + 1);
+        }
+        set
+        {
+            if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+            int n = _scrubLayerEnds.Length;
+            int layer = Math.Clamp((int)Math.Round(value), 1, n);
+            int highLayer = (int)Math.Round(ToolpathScrubLayerHigh);
+            if (layer >= highLayer) layer = Math.Max(1, highLayer - 1);
+            // Start of this layer in move units (end of previous).
+            int newLow = layer <= 1 ? 0 : _scrubLayerEnds[layer - 2];
+            ToolpathScrubLowIndex = newLow;
+        }
+    }
 
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
@@ -1548,17 +2971,29 @@ public sealed class ViewportViewModel : ViewModelBase
         get => _toolpathScrubIndex;
         set
         {
-            if (SetField(ref _toolpathScrubIndex, value))
+            int clamped = Math.Clamp(value, 0, Math.Max(0, _toolpathScrubMax));
+            if (SetField(ref _toolpathScrubIndex, clamped))
             {
+                // Keep the lower window bound strictly under the upper scrub.
+                if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+                {
+                    _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+                    OnPropertyChanged(nameof(ToolpathScrubLowIndex));
+                    OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+                    OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+                }
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
                 // Keep the editable text box in sync unless we're already being
                 // called from ToolpathScrubText's setter (avoids a re-entry loop).
-                if (!_scrubSyncing && _toolpathScrubText != value.ToString())
+                if (!_scrubSyncing && _toolpathScrubText != clamped.ToString())
                 {
                     _scrubSyncing = true;
-                    ToolpathScrubText = value.ToString();
+                    ToolpathScrubText = clamped.ToString();
                     _scrubSyncing = false;
                 }
                 // Pause playback if the user manually moves the scrubber.
@@ -1570,7 +3005,10 @@ public sealed class ViewportViewModel : ViewModelBase
                 }
                 // Drive IK when the user is actively scrubbing a toolpath.
                 if (_isToolpathSelected || _isScrubSessionActive)
-                    OnScrubIkRequested?.Invoke(value);
+                    OnScrubIkRequested?.Invoke(clamped);
+                // 2D slice HUD tracks the active layer.
+                if (_isSlicePlaneViewerActive)
+                    RefreshSlicePlaneStats();
                 // Always repaint: the IK callback only repaints on a successful solve,
                 // so without this the viewport freezes when scrubbing through
                 // unreachable poses.
@@ -1589,6 +3027,8 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ToolpathScrubLabel));
                 OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+                OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
                 OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
                 OnPropertyChanged(nameof(ToolpathScrubFillHeight));
             }
@@ -1625,6 +3065,186 @@ public sealed class ViewportViewModel : ViewModelBase
         => _toolpathScrubMax > 0 ? $" / {_toolpathScrubMax}" : string.Empty;
 
     /// <summary>
+    /// Current layer (1-based) and total layers for the scrubbed toolpath.
+    /// Empty when no toolpath / no layers.
+    /// </summary>
+    public string ToolpathScrubLayerLabel
+    {
+        get
+        {
+            int total = _scrubLayerEnds?.Length ?? ActiveScrubToolpath?.Layers.Count ?? 0;
+            if (total <= 0) return string.Empty;
+            int cur = GetScrubLayerIndex() + 1; // 1-based for humans
+            return $"Layer {cur} / {total}";
+        }
+    }
+
+    /// <summary>
+    /// Live "speed · RPM" readout for the current scrub/playback move, matching
+    /// what KRL export writes ($VEL.CP and $ANOUT[4]): print speed × per-move
+    /// scale, and geometry RPM % × speed/height scales capped at 100 %.
+    /// </summary>
+    public string ToolpathScrubSpeedRpmLabel
+    {
+        get
+        {
+            if (AdditiveSettings is not { } add || ActiveScrubToolpath is not { } tp
+                || _scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+                return string.Empty;
+            int li = GetScrubLayerIndex();
+            if (li >= tp.Layers.Count) return string.Empty;
+            var moves = tp.Layers[li].Moves;
+            if (moves.Count == 0) return string.Empty;
+            int start = li == 0 ? 0 : _scrubLayerEnds[li - 1];
+            var mv = moves[Math.Clamp(_toolpathScrubIndex - start, 0, moves.Count - 1)];
+            if (mv.Kind == MoveKind.Mill) return string.Empty;
+            if (mv.Kind == MoveKind.Travel)
+            {
+                double tSpeed = mv.TravelSpeedMps is { } o ? o * 1000.0 : add.TravelSpeed;
+                return $"{tSpeed:0} mm/s · RPM {KrlAnout.RpmIdlePercent:0}%";
+            }
+            double speed;
+            float rpmScale;
+            if (mv.IsWipe)
+            {
+                speed = add.WipeSpeed;
+                rpmScale = mv.WipeRpmScale;
+            }
+            else
+            {
+                float sScale = Math.Max(mv.PrintSpeedScale, 1e-6f);
+                rpmScale = sScale * Math.Max(mv.HeightScale, 1e-6f);
+                if (mv.IsResumeRamp)
+                {
+                    sScale *= Math.Max(mv.ResumeSpeedScale, 1e-6f);
+                    rpmScale *= Math.Max(mv.ResumeRpmScale, 1e-6f);
+                }
+                speed = add.PrintSpeed * sScale;
+            }
+            float pct = Math.Min(
+                add.GetEffectiveExtrusionSpeedPercent() * Math.Max(rpmScale, 0f), 100f);
+            return $"{speed:0} mm/s · RPM {pct:0}%";
+        }
+    }
+
+    /// <summary>
+    /// 0-based layer index for the current scrub move.
+    /// <see cref="_toolpathScrubIndex"/> is treated as an exclusive end (show moves
+    /// <c>[0, index)</c>), so when index equals a layer's exclusive end we report
+    /// that layer — not the next one. Keeps the LAYERS dual-slider high handle from
+    /// fighting TwoWay bindings and snapping when dragged.
+    /// </summary>
+    private int GetScrubLayerIndex()
+    {
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            return 0;
+        int idx = Math.Clamp(_toolpathScrubIndex, 0, Math.Max(0, _toolpathScrubMax));
+        int last = _scrubLayerEnds.Length - 1;
+        if (idx <= 0) return 0;
+        if (idx >= _scrubLayerEnds[last]) return last;
+        // First layer whose exclusive end is ≥ idx.
+        int lo = 0, hi = last;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (_scrubLayerEnds[mid] >= idx) hi = mid;
+            else lo = mid + 1;
+        }
+        return lo;
+    }
+
+    /// <summary>
+    /// Step the toolpath view by one layer. <paramref name="delta"/> +1 = next layer
+    /// (higher), −1 = previous layer (lower). Used by Preview ↑/↓ arrow keys.
+    /// Returns true when the scrub position changed.
+    /// </summary>
+    public bool StepScrubLayer(int delta)
+    {
+        if (delta == 0) return false;
+        if (ActiveScrubToolpath is not { Layers.Count: > 0 }) return false;
+        // Ensure layer ends are available (scrub session may not have rebuilt yet).
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            RebuildScrubLayerEnds(ActiveScrubToolpath);
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return false;
+
+        int n = _scrubLayerEnds.Length;
+        int cur = GetScrubLayerIndex(); // 0-based
+        int next = Math.Clamp(cur + delta, 0, n - 1);
+        if (next == cur && ToolpathScrubIndex == _scrubLayerEnds[next])
+            return false;
+
+        // Show through the end of the target layer (exclusive end move index).
+        ToolpathScrubIndex = _scrubLayerEnds[next];
+        return true;
+    }
+
+    /// <summary>
+    /// Jump the timeline / LAYERS dual-slider so the active (high) handle is on
+    /// <paramref name="layerIndex0Hi"/> (0-based). The low handle stays at layer 1
+    /// so bed foundation and all layers below the selection remain visible —
+    /// never raise the low handle to the selection (that hid layers 1…N−1 in 2D/3D).
+    /// </summary>
+    public void FocusScrubOnLayers(int layerIndex0Lo, int layerIndex0Hi)
+    {
+        if (ActiveScrubToolpath is not { Layers.Count: > 0 } tp) return;
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0)
+            RebuildScrubLayerEnds(tp);
+        if (_scrubLayerEnds is null || _scrubLayerEnds.Length == 0) return;
+
+        int n = _scrubLayerEnds.Length;
+        int hi = Math.Clamp(Math.Max(layerIndex0Lo, layerIndex0Hi), 0, n - 1);
+
+        // Keep scrub session live so the dual-slider / timeline stays armed.
+        if (!_isScrubSessionActive)
+            IsScrubSessionActive = true;
+
+        // High = end of focus layer (current slice / scrub position).
+        // Low = always layer 1 (move 0) so tree foundation and early layers stay drawn.
+        int newHigh = _scrubLayerEnds[hi];
+        if (newHigh <= 0)
+            newHigh = Math.Min(_toolpathScrubMax, 1);
+
+        ToolpathScrubIndex = newHigh;
+        ToolpathScrubLowIndex = 0;
+
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Jump scrub high handle to a single layer (0-based); low stays at bed.</summary>
+    public void FocusScrubOnLayer(int layerIndex0) =>
+        FocusScrubOnLayers(layerIndex0, layerIndex0);
+
+    private void RebuildScrubLayerEnds(Toolpath? toolpath)
+    {
+        if (toolpath is null || toolpath.Layers.Count == 0)
+        {
+            _scrubLayerEnds = null;
+        }
+        else
+        {
+            var ends = new int[toolpath.Layers.Count];
+            int acc = 0;
+            for (int i = 0; i < toolpath.Layers.Count; i++)
+            {
+                acc += toolpath.Layers[i].Moves.Count;
+                ends[i] = acc;
+            }
+            _scrubLayerEnds = ends;
+        }
+        // Dual-slider Maximum/High/Low bind these — must notify after every rebuild.
+        OnPropertyChanged(nameof(ToolpathScrubLayerCount));
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
+    }
+
+    /// <summary>
     /// Resets the scrubber to position 0 and records the active toolpath without
     /// firing <see cref="OnScrubIkRequested"/>. Use this for programmatic selection
     /// changes so the robot is not driven automatically when a new toolpath is picked.
@@ -1642,6 +3262,8 @@ public sealed class ViewportViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowSimTimeline));
                 OnPropertyChanged(nameof(ShowPlaybackTimeline));
+                ExportKrlCommand?.RaiseCanExecuteChanged();
+                SendToRobotCommand?.RaiseCanExecuteChanged();
             }
         }
     }
@@ -1690,10 +3312,21 @@ public sealed class ViewportViewModel : ViewModelBase
     internal void ReplaceScrubToolpathInPlace(Toolpath toolpath)
     {
         ActiveScrubToolpath = toolpath;
+        RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
     }
 
-    internal void ResetScrubIndex(int max, Toolpath? toolpath)
+    /// <summary>
+    /// Sets the scrub slider range for a toolpath.
+    /// When <paramref name="preservePosition"/> is true (re-slice / update), keeps the
+    /// current move index clamped to the new range so the timeline does not jump to
+    /// the end. When false (first select / new toolpath), jumps to the end as before.
+    /// Does not fire <see cref="OnScrubIkRequested"/> — call ScrubIk separately if needed.
+    /// </summary>
+    internal void ResetScrubIndex(int max, Toolpath? toolpath, bool preservePosition = false)
     {
         if (_isPlaying)
         {
@@ -1702,20 +3335,51 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPlaybackToggled?.Invoke(false);
         }
         ActiveScrubToolpath = toolpath;
+        RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
-        _toolpathScrubMax   = max;
+        int previous = _toolpathScrubIndex;
+        _toolpathScrubMax = Math.Max(0, max);
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
 
-        _toolpathScrubIndex = max;
-        _toolpathScrubText  = max.ToString();
+        int index;
+        if (toolpath is null || _toolpathScrubMax <= 0)
+            index = 0;
+        else if (preservePosition)
+        {
+            index = Math.Clamp(previous, 0, _toolpathScrubMax);
+            // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
+            // blank window when the path has content (common after re-arming edit scrub
+            // with a stale default index of 0).
+            if (index <= 0)
+                index = _toolpathScrubMax;
+        }
+        else
+            index = _toolpathScrubMax; // historical: land at end of path on first select
+
+        _toolpathScrubIndex = index;
+        _toolpathScrubText  = index.ToString();
+        // Full stack on first select: low at bed, high at top layer.
+        if (!preservePosition || toolpath is null || index <= 0)
+            _toolpathScrubLowIndex = 0;
+        else if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
+            _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerCount));
+        OnPropertyChanged(nameof(ToolpathScrubLayerHigh));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLow));
+        OnPropertyChanged(nameof(ToolpathScrubLowIndex));
+        OnPropertyChanged(nameof(ToolpathScrubLowLayerLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
+        if (_isSlicePlaneViewerActive)
+            RefreshSlicePlaneStats();
     }
 
     /// <summary>
@@ -1726,6 +3390,8 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         if (!SetField(ref _toolpathScrubIndex, index)) return;
         OnPropertyChanged(nameof(ToolpathScrubLabel));
+        OnPropertyChanged(nameof(ToolpathScrubLayerLabel));
+        OnPropertyChanged(nameof(ToolpathScrubSpeedRpmLabel));
         OnPropertyChanged(nameof(ToolpathScrubThumbOffsetY));
         OnPropertyChanged(nameof(ToolpathScrubFillHeight));
         _scrubSyncing     = true;
@@ -1880,6 +3546,7 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand UngroupCommand              { get; }
     public RelayCommand ExplodeCommand              { get; }
     public RelayCommand MeshCleanupCommand          { get; }
+    public RelayCommand CutToolCommand              { get; }
     public RelayCommand SaveViewCommand             { get; }
     public RelayCommand SaveDevTransformCommand     { get; }
     public RelayCommand SaveAllDevTransformsCommand { get; }
@@ -2073,6 +3740,7 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action? OnExplodeRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to open mesh cleanup on the selection.</summary>
     internal Action? OnMeshCleanupRequested { get; set; }
+    internal Action? OnCutToolRequested { get; set; }
     /// <summary>Callback set by the viewport code-behind to frame all scene objects in view.</summary>
     internal Action? OnFrameAllRequested    { get; set; }
 
@@ -2118,6 +3786,7 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
+            OnPropertyChanged(nameof(ShowViewTags));
         }
     }
 
@@ -2151,6 +3820,11 @@ public sealed class ViewportViewModel : ViewModelBase
                 OnPropertyChanged(nameof(SimTimelineLabel));
                 if (ShowSimTimeline)
                     OnSimScrubRequested?.Invoke(_simTimelinePercent / 100.0);
+                // Camera keyframes drive the view only while the timeline is in
+                // motion (play or video export) — manual scrubbing leaves the
+                // camera alone so the user can compose the next keyframe.
+                if (_simPlaying || _simRecording)
+                    ApplySimCameraAt(_simTimelinePercent);
                 NotifyRenderNeeded();
             }
         }
@@ -2158,11 +3832,122 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public string SimTimelineLabel => $"{_simTimelinePercent:0}%";
 
+    // ── Sim-timeline camera keyframes ──────────────────────────────────────
+    // Double-click the slider (or the camera-plus button) to pin the current
+    // viewport camera at that timeline position. During play / video export the
+    // camera eases between pins, so the recording flies the shot.
+    private readonly List<(double Percent, CameraView View)> _simCameraKeys = [];
+
+    public bool HasSimCameraKeyframes => _simCameraKeys.Count > 0;
+
+    /// <summary>Normalized 0–1 marker positions for the timeline tick bar.</summary>
+    public IReadOnlyList<double> SimCameraKeyframeMarkers
+        => _simCameraKeys.Select(k => k.Percent / 100.0).ToList();
+
+    public RelayCommand AddSimCameraKeyframeCommand => _addSimCameraKeyframe ??= new RelayCommand(() =>
+    {
+        if (GetCameraState?.Invoke() is not { } view) return;
+        AddSimCameraKeyframe(_simTimelinePercent, view);
+    });
+    private RelayCommand? _addSimCameraKeyframe;
+
+    public RelayCommand ClearSimCameraKeyframesCommand => _clearSimCameraKeyframes ??= new RelayCommand(() =>
+    {
+        _simCameraKeys.Clear();
+        NotifySimCameraKeyframesChanged();
+    });
+    private RelayCommand? _clearSimCameraKeyframes;
+
+    internal void AddSimCameraKeyframe(double percent, CameraView view)
+    {
+        percent = Math.Clamp(percent, 0.0, 100.0);
+        // Re-keying near an existing pin replaces it (nudge-and-repin workflow).
+        _simCameraKeys.RemoveAll(k => Math.Abs(k.Percent - percent) < 1.5);
+        _simCameraKeys.Add((percent, view));
+        _simCameraKeys.Sort((a, b) => a.Percent.CompareTo(b.Percent));
+        NotifySimCameraKeyframesChanged();
+    }
+
+    private void NotifySimCameraKeyframesChanged()
+    {
+        OnPropertyChanged(nameof(HasSimCameraKeyframes));
+        OnPropertyChanged(nameof(SimCameraKeyframeMarkers));
+    }
+
+    /// <summary>Workspace persistence: [percent, azimuth, elevation, radius, tx, ty, tz].</summary>
+    internal List<double[]>? CaptureSimCameraKeyframes()
+        => _simCameraKeys.Count == 0
+            ? null
+            : _simCameraKeys
+                .Select(k => new[]
+                {
+                    k.Percent, k.View.Azimuth, k.View.Elevation, k.View.Radius,
+                    k.View.TargetX, k.View.TargetY, k.View.TargetZ,
+                })
+                .ToList();
+
+    internal void RestoreSimCameraKeyframes(List<double[]>? data)
+    {
+        _simCameraKeys.Clear();
+        if (data is not null)
+            foreach (var d in data)
+            {
+                if (d is not { Length: >= 7 }) continue;
+                _simCameraKeys.Add((Math.Clamp(d[0], 0.0, 100.0), new CameraView
+                {
+                    Azimuth = (float)d[1], Elevation = (float)d[2], Radius = (float)d[3],
+                    TargetX = (float)d[4], TargetY = (float)d[5], TargetZ = (float)d[6],
+                }));
+            }
+        _simCameraKeys.Sort((a, b) => a.Percent.CompareTo(b.Percent));
+        NotifySimCameraKeyframesChanged();
+    }
+
+    private void ApplySimCameraAt(double percent)
+    {
+        if (_simCameraKeys.Count == 0 || ApplyCameraState is null) return;
+        CameraView view;
+        if (percent <= _simCameraKeys[0].Percent || _simCameraKeys.Count == 1)
+            view = _simCameraKeys[0].View;
+        else if (percent >= _simCameraKeys[^1].Percent)
+            view = _simCameraKeys[^1].View;
+        else
+        {
+            int i = 0;
+            while (i < _simCameraKeys.Count - 2 && percent >= _simCameraKeys[i + 1].Percent) i++;
+            var (p0, a) = _simCameraKeys[i];
+            var (p1, b) = _simCameraKeys[i + 1];
+            float t = (float)Math.Clamp((percent - p0) / Math.Max(p1 - p0, 1e-6), 0.0, 1.0);
+            t = t * t * (3f - 2f * t); // ease in/out per segment
+            view = new CameraView
+            {
+                Azimuth   = LerpAngleDeg(a.Azimuth, b.Azimuth, t),
+                Elevation = a.Elevation + (b.Elevation - a.Elevation) * t,
+                Radius    = a.Radius + (b.Radius - a.Radius) * t,
+                TargetX   = a.TargetX + (b.TargetX - a.TargetX) * t,
+                TargetY   = a.TargetY + (b.TargetY - a.TargetY) * t,
+                TargetZ   = a.TargetZ + (b.TargetZ - a.TargetZ) * t,
+            };
+        }
+        ApplyCameraState(view);
+    }
+
+    /// <summary>Shortest-arc angle lerp in degrees (azimuth can wrap through ±180°).</summary>
+    private static float LerpAngleDeg(float a, float b, float t)
+    {
+        float d = ((b - a + 180f) % 360f + 360f) % 360f - 180f;
+        return a + d * t;
+    }
+
     public bool SimPlaying
     {
         get => _simPlaying;
         private set { if (SetField(ref _simPlaying, value)) NotifyRenderNeeded(); }
     }
+
+    /// <summary>Raised when the user selects the toolhead/TCP in the viewport
+    /// (rising edge only) — used to guide attention to the orientation settings.</summary>
+    internal Action? OnToolheadSelected { get; set; }
 
     /// <summary>Wired by the viewport code-behind: robot IK follow for the sim timeline.</summary>
     internal Action<double>? OnSimScrubRequested { get; set; }
@@ -2194,6 +3979,9 @@ public sealed class ViewportViewModel : ViewModelBase
         get
         {
             if (_simRecording || ShowSimTimeline) return (float)(_simTimelinePercent / 100.0);
+            // Edit mode + 2D slice use dual-slider / multi-pass windows — never the
+            // sim-progress override (it was blanking multipass when nothing is selected).
+            if (IsPaintEditOpen || _isSlicePlaneViewerActive) return -1f;
             if (_viewMode == "Preview" && _isScrubSessionActive && !_isToolpathSelected && _toolpathScrubMax > 0)
                 return (float)_toolpathScrubIndex / _toolpathScrubMax;
             return -1f;
@@ -2243,6 +4031,7 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         "Speed" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Speed,
         "RPM"   => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Rpm,
+        "Thermal" => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Thermal,
         _       => MassiveSlicer.Viewport.Rendering.ToolpathColorMode.Normal,
     };
 
@@ -2259,13 +4048,17 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             case "Preview":
                 ShowBead = true;  ShowExtrusionMoves = false; ShowTravelMoves = false; ShowSeam = false;
+                ShowWipeMoves = false;
                 break;
             case "Speed":
             case "RPM":
+            case "Thermal":
                 ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = false;
+                ShowWipeMoves = true;
                 break;
             case "Toolpath":
                 ShowBead = false; ShowExtrusionMoves = true;  ShowTravelMoves = true;
+                ShowWipeMoves = true;
                 break;
         }
         foreach (var item in EnumerateUserModelItems().ToList())
@@ -2313,7 +4106,7 @@ public sealed class ViewportViewModel : ViewModelBase
         public float ToolpathLineOpacity { get; set; } = 1f;
     }
 
-    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Preview"];
+    private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview"];
     private readonly Dictionary<string, ViewDisplayProfile> _viewProfiles = BuildDefaultProfiles();
     private bool _applyingViewProfile;
 
@@ -2322,7 +4115,7 @@ public sealed class ViewportViewModel : ViewModelBase
         var d = new Dictionary<string, ViewDisplayProfile>();
         foreach (var m in ViewModeNames)
         {
-            bool lineView = m is "Toolpath" or "Speed" or "RPM";
+            bool lineView = m is "Toolpath" or "Speed" or "RPM" or "Thermal";
             d[m] = lineView
                 ? new ViewDisplayProfile
                 {
@@ -2352,6 +4145,12 @@ public sealed class ViewportViewModel : ViewModelBase
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
     ];
 
+    /// <summary>
+    /// Profile key currently driving the display: edit mode borrows the
+    /// Toolpath view's profile (dark line-view look) regardless of the pill.
+    /// </summary>
+    private string EffectiveProfileKey => IsPaintEditOpen ? "Toolpath" : _viewMode;
+
     /// <summary>Call once from the constructor: saves tracked changes into the active profile.</summary>
     private void WireViewProfileTracking()
     {
@@ -2359,7 +4158,9 @@ public sealed class ViewportViewModel : ViewModelBase
         {
             if (_applyingViewProfile || e.PropertyName is not { } name || !ProfileTrackedProps.Contains(name))
                 return;
-            if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+            // Edit mode dims lines programmatically — don't bake that into the profile.
+            if (IsPaintEditOpen && name == nameof(ToolpathLineOpacity)) return;
+            if (!_viewProfiles.TryGetValue(EffectiveProfileKey, out var prof)) return;
             prof.ShowGrid           = ShowGrid;
             prof.ShowAxes           = ShowAxes;
             prof.ShowBedGrid        = ShowBedGrid;
@@ -2377,7 +4178,7 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Applies the active view mode's display profile to the viewport.</summary>
     internal void ApplyViewDisplayProfile()
     {
-        if (!_viewProfiles.TryGetValue(_viewMode, out var prof)) return;
+        if (!_viewProfiles.TryGetValue(EffectiveProfileKey, out var prof)) return;
         _applyingViewProfile = true;
         try
         {
@@ -2568,6 +4369,33 @@ public sealed class ViewportViewModel : ViewModelBase
             KeepOwnMaterial = true,
             LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f)),
         });
+
+        // Inner shell marking the full-effect core (60% of the radius) — in Erase mode
+        // the wall must pass through this sphere to go completely flat; outside it only
+        // the blend band applies. Slightly stronger tint so it reads against the range.
+        var coreShell = BuildSphereGeometry(1f, seg: 36, rings: 24);
+        var coreMesh = new MeshData(coreShell.Pos, coreShell.Nrm, coreShell.Idx,
+            $"Effector {number} Core",
+            new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.16f),
+            0f, 1f, uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = new OpenTK.Mathematics.Vector4(EffectorLime.X, EffectorLime.Y, EffectorLime.Z, 0.16f),
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                EmissiveFactor  = EffectorLime * 0.5f,
+                AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
+            });
+        node.AddChild(new SceneNode
+        {
+            Name            = $"Effector {number} Core",
+            PendingMesh     = coreMesh,
+            Selectable      = false,
+            PickIgnore      = true,
+            TranslucentPass = true,
+            KeepOwnMaterial = true,
+            LocalTransform  = OpenTK.Mathematics.Matrix4.CreateScale(MathF.Max(range, 1f) * EffectorCoreFraction),
+        });
         return node;
     }
 
@@ -2580,7 +4408,10 @@ public sealed class ViewportViewModel : ViewModelBase
         return null;
     }
 
-    /// <summary>Rescales every effector's glow shell to the current Range (mm).</summary>
+    /// <summary>Fraction of the influence radius with full effect (matches PatternEffect's erase core).</summary>
+    internal const float EffectorCoreFraction = 0.6f;
+
+    /// <summary>Rescales every effector's glow shells (range + core) to the current Range (mm).</summary>
     internal void UpdateEffectorRangeIndicators(float rangeMm)
     {
         float scale = MathF.Max(rangeMm, 1f);
@@ -2589,7 +4420,10 @@ public sealed class ViewportViewModel : ViewModelBase
             if (node is null) continue;
             foreach (var child in node.Children)
                 if (child.TranslucentPass)
-                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(scale);
+                    child.LocalTransform = OpenTK.Mathematics.Matrix4.CreateScale(
+                        child.Name.EndsWith("Core", StringComparison.Ordinal)
+                            ? scale * EffectorCoreFraction
+                            : scale);
         }
         NotifyRenderNeeded();
     }
@@ -2615,6 +4449,10 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Action<string>? OnDevLog { get; set; }
     /// <summary>Returns the current orbit-camera pose; set by the viewport code-behind.</summary>
     internal Func<CameraView?>? GetCameraState { get; set; }
+
+    /// <summary>Wired by the view: re-upload the active scrub toolpath's GPU buffers
+    /// after in-place mutation (seam edits, tpfix injections).</summary>
+    internal Action? RequestActiveToolpathReupload { get; set; }
 
     /// <summary>Applies a saved camera pose; set by the viewport code-behind.</summary>
     internal Action<CameraView>? ApplyCameraState { get; set; }
@@ -2659,6 +4497,12 @@ public sealed class ViewportViewModel : ViewModelBase
         UngroupCommand        = new RelayCommand(() => OnUngroupRequested?.Invoke(), () => CanUngroup);
         ExplodeCommand        = new RelayCommand(() => OnExplodeRequested?.Invoke(), () => CanExplode);
         MeshCleanupCommand    = new RelayCommand(() => OnMeshCleanupRequested?.Invoke(), () => CanMeshCleanup);
+        CutToolCommand        = new RelayCommand(() => OnCutToolRequested?.Invoke(), () => CanCutTool && !IsCutToolActive);
+        CancelCutToolCommand  = new RelayCommand(() => OnCancelCutToolRequested?.Invoke(), () => IsCutToolActive);
+        PerformCutToolCommand = new RelayCommand(() => OnPerformCutToolRequested?.Invoke(), () => IsCutToolActive);
+        CutToolNormalZCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(0, 0, 1), () => IsCutToolActive);
+        CutToolNormalYCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(0, 1, 0), () => IsCutToolActive);
+        CutToolNormalXCommand = new RelayCommand(() => CutToolSession?.SetNormalPreset(1, 0, 0), () => IsCutToolActive);
         SaveViewCommand       = new RelayCommand(() => OnSaveViewRequested?.Invoke());
         SaveDevTransformCommand = new RelayCommand(
             () => OnSaveDevTransformRequested?.Invoke(),
@@ -2693,11 +4537,11 @@ public sealed class ViewportViewModel : ViewModelBase
 
         ExportKrlCommand = new RelayCommand(
             execute:    () => _ = OnExportKrlRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null);
 
         SendToRobotCommand = new RelayCommand(
             execute:    () => _ = OnSendToRobotRequested?.Invoke(),
-            canExecute: () => IsToolpathSelected && ActiveScrubToolpath is not null && ActiveCell is not null);
+            canExecute: () => IsScrubSessionActive && ActiveScrubToolpath is not null && ActiveCell is not null);
 
         MergeToolpathsCommand = new RelayCommand(
             execute:    () => OnMergeToolpathsRequested?.Invoke(),
@@ -3218,6 +5062,126 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     public ConcurrentQueue<PendingToolpathEntry> PendingToolpathReplace { get; } = new();
 
+    /// <summary>
+    /// UI session (edit mode / tools / layer isolation) to re-apply after workspace
+    /// toolpaths finish uploading. Set by workspace restore; consumed by the viewport
+    /// once <see cref="PendingToolpath"/> is empty.
+    /// </summary>
+    internal WorkspaceUiSession? PendingUiSession { get; set; }
+
+    /// <summary>Wired by the viewport: re-select scrub toolpath + apply pending UI session.</summary>
+    internal Action? RequestApplyPendingUiSession { get; set; }
+
+    /// <summary>Viewport captures the MODIFICATIONS list for workspace save.</summary>
+    internal Func<List<WorkspacePaintModification>>? CapturePaintModifications { get; set; }
+
+    /// <summary>Viewport rebuilds the MODIFICATIONS list after toolpath restore.</summary>
+    internal Action<IReadOnlyList<WorkspacePaintModification>>? RestorePaintModifications { get; set; }
+
+    /// <summary>
+    /// Applies pure ViewModel pieces of a saved UI session (view mode, edit tools).
+    /// Scrub node selection and move indices are applied by the viewport code-behind.
+    /// </summary>
+    internal void ApplyUiSessionViewState(WorkspaceUiSession session)
+    {
+        if (!string.IsNullOrWhiteSpace(session.ViewMode))
+            ViewMode = session.ViewMode;
+
+        // Multi-Planar Planes toggle — only apply when the workspace actually saved it
+        // (null = older .mass → keep default on).
+        if (session.ShowMultiPlanarPlanes is bool showPlanes)
+            ShowMultiPlanarPlanes = showPlanes;
+
+        if (!string.IsNullOrWhiteSpace(session.PaintSelectGranularity))
+            PaintSelectGranularity = session.PaintSelectGranularity;
+        if (!string.IsNullOrWhiteSpace(session.PaintPickFilter))
+            PaintPickFilter = session.PaintPickFilter;
+        if (session.PaintBrushRadiusMm > 0)
+            PaintBrushRadiusMm = session.PaintBrushRadiusMm;
+
+        if (!string.IsNullOrWhiteSpace(session.PaintRegionSelectMode))
+            PaintRegionSelectMode = session.PaintRegionSelectMode;
+        if (!string.IsNullOrWhiteSpace(session.PaintModificationMode))
+            PaintModificationMode = session.PaintModificationMode;
+        if (!string.IsNullOrWhiteSpace(session.PaintSupportType))
+            PaintSupportType = session.PaintSupportType;
+        ShowPaintMarkers = session.ShowPaintMarkers;
+        PaintShowBeads = session.PaintShowBeads;
+
+        // Open edit first so tool mutual-exclusion and display modes apply correctly.
+        IsPaintEditOpen = session.IsPaintEditOpen;
+        if (session.IsPaintEditOpen)
+        {
+            PaintHandActive = false;
+            PaintBoxSelectActive = false;
+            PaintBridgeActive = false;
+            PaintRemoveActive = false;
+            PaintLineBridgeActive = false;
+            PaintLineRemoveActive = false;
+
+            if (session.PaintHandActive)
+                PaintHandActive = true;
+            else if (session.PaintBoxSelectActive)
+                PaintBoxSelectActive = true;
+            else if (session.PaintBridgeActive)
+                PaintBridgeActive = true;
+            else if (session.PaintRemoveActive)
+                PaintRemoveActive = true;
+            else if (session.PaintLineBridgeActive)
+                PaintLineBridgeActive = true;
+            else if (session.PaintLineRemoveActive)
+                PaintLineRemoveActive = true;
+            // else: path-select is the implicit default when no other tool is armed
+
+            // Do not call ApplyPaintSupportTypeToSettings here — that would overwrite
+            // the workspace-restored FILL PATTERN with the edit Support type.
+            ApplyPaintEditDisplayMode();
+
+            // 2D Slice Plane Viewer — after edit is open so the toggle is allowed.
+            IsSlicePlaneViewerActive = session.IsSlicePlaneViewerActive;
+            if (session.IsSlicePlaneViewerActive)
+                RefreshSlicePlaneStats();
+        }
+        else
+        {
+            IsSlicePlaneViewerActive = false;
+        }
+
+        // MODIFICATIONS list — after toolpath is armed (caller may re-invoke with layers ready).
+        if (session.PaintModifications is { Count: > 0 } mods)
+            RestorePaintModifications?.Invoke(mods);
+    }
+
+    /// <summary>
+    /// Restores the isolated layer window after the scrub toolpath is armed.
+    /// Prefers exact move indices; falls back to saved layer numbers when the
+    /// move count differs.
+    /// </summary>
+    internal void ApplyUiSessionScrubWindow(WorkspaceUiSession session)
+    {
+        if (ToolpathScrubMax <= 0) return;
+
+        int high = session.ToolpathScrubIndex;
+        int low = session.ToolpathScrubLowIndex;
+
+        // If saved move indices look out of range, map from layer numbers instead.
+        if (high > ToolpathScrubMax || high < 0
+            || (session.ToolpathScrubLayerHigh > 0 && high == 0 && session.ToolpathScrubLayerHigh > 1))
+        {
+            if (session.ToolpathScrubLayerHigh > 0)
+                ToolpathScrubLayerHigh = session.ToolpathScrubLayerHigh;
+            if (session.ToolpathScrubLayerLow > 0)
+                ToolpathScrubLayerLow = session.ToolpathScrubLayerLow;
+            return;
+        }
+
+        high = Math.Clamp(high, 0, ToolpathScrubMax);
+        low = Math.Clamp(low, 0, Math.Max(0, high - 1));
+        // High first so the low clamp has the correct ceiling.
+        ToolpathScrubIndex = high;
+        ToolpathScrubLowIndex = low;
+    }
+
     /// <summary>Returns live toolpath data for a scene node (wired by the viewport).</summary>
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
@@ -3225,7 +5189,30 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
-    public AdditiveSettingsViewModel? AdditiveSettings { get; set; }
+    private AdditiveSettingsViewModel? _additiveSettings;
+    public AdditiveSettingsViewModel? AdditiveSettings
+    {
+        get => _additiveSettings;
+        set
+        {
+            if (ReferenceEquals(_additiveSettings, value)) return;
+            if (_additiveSettings is not null)
+                _additiveSettings.PropertyChanged -= OnAdditiveSettingsPropertyChanged;
+            _additiveSettings = value;
+            if (_additiveSettings is not null)
+                _additiveSettings.PropertyChanged += OnAdditiveSettingsPropertyChanged;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+        }
+    }
+
+    private void OnAdditiveSettingsPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(AdditiveSettingsViewModel.ShowMultiPlanarControls)
+            or nameof(AdditiveSettingsViewModel.Method)
+            or nameof(AdditiveSettingsViewModel.SelectedPreset))
+            OnPropertyChanged(nameof(ShowMultiPlanarPlanesButton));
+    }
 
     /// <summary>Subtractive (relief milling) settings, wired from the right panel.</summary>
     public SubtractiveSettingsViewModel? SubtractiveSettings { get; set; }
@@ -3236,8 +5223,16 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool HasToolpathStats
     {
         get => _hasToolpathStats;
-        set => SetField(ref _hasToolpathStats, value);
+        set
+        {
+            if (SetField(ref _hasToolpathStats, value))
+                OnPropertyChanged(nameof(ShowToolpathStatsOverlay));
+        }
     }
+
+    /// <summary>Stats + cost hide while the Edit menu is open — the numbers are
+    /// stale mid-edit (slicing is paused) and the boxes crowd the editing HUD.</summary>
+    public bool ShowToolpathStatsOverlay => HasToolpathStats && !IsPaintEditOpen;
 
     private string _statsTime = "";
     public string StatsTime
@@ -3247,6 +5242,10 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     private string _statsWeight = "";
+    /// <summary>Numeric twins of the display stats — feed ERP quotes/slice costing.</summary>
+    public double StatsTimeSeconds { get; set; }
+    public double StatsWeightKg    { get; set; }
+
     public string StatsWeight
     {
         get => _statsWeight;
@@ -3584,6 +5583,15 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>Locks/unlocks the cell-environment rows whose scene node is dev-editable
+    /// (print bed, stands) — dev mode unlocks them so they can be selected and transformed.</summary>
+    internal void SetCellEnvironmentDevLock(Func<SceneNode, bool> isDevNode, bool locked)
+    {
+        foreach (var item in _cellEnvOutlinerItems)
+            if (isDevNode(item.Node))
+                item.IsLocked = locked;
+    }
+
     private OutlinerItemViewModel? _robotGroupItem;
     private OutlinerItemViewModel? _robotPedestalItem;
     private OutlinerItemViewModel? _robotArmItem;
@@ -3617,6 +5625,17 @@ public sealed class ViewportViewModel : ViewModelBase
             _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
             (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
         }
+    }
+
+    /// <summary>
+    /// Syncs Robot Root / Pedestal / Arm outliner eye state from the live scene nodes
+    /// (e.g. after 2D slice view temporarily hides the robot).
+    /// </summary>
+    internal void RefreshRobotOutlinerVisibilityFromScene()
+    {
+        _robotGroupItem?.NotifyVisibilityFromScene();
+        _robotPedestalItem?.NotifyVisibilityFromScene();
+        _robotArmItem?.NotifyVisibilityFromScene();
     }
 
     /// <summary>
@@ -4365,6 +6384,102 @@ public sealed class ViewportViewModel : ViewModelBase
     /// removes it from the outliner, and queues the root for GL disposal.
     /// Must be called on the UI thread.
     /// </summary>
+    /// <summary>Snapshot of an outliner row's position for delete-undo.</summary>
+    internal (OutlinerItemViewModel Item, OutlinerItemViewModel? Parent, int Index)? CaptureOutlinerContext(SceneNode node)
+    {
+        if (FindOutlinerItem(node) is not { } item) return null;
+        var parent = FindParentOutlinerItem(item);
+        int index  = parent is null ? OutlinerItems.IndexOf(item) : parent.Children.IndexOf(item);
+        return (item, parent, Math.Max(index, 0));
+    }
+
+    /// <summary>Re-inserts a previously deleted outliner row at its old position (delete-undo).</summary>
+    internal void RestoreOutlinerItem(OutlinerItemViewModel item, OutlinerItemViewModel? parent, int index)
+    {
+        if (parent is null)
+        {
+            if (!OutlinerItems.Contains(item))
+                OutlinerItems.Insert(Math.Clamp(index, 0, OutlinerItems.Count), item);
+        }
+        else if (!parent.Children.Contains(item))
+        {
+            parent.InsertChild(item, index);
+        }
+        SliceCommand.RaiseCanExecuteChanged();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Wired by the viewport code-behind: shift+click sequence toggle.</summary>
+    internal Action<SceneNode>? OnSequenceToggleRequested { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: current sequence-selection size (diagnostics).</summary>
+    internal Func<int>? GetSequenceCount { get; set; }
+
+    /// <summary>Wired by the viewport code-behind: PrintSpeedScale spread of the first toolpath (diagnostics).</summary>
+    internal Func<string>? GetSpeedSpread { get; set; }
+
+    /// <summary>One floating value tag beside the toolpath in the Speed/RPM views.</summary>
+    public sealed record ViewTag(double X, double Y, string Text);
+
+    private IReadOnlyList<ViewTag> _viewTags = [];
+
+    /// <summary>Height-interval value tags (screen coords, overlay space).</summary>
+    public IReadOnlyList<ViewTag> ViewTags
+    {
+        get => _viewTags;
+        internal set => SetField(ref _viewTags, value);
+    }
+
+    public bool ShowViewTags => _viewMode is "Speed" or "RPM";
+
+    /// <summary>Wired by the viewport code-behind: outliner shift+click range-extend.</summary>
+    internal Action<OutlinerItemViewModel>? OnSequenceRangeRequested { get; set; }
+
+    /// <summary>Outliner shift+click: extends the print-sequence selection from the
+    /// current anchor through the clicked row (models resolve to their toolpath child).</summary>
+    internal bool TryToggleToolpathSequenceSelection(OutlinerItemViewModel item)
+    {
+        bool sequenceable = item.IsToolpath || IsUserModelItem(item)
+            || (item.IsToolpath is false && OwningModelItem(item) is not null);
+        if (!sequenceable || OnSequenceRangeRequested is null) return false;
+        OnSequenceRangeRequested.Invoke(item);
+        return true;
+    }
+
+    /// <summary>Top-level user model rows in outliner order (sequence range selection).</summary>
+    internal List<OutlinerItemViewModel> GetUserModelItems() => EnumerateUserModelItems().ToList();
+
+    /// <summary>Highlights outliner rows whose toolpath is in the sequence selection.</summary>
+    internal void SyncSequenceRowHighlights(IReadOnlyList<SceneNode> selectedToolpaths)
+    {
+        bool multi = selectedToolpaths.Count >= 2;
+        foreach (var model in EnumerateUserModelItems())
+        {
+            bool anyChild = false;
+            foreach (var child in model.Children)
+            {
+                if (!child.IsToolpath) continue;
+                bool on = multi && selectedToolpaths.Contains(child.Node);
+                child.IsSequenceSelected = on;
+                anyChild |= on;
+            }
+            model.IsSequenceSelected = anyChild;
+        }
+    }
+
+    /// <summary>True when the row is a user-imported print model (context-menu gating).</summary>
+    internal bool IsUserModelItem(OutlinerItemViewModel item)
+        => EnumerateUserModelItems().Contains(item);
+
+    /// <summary>Explicitly (re)creates the toolpath for a model — recovery path after the
+    /// realtime toolpath was deleted; slicing re-adopts it into the live sync loop.</summary>
+    internal void RequestCreateToolpath(OutlinerItemViewModel item)
+    {
+        ForceSelectNode?.Invoke(item.Node);
+        if (SliceCommand.CanExecute(null))
+            SliceCommand.Execute(null);
+    }
+
     public void RequestDeleteNode(SceneNode node)
     {
         if (FindOutlinerItem(node) is not { } item) return;

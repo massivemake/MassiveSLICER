@@ -56,9 +56,23 @@ public sealed class MainWindowViewModel : ViewModelBase
     private int _workspaceRestoreGeneration;
     private bool _cellSceneReady;
     private bool _applyingUndoRedo;
+    private bool _suppressWorkspaceDirty;
     private string _lastCommittedPrefsJson = "";
     private CancellationTokenSource? _settingsUndoDebounce;
     private string _lastProgressLogMessage = string.Empty;
+
+    /// <summary>Marks the open workspace as having unsaved changes (yellow status dot).</summary>
+    public void MarkWorkspaceDirty()
+    {
+        if (_suppressWorkspaceDirty || _applyingUndoRedo) return;
+        StatusBar.IsWorkspaceDirty = true;
+    }
+
+    /// <summary>Clears the unsaved flag after a successful save or open (green status dot).</summary>
+    public void ClearWorkspaceDirty()
+    {
+        StatusBar.IsWorkspaceDirty = false;
+    }
 
     private static readonly JsonSerializerOptions PrefsJsonOptions = new() { WriteIndented = false };
 
@@ -76,15 +90,72 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Toolbar.AttachUndoRedo(UndoRedo);
         Viewport.UndoRedo = UndoRedo;
+        // Any undoable edit (transform, settings, paint, delete…) marks the scene dirty.
+        UndoRedo.StateChanged += () =>
+        {
+            if (_suppressWorkspaceDirty) return;
+            // Clear stack on New/Open also fires StateChanged — only mark dirty when
+            // there is something on the stack (a real edit).
+            if (UndoRedo.CanUndo || UndoRedo.CanRedo)
+                MarkWorkspaceDirty();
+        };
+        Viewport.MarkWorkspaceDirty = MarkWorkspaceDirty;
+        Viewport.OnPaintEditModeChanged = open => RightPanel.ApplyPaintEditMode(open);
 
         // Give the viewport direct access to the robot panel so the render loop
         // can read joint angles for FK without a cross-tree binding.
         Viewport.Robot = RightPanel.Settings.Robot;
         Viewport.LiveIo.AttachRobot(RightPanel.Settings.Robot);
+        Viewport.Erp.Initialize(AppPreferences,
+            () => PreferencesLoader.Save(AppPreferences),
+            msg => Console.Log(msg));
+        Viewport.RobotSmb.Initialize(AppPreferences,
+            () => PreferencesLoader.Save(AppPreferences),
+            msg => Console.Log(msg));
+        Viewport.Erp.GetDefaultElementName = () =>
+            AppPreferences.LastWorkspacePath is { Length: > 0 } wp
+                ? System.IO.Path.GetFileNameWithoutExtension(wp)
+                : null;
+        Viewport.Erp.FindWorkspaceFiles = FindErpWorkspaceFiles;
+
+        Viewport.Erp.OpenWorkspaceFile  = p => OpenWorkspace(p);
+
+        Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
+        Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
+        Toolbar.OpenRecentRequested += (_, recentPath) =>
+        {
+            if (System.IO.File.Exists(recentPath))
+            {
+                OpenWorkspace(recentPath);
+            }
+            else
+            {
+                Console.LogError($"[workspace] '{recentPath}' no longer exists — removed from Open Recent.");
+                AppPreferences.RecentWorkspaces.RemoveAll(r =>
+                    string.Equals(r, recentPath, StringComparison.OrdinalIgnoreCase));
+                PreferencesLoader.Save(AppPreferences);
+                Toolbar.SetRecentWorkspaces(AppPreferences.RecentWorkspaces);
+            }
+        };
+        Viewport.Erp.WorkspaceLinked = () =>
+        {
+            if (!TrySaveCurrentWorkspace())
+                Console.Log("[workspace] linked to ERP but no project folder found — use Save As.");
+        };
 
         // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
         Viewport.SubtractiveSettings = RightPanel.Subtractive;
+
+        // X-bracing cylinder is placed on the print-bed centre (ImportSurfaceCenter),
+        // not the robot / world origin.
+        RightPanel.Additive.ResolvePrintBedCenterXY = () =>
+        {
+            var cell = Viewport.ActiveCell;
+            if (cell?.Bed is null) return null;
+            var c = cell.Bed.ImportSurfaceCenter(cell.Robot.WorldPosition);
+            return (c.X, c.Y);
+        };
 
         // Load persisted material presets and restore the last selection.
         foreach (var preset in MaterialPresetsLoader.Load())
@@ -211,6 +282,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         Toolbar.FrameAllRequested       += (_, _) => Viewport.OnFrameAllRequested?.Invoke();
         Toolbar.NewWorkspaceRequested   += (_, _) => NewWorkspace();
         Viewport.OnSaveViewRequested    = SaveCurrentView;
+        Viewport.OnToolheadSelected     = () =>
+        {
+            if (RightPanel.ShowAdditiveTabButton)
+                RightPanel.ActiveTab = RightPanelTab.Additive;
+            RightPanel.FlashToolheadOrientation();
+        };
 
         Console.Attach(this, new ConsoleCommandContext
         {
@@ -1167,8 +1244,199 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally { robot.ResumeStreaming(); }
     }
 
+    /// <summary>Seeds a RobotSmb prefs entry per discovered cell (host prefilled from the
+    /// cell's bridge IP) so Preferences → Connections always lists every cell.</summary>
+    public void EnsureRobotSmbEntries(IEnumerable<(string Name, string BridgeIp)> cells)
+    {
+        bool added = false;
+        foreach (var (name, ip) in cells)
+        {
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            if (AppPreferences.RobotSmb.Any(c => string.Equals(c.CellName, name, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            AppPreferences.RobotSmb.Add(new RobotSmbConfig { CellName = name, Host = ip });
+            added = true;
+        }
+        if (added) PreferencesLoader.Save(AppPreferences);
+    }
+
     /// <summary>Captures the full app window as PNG bytes. Wired from <c>MainWindow</c> on load.</summary>
     internal Func<Task<byte[]?>>? CaptureAppScreenshot { get; set; }
+
+    /// <summary>Captures only the GL viewport (no UI chrome) as PNG bytes — used for the
+    /// ERP element preview. Wired from <c>MainWindow</c> on load.</summary>
+    internal Func<Task<byte[]?>>? CaptureViewportPng { get; set; }
+
+    /// <summary>
+    /// Builds the ERP slice registration payload: renders a viewport preview PNG into
+    /// <c>slicer/</c> beside the saved .mass, and references heavy files by UNAS
+    /// share-relative path (the ERP resolves them via its UNAS API — no bytes are
+    /// uploaded to the web server). Returns null when the workspace was never saved.
+    /// </summary>
+    internal async Task<(MassiveSlicer.App.Erp.ErpSliceStats Stats, IReadOnlyList<MassiveSlicer.App.Erp.ErpSliceFile> Files)?> BuildErpSlicePayloadAsync()
+    {
+        if (AppPreferences.LastWorkspacePath is not { Length: > 0 } massPath
+            || !System.IO.File.Exists(massPath))
+            return null;
+
+        var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
+
+        // The .src for this revision goes to the project's 3D Print Files/Rev N/ on
+        // the UNAS; the preview render lands beside it so each rev folder is complete.
+        var src = await ExportSrcToPrintFilesAsync();
+        if (src is { } s2)
+        {
+            if (ToUnasShareRelative(s2.Path) is { } krlRel)
+                files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(s2.Path).Length));
+        }
+        else
+        {
+            Console.Log("[erp] no active toolpath — registering without a .src file.");
+        }
+
+        try
+        {
+            if (CaptureViewportPng is { } capture && await capture() is { Length: > 0 } png)
+            {
+                string dir = src?.RevFolder
+                    ?? System.IO.Path.Combine(System.IO.Path.GetDirectoryName(massPath)!, "slicer");
+                System.IO.Directory.CreateDirectory(dir);
+                string previewPath = System.IO.Path.Combine(
+                    dir, System.IO.Path.GetFileNameWithoutExtension(massPath) + " preview.png");
+                await System.IO.File.WriteAllBytesAsync(previewPath, png);
+                if (ToUnasShareRelative(previewPath) is { } previewRel)
+                    files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("preview", previewRel, png.Length));
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[erp] preview render failed: {ex.Message}");
+        }
+
+        if (ToUnasShareRelative(massPath) is { } massRel)
+            files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
+
+        var add = RightPanel.Additive;
+        var stats = new MassiveSlicer.App.Erp.ErpSliceStats(
+            PrintTime:     Viewport.StatsTime is { Length: > 0 } t ? t : null,
+            Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
+            Material:      add.SelectedPreset?.Name,
+            LayerHeightMm: add.LayerHeight,
+            BeadWidthMm:   add.BeadWidth,
+            PrintTimeSec:  Viewport.StatsTimeSeconds > 0 ? Viewport.StatsTimeSeconds : null,
+            WeightKg:      Viewport.StatsWeightKg > 0 ? Viewport.StatsWeightKg : null);
+        return (stats, files);
+    }
+
+    /// <summary>
+    /// After a successful Export-to-Robot SMB upload: mirrors the .src into the
+    /// project's <c>slicer/</c> folder on the UNAS (so the ERP can reach the same
+    /// file) and registers a slice rev flagged <c>sentToRobot</c> so the ERP knows
+    /// the program is on the printer and ready to run.
+    /// </summary>
+    internal async Task NotifyErpSentToRobotAsync(string srcPath, string fileName, string cellName, string host)
+    {
+        var files = new List<MassiveSlicer.App.Erp.ErpSliceFile>();
+        string robotPath = $@"\\{host}\{fileName}";
+
+        // srcPath is the NAS copy under 3D Print Files/Rev N/ when the workspace is
+        // saved on the share; reference it directly.
+        if (ToUnasShareRelative(srcPath) is { } krlRel && System.IO.File.Exists(srcPath))
+            files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("krl", krlRel, new System.IO.FileInfo(srcPath).Length));
+
+        if (AppPreferences.LastWorkspacePath is { Length: > 0 } massPath && System.IO.File.Exists(massPath))
+        {
+            if (ToUnasShareRelative(massPath) is { } massRel)
+                files.Add(new MassiveSlicer.App.Erp.ErpSliceFile("workspace", massRel, new System.IO.FileInfo(massPath).Length));
+        }
+
+        var add = RightPanel.Additive;
+        var stats = new MassiveSlicer.App.Erp.ErpSliceStats(
+            PrintTime:     Viewport.StatsTime is { Length: > 0 } t ? t : null,
+            Weight:        Viewport.StatsWeight is { Length: > 0 } w ? w : null,
+            Material:      add.SelectedPreset?.Name,
+            LayerHeightMm: add.LayerHeight,
+            BeadWidthMm:   add.BeadWidth,
+            PrintTimeSec:  Viewport.StatsTimeSeconds > 0 ? Viewport.StatsTimeSeconds : null,
+            WeightKg:      Viewport.StatsWeightKg > 0 ? Viewport.StatsWeightKg : null);
+
+        await Viewport.Erp.NotifySentToRobotAsync(stats, files, new Dictionary<string, object?>
+        {
+            ["cell"]     = cellName,
+            ["host"]     = host,
+            ["file"]     = fileName,
+            ["robotPath"] = robotPath,
+            ["at"]       = DateTime.UtcNow.ToString("o"),
+        });
+    }
+
+    /// <summary>
+    /// Writes the active toolpath's .src into the project's
+    /// <c>3D Print Files/Rev N/</c> folder beside the saved .mass — one folder per
+    /// registered/sent revision, filename identical to the source geometry (the KRL
+    /// program name derives from it). Returns null when the workspace was never
+    /// saved or no toolpath is active.
+    /// </summary>
+    internal async Task<(string Path, string RevFolder)?> ExportSrcToPrintFilesAsync()
+    {
+        if (AppPreferences.LastWorkspacePath is not { Length: > 0 } massPath
+            || !System.IO.File.Exists(massPath)
+            || Viewport.ExportKrlToDirectory is not { } export)
+            return null;
+
+        string baseDir = System.IO.Path.Combine(
+            System.IO.Path.GetDirectoryName(massPath)!, "3D Print Files");
+        string revDir = NextRevisionDir(baseDir);
+        System.IO.Directory.CreateDirectory(revDir);
+        int rev = int.TryParse(System.IO.Path.GetFileName(revDir)[4..].Trim(), out int n2) ? n2 : 1;
+
+        string? path = null;
+        try
+        {
+            path = await export(revDir, rev);
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[krl] .src export to {revDir} failed: {ex.Message}");
+        }
+
+        if (path is null)
+        {
+            try { System.IO.Directory.Delete(revDir); } catch { /* non-empty or gone */ }
+            return null;
+        }
+        Console.Log($"[krl] Saved {System.IO.Path.GetFileName(path)} to {revDir}");
+        return (path, revDir);
+    }
+
+    /// <summary>Next unused "Rev N" subfolder (Rev 1, Rev 2, …) under <paramref name="baseDir"/>.</summary>
+    internal static string NextRevisionDir(string baseDir)
+    {
+        int next = 1;
+        if (System.IO.Directory.Exists(baseDir))
+        {
+            foreach (var dir in System.IO.Directory.EnumerateDirectories(baseDir))
+            {
+                var name = System.IO.Path.GetFileName(dir);
+                if (name.StartsWith("Rev ", StringComparison.OrdinalIgnoreCase)
+                    && int.TryParse(name[4..].Trim(), out int n) && n >= next)
+                    next = n + 1;
+            }
+        }
+        return System.IO.Path.Combine(baseDir, $"Rev {next}");
+    }
+
+    /// <summary>
+    /// <c>/Volumes/&lt;share&gt;/rest…</c> → <c>rest…</c> — the path the ERP's UNAS API
+    /// resolves against the same share. Null for local (non-mounted) paths.
+    /// </summary>
+    internal static string? ToUnasShareRelative(string path)
+    {
+        var parts = path.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length > 2 && parts[0] == "Volumes"
+            ? string.Join('/', parts.Skip(2))
+            : null;
+    }
 
     /// <summary>Saves a full-window PNG under <c>%LOCALAPPDATA%/MassiveSlicer/screenshots/</c> and returns the path.</summary>
     public async Task<string> SaveViewportScreenshotAsync()
@@ -1289,7 +1557,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         robot.PauseStreaming();
         try
         {
-            foreach (var name in names.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            foreach (var name in names.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             {
                 var value = await robot.ReadVarAsync(name);
                 Console.Log($"[var] {name} = {value.Trim()}");
@@ -1938,10 +2206,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Clears user models and starts a fresh unsaved workspace.</summary>
     public void NewWorkspace()
     {
-        Viewport.ClearUserScene();
-        UndoRedo.Clear();
-        AppPreferences.LastWorkspacePath = null;
-        PreferencesLoader.Save(AppPreferences);
+        _suppressWorkspaceDirty = true;
+        try
+        {
+            Viewport.ClearUserScene();
+            Viewport.Erp.ClearAttachment();
+            UndoRedo.Clear();
+            AppPreferences.LastWorkspacePath = null;
+            PreferencesLoader.Save(AppPreferences);
+            StatusBar.FileStatus = "Untitled";
+            ClearWorkspaceDirty();
+        }
+        finally
+        {
+            _suppressWorkspaceDirty = false;
+        }
 
         // Reset to a fresh cell: rebuild the active cell scene (robot/bed back to home pose).
         // Falls back to the first discovered cell if none is active.
@@ -2064,6 +2343,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        MarkWorkspaceDirty();
         // Inspect BEFORE enqueuing: AddImportNode hands the node to the GL upload thread,
         // which clears PendingMesh once uploaded -- for small meshes that can happen before
         // the inspector runs, making it report 0 verts. Summarize while the mesh is intact.
@@ -2161,6 +2441,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         {
             HideBusy();
             Console.Log($"[workspace] Failed to load '{path}'.");
+            if (System.IO.File.Exists(path + ".bak"))
+                Console.Log($"[workspace] A previous save exists at {System.IO.Path.GetFileName(path)}.bak — open it to recover.");
             return;
         }
 
@@ -2256,11 +2538,100 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// </summary>
     public bool TrySaveCurrentWorkspace()
     {
+        // ERP-linked workspaces know their home: the attached project's
+        // 06-Production Documents folder on the UNAS — no save dialog needed.
+        if (ResolveErpProjectDocsFolder() is { } docs)
+        {
+            string fileName = AppPreferences.LastWorkspacePath is { Length: > 0 } lp
+                ? System.IO.Path.GetFileName(lp)
+                : ErpDefaultWorkspaceFileName();
+            string target = System.IO.Path.Combine(docs, fileName);
+            if (!string.Equals(target, AppPreferences.LastWorkspacePath, StringComparison.Ordinal))
+                Console.Log($"[workspace] ERP-linked — saving to {target}");
+            _ = SaveWorkspaceAsync(target, guardStalePath: true);
+            return true;
+        }
+
         if (AppPreferences.LastWorkspacePath is not { Length: > 0 } path)
             return false;
 
-        SaveWorkspace(path);
+        _ = SaveWorkspaceAsync(path, guardStalePath: true);
         return true;
+    }
+
+    /// <summary>Front-inserts into File → Open Recent (deduped, capped at 10).</summary>
+    private void RecordRecentWorkspace(string path)
+    {
+        var list = AppPreferences.RecentWorkspaces;
+        list.RemoveAll(r => string.Equals(r, path, StringComparison.OrdinalIgnoreCase));
+        list.Insert(0, path);
+        if (list.Count > 10)
+            list.RemoveRange(10, list.Count - 10);
+        Toolbar.SetRecentWorkspaces(list);
+    }
+
+    /// <summary>The attached project/lead's "06-Production Documents" folder, found by
+    /// matching the attachment number against folder names under the UNAS projects
+    /// root (e.g. "26-173 - studio JEFRE llc - …"). Null when unattached, the share
+    /// is offline, or no folder starts with the number.</summary>
+    internal string? ResolveErpProjectDocsFolder()
+    {
+        var att = Viewport.Erp.Attachment;
+        if (att is null || string.IsNullOrWhiteSpace(att.Number)) return null;
+
+        try
+        {
+            string root = AppPreferences.UnasProjectsRoot;
+            if (!System.IO.Directory.Exists(root)) return null;
+            var match = System.IO.Directory.EnumerateDirectories(root).FirstOrDefault(d =>
+                System.IO.Path.GetFileName(d).StartsWith(att.Number, StringComparison.OrdinalIgnoreCase));
+            if (match is null)
+            {
+                Console.Log($"[workspace] no project folder starting with '{att.Number}' under {root}.");
+                return null;
+            }
+            string docs = System.IO.Path.Combine(match, "06-Production Documents");
+            System.IO.Directory.CreateDirectory(docs);
+            return docs;
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[workspace] project folder lookup failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Lists saved .mass workspaces in the attached project's documents folder,
+    /// newest first — the ERP dock offers them so an existing element's work can be
+    /// loaded and iterated (each new send registers the next rev).</summary>
+    internal IReadOnlyList<(string Path, string Name, string Detail)> FindErpWorkspaceFiles()
+    {
+        try
+        {
+            if (ResolveErpProjectDocsFolder() is not { } docs) return [];
+            return System.IO.Directory.EnumerateFiles(docs, "*.mass", System.IO.SearchOption.TopDirectoryOnly)
+                .Select(f => new System.IO.FileInfo(f))
+                .OrderByDescending(fi => fi.LastWriteTimeUtc)
+                .Take(12)
+                .Select(fi => (
+                    fi.FullName,
+                    System.IO.Path.GetFileNameWithoutExtension(fi.Name),
+                    $"{fi.LastWriteTime:MMM d, HH:mm} · {fi.Length / (1024.0 * 1024.0):0.#} MB"))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            Console.Log($"[erp] workspace scan failed: {ex.Message}");
+            return [];
+        }
+    }
+
+    /// <summary>"yyyy_MMdd - <first model>.mass" (their file convention) for the first
+    /// save of a fresh ERP-linked workspace.</summary>
+    private string ErpDefaultWorkspaceFileName()
+    {
+        var model = Viewport.EnumerateUserModelItems().FirstOrDefault();
+        return RobotKrlPaths.SuggestedFileName(model?.Node.Name) + ".mass";
     }
 
     private bool _workspaceSaveInProgress;
@@ -2268,8 +2639,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>
     /// Saves all outliner models, camera, cell, and settings to <paramref name="path"/>.
     /// Toolpath serialization runs off the UI thread so large slices do not freeze the app.
+    /// <paramref name="guardStalePath"/> is set by implicit Save (which targets the
+    /// remembered LastWorkspacePath): it refuses to overwrite a file that has models when
+    /// the current scene is empty. Explicit Save As paths skip the guard.
     /// </summary>
-    public async Task SaveWorkspaceAsync(string path)
+    public async Task SaveWorkspaceAsync(string path, bool guardStalePath = false)
     {
         if (_workspaceSaveInProgress)
         {
@@ -2290,11 +2664,25 @@ public sealed class MainWindowViewModel : ViewModelBase
             int toolpathCount = capture.ToolpathEntries.Count;
             int modelCount    = capture.Document.Models.Count;
 
+            // A stale LastWorkspacePath plus an empty scene must never clobber a real
+            // workspace file (models are unrecoverable without NAS snapshots).
+            if (guardStalePath && modelCount == 0 &&
+                await Task.Run(() => WorkspaceService.FileHasModels(path)))
+            {
+                Console.LogError(
+                    $"[workspace] Refusing to save: the scene is empty but {System.IO.Path.GetFileName(path)} " +
+                    "contains models. Use Save As to overwrite it intentionally.");
+                return;
+            }
+
             await Task.Run(() => WorkspaceService.FinalizeAndSave(capture, path));
 
             AppPreferences.LastWorkspacePath = path;
-            StatusBar.FileStatus = System.IO.Path.GetFileName(path);
+            RecordRecentWorkspace(path);
+            Viewport.Erp.RefreshWorkspaceCandidates();
             PreferencesLoader.Save(AppPreferences);
+            StatusBar.FileStatus = Path.GetFileName(path);
+            ClearWorkspaceDirty();
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
@@ -2325,13 +2713,16 @@ public sealed class MainWindowViewModel : ViewModelBase
     private void ApplyWorkspaceState(WorkspaceDocument doc, string workspacePath)
     {
         _applyingUndoRedo = true;
+        _suppressWorkspaceDirty = true;
         try
         {
             ApplyWorkspaceStateCore(doc, workspacePath);
+            ClearWorkspaceDirty();
         }
         finally
         {
             _applyingUndoRedo = false;
+            _suppressWorkspaceDirty = false;
             PersistSettings();
             _lastCommittedPrefsJson = CapturePrefsJson();
         }
@@ -2346,13 +2737,34 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
             RightPanel.ActiveTab = tab;
 
+        Viewport.Erp.RestoreAttachment(doc.Erp);
+
         int restoredCount = WorkspaceService.RestoreModels(doc, Viewport, workspacePath);
         Viewport.FlattenScansToBedGroup();
 
         if (doc.Camera is { } camera)
             Viewport.ApplyCameraState?.Invoke(camera);
 
+        // Robot pose (incl. E1) saved with the workspace — reapply so the scene
+        // comes back exactly as it was. A restored scrub session may later re-pose
+        // A1–A6 from IK, which is correct; E1 sticks.
+        if (doc.UiSession?.RobotJoints is { Length: >= 7 } rj && Viewport.Robot is { } robotVm)
+        {
+            robotVm.A1 = rj[0]; robotVm.A2 = rj[1]; robotVm.A3 = rj[2];
+            robotVm.A4 = rj[3]; robotVm.A5 = rj[4]; robotVm.A6 = rj[5];
+            robotVm.E1 = rj[6];
+        }
+
+        Viewport.RestoreSimCameraKeyframes(doc.UiSession?.SimCameraKeyframes);
+
+        // Queue UI session restore (edit mode / tool / layer isolation). Applied once
+        // pending toolpath uploads finish so the scrub range and nodes exist.
+        Viewport.PendingUiSession = doc.UiSession;
+        if (doc.UiSession is not null && Viewport.PendingToolpath.IsEmpty)
+            Viewport.RequestApplyPendingUiSession?.Invoke();
+
         AppPreferences.LastWorkspacePath = workspacePath;
+        RecordRecentWorkspace(workspacePath);
         StatusBar.FileStatus = Path.GetFileName(workspacePath);
         SyncKrlFrameIndicesToActiveTab();
         PreferencesLoader.Save(AppPreferences);
@@ -2474,6 +2886,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WipeLengthMm            = copy.WipeLengthMm;
         live.WipeRampMm              = copy.WipeRampMm;
         live.WipeSpeed               = copy.WipeSpeed;
+        live.WipeSkipShortTravels    = copy.WipeSkipShortTravels;
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
@@ -2486,6 +2899,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedMinMmS          = copy.LayerSpeedMinMmS;
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
+        live.PaintMarks              = copy.PaintMarks;
         live.CurvedBoundarySource       = copy.CurvedBoundarySource;
         live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
         live.CurvedEnableRegionSplit    = copy.CurvedEnableRegionSplit;
@@ -2504,9 +2918,33 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.SmoothRotation                = copy.SmoothRotation;
         live.SmoothRotationRadius          = copy.SmoothRotationRadius;
         live.SmoothRotationMaxRateDegPerMm = copy.SmoothRotationMaxRateDegPerMm;
-        live.InfillPattern          = copy.InfillPattern;
+        live.InfillPattern          = NormalizeInfillPatternLabel(copy.InfillPattern);
         live.InfillSpacingMm        = copy.InfillSpacingMm;
         live.InfillAngleDeg         = copy.InfillAngleDeg;
+        live.LightningOverhangDeg     = copy.LightningOverhangDeg;
+        live.LightningBranchSpacingMm = copy.LightningBranchSpacingMm;
+        live.LightningTipLoopRadiusMm = copy.LightningTipLoopRadiusMm;
+        live.LightningAnchorInterior  = copy.LightningAnchorInterior;
+        live.LightningExteriorOverhangs = copy.LightningExteriorOverhangs;
+        live.LightningAnchorExterior  = copy.LightningExteriorOverhangs;
+        live.LightningButtressBarMm         = copy.LightningButtressBarMm;
+        live.LightningPreferInteriorMouths  = copy.LightningPreferInteriorMouths;
+        live.LightningTargetSupportSelections = copy.LightningTargetSupportSelections;
+        live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
+        live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
+        live.XBracingEnabled        = copy.XBracingEnabled;
+        live.XBracingDepthMm        = copy.XBracingDepthMm;
+        live.XBracingSpanMm         = copy.XBracingSpanMm;
+        live.XBracingAngleDeg       = copy.XBracingAngleDeg;
+        live.XBracingExtendEdges    = copy.XBracingExtendEdges;
+        live.XBracingShowHelper     = copy.XBracingShowHelper;
+        live.XBracingPlaneTiltY     = copy.XBracingPlaneTiltY;
+        live.XBracingPlaneTiltX     = copy.XBracingPlaneTiltX;
+        live.XBracingProjectionType = copy.XBracingProjectionType;
+        live.XBracingCylinderDiameterMm = copy.XBracingCylinderDiameterMm;
+        live.XBracingCylinderX      = copy.XBracingCylinderX;
+        live.XBracingCylinderY      = copy.XBracingCylinderY;
+        live.XBracingCylinderFlipDirection = copy.XBracingCylinderFlipDirection;
         live.WaveEffect             = copy.WaveEffect;
         live.WaveAmplitude          = copy.WaveAmplitude;
         live.WaveFrequencyMode      = copy.WaveFrequencyMode;
@@ -2522,6 +2960,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WaveWavelengthTop      = copy.WaveWavelengthTop;
         live.WaveGradientCenter     = copy.WaveGradientCenter;
         live.WaveGradientCurve      = copy.WaveGradientCurve;
+        live.TemperatureOffset      = copy.TemperatureOffset;
+        live.ExtrusionSpeedOffset   = copy.ExtrusionSpeedOffset;
+        live.PatternType            = copy.PatternType;
+        live.PatternMapping         = copy.PatternMapping;
+        live.PatternWavelengthMm    = copy.PatternWavelengthMm;
+        live.PatternAmplitude       = copy.PatternAmplitude;
+        live.PatternFrequency       = copy.PatternFrequency;
+        live.PatternTwist           = copy.PatternTwist;
+        live.PatternOffset          = copy.PatternOffset;
+        live.PatternFadeIn          = copy.PatternFadeIn;
+        live.PatternFadeOut         = copy.PatternFadeOut;
         live.SliceMethod            = copy.SliceMethod;
         live.SlicingMode            = copy.SlicingMode;
         live.PassAngle              = copy.PassAngle;
@@ -2580,6 +3029,22 @@ public sealed class MainWindowViewModel : ViewModelBase
                     $"(azimuth {view.Azimuth:F0}Â°, elevation {view.Elevation:F0}Â°, radius {view.Radius:F0} mm). " +
                     "Restored on next load for all users.");
     }
+
+    /// <summary>
+    /// Canonical FILL PATTERN labels for the ComboBox / workspace round-trip.
+    /// Maps legacy names and rejects unknown values so the selection sticks on reopen.
+    /// </summary>
+    private static string NormalizeInfillPatternLabel(string? raw) => raw switch
+    {
+        "Rectilinear" => "Rectilinear",
+        "Grid" => "Grid",
+        "Triangle" => "Triangle",
+        "Ghost Mesh Grid" => "Ghost Mesh Grid",
+        "Formbound Bridge" or "Lightning Bridge" => "Formbound Bridge",
+        "Formbound Buttress" => "Formbound Buttress",
+        "None" or null or "" => "None",
+        _ => "None",
+    };
 
     /// <summary>
     /// Copies all persisted settings from <see cref="AppPreferences"/> back into
@@ -2655,15 +3120,47 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.AdaptiveQuality     = p.AdaptiveQuality;
         add.MinLayerHeight      = p.MinLayerHeight;
         add.DisableContourOffset = p.DisableContourOffset;
-        add.SeamMode = p.SeamMode is "Zig-zag" ? "Zig-zag" : "Normal";
+        add.SeamMode = add.SeamModeOptions.Contains(p.SeamMode) ? p.SeamMode : "Normal";
         add.OverhangOrientation = p.OverhangOrientation;
         add.MaxOverhangTiltDeg  = p.MaxOverhangTiltDeg;
         add.SmoothRotation                = p.SmoothRotation;
         add.SmoothRotationRadius          = p.SmoothRotationRadius;
         add.SmoothRotationMaxRateDegPerMm = p.SmoothRotationMaxRateDegPerMm;
-        add.InfillPattern    = p.InfillPattern;
+        add.InfillPattern    = NormalizeInfillPatternLabel(p.InfillPattern);
         add.InfillSpacingMm  = p.InfillSpacingMm;
         add.InfillAngleDeg   = p.InfillAngleDeg;
+        add.LightningOverhangDeg     = p.LightningOverhangDeg;
+        add.LightningBranchSpacingMm = p.LightningBranchSpacingMm;
+        add.LightningTipLoopRadiusMm = p.LightningTipLoopRadiusMm;
+        // Affect Interior / Affect Exterior (UI checkboxes).
+        add.LightningAffectInterior = p.LightningAnchorInterior;
+        add.LightningAffectExterior = p.LightningExteriorOverhangs;
+        add.LightningButtressBarMm         = p.LightningButtressBarMm;
+        add.LightningPreferInteriorMouths  = p.LightningPreferInteriorMouths;
+        add.LightningTargetSupportSelections = p.LightningTargetSupportSelections;
+        add.MultiPlanarPlanes.Clear();
+        foreach (var pair in p.MultiPlanarPlanes.Where(a => a is { Length: >= 2 }))
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(pair[0], pair[1]));
+        if (add.MultiPlanarPlanes.Count < 2)
+        {
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(0, 0));
+            add.MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(100, 30));
+        }
+        add.MultiPlanarAxisX = p.MultiPlanarAxisX;
+        add.BumpMultiPlanarStamp();
+        add.XBracingEnabled     = p.XBracingEnabled;
+        add.XBracingDepthMm     = p.XBracingDepthMm;
+        add.XBracingSpanMm      = p.XBracingSpanMm;
+        add.XBracingAngleDeg    = p.XBracingAngleDeg;
+        add.XBracingExtendEdges = p.XBracingExtendEdges;
+        add.XBracingShowHelper = p.XBracingShowHelper;
+        add.XBracingPlaneTiltY  = p.XBracingPlaneTiltY;
+        add.XBracingPlaneTiltX  = p.XBracingPlaneTiltX;
+        add.XBracingProjectionType = p.XBracingProjectionType is "Cylinder" ? "Cylinder" : "Planar";
+        add.XBracingCylinderDiameterMm = p.XBracingCylinderDiameterMm;
+        add.XBracingCylinderX   = p.XBracingCylinderX;
+        add.XBracingCylinderY   = p.XBracingCylinderY;
+        add.XBracingCylinderFlipDirection = p.XBracingCylinderFlipDirection;
         add.WaveEffect = p.WaveEffect switch
         {
             "Sine"     => "Sine",
@@ -2691,6 +3188,18 @@ public sealed class MainWindowViewModel : ViewModelBase
             "Ease Out" => "Ease Out",
             _          => "Linear",
         };
+        add.TemperatureOffset    = p.TemperatureOffset;
+        add.ExtrusionSpeedOffset = p.ExtrusionSpeedOffset;
+        add.PatternType         = p.PatternType;
+        add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
+            ? p.PatternMapping : "Wavelength (mm)";
+        add.PatternWavelengthMm = p.PatternWavelengthMm;
+        add.PatternAmplitude    = p.PatternAmplitude;
+        add.PatternFrequency    = p.PatternFrequency;
+        add.PatternTwist        = p.PatternTwist;
+        add.PatternOffset       = p.PatternOffset;
+        add.PatternFadeIn       = p.PatternFadeIn;
+        add.PatternFadeOut      = p.PatternFadeOut;
         if (Enum.TryParse<SliceMethod>(p.SliceMethod, out var method))
             add.Method = method;
         add.SlicingMode   = p.SlicingMode is "Surface" ? "Surface" : "Normal";
@@ -2706,6 +3215,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WipeLengthMm            = p.WipeLengthMm;
         add.WipeRampMm              = p.WipeRampMm;
         add.WipeSpeed               = p.WipeSpeed;
+        add.WipeSkipShortTravels    = p.WipeSkipShortTravels;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
@@ -2720,6 +3230,14 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
+        add.SetPaintMarks(p.PaintMarks
+            .Where(a => a is { Length: >= 5 })
+            .Select(a => new PaintMark(
+                new System.Numerics.Vector3(a[0], a[1], a[2]), a[3],
+                a[4] >= 1f ? PaintMarkKind.Remove : PaintMarkKind.Bridge,
+                a.Length >= 6 ? (PaintBridgeRole)(int)a[5] : PaintBridgeRole.None,
+                a.Length >= 7 ? (PaintSupportStyle)(int)a[6] : PaintSupportStyle.FormboundButtress,
+                a.Length >= 8 ? (PaintSupportSide)(int)a[7] : PaintSupportSide.Inside)));
         add.CurvedBoundarySourceDisplay = p.CurvedBoundarySource switch
         {
             "Viewport Pick" => "Viewport Pick",
@@ -2902,9 +3420,34 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.SmoothRotation                = add.SmoothRotation;
         p.SmoothRotationRadius          = add.SmoothRotationRadius;
         p.SmoothRotationMaxRateDegPerMm = add.SmoothRotationMaxRateDegPerMm;
-        p.InfillPattern    = add.InfillPattern;
+        p.InfillPattern    = NormalizeInfillPatternLabel(add.InfillPattern);
         p.InfillSpacingMm  = add.InfillSpacingMm;
         p.InfillAngleDeg   = add.InfillAngleDeg;
+        p.LightningOverhangDeg     = add.LightningOverhangDeg;
+        p.LightningBranchSpacingMm = add.LightningBranchSpacingMm;
+        p.LightningTipLoopRadiusMm = add.LightningTipLoopRadiusMm;
+        p.LightningAnchorInterior  = add.LightningAffectInterior;
+        p.LightningAnchorExterior  = add.LightningAffectExterior;
+        p.LightningExteriorOverhangs = add.LightningAffectExterior;
+        p.LightningButtressBarMm         = add.LightningButtressBarMm;
+        p.LightningPreferInteriorMouths  = add.LightningPreferInteriorMouths;
+        p.LightningTargetSupportSelections = add.LightningTargetSupportSelections;
+        p.MultiPlanarPlanes = add.MultiPlanarPlanes
+            .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
+        p.MultiPlanarAxisX = add.MultiPlanarAxisX;
+        p.XBracingEnabled      = add.XBracingEnabled;
+        p.XBracingDepthMm      = add.XBracingDepthMm;
+        p.XBracingSpanMm       = add.XBracingSpanMm;
+        p.XBracingAngleDeg     = add.XBracingAngleDeg;
+        p.XBracingExtendEdges  = add.XBracingExtendEdges;
+        p.XBracingShowHelper   = add.XBracingShowHelper;
+        p.XBracingPlaneTiltY   = add.XBracingPlaneTiltY;
+        p.XBracingPlaneTiltX   = add.XBracingPlaneTiltX;
+        p.XBracingProjectionType = add.XBracingProjectionType;
+        p.XBracingCylinderDiameterMm = add.XBracingCylinderDiameterMm;
+        p.XBracingCylinderX    = add.XBracingCylinderX;
+        p.XBracingCylinderY    = add.XBracingCylinderY;
+        p.XBracingCylinderFlipDirection = add.XBracingCylinderFlipDirection;
         p.WaveEffect           = add.WaveEffect;
         p.WaveAmplitude        = add.WaveAmplitude;
         p.WaveFrequencyMode    = add.WaveFrequencyMode;
@@ -2920,6 +3463,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WaveWavelengthTop    = add.WaveWavelengthTop;
         p.WaveGradientCenter   = add.WaveGradientCenter;
         p.WaveGradientCurve    = add.WaveGradientCurve;
+        p.TemperatureOffset    = add.TemperatureOffset;
+        p.ExtrusionSpeedOffset = add.ExtrusionSpeedOffset;
+        p.PatternType          = add.PatternType;
+        p.PatternMapping       = add.PatternMapping;
+        p.PatternWavelengthMm  = add.PatternWavelengthMm;
+        p.PatternAmplitude     = add.PatternAmplitude;
+        p.PatternFrequency     = add.PatternFrequency;
+        p.PatternTwist         = add.PatternTwist;
+        p.PatternOffset        = add.PatternOffset;
+        p.PatternFadeIn        = add.PatternFadeIn;
+        p.PatternFadeOut       = add.PatternFadeOut;
         p.SliceMethod      = add.Method.ToString();
         p.SlicingMode      = add.SlicingMode;
         p.PassAngle        = add.PassAngle;
@@ -2934,6 +3488,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeLengthMm            = add.WipeLengthMm;
         p.WipeRampMm              = add.WipeRampMm;
         p.WipeSpeed               = add.WipeSpeed;
+        p.WipeSkipShortTravels    = add.WipeSkipShortTravels;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
@@ -2947,6 +3502,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.LayerSpeedMaxMmS          = add.LayerSpeedMaxMmS;
         p.SeamGuidePoints = add.SeamGuides
             .Select(g => new[] { (float)g.X, (float)g.Y, (float)g.Z })
+            .ToList();
+        p.PaintMarks = add.PaintMarks
+            .Select(m => new[] {
+                m.Center.X, m.Center.Y, m.Center.Z, m.Radius,
+                (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
+                (float)m.SupportSide })
             .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;

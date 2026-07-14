@@ -25,6 +25,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         AutoTiltCommand       = new RelayCommand(() => OnAutoTiltRequested?.Invoke(false), () => !IsAutoTiltRunning);
         AutoTiltRotateCommand = new RelayCommand(() => OnAutoTiltRequested?.Invoke(true),  () => !IsAutoTiltRunning);
         OpenSeamEditorCommand            = new RelayCommand(() => OnOpenSeamEditorRequested?.Invoke());
+        SimulateThermalCommand           = new RelayCommand(() => OnSimulateThermalRequested?.Invoke());
+        OptimizeToolpathCommand          = new RelayCommand(() => OnOptimizeToolpathRequested?.Invoke());
+        foreach (var row in MultiPlanarPlanes) row.Owner = this;
+        MultiPlanarPlanes.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems is not null)
+                foreach (MultiPlanarPlaneRow row in e.NewItems) row.Owner = this;
+        };
         OpenCurvedBoundaryEditorCommand  = new RelayCommand(() => OnOpenCurvedBoundaryEditorRequested?.Invoke());
         ImportCurvedBoundariesCommand    = new RelayCommand(() => OnImportCurvedBoundariesRequested?.Invoke());
 
@@ -174,6 +182,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
+            OnPropertyChanged(nameof(ShowMultiPlanarControls));
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
@@ -185,20 +194,23 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public string[] AvailableMethodNames { get; } =
-        ["Planar", "Angled", "Geodesic (Experimental)", "Curved (Sweep)"];
+        ["Planar", "Angled", "Multi-Planar", "Geodesic (Experimental)", "Curved (Sweep)"];
 
     public string MethodDisplayName
     {
         get => Method switch
         {
-            SliceMethod.Angled   => "Angled",
-            SliceMethod.Geodesic => "Geodesic (Experimental)",
-            SliceMethod.Curved   => "Curved (Sweep)",
-            _                    => "Planar",
+            SliceMethod.Angled      => "Angled",
+            SliceMethod.MultiPlanar => "Multi-Planar",
+            SliceMethod.Geodesic    => "Geodesic (Experimental)",
+            SliceMethod.Curved      => "Curved (Sweep)",
+            _                       => "Planar",
         };
         set => Method = value switch
         {
             "Angled"                  => SliceMethod.Angled,
+            "Multi-Planar"            => SliceMethod.MultiPlanar,
+            "MultiPlanar"             => SliceMethod.MultiPlanar,
             "Geodesic (Experimental)" => SliceMethod.Geodesic,
             "Geodesic"                => SliceMethod.Geodesic,
             "Curved (Sweep)"          => SliceMethod.Curved,
@@ -207,9 +219,62 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         };
     }
 
+    /// <summary>Multi-Planar guide plane stack (height % + tilt °), min two rows.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<MultiPlanarPlaneRow> MultiPlanarPlanes { get; } =
+    [
+        new(0, 0), new(50, 15), new(100, 30),
+    ];
+
+    /// <summary>Bumped whenever any plane row (or the stack shape) changes —
+    /// registered as a realtime re-slice trigger.</summary>
+    public int MultiPlanarStamp
+    {
+        get => _multiPlanarStamp;
+        private set => SetField(ref _multiPlanarStamp, value);
+    }
+    private int _multiPlanarStamp;
+
+    internal void BumpMultiPlanarStamp() => MultiPlanarStamp++;
+
+    private bool _multiPlanarAxisX;
+    /// <summary>False = tilt about Y (lean along X); true = tilt about X (lean along Y).</summary>
+    public bool MultiPlanarAxisX
+    {
+        get => _multiPlanarAxisX;
+        set { if (SetField(ref _multiPlanarAxisX, value)) BumpMultiPlanarStamp(); }
+    }
+
+    public RelayCommand AddMultiPlanarPlaneCommand => _addMultiPlanarPlane ??= new RelayCommand(() =>
+    {
+        // Insert into the biggest height gap so new planes land somewhere useful.
+        var sorted = MultiPlanarPlanes.OrderBy(r => r.HeightPct).ToList();
+        double bestGap = -1, at = 50, angle = 15;
+        for (int i = 1; i < sorted.Count; i++)
+        {
+            double gap = sorted[i].HeightPct - sorted[i - 1].HeightPct;
+            if (gap > bestGap)
+            {
+                bestGap = gap;
+                at = (sorted[i].HeightPct + sorted[i - 1].HeightPct) * 0.5;
+                angle = (sorted[i].AngleDeg + sorted[i - 1].AngleDeg) * 0.5;
+            }
+        }
+        MultiPlanarPlanes.Add(new MultiPlanarPlaneRow(Math.Round(at), Math.Round(angle, 1)));
+        BumpMultiPlanarStamp();
+    });
+    private RelayCommand? _addMultiPlanarPlane;
+
+    public void RemoveMultiPlanarPlane(MultiPlanarPlaneRow row)
+    {
+        if (MultiPlanarPlanes.Count <= 2) return;   // interpolation needs two ends
+        MultiPlanarPlanes.Remove(row);
+        BumpMultiPlanarStamp();
+    }
+
     public bool IsCurvedMethod          => Method == SliceMethod.Curved;
     public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
+    public bool ShowMultiPlanarControls => Method == SliceMethod.MultiPlanar;
     public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private bool _disableContourOffset;
@@ -221,10 +286,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _disableContourOffset, value);
     }
 
-    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag"];
+    public string[] SeamModeOptions { get; } = ["Normal", "Zig-zag", "Spiral (vase)"];
 
     private string _seamMode = "Normal";
 
+    /// <summary>
+    /// Normal = closed loops / standard seams.
+    /// Zig-zag = single-skin open wall: longest face only (no back panel), reverse
+    /// direction every layer (end of line → Z up → reverse).
+    /// Spiral = vase mode continuous Z.
+    /// </summary>
     public string SeamMode
     {
         get => _seamMode;
@@ -247,10 +318,74 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public IReadOnlyList<SeamGuidePoint> BuildSeamGuideList() => [.. SeamGuides];
 
+    // ── Toolpath paint marks (brush tool) ──────────────────────────────────────
+
+    /// <summary>World-space brush dabs painted on the toolpath (Bridge = grow
+    /// fingers under the beads; Remove = delete the beads). Persist with the
+    /// workspace; survive re-slices because they are world-space spheres.</summary>
+    public List<Core.Models.PaintMark> PaintMarks { get; } = [];
+
+    /// <summary>Bumped when a paint stroke commits — registered as a realtime
+    /// re-slice trigger.</summary>
+    public int PaintStamp
+    {
+        get => _paintStamp;
+        private set => SetField(ref _paintStamp, value);
+    }
+    private int _paintStamp;
+
+    internal void BumpPaintStamp() => PaintStamp++;
+
+    public void SetPaintMarks(IEnumerable<Core.Models.PaintMark> marks)
+    {
+        PaintMarks.Clear();
+        PaintMarks.AddRange(marks);
+        BumpPaintStamp();
+    }
+
+    public IReadOnlyList<Core.Models.PaintMark> BuildPaintMarkList() => [.. PaintMarks];
+
+    /// <summary>Clears every painted mark (both kinds) and re-slices.</summary>
+    public RelayCommand ClearPaintMarksCommand => _clearPaintMarks ??= new RelayCommand(() =>
+    {
+        if (PaintMarks.Count == 0) return;
+        PaintMarks.Clear();
+        BumpPaintStamp();
+    });
+    private RelayCommand? _clearPaintMarks;
+
     /// <summary>Opens the viewport seam guide editor.</summary>
     public RelayCommand OpenSeamEditorCommand { get; }
 
     internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    /// <summary>Runs the analytical thermomechanical screen and fills Adaptive Speed low/high.</summary>
+    public RelayCommand SimulateThermalCommand { get; }
+
+    internal Action? OnSimulateThermalRequested { get; set; }
+
+    /// <summary>Re-orders the sliced toolpath to minimize travel and bridges nearby paths into one extrusion.</summary>
+    public RelayCommand OptimizeToolpathCommand { get; }
+
+    internal Action? OnOptimizeToolpathRequested { get; set; }
+
+    private string _optimizeToolpathSummary = "";
+    /// <summary>Human-readable result of the last toolpath optimization.</summary>
+    public string OptimizeToolpathSummary
+    {
+        get => _optimizeToolpathSummary;
+        set => SetField(ref _optimizeToolpathSummary, value);
+    }
+
+    private string _thermalSummary = "";
+    /// <summary>Human-readable result of the last thermomechanical simulation.</summary>
+    public string ThermalSummary
+    {
+        get => _thermalSummary;
+        set { if (SetField(ref _thermalSummary, value)) OnPropertyChanged(nameof(HasThermalSummary)); }
+    }
+
+    public bool HasThermalSummary => !string.IsNullOrEmpty(_thermalSummary);
 
     // -- Curved slicing boundaries --------------------------------------------
 
@@ -333,6 +468,23 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _effectorEnabled, value);
     }
 
+    public string[] EffectorModeOptions { get; } = ["Amplify", "Erase (smooth)"];
+
+    private string _effectorMode = "Amplify";
+    /// <summary>What the effector does in its influence area: boost the pattern
+    /// amplitude, or erase it back to a plain wall.</summary>
+    public string EffectorMode
+    {
+        get => _effectorMode;
+        set
+        {
+            if (SetField(ref _effectorMode, value))
+                OnPropertyChanged(nameof(IsEffectorAmplify));
+        }
+    }
+
+    public bool IsEffectorAmplify => !_effectorMode.StartsWith("Erase", StringComparison.OrdinalIgnoreCase);
+
     private double _effectorRange = 400.0;
     /// <summary>Effector influence radius (mm).</summary>
     public double EffectorRange
@@ -356,6 +508,31 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _patternType;
         set => SetField(ref _patternType, value);
+    }
+
+    public string[] PatternMappingOptions { get; } =
+        ["Wavelength (mm)", "Even (path length)", "Radial (angle)"];
+
+    private string _patternMapping = "Wavelength (mm)";
+    /// <summary>How the pattern wraps the part: fixed mm wavelength, even per-loop, or polar angle.</summary>
+    public string PatternMapping
+    {
+        get => _patternMapping;
+        set
+        {
+            if (SetField(ref _patternMapping, value))
+                OnPropertyChanged(nameof(ShowPatternWavelength));
+        }
+    }
+
+    public bool ShowPatternWavelength => _patternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase);
+
+    private double _patternWavelengthMm = 60.0;
+    /// <summary>Cycle size in mm for wavelength mapping.</summary>
+    public double PatternWavelengthMm
+    {
+        get => _patternWavelengthMm;
+        set => SetField(ref _patternWavelengthMm, Math.Clamp(value, 2.0, 2000.0));
     }
 
     private double _patternAmplitude;
@@ -532,6 +709,187 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
 
+    // -- X-Bracing Wall ----------------------------------------------------------
+
+    private bool _xBracingEnabled;
+    /// <summary>Cut dual-wall X braces into the perimeter for structural back-support.</summary>
+    public bool XBracingEnabled
+    {
+        get => _xBracingEnabled;
+        set
+        {
+            if (SetField(ref _xBracingEnabled, value))
+            {
+                OnPropertyChanged(nameof(ShowXBracingControls));
+                OnPropertyChanged(nameof(ShowXBracingPlanarControls));
+                OnPropertyChanged(nameof(ShowXBracingCylinderControls));
+            }
+        }
+    }
+
+    public bool ShowXBracingControls => XBracingEnabled;
+
+    public string[] XBracingProjectionTypeOptions { get; } = ["Planar", "Cylinder"];
+
+    private string _xBracingProjectionType = "Planar";
+    /// <summary>Planar = oriented plane; Cylinder = radial from a vertical cylinder on the bed.</summary>
+    public string XBracingProjectionType
+    {
+        get => _xBracingProjectionType;
+        set
+        {
+            if (SetField(ref _xBracingProjectionType, value is "Cylinder" ? "Cylinder" : "Planar"))
+            {
+                OnPropertyChanged(nameof(ShowXBracingPlanarControls));
+                OnPropertyChanged(nameof(ShowXBracingCylinderControls));
+                // When the cylinder is put into the scene, centre it on the print bed
+                // (not the robot / world origin).
+                if (XBracingProjectionType == "Cylinder")
+                    PlaceCylinderAtPrintBedCenter(keepDiameter: true);
+            }
+        }
+    }
+
+    public bool ShowXBracingPlanarControls => XBracingEnabled && XBracingProjectionType != "Cylinder";
+    public bool ShowXBracingCylinderControls => XBracingEnabled && XBracingProjectionType == "Cylinder";
+
+    private bool _xBracingShowHelper = true;
+    /// <summary>Show the brace plane / cylinder helper in the viewport (visual only).</summary>
+    public bool XBracingShowHelper
+    {
+        get => _xBracingShowHelper;
+        set => SetField(ref _xBracingShowHelper, value);
+    }
+
+    private double _xBracingDepthMm = 50.0;
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    public double XBracingDepthMm
+    {
+        get => _xBracingDepthMm;
+        set => SetField(ref _xBracingDepthMm, Math.Clamp(value, 5.0, 500.0));
+    }
+
+    private double _xBracingSpanMm = 120.0;
+    /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
+    public double XBracingSpanMm
+    {
+        get => _xBracingSpanMm;
+        set => SetField(ref _xBracingSpanMm, Math.Clamp(value, 20.0, 2000.0));
+    }
+
+    private double _xBracingAngleDeg = 30.0;
+    /// <summary>Brace angle from vertical (deg). Lower = more printable.</summary>
+    public double XBracingAngleDeg
+    {
+        get => _xBracingAngleDeg;
+        set => SetField(ref _xBracingAngleDeg, Math.Clamp(value, 10.0, 60.0));
+    }
+
+    private bool _xBracingExtendEdges = true;
+    /// <summary>Partial X cells on left/right ends (never top/bottom of the part).</summary>
+    public bool XBracingExtendEdges
+    {
+        get => _xBracingExtendEdges;
+        set => SetField(ref _xBracingExtendEdges, value);
+    }
+
+    private double _xBracingPlaneTiltY;
+    /// <summary>
+    /// Orientable brace plane: tilt about Y (°). Hairpins grow perpendicular to this
+    /// plane (along its normal projected into the layer). 0/0 = horizontal — falls
+    /// back to path left-normal.
+    /// </summary>
+    public double XBracingPlaneTiltY
+    {
+        get => _xBracingPlaneTiltY;
+        set => SetField(ref _xBracingPlaneTiltY, Math.Clamp(value, -90.0, 90.0));
+    }
+
+    private double _xBracingPlaneTiltX;
+    /// <summary>Brace plane tilt about X (°). See <see cref="XBracingPlaneTiltY"/>.</summary>
+    public double XBracingPlaneTiltX
+    {
+        get => _xBracingPlaneTiltX;
+        set => SetField(ref _xBracingPlaneTiltX, Math.Clamp(value, -90.0, 90.0));
+    }
+
+    public RelayCommand FlipXBracingPlaneCommand => _flipXBracingPlane ??= new RelayCommand(() =>
+    {
+        // Negating both tilts flips the plane normal (brace direction).
+        XBracingPlaneTiltY = -XBracingPlaneTiltY;
+        XBracingPlaneTiltX = -XBracingPlaneTiltX;
+    });
+    private RelayCommand? _flipXBracingPlane;
+
+    public RelayCommand ResetXBracingPlaneCommand => _resetXBracingPlane ??= new RelayCommand(() =>
+    {
+        XBracingPlaneTiltY = 0;
+        XBracingPlaneTiltX = 0;
+    });
+    private RelayCommand? _resetXBracingPlane;
+
+    private double _xBracingCylinderDiameterMm = 200.0;
+    /// <summary>Cylinder projection diameter (mm). Height follows the model AABB.</summary>
+    public double XBracingCylinderDiameterMm
+    {
+        get => _xBracingCylinderDiameterMm;
+        set => SetField(ref _xBracingCylinderDiameterMm, Math.Clamp(value, 10.0, 20000.0));
+    }
+
+    private double _xBracingCylinderX;
+    /// <summary>Cylinder axis X on the bed (mm, world).</summary>
+    public double XBracingCylinderX
+    {
+        get => _xBracingCylinderX;
+        set => SetField(ref _xBracingCylinderX, value);
+    }
+
+    private double _xBracingCylinderY;
+    /// <summary>Cylinder axis Y on the bed (mm, world).</summary>
+    public double XBracingCylinderY
+    {
+        get => _xBracingCylinderY;
+        set => SetField(ref _xBracingCylinderY, value);
+    }
+
+    private bool _xBracingCylinderFlipDirection;
+    /// <summary>
+    /// Default off: braces pull toward the cylinder axis.
+    /// On: braces radiate outward from the axis.
+    /// </summary>
+    public bool XBracingCylinderFlipDirection
+    {
+        get => _xBracingCylinderFlipDirection;
+        set => SetField(ref _xBracingCylinderFlipDirection, value);
+    }
+
+    /// <summary>
+    /// Resolves print-bed surface centre XY in world mm (from the active cell).
+    /// Wired by MainWindowViewModel; null when no cell is loaded.
+    /// </summary>
+    public Func<(double X, double Y)?>? ResolvePrintBedCenterXY { get; set; }
+
+    /// <summary>Places the brace cylinder on the print-bed centre (not robot origin).</summary>
+    public void PlaceCylinderAtPrintBedCenter(bool keepDiameter = false)
+    {
+        if (ResolvePrintBedCenterXY?.Invoke() is { } c)
+        {
+            XBracingCylinderX = c.X;
+            XBracingCylinderY = c.Y;
+        }
+        else
+        {
+            // No cell yet — leave XY as-is rather than forcing robot origin.
+        }
+        if (!keepDiameter)
+            XBracingCylinderDiameterMm = 200;
+        XBracingCylinderFlipDirection = false;
+    }
+
+    public RelayCommand ResetXBracingCylinderCommand => _resetXBracingCylinder ??= new RelayCommand(() =>
+        PlaceCylinderAtPrintBedCenter(keepDiameter: false));
+    private RelayCommand? _resetXBracingCylinder;
+
     // -- Wave effect -------------------------------------------------------------
 
     public string[] WaveEffectOptions { get; } = ["None", "Sine", "Sawtooth", "Triangle"];
@@ -706,7 +1064,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     // -- Infill pattern -------------------------------------------------------
 
-    public string[] InfillPatternOptions { get; } = ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid"];
+    public string[] InfillPatternOptions { get; } =
+        ["None", "Rectilinear", "Grid", "Triangle", "Ghost Mesh Grid", "Formbound Bridge", "Formbound Buttress"];
 
     private string _infillPattern = "None";
 
@@ -717,11 +1076,160 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set
         {
             if (SetField(ref _infillPattern, value))
+            {
                 OnPropertyChanged(nameof(ShowInfillControls));
+                OnPropertyChanged(nameof(ShowGridControls));
+                OnPropertyChanged(nameof(ShowLightningControls));
+                OnPropertyChanged(nameof(ShowButtressControls));
+            }
         }
     }
 
-    public bool ShowInfillControls => InfillPattern != "None" && !SurfaceModeActive;
+    public bool ShowInfillControls => InfillPattern != "None";
+
+    /// <summary>Grid width / angle only apply to the line-based fills — Formbound
+    /// patterns are demand-driven and ignore them.</summary>
+    public bool ShowGridControls =>
+        InfillPattern is "Rectilinear" or "Grid" or "Triangle" or "Ghost Mesh Grid";
+
+    public bool ShowLightningControls => InfillPattern is "Formbound Bridge" or "Lightning Bridge" or "Formbound Buttress";
+
+    public bool ShowButtressControls => InfillPattern is "Formbound Buttress";
+
+    private double _lightningOverhangDeg = 30.0;
+    /// <summary>Max unsupported overhang angle for lightning finger growth (deg).</summary>
+    public double LightningOverhangDeg
+    {
+        get => _lightningOverhangDeg;
+        set => SetField(ref _lightningOverhangDeg, Math.Clamp(value, 5.0, 80.0));
+    }
+
+    private double _lightningBranchSpacingMm;
+    /// <summary>Spacing between finger roots along unsupported arcs (mm). 0 = auto.</summary>
+    public double LightningBranchSpacingMm
+    {
+        get => _lightningBranchSpacingMm;
+        set => SetField(ref _lightningBranchSpacingMm, Math.Clamp(value, 0.0, 500.0));
+    }
+
+    private double _lightningTipLoopRadiusMm;
+    /// <summary>Support-pad loop radius at finger tips (mm). 0 = plain tip.</summary>
+    public double LightningTipLoopRadiusMm
+    {
+        get => _lightningTipLoopRadiusMm;
+        set => SetField(ref _lightningTipLoopRadiusMm, Math.Clamp(value, 0.0, 200.0));
+    }
+
+    private bool _lightningAnchorInterior = true;
+    private bool _lightningAnchorExterior;
+    private bool _lightningExteriorOverhangs;
+    private bool _lightningPreferInteriorMouths = true;
+
+    /// <summary>
+    /// Support inward overhangs / cavities / inner walls. Own tip budget.
+    /// Also enables interior mouth anchoring (notches hidden inside the part).
+    /// </summary>
+    public bool LightningAffectInterior
+    {
+        get => _lightningAnchorInterior;
+        set
+        {
+            if (!SetField(ref _lightningAnchorInterior, value)) return;
+            OnPropertyChanged(nameof(LightningAnchorInterior));
+        }
+    }
+
+    /// <summary>
+    /// Support outward flares / free edges (sacrificial exterior fins). Own tip budget,
+    /// independent of Interior — both may be on at once.
+    /// </summary>
+    public bool LightningAffectExterior
+    {
+        get => _lightningExteriorOverhangs;
+        set
+        {
+            if (!SetField(ref _lightningExteriorOverhangs, value)) return;
+            // Exterior demand uses exterior perimeter mouths.
+            if (SetField(ref _lightningAnchorExterior, value))
+                OnPropertyChanged(nameof(LightningAnchorExterior));
+            OnPropertyChanged(nameof(LightningExteriorOverhangs));
+        }
+    }
+
+    /// <summary>Persistence / planner: root fingers on interior boundaries.</summary>
+    public bool LightningAnchorInterior
+    {
+        get => _lightningAnchorInterior;
+        set
+        {
+            if (!SetField(ref _lightningAnchorInterior, value)) return;
+            OnPropertyChanged(nameof(LightningAffectInterior));
+        }
+    }
+
+    /// <summary>Persistence / planner: root fingers on the outer perimeter.</summary>
+    public bool LightningAnchorExterior
+    {
+        get => _lightningAnchorExterior;
+        set
+        {
+            if (!SetField(ref _lightningAnchorExterior, value)) return;
+            // Keep exterior-affect demand in sync when loaded from prefs.
+            if (value && !_lightningExteriorOverhangs)
+            {
+                _lightningExteriorOverhangs = true;
+                OnPropertyChanged(nameof(LightningExteriorOverhangs));
+                OnPropertyChanged(nameof(LightningAffectExterior));
+            }
+            else if (!value && _lightningExteriorOverhangs && !_lightningAnchorInterior)
+            {
+                // exterior-only mode can leave AnchorExterior true; no force-off of demand
+            }
+            OnPropertyChanged(nameof(LightningAffectExterior));
+        }
+    }
+
+    /// <summary>Planner: grow sacrificial fins under outward overhangs.</summary>
+    public bool LightningExteriorOverhangs
+    {
+        get => _lightningExteriorOverhangs;
+        set
+        {
+            if (!SetField(ref _lightningExteriorOverhangs, value)) return;
+            if (value && !_lightningAnchorExterior)
+            {
+                _lightningAnchorExterior = true;
+                OnPropertyChanged(nameof(LightningAnchorExterior));
+            }
+            OnPropertyChanged(nameof(LightningAffectExterior));
+        }
+    }
+
+    private double _lightningButtressBarMm = 40.0;
+    /// <summary>Formbound Buttress: single-bead horizontal support bar length (mm).</summary>
+    public double LightningButtressBarMm
+    {
+        get => _lightningButtressBarMm;
+        set => SetField(ref _lightningButtressBarMm, Math.Clamp(value, 5.0, 500.0));
+    }
+
+    /// <summary>Formbound Buttress: prefer interior mouths when Interior domain is enabled.</summary>
+    public bool LightningPreferInteriorMouths
+    {
+        get => _lightningPreferInteriorMouths;
+        set => SetField(ref _lightningPreferInteriorMouths, value);
+    }
+
+    private bool _lightningTargetSupportSelections;
+    /// <summary>
+    /// Formbound Bridge/Buttress: only place support under edit-mode Support
+    /// selections (painted Bridge marks). Disables automatic overhang detection.
+    /// </summary>
+    public bool LightningTargetSupportSelections
+    {
+        get => _lightningTargetSupportSelections;
+        set => SetField(ref _lightningTargetSupportSelections, value);
+    }
 
     private double _infillSpacingMm = 0.0;
 
@@ -1012,13 +1520,14 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         return Math.Max(0f, pct);
     }
 
-    private double _extrusionStartWaitSec = 1.0;
+    private double _extrusionStartWaitSec;
 
     /// <summary>Pause (seconds) after first RPM-on before the first extrusion move.</summary>
     public double ExtrusionStartWaitSec
     {
         get => _extrusionStartWaitSec;
-        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 60.0));
+        // Allow long purges for material calibration workspaces (was capped at 60 s).
+        set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
     private double _extrusionResumeWaitSec;
@@ -1027,7 +1536,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ExtrusionResumeWaitSec
     {
         get => _extrusionResumeWaitSec;
-        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 60.0));
+        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
     // -- Movement (z-hop, wipe) ------------------------------------------------
@@ -1080,6 +1589,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     {
         get => _wipeSpeed;
         set => SetField(ref _wipeSpeed, Math.Clamp(value, 1.0, 2000.0));
+    }
+
+    private bool _wipeSkipShortTravels;
+
+    /// <summary>
+    /// Skip wipe before travels shorter than 2× the layer height
+    /// (avoids wipe on tiny gaps between nearby beads).
+    /// </summary>
+    public bool WipeSkipShortTravels
+    {
+        get => _wipeSkipShortTravels;
+        set => SetField(ref _wipeSkipShortTravels, value);
     }
 
     private bool _resumeRampEnabled;

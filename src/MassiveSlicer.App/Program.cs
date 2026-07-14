@@ -11,9 +11,38 @@ class Program
     [STAThread]
     public static void Main(string[] args)
     {
+        // Capture unhandled managed exceptions so UI crashes leave a trail
+        // (macOS crash reports only show native frames for Avalonia/dotnet).
+        string crashLog = Path.Combine(Path.GetTempPath(), "massiveslicer-crash.log");
+        void LogCrash(string source, Exception? ex)
+        {
+            try
+            {
+                var msg = $"[{DateTime.Now:O}] {source}\n{ex}\n\n";
+                File.AppendAllText(crashLog, msg);
+                global::System.Console.Error.WriteLine(msg);
+            }
+            catch { /* best effort */ }
+        }
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+            LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception);
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+        {
+            LogCrash("TaskScheduler.UnobservedTaskException", e.Exception);
+            e.SetObserved();
+        };
+
         // Cell JSON + GLBs resolve from assets/ next to the executable.
         Directory.SetCurrentDirectory(AppContext.BaseDirectory);
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        try
+        {
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
+        catch (Exception ex)
+        {
+            LogCrash("Main.StartWithClassicDesktopLifetime", ex);
+            throw;
+        }
     }
 
     public static AppBuilder BuildAvaloniaApp()

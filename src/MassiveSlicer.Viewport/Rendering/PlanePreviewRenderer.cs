@@ -107,7 +107,9 @@ public sealed class PlanePreviewRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    public void Draw(Matrix4 mvp)
+    public void Draw(Matrix4 mvp) => Draw(mvp, FaceColor, EdgeColor);
+
+    public void Draw(Matrix4 mvp, Vector4 faceColor, Vector4 edgeColor)
     {
         if (!_hasData || _disposed) return;
 
@@ -120,13 +122,13 @@ public sealed class PlanePreviewRenderer : IDisposable
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.DepthMask(false);
-        _shader.SetVector4("uColor", FaceColor);
+        _shader.SetVector4("uColor", faceColor);
         GL.BindVertexArray(_faceVao);
         GL.DrawArrays(PrimitiveType.Triangles, 0, 6);
 
         // Solid border.
         GL.DepthMask(true);
-        _shader.SetVector4("uColor", EdgeColor);
+        _shader.SetVector4("uColor", edgeColor);
         GL.BindVertexArray(_edgeVao);
         GL.DrawArrays(PrimitiveType.Lines, 0, 8);
 

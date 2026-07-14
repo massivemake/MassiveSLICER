@@ -26,6 +26,7 @@ public partial class MainWindow : Window
         if (DataContext is not MainWindowViewModel vm) return;
 
         vm.CaptureAppScreenshot = () => CaptureAppScreenshotAsync();
+        vm.CaptureViewportPng   = () => Viewport.CaptureScreenshotAsync();
 
         // Route GL host diagnostics to the in-app console (readable via the control bridge).
         MassiveSlicer.App.Views.GlHostControl.Diag = msg =>
@@ -50,6 +51,8 @@ public partial class MainWindow : Window
 
         // -- Plasticity live bridge (collapsible section in the N-key HUD) ------
         vm.Viewport.Plasticity.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+        vm.Viewport.MassiveBrain.Attach(vm.Viewport, msg => vm.Console.Log(msg));
+        vm.Viewport.MassiveBrain.Enabled = true;   // sync server on by default (localhost:4547)
 
         // -- Right panel toggle (floating card) --------------------------------
         vm.Toolbar.PropertyChanged += (_, args) =>
@@ -71,16 +74,24 @@ public partial class MainWindow : Window
         if (cellsRoot is not null)
             vm.Console.Log($"[cell] using cells directory: {cellsRoot}");
 
+        var smbSeeds = new List<(string Name, string BridgeIp)>();
         var cells = CellLoader.FindAll()
             .Select(path =>
             {
                 string full = Path.GetFullPath(path);
                 string name;
-                try   { name = CellLoader.Load(full).Name; }
+                try
+                {
+                    var cfg = CellLoader.Load(full);
+                    name = cfg.Name;
+                    smbSeeds.Add((cfg.Name, cfg.BridgeIp));
+                }
                 catch { name = Path.GetFileNameWithoutExtension(full); }
                 return (name, full);
             })
+            .OrderBy(c => c.name, StringComparer.OrdinalIgnoreCase)
             .ToList();
+        vm.EnsureRobotSmbEntries(smbSeeds);
 
         if (cells.Count == 0)
         {
@@ -195,9 +206,21 @@ public partial class MainWindow : Window
         // -- Preferences -------------------------------------------------------
         vm.Toolbar.PreferencesRequested += async (_, _) =>
         {
+            vm.Preferences.Erp = vm.Viewport.Erp;
+            vm.Preferences.RefreshSmbRows();
             var win = new Views.PreferencesWindow { DataContext = vm.Preferences };
             await win.ShowDialog(this);
         };
+
+        // ERP dock cog / hints open Preferences directly on the Connections section.
+        vm.Viewport.Erp.OpenPreferencesRequested = () => Avalonia.Threading.Dispatcher.UIThread.Post(async () =>
+        {
+            vm.Preferences.Erp = vm.Viewport.Erp;
+            vm.Preferences.RefreshSmbRows();
+            var win = new Views.PreferencesWindow { DataContext = vm.Preferences };
+            win.ShowConnections();
+            await win.ShowDialog(this);
+        });
 
         // -- Import KRL (File menu) --------------------------------------------
         vm.Toolbar.ImportKrlRequested += async (_, _) =>

@@ -19,4 +19,19 @@ public enum InfillPattern
     /// On the final layer the entire outer perimeter is traced once to close the path.
     /// </summary>
     GhostMeshGrid,
+
+    /// <summary>
+    /// Lightning-style sparse support: thin two-wall "fingers" detour inward from
+    /// the perimeter only where upper layers need material below them, then rejoin —
+    /// the whole layer stays one continuous extrusion (no travels).
+    /// UI label: Formbound Bridge.
+    /// </summary>
+    LightningBridge,
+
+    /// <summary>
+    /// Formbound Buttress: single-bead continuous path that morphs from a perimeter
+    /// mouth (wall cut) into a horizontal support bar under overhang demand — one
+    /// extrusion line, not a filled pad. Prefers interior mouths.
+    /// </summary>
+    FormboundButtress,
 }

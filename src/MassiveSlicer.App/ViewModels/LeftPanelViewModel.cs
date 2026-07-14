@@ -29,9 +29,60 @@ public sealed class LeftPanelViewModel : ViewModelBase
         set
         {
             if (!SetField(ref _selectedCellIndex, value)) return;
+            UpdateCellIcon();
             if ((uint)value < (uint)_cellPaths.Count)
                 OnCellSelected?.Invoke(_cellPaths[value]);
         }
+    }
+
+    private Avalonia.Media.Imaging.Bitmap? _selectedCellIcon;
+
+    /// <summary>Line-art icon for the active cell (assets/images/*<name>*.png), or null.</summary>
+    public Avalonia.Media.Imaging.Bitmap? SelectedCellIcon
+    {
+        get => _selectedCellIcon;
+        private set
+        {
+            var old = _selectedCellIcon;
+            if (!SetField(ref _selectedCellIcon, value)) return;
+            OnPropertyChanged(nameof(HasCellIcon));
+            old?.Dispose();
+        }
+    }
+
+    public bool HasCellIcon => _selectedCellIcon is not null;
+
+    /// <summary>Finds the newest PNG in assets/images whose name contains the cell name.</summary>
+    private void UpdateCellIcon()
+    {
+        Avalonia.Media.Imaging.Bitmap? bmp = null;
+        try
+        {
+            if ((uint)_selectedCellIndex < (uint)_cellPaths.Count
+                && _selectedCellIndex < CellNames.Count)
+            {
+                string name    = CellNames[_selectedCellIndex];
+                string cellDir = Path.GetDirectoryName(Path.GetFullPath(_cellPaths[_selectedCellIndex]))!;
+                string images  = Path.GetFullPath(Path.Combine(cellDir, "..", "..", "images"));
+                if (Directory.Exists(images) && name.Length > 0)
+                {
+                    string compact = name.Replace(" ", "");
+                    var match = Directory.EnumerateFiles(images, "*.png")
+                        .Where(f =>
+                        {
+                            var stem = Path.GetFileNameWithoutExtension(f);
+                            return stem.Contains(name, StringComparison.OrdinalIgnoreCase)
+                                || stem.Replace(" ", "").Contains(compact, StringComparison.OrdinalIgnoreCase);
+                        })
+                        .OrderByDescending(File.GetLastWriteTimeUtc)
+                        .FirstOrDefault();
+                    if (match is not null)
+                        bmp = new Avalonia.Media.Imaging.Bitmap(match);
+                }
+            }
+        }
+        catch { /* missing/corrupt icon — just show nothing */ }
+        SelectedCellIcon = bmp;
     }
 
     /// <summary>
@@ -84,7 +135,67 @@ public sealed class LeftPanelViewModel : ViewModelBase
     public ObservableCollection<OutlinerItemViewModel>? OutlinerItems
     {
         get => _outlinerItems;
-        internal set => SetField(ref _outlinerItems, value);
+        internal set
+        {
+            if (!SetField(ref _outlinerItems, value)) return;
+            HookOutlinerForFilter(value);
+            RebuildFilteredToolpaths();
+            OnPropertyChanged(nameof(VisibleOutlinerRows));
+        }
+    }
+
+    // -- Toolpaths-only filter ---------------------------------------------------
+
+    private bool _filterToolpathsOnly;
+
+    /// <summary>Outliner filter: show a flat, curated list of toolpaths only —
+    /// range shift+click then walks just the toolpaths.</summary>
+    public bool FilterToolpathsOnly
+    {
+        get => _filterToolpathsOnly;
+        set
+        {
+            if (!SetField(ref _filterToolpathsOnly, value)) return;
+            RebuildFilteredToolpaths();
+            OnPropertyChanged(nameof(VisibleOutlinerRows));
+        }
+    }
+
+    /// <summary>Flat list of every model's toolpath rows (outliner order).</summary>
+    public ObservableCollection<OutlinerItemViewModel> FilteredToolpaths { get; } = [];
+
+    /// <summary>What the outliner list actually shows: full hierarchy or the toolpath filter.</summary>
+    public System.Collections.IEnumerable? VisibleOutlinerRows
+        => _filterToolpathsOnly ? FilteredToolpaths : _outlinerItems;
+
+    private readonly HashSet<OutlinerItemViewModel> _filterHooked = [];
+
+    private void HookOutlinerForFilter(ObservableCollection<OutlinerItemViewModel>? items)
+    {
+        if (items is null) return;
+        items.CollectionChanged += (_, _) =>
+        {
+            foreach (var it in items) HookItemChildren(it);
+            RebuildFilteredToolpaths();
+        };
+        foreach (var it in items) HookItemChildren(it);
+    }
+
+    private void HookItemChildren(OutlinerItemViewModel item)
+    {
+        if (!_filterHooked.Add(item)) return;
+        item.Children.CollectionChanged += (_, _) => RebuildFilteredToolpaths();
+    }
+
+    private void RebuildFilteredToolpaths()
+    {
+        if (!_filterToolpathsOnly && FilteredToolpaths.Count == 0) return;
+        FilteredToolpaths.Clear();
+        if (_outlinerItems is null) return;
+        foreach (var top in _outlinerItems)
+            foreach (var child in top.Children)
+                if (child.IsToolpath)
+                    FilteredToolpaths.Add(child);
     }
 
     // -- Tab management --------------------------------------------------------

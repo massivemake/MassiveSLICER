@@ -197,6 +197,7 @@ public sealed class SceneRenderer : IDisposable
         vec3 applyCavity(vec3 color, vec2 uv, vec2 texel) {
             float depth = texture(uDepth, uv).r;
             if (depth > 0.9999) return color;
+            if (texture(uNormal, uv).a < 0.5) return color;   // category excluded
 
             vec3 cNorm;
             if (!readNormal(uv, depth, cNorm)) return color;
@@ -357,6 +358,118 @@ public sealed class SceneRenderer : IDisposable
     public bool IsToolpathNode(SceneNode node) => _toolpaths.ContainsKey(node);
 
     /// <summary>
+    /// 2D Slice Plane Viewer multi-pass — ONLY these five bands are drawn:
+    /// <list type="bullet">
+    ///   <item>current−3 @ 17% opacity</item>
+    ///   <item>current−2 @ 30% opacity</item>
+    ///   <item>current−1 @ 60% opacity</item>
+    ///   <item>current+1 dashed @ 40% opacity</item>
+    ///   <item>current solid @ 100%, 2× line weight</item>
+    /// </list>
+    /// Nothing older than current−3 is drawn. Depth test off so fade composites top-down.
+    /// </summary>
+    private void DrawSlicePlaneLayers(
+        ToolpathRenderer renderer, Matrix4 toolpathMvp, Vector3 eyeLocal,
+        bool selected, int[] ends)
+    {
+        int n = ends.Length;
+        if (n == 0) return;
+        int cur = Math.Clamp(SlicePlaneLayerIndex, 0, n - 1);
+
+        static (int start, int end) Range(int[] endsArr, int layer)
+        {
+            int start = layer <= 0 ? 0 : endsArr[layer - 1];
+            int end = endsArr[layer];
+            return (start, end);
+        }
+
+        const float ctxWidth = 2.2f;
+        const float activeWidth = ctxWidth * 2f;
+
+        // Always enable alpha blending for fade; ignore mesh depth.
+        GL.Enable(EnableCap.Blend);
+        GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+        GL.Disable(EnableCap.DepthTest);
+        GL.DepthMask(false);
+
+        // Farther-below first so nearer below-layers and the active line paint on top.
+        // depth 3 → 17%, depth 2 → 30%, depth 1 → 60%.
+        ReadOnlySpan<float> belowOpacity = [0.17f, 0.30f, 0.60f];
+        for (int depth = 3; depth >= 1; depth--)
+        {
+            int li = cur - depth;
+            if (li < 0) continue;
+            float opacity = belowOpacity[3 - depth];
+            var (lo, hi) = Range(ends, li);
+            if (hi <= lo) continue;
+            // selected:false so override colour stays uniform; opacity carries the fade.
+            renderer.Draw(toolpathMvp, selected: false,
+                showExtrusion: true, showTravel: false,
+                showLightning: true, showWipe: false,
+                showSeam: false, showBead: false, showBeadOverhang: false,
+                showOrientationPreview: false,
+                scrubIndex: hi, scrubStart: lo,
+                eyeLocal: eyeLocal, lineOpacity: opacity,
+                showAllPathPoints: false, showDepthLines: false,
+                viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                dashPeriodPx: 0f, lineWidth: ctxWidth);
+        }
+
+        // One layer above: dashed, semi-transparent (not pickable in the view).
+        if (cur + 1 < n)
+        {
+            var (lo, hi) = Range(ends, cur + 1);
+            if (hi > lo)
+            {
+                renderer.Draw(toolpathMvp, selected: false,
+                    showExtrusion: true, showTravel: false,
+                    showLightning: true, showWipe: false,
+                    showSeam: false, showBead: false, showBeadOverhang: false,
+                    showOrientationPreview: false,
+                    scrubIndex: hi, scrubStart: lo,
+                    eyeLocal: eyeLocal, lineOpacity: 0.40f,
+                    showAllPathPoints: false, showDepthLines: false,
+                    viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                    dashPeriodPx: 12f, lineWidth: ctxWidth);
+            }
+        }
+
+        // Active current layer — full opacity, double weight, on top.
+        {
+            var (lo, hi) = Range(ends, cur);
+            if (hi > lo)
+            {
+                renderer.Draw(toolpathMvp, selected: true,
+                    showExtrusion: true, showTravel: false,
+                    showLightning: true, showWipe: false,
+                    showSeam: false, showBead: false, showBeadOverhang: false,
+                    showOrientationPreview: false,
+                    scrubIndex: hi, scrubStart: lo,
+                    eyeLocal: eyeLocal, lineOpacity: 1f,
+                    showAllPathPoints: false, showDepthLines: false,
+                    viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                    dashPeriodPx: 0f, lineWidth: activeWidth);
+            }
+        }
+
+        GL.DepthMask(true);
+        GL.Enable(EnableCap.DepthTest);
+    }
+
+    /// <summary>Exclusive move-count ends per layer from live toolpath data.</summary>
+    private static int[] BuildLayerEnds(Toolpath toolpath)
+    {
+        var ends = new int[toolpath.Layers.Count];
+        int acc = 0;
+        for (int i = 0; i < toolpath.Layers.Count; i++)
+        {
+            acc += toolpath.Layers[i].Moves.Count;
+            ends[i] = acc;
+        }
+        return ends;
+    }
+
+    /// <summary>
     /// The gizmo axis currently being dragged, or <see cref="GizmoAxis.None"/>.
     /// Set by the viewport when a drag begins and cleared when it ends.
     /// </summary>
@@ -404,20 +517,78 @@ public sealed class SceneRenderer : IDisposable
     public float CavityScreenValley { get; set; } = 1f;
     public float CavityWorldRidge   { get; set; } = 1f;
     public float CavityWorldValley  { get; set; } = 1f;
+
+    /// <summary>Include toolpath pixels (lines + bead) in cavity shading.</summary>
+    public bool CavityShadeToolpaths { get; set; } = true;
+
+    /// <summary>Include user-imported meshes in cavity shading (cell always shades).</summary>
+    public bool CavityShadeImportedMeshes { get; set; } = true;
     public float CavityWorldDistance { get; set; } = 5f;
 
     public bool ShowExtrusionMoves { get; set; } = true;
     public bool ShowTravelMoves    { get; set; } = true;
+    public bool ShowLightningMoves { get; set; } = true;
+
+    /// <summary>Wipe extrusion segments (pre-travel filament wipes) as their own display layer.</summary>
+    public bool ShowWipeMoves { get; set; } = true;
     public bool ShowSeam           { get; set; } = true;
     public bool ShowBead           { get; set; } = false;
     public bool ShowBeadOverhang        { get; set; } = false;
     public bool ShowOrientationPreview  { get; set; } = false;
 
     /// <summary>
-    /// Scrubber move index applied to the selected toolpath renderer.
+    /// Scrubber move index applied to the active scrub toolpath renderer.
     /// int.MaxValue (default) means render the full toolpath.
     /// </summary>
     public int ToolpathActiveScrubIndex { get; set; } = int.MaxValue;
+
+    /// <summary>Lower bound of the layer window (edit mode): moves below this index
+    /// are hidden — pair with <see cref="ToolpathActiveScrubIndex"/> for a range.</summary>
+    public int ToolpathActiveScrubStart { get; set; }
+
+    /// <summary>
+    /// Toolpath node that owns the live scrub / layer isolation window. Applied even
+    /// when the mesh (or TCP) is selected so the dual-slider still hides layers.
+    /// </summary>
+    public SceneNode? ToolpathActiveScrubNode { get; set; }
+
+    /// <summary>
+    /// Edit-mode 2D Slice Plane Viewer: draw current layer solid, three layers below
+    /// with fade, one dashed layer above (top-down context).
+    /// </summary>
+    public bool SlicePlaneViewerActive { get; set; }
+
+    /// <summary>0-based current layer when <see cref="SlicePlaneViewerActive"/>.</summary>
+    public int SlicePlaneLayerIndex { get; set; }
+
+    /// <summary>Half bead width (mm) — spacing for the 2D slice measurement grid.</summary>
+    public float SlicePlaneGridSpacingMm { get; set; } = 3f;
+
+    /// <summary>World Z of the active slice plane (grid is drawn here).</summary>
+    public float SlicePlaneGridZ { get; set; }
+
+    /// <summary>Grid centre in world XY (usually the active toolpath centroid).</summary>
+    public float SlicePlaneGridCenterX { get; set; }
+    public float SlicePlaneGridCenterY { get; set; }
+
+    /// <summary>
+    /// Exclusive move-count ends per layer (prefix sums). Null disables neighbour passes.
+    /// </summary>
+    public int[]? SlicePlaneLayerEnds { get; set; }
+
+    /// <summary>
+    /// When true, draw a point at every extrude bead (edit Point mode) instead of
+    /// only contour start/end seams.
+    /// </summary>
+    public bool ShowAllPathPoints { get; set; }
+
+    /// <summary>
+    /// Path edit mode: centre-lines use depth-cued width (near ~2.5x) and opacity fade.
+    /// </summary>
+    public bool ShowDepthAwareLines { get; set; }
+
+    private int _viewportWidthPx;
+    private int _viewportHeightPx;
 
     /// <summary>Active shader/material mode applied to all mesh renderers each frame.</summary>
     public ShaderMode ShaderMode
@@ -469,6 +640,22 @@ public sealed class SceneRenderer : IDisposable
     private Rendering.ToolpathColorMode _toolpathColorMode = Rendering.ToolpathColorMode.Normal;
 
     /// <summary>Switches every toolpath's extrude-line colour mode. GL thread only; no-op if unchanged.</summary>
+    /// <summary>Diagnostics: describes a registered toolpath entry (colour mode + speed-scale spread).</summary>
+    public string DescribeToolpathEntry(SceneNode node)
+    {
+        if (!_toolpaths.TryGetValue(node, out var entry)) return "not registered";
+        float min = float.MaxValue, max = float.MinValue; int n = 0;
+        foreach (var l in entry.Data.Layers)
+            foreach (var m in l.Moves)
+                if (m.Kind == MassiveSlicer.Core.Models.MoveKind.Extrude)
+                {
+                    min = MathF.Min(min, m.PrintSpeedScale);
+                    max = MathF.Max(max, m.PrintSpeedScale);
+                    n++;
+                }
+        return $"sceneMode={_toolpathColorMode} rendererMode={entry.Renderer.ColorMode} moves={n} scale {min:F3}..{max:F3}";
+    }
+
     public void SetToolpathColorMode(Rendering.ToolpathColorMode mode)
     {
         if (_toolpathColorMode == mode) return;
@@ -524,6 +711,11 @@ public sealed class SceneRenderer : IDisposable
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
 
+    /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
+    /// full selected appearance — colours, travels, seams — regardless of selection.
+    /// Body view keeps the dimmed unselected treatment.</summary>
+    public bool ToolpathFullAppearance { get; set; }
+
     /// <summary>
     /// Uploads a toolpath to the GPU and registers it in the scene.
     /// Must be called on the GL thread after <see cref="Initialise"/>.
@@ -536,6 +728,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -594,6 +787,7 @@ public sealed class SceneRenderer : IDisposable
         var centroid = ComputeToolpathCentroid(toolpath);
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
+        renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -676,6 +870,122 @@ public sealed class SceneRenderer : IDisposable
         }
         _planePreview ??= new PlanePreviewRenderer();
         _planePreview.Update(center.Value, normal.Value, size);
+    }
+
+    private SpineRenderer? _cylinderPreview;
+    private int _cylinderPreviewCount;
+    private bool _cylinderPreviewSelected;
+
+    /// <summary>
+    /// Wireframe vertical cylinder for X-bracing cylinder projection.
+    /// Pass radius ≤ 0 to hide. Height is Z from <paramref name="zMin"/> to <paramref name="zMax"/>.
+    /// </summary>
+    public void SetCylinderPreview(Vector3 centerXY, float radius, float zMin, float zMax, bool selected = false)
+    {
+        _cylinderPreviewSelected = selected;
+        if (radius <= 1e-3f || zMax <= zMin + 1e-3f)
+        {
+            _cylinderPreviewCount = 0;
+            return;
+        }
+
+        var col = selected
+            ? new Vector3(1.0f, 0.85f, 0.15f)
+            : new Vector3(0.2f, 0.85f, 0.95f);
+        var pts = new List<(Vector3, Vector3)>(200);
+        const int segs = 48;
+        // Bottom + top rings as line segments, plus verticals every few steps.
+        for (int i = 0; i < segs; i++)
+        {
+            float a0 = MathF.Tau * i / segs;
+            float a1 = MathF.Tau * (i + 1) / segs;
+            var b0 = new Vector3(centerXY.X + radius * MathF.Cos(a0), centerXY.Y + radius * MathF.Sin(a0), zMin);
+            var b1 = new Vector3(centerXY.X + radius * MathF.Cos(a1), centerXY.Y + radius * MathF.Sin(a1), zMin);
+            var t0 = new Vector3(b0.X, b0.Y, zMax);
+            var t1 = new Vector3(b1.X, b1.Y, zMax);
+            pts.Add((b0, col)); pts.Add((b1, col));
+            pts.Add((t0, col)); pts.Add((t1, col));
+            if (i % 6 == 0)
+            {
+                pts.Add((b0, col)); pts.Add((t0, col));
+            }
+        }
+        // Axis cross at mid-height for pick/center cue.
+        float zMid = 0.5f * (zMin + zMax);
+        float cross = MathF.Min(radius * 0.25f, 40f);
+        pts.Add((new Vector3(centerXY.X - cross, centerXY.Y, zMid), col));
+        pts.Add((new Vector3(centerXY.X + cross, centerXY.Y, zMid), col));
+        pts.Add((new Vector3(centerXY.X, centerXY.Y - cross, zMid), col));
+        pts.Add((new Vector3(centerXY.X, centerXY.Y + cross, zMid), col));
+
+        _cylinderPreviewCount = pts.Count;
+        _cylinderPreview ??= new SpineRenderer();
+        _cylinderPreview.UpdateSegments(pts);
+    }
+
+    // ── Multi-Planar guide planes + distortion spine ─────────────────────────
+
+    private readonly List<PlanePreviewRenderer> _guidePlanes = [];
+    private List<(Vector3 Center, Vector3 Normal)> _guidePlaneData = [];
+    private float _guidePlaneSize;
+    private int   _guidePlaneSelected = -1;
+    private SpineRenderer? _spine;
+    private int _spineCount;
+    private SpineRenderer? _guideGizmo;
+    private int _guideGizmoCount;
+    private PaintOverlayRenderer? _paintOverlay;
+    private int _paintOverlayCount;
+
+    /// <summary>
+    /// Toolpath paint overlay: line segments (mark spheres / path hover) plus
+    /// optional highlight points (Point-mode hover/select recolour). Either list
+    /// may be empty. Must be called on the GL thread.
+    /// </summary>
+    public void SetPaintOverlay(
+        IReadOnlyList<(Vector3 Pos, Vector3 Color)> segments,
+        IReadOnlyList<(Vector3 Pos, Vector3 Color)>? highlightPoints = null)
+    {
+        int pts = highlightPoints?.Count ?? 0;
+        _paintOverlayCount = segments.Count + pts;
+        if (segments.Count < 2 && pts == 0)
+        {
+            _paintOverlayCount = 0;
+            // Keep renderer but clear buffers so nothing lingers after edit closes.
+            _paintOverlay?.Update([], null);
+            return;
+        }
+        _paintOverlay ??= new PaintOverlayRenderer();
+        _paintOverlay.Update(segments, highlightPoints);
+    }
+
+    /// <summary>Shows the Multi-Planar guide planes (base/middle/top). Empty list hides
+    /// them. <paramref name="selected"/> highlights the plane being rotated.</summary>
+    public void SetGuidePlanes(IReadOnlyList<(Vector3 Center, Vector3 Normal)> planes, float size, int selected = -1)
+    {
+        _guidePlaneData     = [.. planes];
+        _guidePlaneSize     = size;
+        _guidePlaneSelected = selected;
+        while (_guidePlanes.Count < planes.Count) _guidePlanes.Add(new PlanePreviewRenderer());
+    }
+
+    /// <summary>Multi-Planar spine polyline through the layer centres, coloured by
+    /// distortion. Empty list hides it. Must be called on the GL thread.</summary>
+    public void SetMultiPlanarSpine(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _spineCount = points.Count;
+        if (points.Count < 2) return;
+        _spine ??= new SpineRenderer();
+        _spine.Update(points);
+    }
+
+    /// <summary>Rotate/translate affordance polyline for the selected guide plane
+    /// (rotation ring + height arrow). Empty hides it. GL thread only.</summary>
+    public void SetGuidePlaneGizmo(IReadOnlyList<(Vector3 Pos, Vector3 Color)> points)
+    {
+        _guideGizmoCount = points.Count;
+        if (points.Count < 2) return;
+        _guideGizmo ??= new SpineRenderer();
+        _guideGizmo.Update(points);
     }
 
     /// <summary>
@@ -835,6 +1145,9 @@ public sealed class SceneRenderer : IDisposable
         if (!_initialised || viewportWidth <= 0 || viewportHeight <= 0)
             return;
 
+        _viewportWidthPx  = viewportWidth;
+        _viewportHeightPx = viewportHeight;
+
         // Capture the currently bound FBO before we touch anything.
         // With OpenGlControlBase this is Avalonia's internal FBO; with Win32GlHost it's 0.
         GL.GetInteger(GetPName.DrawFramebufferBinding, out int outputFbo);
@@ -884,9 +1197,18 @@ public sealed class SceneRenderer : IDisposable
             GL.DepthMask(true);
         }
 
-        if (ShowGrid && !arcticPresentation) _grid?.Draw(mvp);
+        // 2D slice view: replace the normal ground / bed grids with a subtle
+        // measurement grid (drawn again after toolpaths so alpha composites cleanly).
+        if (SlicePlaneViewerActive)
+        {
+            // No world ground grid or bed outline — they fight the slice readout.
+        }
+        else if (ShowGrid && !arcticPresentation)
+        {
+            _grid?.Draw(mvp);
+        }
         if (ShowAxes)    _axes?.Draw(mvp);
-        if (ShowBedGrid && !arcticPresentation)
+        if (ShowBedGrid && !arcticPresentation && !SlicePlaneViewerActive)
             _bedBoundary?.Draw(BedBoundaryModel * mvp, mvp);
 
         // Bind backdrop HDR to unit 1 for env reflections in the mesh shader.
@@ -956,16 +1278,60 @@ public sealed class SceneRenderer : IDisposable
             if (!tpNode.Visible) continue;
             var toolpathMvp = tpNode.LocalTransform * mvp;
             bool isSelected = IsToolpathHighlighted(tpNode);
+            // Sticky scrub / edit mode: apply the layer window to the scrubbed
+            // toolpath even when the mesh (or another node) is the selection.
+            bool applyScrub = isSelected
+                || (ToolpathActiveScrubNode is not null
+                    && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
-            int scrub = isSelected ? ToolpathActiveScrubIndex : int.MaxValue;
+
+            // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
+            // dual-slider full window (those stacked every layer into a solid blob when
+            // edit mode had scrub active but nothing selected in the outliner).
+            if (SlicePlaneViewerActive)
+            {
+                // Only the armed scrub toolpath (or any path if none armed yet).
+                if (ToolpathActiveScrubNode is not null
+                    && !ReferenceEquals(tpNode, ToolpathActiveScrubNode))
+                    continue;
+
+                var sliceEnds = SlicePlaneLayerEnds;
+                if (sliceEnds is null || sliceEnds.Length == 0
+                    || (entry.Data.Layers.Count > 0 && sliceEnds.Length != entry.Data.Layers.Count))
+                    sliceEnds = BuildLayerEnds(entry.Data);
+                if (sliceEnds.Length > 0)
+                {
+                    DrawSlicePlaneLayers(entry.Renderer, toolpathMvp, eyeLocal,
+                        isSelected || ToolpathFullAppearance, sliceEnds);
+                }
+                continue;
+            }
+
+            int scrub = applyScrub ? ToolpathActiveScrubIndex : int.MaxValue;
+            int scrubLo = applyScrub ? ToolpathActiveScrubStart : 0;
             if (ToolpathSimProgress >= 0f)
                 scrub = (int)(ToolpathSimProgress * entry.Renderer.TotalMoveCount + 0.5f);
-            entry.Renderer.Draw(toolpathMvp, selected: isSelected,
+
+            entry.Renderer.Draw(toolpathMvp, selected: isSelected || ToolpathFullAppearance,
                 showExtrusion: ShowExtrusionMoves, showTravel: ShowTravelMoves,
+                showLightning: ShowLightningMoves,
+                showWipe: ShowWipeMoves,
                 showSeam: ShowSeam, showBead: ShowBead, showBeadOverhang: ShowBeadOverhang,
                 showOrientationPreview: ShowOrientationPreview,
                 scrubIndex: scrub,
-                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity);
+                eyeLocal: eyeLocal, lineOpacity: ToolpathLineOpacity,
+                scrubStart: scrubLo,
+                showAllPathPoints: ShowAllPathPoints,
+                showDepthLines: ShowDepthAwareLines,
+                viewportW: _viewportWidthPx, viewportH: _viewportHeightPx);
+        }
+
+        // Slice measurement grid AFTER toolpaths so centre-lines stay readable and
+        // alpha blends over the dark backdrop (not under opaque white lines).
+        if (SlicePlaneViewerActive && _grid is not null)
+        {
+            _grid.DrawSliceGrid(mvp, SlicePlaneGridSpacingMm, SlicePlaneGridZ,
+                SlicePlaneGridCenterX, SlicePlaneGridCenterY);
         }
 
         // Translucent helper geometry (effector range glow, …): depth-tested but not
@@ -988,6 +1354,40 @@ public sealed class SceneRenderer : IDisposable
         // Draw the angled-slice plane preview (only present when Angled method is active).
         _planePreview?.Draw(mvp);
 
+        if (_cylinderPreviewCount >= 2 && _cylinderPreview is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _cylinderPreview.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        for (int gi = 0; gi < _guidePlaneData.Count && gi < _guidePlanes.Count; gi++)
+        {
+            var (c, n) = _guidePlaneData[gi];
+            _guidePlanes[gi].Update(c, n, _guidePlaneSize);
+            bool gpSel = gi == _guidePlaneSelected;
+            _guidePlanes[gi].Draw(mvp,
+                gpSel ? new Vector4(1.0f, 0.85f, 0.1f, 0.18f) : new Vector4(0.1f, 0.45f, 0.9f, 0.10f),
+                gpSel ? new Vector4(1.0f, 0.85f, 0.1f, 0.9f)  : new Vector4(0.1f, 0.45f, 0.9f, 0.65f));
+        }
+
+        if (_spineCount >= 2 && _spine is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _spine.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        if (_guideGizmoCount >= 2 && _guideGizmo is not null)
+        {
+            GL.Disable(EnableCap.DepthTest);
+            _guideGizmo.Draw(mvp);
+            GL.Enable(EnableCap.DepthTest);
+        }
+
+        // Paint overlay is drawn AFTER the composite pass (see below) so selection
+        // highlights are never flattened into the cavity/composite shader.
+
         // -- Cavity normal prepass (world normals for screen/world cavity) -----
         if (_cavity is not null && CavityEnabled)
         {
@@ -998,7 +1398,26 @@ public sealed class SceneRenderer : IDisposable
             _cavity.WorldRidge       = CavityWorldRidge;
             _cavity.WorldValley      = CavityWorldValley;
             _cavity.WorldDistance    = CavityWorldDistance;
+            _cavity.ShadeUserMeshes  = CavityShadeImportedMeshes;
             _cavity.RenderNormalPrepass(SceneRoot, mvp, _normalFbo);
+
+            // Excluded toolpaths punch mask-off holes over their pixels so cavity
+            // from surfaces behind them can't bleed through the line work.
+            if (!CavityShadeToolpaths)
+            {
+                GL.DepthFunc(DepthFunction.Lequal);
+                GL.DepthMask(false);
+                foreach (var (tpNode, entry) in _toolpaths)
+                {
+                    if (!tpNode.Visible) continue;
+                    var tpMvp = tpNode.LocalTransform * mvp;
+                    entry.Renderer.DrawCavityPunch(tpMvp,
+                        lines: ShowExtrusionMoves || ShowTravelMoves || ShowLightningMoves || ShowWipeMoves,
+                        bead: ShowBead);
+                }
+                GL.DepthMask(true);
+                GL.DepthFunc(DepthFunction.Less);
+            }
         }
 
         // -- Selection mask pass -----------------------------------------------
@@ -1122,6 +1541,21 @@ public sealed class SceneRenderer : IDisposable
                     _sensorAxes.Draw(sensorModel * mvp);
             }
             GL.Enable(EnableCap.CullFace);
+        }
+
+        // -- Paint overlay (always on top of composite / cavity) --------------
+        // Sticky line selection, hover highlight, brush cursor, mark spheres.
+        // Must live here (output FBO) — drawing into the scene FBO made highlights
+        // vanish under cavity composite on some paths.
+        if (_paintOverlayCount > 0 && _paintOverlay is not null)
+        {
+            GL.Clear(ClearBufferMask.DepthBufferBit);
+            GL.Disable(EnableCap.DepthTest);
+            GL.Enable(EnableCap.Blend);
+            GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            _paintOverlay.Draw(mvp);
+            GL.Disable(EnableCap.Blend);
+            GL.Enable(EnableCap.DepthTest);
         }
 
         // -- Seam guide pass (always on top) -----------------------------------
@@ -1255,8 +1689,14 @@ public sealed class SceneRenderer : IDisposable
     public void SetScanSelection(IReadOnlyList<SceneNode> scans, SceneNode? primary = null)
     {
         _selectedScanOrder.Clear();
-        _selectedToolpaths.Clear();
-        _selectedToolpathOrder.Clear();
+        // Only an ACTUAL scan multi-select displaces the toolpath sequence selection.
+        // Empty syncs (routine scan-selection clears fired by every outliner update)
+        // must not wipe a shift+click toolpath sequence in progress.
+        if (scans.Count > 0 || primary is not null)
+        {
+            _selectedToolpaths.Clear();
+            _selectedToolpathOrder.Clear();
+        }
         foreach (var scan in scans)
         {
             if (scan is null) continue;
@@ -1431,13 +1871,48 @@ public sealed class SceneRenderer : IDisposable
         return best;
     }
 
+    /// <summary>
+    /// View × projection for the current camera and viewport aspect. Compute once per
+    /// pick/hover frame and pass into <see cref="ProjectToScreen(Vector3, Matrix4, float, float)"/>
+    /// — rebuilding matrices per move freezes 10k+ bead path picks.
+    /// </summary>
+    public Matrix4 GetViewProjectionMatrix(float vpW, float vpH)
+    {
+        if (vpW <= 0f || vpH <= 0f) return Matrix4.Identity;
+        float aspect = vpW / MathF.Max(1e-6f, vpH);
+        return Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+    }
+
     /// <summary>Projects a world-space point to viewport pixels (top-left origin).</summary>
     public Vector2 ProjectToScreen(Vector3 world, float vpW, float vpH)
+        => ProjectToScreen(world, GetViewProjectionMatrix(vpW, vpH), vpW, vpH);
+
+    /// <summary>
+    /// Fast path when the caller already has a view-projection matrix (path pick, hover).
+    /// </summary>
+    public Vector2 ProjectToScreen(Vector3 world, Matrix4 viewProj, float vpW, float vpH)
     {
         if (vpW <= 0f || vpH <= 0f) return new Vector2(float.NaN);
-        float aspect = vpW / vpH;
-        var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
         return WorldToScreen(world, viewProj, vpW, vpH);
+    }
+
+    /// <summary>ProjectToScreen plus view depth (clip-space W — larger = farther
+    /// from the camera) so pickers can prefer the FRONT line among stacked beads
+    /// that all project onto the same pixels.</summary>
+    public Vector3 ProjectToScreenDepth(Vector3 world, float vpW, float vpH)
+        => ProjectToScreenDepth(world, GetViewProjectionMatrix(vpW, vpH), vpW, vpH);
+
+    /// <summary>Fast depth project with a precomputed view-projection matrix.</summary>
+    public Vector3 ProjectToScreenDepth(Vector3 world, Matrix4 viewProj, float vpW, float vpH)
+    {
+        if (vpW <= 0f || vpH <= 0f) return new Vector3(float.NaN);
+        var clip = new Vector4(world, 1f) * viewProj;
+        if (clip.W <= 0f) return new Vector3(float.NaN);
+        float invW = 1f / clip.W;
+        return new Vector3(
+            (clip.X * invW * 0.5f + 0.5f) * vpW,
+            (1f - (clip.Y * invW * 0.5f + 0.5f)) * vpH,
+            clip.W);
     }
 
     /// <summary>Intersects <paramref name="ray"/> with the build-plate plane at <see cref="BedZ"/>.</summary>
@@ -1617,6 +2092,11 @@ public sealed class SceneRenderer : IDisposable
         _gizmo?.Dispose();
         _backdrop?.Dispose();
         _planePreview?.Dispose();
+        _cylinderPreview?.Dispose();
+        foreach (var gp in _guidePlanes) gp.Dispose();
+        _spine?.Dispose();
+        _guideGizmo?.Dispose();
+        _paintOverlay?.Dispose();
         _seamGuides?.Dispose();
         _boundaryLowMarkers?.Dispose();
         _boundaryHighMarkers?.Dispose();

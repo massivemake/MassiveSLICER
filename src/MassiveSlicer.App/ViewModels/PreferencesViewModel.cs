@@ -166,7 +166,38 @@ public sealed class PreferencesViewModel : ViewModelBase
         ToolpathUnselectedColor = HexToColor(_prefs.ToolpathUnselectedColor);
         ToolpathWipeColor       = HexToColor(_prefs.ToolpathWipeColor);
         ToolpathRetractionColor = HexToColor(_prefs.ToolpathRetractionColor);
+        UnasProjectsRoot        = _prefs.UnasProjectsRoot;
         _loading                = false;
+    }
+
+    // -- Connections ---------------------------------------------------------
+
+    /// <summary>Live ERP view model — URL/token edits write through it so the
+    /// client is invalidated and reconnect uses the new values. Set after startup.</summary>
+    private ErpViewModel? _erp;
+    public ErpViewModel? Erp
+    {
+        get => _erp;
+        set => SetField(ref _erp, value);
+    }
+
+    private string _unasProjectsRoot = "";
+    /// <summary>UNAS projects root — ERP-linked workspaces save into
+    /// "&lt;root&gt;/&lt;number&gt; - …/06-Production Documents" automatically.</summary>
+    public string UnasProjectsRoot
+    {
+        get => _unasProjectsRoot;
+        set { if (SetField(ref _unasProjectsRoot, value)) Commit(() => _prefs.UnasProjectsRoot = value.Trim()); }
+    }
+
+    /// <summary>Per-cell robot SMB rows, rebuilt each time the dialog opens.</summary>
+    public System.Collections.ObjectModel.ObservableCollection<RobotSmbRowViewModel> SmbRows { get; } = [];
+
+    public void RefreshSmbRows()
+    {
+        SmbRows.Clear();
+        foreach (var cfg in _prefs.RobotSmb.OrderBy(c => c.CellName, StringComparer.OrdinalIgnoreCase))
+            SmbRows.Add(new RobotSmbRowViewModel(cfg, () => PreferencesLoader.Save(_prefs)));
     }
 
     // -- Private -----------------------------------------------------------

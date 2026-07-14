@@ -99,7 +99,7 @@ public sealed record CellConfig
     public IReadOnlyList<CellWaypointConfig> Waypoints { get; init; } = [];
 }
 
-/// <summary>A saved orbit-camera pose (spherical, Z-up). Persisted per cell.</summary>
+/// <summary>A saved orbit-camera pose (spherical, Z-up). Persisted per cell / workspace.</summary>
 public sealed record CameraView
 {
     public float Azimuth   { get; init; }
@@ -108,6 +108,9 @@ public sealed record CameraView
     public float TargetX   { get; init; }
     public float TargetY   { get; init; }
     public float TargetZ   { get; init; }
+
+    /// <summary>Orthographic projection (2D slice view / number-key CAD views).</summary>
+    public bool IsOrthographic { get; init; }
 }
 
 /// <summary>Contents of the per-cell <c>home_positions.json</c> sidecar file.</summary>

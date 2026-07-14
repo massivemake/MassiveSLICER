@@ -30,8 +30,14 @@ public sealed class OrbitCamera
 
     // -- Projection --------------------------------------------------------
 
-    /// <summary>Vertical field of view in degrees.</summary>
+    /// <summary>Vertical field of view in degrees (perspective only).</summary>
     public float FovDegrees { get; set; } = 85f;
+
+    /// <summary>
+    /// When true, uses an orthographic projection sized so the view matches the
+    /// perspective frustum at the current <see cref="Radius"/>.
+    /// </summary>
+    public bool IsOrthographic { get; set; }
 
     /// <summary>Near clip plane distance in mm.</summary>
     public float NearClip { get; set; } = 1f;
@@ -41,6 +47,25 @@ public sealed class OrbitCamera
 
     // -- Derived state -----------------------------------------------------
 
+    /// <summary>
+    /// Distance used to place the eye along the view ray.
+    /// In orthographic mode zoom only changes frustum size (<see cref="Radius"/>); the eye
+    /// stays far from the target so multiplanar Z extents are not near-clipped when zoomed in
+    /// (classic 2D CAD behaviour — radius was previously both zoom and eye distance).
+    /// </summary>
+    private float EyeDistance
+    {
+        get
+        {
+            if (!IsOrthographic)
+                return Radius;
+            // Keep the eye well above any toolpath Z span (multiplanar layers can be hundreds
+            // of mm thick). Still grow with Radius so extreme zoom-out stays consistent.
+            const float orthoMinEye = 50_000f;
+            return MathF.Max(Radius, orthoMinEye);
+        }
+    }
+
     /// <summary>World-space position of the camera eye, computed from spherical coordinates.</summary>
     public Vector3 Eye
     {
@@ -49,10 +74,11 @@ public sealed class OrbitCamera
             float azRad  = MathHelper.DegreesToRadians(Azimuth);
             float elRad  = MathHelper.DegreesToRadians(Elevation);
             float cosEl  = MathF.Cos(elRad);
+            float r      = EyeDistance;
             return Target + new Vector3(
-                Radius * cosEl * MathF.Cos(azRad),
-                Radius * cosEl * MathF.Sin(azRad),
-                Radius * MathF.Sin(elRad));
+                r * cosEl * MathF.Cos(azRad),
+                r * cosEl * MathF.Sin(azRad),
+                r * MathF.Sin(elRad));
         }
     }
 
@@ -85,14 +111,35 @@ public sealed class OrbitCamera
         return Matrix4.LookAt(eye, Target, up);
     }
 
-    /// <summary>Returns the perspective projection matrix for the given viewport aspect ratio.</summary>
-    /// <param name="aspectRatio">Viewport width divided by height.</param>
+    /// <summary>
+    /// Projection matrix for the given viewport aspect ratio — perspective or
+    /// orthographic depending on <see cref="IsOrthographic"/>.
+    /// </summary>
     public Matrix4 GetProjectionMatrix(float aspectRatio)
-        => Matrix4.CreatePerspectiveFieldOfView(
-               MathHelper.DegreesToRadians(FovDegrees),
-               aspectRatio,
-               NearClip,
-               FarClip);
+    {
+        if (!IsOrthographic)
+        {
+            return Matrix4.CreatePerspectiveFieldOfView(
+                MathHelper.DegreesToRadians(FovDegrees),
+                aspectRatio,
+                NearClip,
+                FarClip);
+        }
+
+        // Match the perspective frustum height at the focus distance so switching
+        // ortho/persp does not jump scale. Frustum size tracks Radius (zoom); eye
+        // distance is independent (see EyeDistance) so close zoom never clips Z.
+        float halfH = Math.Max(1f, Radius)
+            * MathF.Tan(MathHelper.DegreesToRadians(FovDegrees) * 0.5f);
+        float halfW = halfH * Math.Max(0.01f, aspectRatio);
+        // Depth window around the focus plane (±25 m). Eye sits at EyeDistance so
+        // multiplanar Z never crosses the near plane when zoomed in.
+        float eyeDist = EyeDistance;
+        float near = MathF.Max(0.1f, eyeDist - 25_000f);
+        float far  = eyeDist + 25_000f;
+        return Matrix4.CreateOrthographicOffCenter(
+            -halfW, halfW, -halfH, halfH, near, far);
+    }
 
     // -- Picking -----------------------------------------------------------
 
@@ -189,6 +236,8 @@ public sealed class OrbitCamera
     {
         const float ZoomFactor = 0.1f;
         Radius *= 1f - scrollDelta * ZoomFactor;
-        Radius = Math.Clamp(Radius, 10f, 100_000f);
+        // Allow tighter ortho zoom (2D slice / detail work); perspective stays practical.
+        float minR = IsOrthographic ? 2f : 10f;
+        Radius = Math.Clamp(Radius, minR, 100_000f);
     }
 }

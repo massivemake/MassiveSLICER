@@ -14,6 +14,14 @@ public sealed class WorkspaceDocument
     /// <summary>Orbit camera pose at save time.</summary>
     public CameraView? Camera { get; set; }
 
+    /// <summary>
+    /// Viewport UI session at save time (edit mode, tools, layer isolation, scrub,
+    /// 2D slice viewer). Written immediately after Camera so a truncated large save
+    /// (common on NAS mid-toolpath serialize) still restores view/edit state.
+    /// Null on workspaces saved before this field existed.
+    /// </summary>
+    public WorkspaceUiSession? UiSession { get; set; }
+
     /// <summary>Active right-panel tab name (matches <see cref="RightPanelTab"/> enum).</summary>
     public string RightPanelTab { get; set; } = "Additive";
 
@@ -22,6 +30,185 @@ public sealed class WorkspaceDocument
 
     /// <summary>Snapshot of user settings at save time.</summary>
     public AppPreferences Settings { get; set; } = new();
+
+    /// <summary>ERP project/lead this workspace is attached to, or null.</summary>
+    public ErpAttachment? Erp { get; set; }
+}
+
+/// <summary>
+/// Transient UI state captured with a workspace so reopen restores edit mode,
+/// selected paint/path tools, and the isolated layer window.
+/// </summary>
+public sealed class WorkspaceUiSession
+{
+    /// <summary>Body / Toolpath / Speed / RPM / Preview.</summary>
+    public string ViewMode { get; set; } = "Body";
+
+    /// <summary>Whether the toolpath Edit toolbar was open.</summary>
+    public bool IsPaintEditOpen { get; set; }
+
+    /// <summary>2D Slice Plane Viewer toggle (edit mode only).</summary>
+    public bool IsSlicePlaneViewerActive { get; set; }
+
+    /// <summary>
+    /// Multi-Planar "Planes" viewport overlay toggle. Nullable so workspaces saved
+    /// before this field keep the app default (on) instead of deserializing as false.
+    /// </summary>
+    public bool? ShowMultiPlanarPlanes { get; set; }
+
+    public bool PaintHandActive { get; set; }
+    public bool PaintBoxSelectActive { get; set; }
+    public bool PaintBridgeActive { get; set; }
+    public bool PaintRemoveActive { get; set; }
+    public bool PaintLineBridgeActive { get; set; }
+    public bool PaintLineRemoveActive { get; set; }
+
+    /// <summary>"Path" or "Point".</summary>
+    public string PaintSelectGranularity { get; set; } = "Path";
+
+    /// <summary>"All", "Formbound", or "Perimeter".</summary>
+    public string PaintPickFilter { get; set; } = "All";
+
+    public double PaintBrushRadiusMm { get; set; } = 15.0;
+
+    /// <summary>"Square" or "Lasso" region-select mode.</summary>
+    public string PaintRegionSelectMode { get; set; } = "Square";
+
+    /// <summary>"Support" or "Remove".</summary>
+    public string PaintModificationMode { get; set; } = "Support";
+
+    /// <summary>"Formbound Buttress" or "Formbound Bridge".</summary>
+    public string PaintSupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>Show Support/Remove paint marker spheres in the viewport.</summary>
+    public bool ShowPaintMarkers { get; set; } = true;
+
+    /// <summary>Show bead mesh while edit mode is open.</summary>
+    public bool PaintShowBeads { get; set; }
+
+    /// <summary>
+    /// Applied MODIFICATIONS list (reselectable Support/Remove entries with optional
+    /// bridge targets). Null/empty when none or workspaces saved before this field.
+    /// </summary>
+    public List<WorkspacePaintModification> PaintModifications { get; set; } = [];
+
+    /// <summary>Robot joint pose [A1..A6, E1] (KRL degrees) at save time.</summary>
+    public double[]? RobotJoints { get; set; }
+
+    /// <summary>Sim-timeline camera keyframes: [percent, azimuth, elevation, radius, targetX, targetY, targetZ].</summary>
+    public List<double[]>? SimCameraKeyframes { get; set; }
+
+    /// <summary>Exclusive upper scrub move index (high handle / top of layer window).</summary>
+    public int ToolpathScrubIndex { get; set; }
+
+    /// <summary>Lower scrub move index (low handle / bottom of isolated window).</summary>
+    public int ToolpathScrubLowIndex { get; set; }
+
+    /// <summary>1-based layer high (redundant with move index; used if move count shifts).</summary>
+    public double ToolpathScrubLayerHigh { get; set; }
+
+    /// <summary>1-based layer low.</summary>
+    public double ToolpathScrubLayerLow { get; set; } = 1;
+
+    /// <summary>Timeline scrub session was live (toolpath armed even if not selected).</summary>
+    public bool IsScrubSessionActive { get; set; }
+
+    /// <summary>True when the toolpath node itself was the viewport selection.</summary>
+    public bool SelectToolpath { get; set; }
+
+    /// <summary>Parent model name for the scrubbed toolpath.</summary>
+    public string? ScrubModelName { get; set; }
+
+    /// <summary>Outliner / node name of the scrubbed toolpath.</summary>
+    public string? ScrubToolpathName { get; set; }
+}
+
+/// <summary>
+/// One path/point span inside a grouped paint modification (Shift multi-select).
+/// </summary>
+public sealed class WorkspacePaintModMember
+{
+    public int LayerIndex { get; set; }
+    public float LayerZ { get; set; }
+    public int SpanStart { get; set; }
+    public int SpanCount { get; set; }
+    public bool SpanClosed { get; set; }
+    public int SpanEntryTravelIndex { get; set; } = -1;
+    /// <summary>Mark centres as [x,y,z] for this member only.</summary>
+    public List<float[]> MarkCenters { get; set; } = [];
+    /// <summary>World highlight polyline [x,y,z] points.</summary>
+    public List<float[]> WorldPoints { get; set; } = [];
+}
+
+/// <summary>
+/// One applied paint modification for workspace save/restore.
+/// Layer spans are re-bound by index/Z after the toolpath reloads.
+/// </summary>
+public sealed class WorkspacePaintModification
+{
+    public Guid Id { get; set; }
+    /// <summary>"Bridge" or "Remove" (<see cref="PaintMarkKind"/> name).</summary>
+    public string Kind { get; set; } = "Bridge";
+
+    public int LayerIndex { get; set; }
+    public float LayerZ { get; set; }
+    public int SpanStart { get; set; }
+    public int SpanCount { get; set; }
+    public bool SpanClosed { get; set; }
+    public int SpanEntryTravelIndex { get; set; } = -1;
+
+    /// <summary>Mark centres as [x,y,z].</summary>
+    public List<float[]> MarkCenters { get; set; } = [];
+
+    public string Title { get; set; } = "";
+    public string Detail { get; set; } = "";
+    public bool IsExpanded { get; set; }
+
+    /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+    public string SupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
+    public string SupportSide { get; set; } = "Inside";
+
+    /// <summary>World highlight polyline [x,y,z] points.</summary>
+    public List<float[]> WorldPoints { get; set; } = [];
+
+    /// <summary>
+    /// Group members (Shift multi-select). Empty = legacy single-span mod.
+    /// When present, primary Layer/Span fields still mirror the first member.
+    /// </summary>
+    public List<WorkspacePaintModMember> Members { get; set; } = [];
+
+    // ── Optional bridge target ───────────────────────────────────────────────
+    public int? TargetLayerIndex { get; set; }
+    public float? TargetLayerZ { get; set; }
+    public int? TargetSpanStart { get; set; }
+    public int? TargetSpanCount { get; set; }
+    public bool TargetSpanClosed { get; set; }
+    public int TargetSpanEntryTravelIndex { get; set; } = -1;
+    public List<float[]> TargetMarkCenters { get; set; } = [];
+    public List<float[]> TargetWorldPoints { get; set; } = [];
+    public List<float[]> ScaffoldMarkCenters { get; set; } = [];
+    public int ScaffoldLayerCount { get; set; }
+}
+
+/// <summary>Reference to the ERP Project/Lead (and optional element) a workspace belongs to.</summary>
+public sealed class ErpAttachment
+{
+    /// <summary>"project" or "lead".</summary>
+    public string Type { get; set; } = "project";
+
+    /// <summary>ERP record id.</summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>Project number, e.g. "25-114".</summary>
+    public string Number { get; set; } = "";
+
+    public string Title { get; set; } = "";
+
+    public string? ElementId { get; set; }
+
+    public string? ElementName { get; set; }
 }
 
 /// <summary>One outliner root model entry.</summary>

@@ -52,7 +52,7 @@ internal static partial class ConsoleDistanceParser
         if (args.Length == 0)
             return (string.Empty, defaultVel);
 
-        var parts = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length >= 2
             && int.TryParse(parts[^1], NumberStyles.Integer, Inv, out var vel)
             && vel is >= 1 and <= 100

@@ -199,6 +199,29 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
 
     public event EventHandler? OpenWorkspaceRequested;
 
+    /// <summary>Raised with the full path when a File → Open Recent entry is picked.</summary>
+    public event EventHandler<string>? OpenRecentRequested;
+
+    /// <summary>File → Open Recent entries (newest first).</summary>
+    public System.Collections.ObjectModel.ObservableCollection<RecentWorkspaceItem> RecentWorkspaces { get; } = [];
+
+    public bool HasRecentWorkspaces => RecentWorkspaces.Count > 0;
+
+    /// <summary>Rebuilds the Open Recent list from prefs (newest first).</summary>
+    public void SetRecentWorkspaces(IEnumerable<string> paths)
+    {
+        RecentWorkspaces.Clear();
+        foreach (var path in paths)
+        {
+            string captured = path;
+            RecentWorkspaces.Add(new RecentWorkspaceItem(
+                System.IO.Path.GetFileName(captured),
+                captured,
+                new RelayCommand(() => OpenRecentRequested?.Invoke(this, captured))));
+        }
+        OnPropertyChanged(nameof(HasRecentWorkspaces));
+    }
+
     /// <summary>Raised when the user triggers Save (current file).</summary>
     public event EventHandler? SaveWorkspaceRequested;
 
@@ -247,3 +270,6 @@ OpenPreferencesCommand  = new RelayCommand(OpenPreferences);
         IsConsoleVisible = true;
     }
 }
+
+/// <summary>One File → Open Recent entry.</summary>
+public sealed record RecentWorkspaceItem(string Label, string Path, RelayCommand OpenCommand);

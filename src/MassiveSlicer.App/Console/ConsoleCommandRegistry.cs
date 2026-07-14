@@ -116,6 +116,639 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "seqtest",
+            Description = "Debug: select first toolpath, range-extend to last",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var models = v.GetUserModelItems()
+                    .Where(m => m.Children.Any(c => c.IsToolpath)).ToList();
+                if (models.Count < 2) { ctx.Log($"[seqtest] need 2+ sliced models, have {models.Count}"); return; }
+                var firstTp = models[0].Children.First(c => c.IsToolpath);
+                v.ForceSelectNode?.Invoke(firstTp.Node);
+                var lastTp = models[^1].Children.First(c => c.IsToolpath);
+                bool ok = v.TryToggleToolpathSequenceSelection(lastTp);
+                ctx.Log($"[seqtest] toggled={ok} selected={v.GetSequenceCount?.Invoke() ?? -1} of {models.Count}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "erp",
+            Description = "ERP attachment: erp url <u> | token <t> | connect | expand | search <q> | attach <i> [elemIdx] | newelem <name> | sendslice | pricing | quote [qty] [finishing] | detach | status",
+            Execute = (ctx, args) =>
+            {
+                var erp = ctx.Main.Viewport.Erp;
+                var parts = args.Trim().Split(' ', 2);
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "url":     erp.BaseUrl  = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[erp] url = {erp.BaseUrl}"); break;
+                    case "token":   erp.ApiToken = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log("[erp] token set"); break;
+                    case "connect": erp.ConnectCommand.Execute(null); break;
+                    case "expand":
+                    case "toggle":
+                        // Force-open the ERP dock (same as clicking the ERP button).
+                        try
+                        {
+                            erp.IsExpanded = true;
+                            ctx.Log($"[erp] expanded={erp.IsExpanded} attached='{erp.ToggleLabel}' " +
+                                    $"showAtt={erp.ShowAttachment} showSearch={erp.ShowSearch} " +
+                                    $"showSettings={erp.ShowSettings} candidates={erp.WorkspaceCandidates.Count} " +
+                                    $"pricing='{erp.PricingSummary}' status='{erp.Status}'");
+                        }
+                        catch (Exception ex)
+                        {
+                            ctx.Log($"[erp] expand CRASHED: {ex}");
+                            throw;
+                        }
+                        break;
+                    case "search":  erp.SearchText = parts.ElementAtOrDefault(1) ?? ""; break;
+                    case "attach":
+                    {
+                        var idx = (parts.ElementAtOrDefault(1) ?? "0").Split(' ');
+                        if (int.TryParse(idx[0], out int i) && i >= 0 && i < erp.SearchResults.Count)
+                        {
+                            erp.SelectedResult = erp.SearchResults[i];
+                            if (idx.Length > 1 && int.TryParse(idx[1], out int e)
+                                && e >= 0 && e < erp.Elements.Count)
+                                erp.SelectedElement = erp.Elements[e];
+                            erp.AttachCommand.Execute(null);
+                        }
+                        else ctx.Log($"[erp] no result at index (have {erp.SearchResults.Count})");
+                        break;
+                    }
+                    case "detach":  erp.DetachCommand.Execute(null); break;
+                    case "newelem":
+                    {
+                        // Creates on the attached record when one is linked, else on the selected result.
+                        string name = parts.ElementAtOrDefault(1)?.Trim() ?? "";
+                        if (erp.ShowAttachmentElementCreate)
+                        {
+                            if (name.Length > 0) erp.AttachmentElementName = name;
+                            erp.CreateAttachmentElementCommand.Execute(null);
+                        }
+                        else
+                        {
+                            if (name.Length > 0) erp.NewElementName = name;
+                            erp.CreateElementCommand.Execute(null);
+                        }
+                        break;
+                    }
+                    case "sendslice": erp.SendSliceCommand.Execute(null); break;
+                    case "reattach":  erp.ReattachToProjectCommand.Execute(null); break;
+                    case "pricing":
+                        if (erp.PricingConfig is { } cfg)
+                        {
+                            ctx.Log($"[erp] {erp.PricingSummary}");
+                            foreach (var m in cfg.Materials)
+                                ctx.Log($"[erp]   {m.Name}: ${m.CostPerKg:0.00}/kg (density {m.DensityGmCc:0.###})");
+                            foreach (var d in cfg.QuantityDiscounts)
+                                ctx.Log($"[erp]   {d.MinQuantity}+ units → {d.Rate:P0} off");
+                        }
+                        else ctx.Log("[erp] no pricing config cached — fetching…");
+                        _ = erp.RefreshPricingAsync();
+                        break;
+                    case "quote":
+                    {
+                        var vp = ctx.Main.Viewport;
+                        if (vp.StatsTimeSeconds <= 0 && vp.StatsWeightKg <= 0)
+                        {
+                            ctx.Log("[erp] no slice stats — slice a model first.");
+                            break;
+                        }
+                        var qargs = (parts.ElementAtOrDefault(1) ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        int qty = qargs.Length > 0 && int.TryParse(qargs[0], out int q) ? q : 1;
+                        bool finishing = qargs.Contains("finishing", StringComparer.OrdinalIgnoreCase);
+                        var req = new MassiveSlicer.App.Erp.ErpQuoteRequest(
+                            PrintTimeSec: vp.StatsTimeSeconds > 0 ? vp.StatsTimeSeconds : null,
+                            WeightKg:     vp.StatsWeightKg > 0 ? vp.StatsWeightKg : null,
+                            Material:     ctx.Main.RightPanel.Additive.SelectedPreset?.Name,
+                            Quantity:     qty,
+                            Finishing:    finishing);
+                        ctx.Log($"[erp] requesting quote (qty {qty}{(finishing ? ", finishing" : "")})…");
+                        _ = erp.QuoteAsync(req).ContinueWith(t =>
+                        {
+                            var r = t.Result;
+                            if (r.Ok)
+                            {
+                                var c = r.Value!;
+                                ctx.Log($"[erp] quote: machine ${c.MachineCost:0.00} + material ${c.MaterialCost:0.00}"
+                                    + (c.QuantityDiscount is { } qd and not 0.0 ? $" − discount ${qd:0.00}" : "")
+                                    + (c.Markup is { } mk and not 0.0 ? $" + markup ${mk:0.00}" : "")
+                                    + $" → CLIENT PRICE ${c.ClientPrice:0.00} (v{c.PricingVersion})");
+                            }
+                            else ctx.Log($"[erp] quote failed: {r.Error!.Message}");
+                        }, TaskScheduler.Default);
+                        break;
+                    }
+                    default:
+                        ctx.Log($"[erp] state={erp.ConnectionState} status='{erp.Status}' results={erp.SearchResults.Count} " +
+                                $"elements={erp.Elements.Count} attached='{erp.ToggleLabel}'");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "smb",
+            Description = "Robot SMB: smb host <ip> | share <s> | folder <f> | user <u> | pass <p> | test | send | status",
+            Execute = (ctx, args) =>
+            {
+                var smb = ctx.Main.Viewport.RobotSmb;
+                var parts = args.Trim().Split(' ', 2);
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "host":   smb.Host     = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] host = {smb.Host}"); break;
+                    case "share":  smb.Share    = parts.ElementAtOrDefault(1)?.Trim() ?? "d"; ctx.Log($"[smb] share = {smb.Share}"); break;
+                    case "folder": smb.Folder   = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] folder = {smb.Folder}"); break;
+                    case "user":   smb.Username = parts.ElementAtOrDefault(1)?.Trim() ?? ""; ctx.Log($"[smb] user = {smb.Username}"); break;
+                    case "pass":   smb.Password = parts.ElementAtOrDefault(1) ?? ""; ctx.Log("[smb] password set"); break;
+                    case "test":   smb.TestCommand.Execute(null); break;
+                    case "send":   ctx.Main.Viewport.SendToRobotCommand.Execute(null); break;
+                    default:
+                        ctx.Log($"[smb] cell='{smb.CellName}' host='{smb.Host}' share='{smb.Share}' folder='{smb.Folder}' " +
+                                $"user='{smb.Username}' configured={smb.IsConfigured} status='{smb.Status}'");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "addset",
+            Description = "Debug: get/set an AdditiveSettings property by name",
+            Usage = "addset <property> [value]",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', 2);
+                var prop = typeof(ViewModels.AdditiveSettingsViewModel).GetProperty(parts[0]);
+                if (prop is null) { ctx.LogError($"[addset] no property '{parts[0]}'"); return; }
+                var add = ctx.Main.RightPanel.Additive;
+                if (parts.Length > 1 && prop.CanWrite)
+                {
+                    object value = prop.PropertyType switch
+                    {
+                        var t when t == typeof(double) => double.Parse(parts[1]),
+                        var t when t == typeof(float)  => float.Parse(parts[1]),
+                        var t when t == typeof(int)    => int.Parse(parts[1]),
+                        var t when t == typeof(bool)   => bool.Parse(parts[1]),
+                        _                              => parts[1],
+                    };
+                    prop.SetValue(add, value);
+                }
+                ctx.Log($"[addset] {parts[0]} = {prop.GetValue(add)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tpdump",
+            Description = "Debug: dump the active toolpath moves to a CSV file",
+            Usage = "tpdump <path.csv>",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[tpdump] no active toolpath"); return; }
+                string path = string.IsNullOrWhiteSpace(args)
+                    ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "toolpath-dump.csv")
+                    : args.Trim();
+                var sb = new System.Text.StringBuilder(
+                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz\n");
+                for (int li = 0; li < tp.Layers.Count; li++)
+                {
+                    var lyr = tp.Layers[li];
+                    foreach (var m in lyr.Moves)
+                    {
+                        var n = m.Normal.LengthSquared() > 0.01f ? m.Normal : lyr.PlaneNormal;
+                        sb.Append(li).Append(',').Append(lyr.Z.ToString("0.###")).Append(',')
+                          .Append(m.Kind).Append(',')
+                          .Append(m.From.X.ToString("0.###")).Append(',')
+                          .Append(m.From.Y.ToString("0.###")).Append(',')
+                          .Append(m.From.Z.ToString("0.###")).Append(',')
+                          .Append(m.To.X.ToString("0.###")).Append(',')
+                          .Append(m.To.Y.ToString("0.###")).Append(',')
+                          .Append(m.To.Z.ToString("0.###")).Append(',')
+                          .Append(m.IsLightning ? 1 : 0).Append(',')
+                          .Append(m.HeightScale.ToString("0.###")).Append(',')
+                          .Append(n.X.ToString("0.####")).Append(',')
+                          .Append(n.Y.ToString("0.####")).Append(',')
+                          .Append(n.Z.ToString("0.####")).Append('\n');
+                    }
+                }
+                System.IO.File.WriteAllText(path, sb.ToString());
+                ctx.Log($"[tpdump] {tp.Layers.Count} layer(s) → {path}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "effector",
+            Description = "Toggle live effector point 1-3, or list active positions",
+            Usage = "effector <1|2|3|list>",
+            Execute = (ctx, args) =>
+            {
+                var arg = args.Trim();
+                if (arg is "1" or "2" or "3")
+                {
+                    ctx.Main.Viewport.ToggleEffectorPointCommand.Execute(arg);
+                    return;
+                }
+                var pts = ctx.Main.Viewport.GetActiveEffectorPositions();
+                ctx.Log($"[effector] {pts.Count} active: " +
+                        string.Join("  ", pts.Select(p => $"({p.X:0},{p.Y:0},{p.Z:0})")));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "viewset",
+            Description = "Debug: get/set a ViewportViewModel property by name",
+            Usage = "viewset <property> [value]",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', 2);
+                var prop = typeof(ViewModels.ViewportViewModel).GetProperty(parts[0]);
+                if (prop is null) { ctx.LogError($"[viewset] no property '{parts[0]}'"); return; }
+                var vp = ctx.Main.Viewport;
+                if (parts.Length > 1 && prop.CanWrite)
+                {
+                    object value = prop.PropertyType switch
+                    {
+                        var t when t == typeof(double) => double.Parse(parts[1]),
+                        var t when t == typeof(float)  => float.Parse(parts[1]),
+                        var t when t == typeof(int)    => int.Parse(parts[1]),
+                        var t when t == typeof(bool)   => bool.Parse(parts[1]),
+                        _                              => parts[1],
+                    };
+                    prop.SetValue(vp, value);
+                }
+                ctx.Log($"[viewset] {parts[0]} = {prop.GetValue(vp)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tpopt",
+            Description = "Optimize the active toolpath: greedy travel-minimizing path order + extrude bridges between paths within 3x bead width (same as the Optimize Toolpath button).",
+            Usage = "tpopt",
+            Execute = (ctx, _) =>
+            {
+                if (ctx.Main.Viewport.ActiveScrubToolpath is not { } tpo)
+                {
+                    ctx.LogError("[tpopt] no active toolpath — slice first");
+                    return;
+                }
+                var stats = Core.Slicing.ToolpathOptimizer.Optimize(
+                    tpo, (float)ctx.Main.RightPanel.Additive.BeadWidth);
+                ctx.Main.RightPanel.Additive.OptimizeToolpathSummary = stats.ToString();
+                ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
+                ctx.Log($"[tpopt] {stats}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "tpfix",
+            Description = "Surgical toolpath repair: build continuous support shelves under every floating run (full-length lines stepping back to the wall at 30 deg/layer). Re-run after any reslice.",
+            Usage = "tpfix supports",
+            Execute = (ctx, args) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[tpfix] no active toolpath"); return; }
+                var add = ctx.Main.RightPanel.Additive;
+                float bead = (float)add.BeadWidth;
+                float layerH = (float)add.LayerHeight;
+                float thr = bead * 0.75f;
+                float maxReach = bead * 4f;
+                float maxStep = MathF.Min(layerH * MathF.Tan(30f * MathF.PI / 180f), bead * 0.5f);
+
+                var layerSegs = new List<List<(System.Numerics.Vector2 A, System.Numerics.Vector2 B)>>(tp.Layers.Count);
+                foreach (var layer in tp.Layers)
+                {
+                    var list = new List<(System.Numerics.Vector2, System.Numerics.Vector2)>();
+                    foreach (var mv in layer.Moves)
+                        if (mv.Kind == Core.Models.MoveKind.Extrude)
+                            list.Add((new System.Numerics.Vector2(mv.From.X, mv.From.Y),
+                                      new System.Numerics.Vector2(mv.To.X, mv.To.Y)));
+                    layerSegs.Add(list);
+                }
+                static float DistToSeg(System.Numerics.Vector2 p,
+                    (System.Numerics.Vector2 A, System.Numerics.Vector2 B) s)
+                {
+                    var ab = s.B - s.A;
+                    float l2 = ab.LengthSquared();
+                    if (l2 < 1e-12f) return System.Numerics.Vector2.Distance(p, s.A);
+                    float t = Math.Clamp(System.Numerics.Vector2.Dot(p - s.A, ab) / l2, 0f, 1f);
+                    return System.Numerics.Vector2.Distance(p, s.A + ab * t);
+                }
+                float NearestBelow(int li, System.Numerics.Vector2 p, out System.Numerics.Vector2 q)
+                {
+                    q = p;
+                    float best = float.MaxValue;
+                    foreach (var seg in layerSegs[li - 1])
+                    {
+                        float d = DistToSeg(p, seg);
+                        if (d < best)
+                        {
+                            best = d;
+                            var ab = seg.B - seg.A;
+                            float l2 = ab.LengthSquared();
+                            float t = l2 < 1e-12f ? 0f
+                                : Math.Clamp(System.Numerics.Vector2.Dot(p - seg.A, ab) / l2, 0f, 1f);
+                            q = seg.A + ab * t;
+                        }
+                    }
+                    return best;
+                }
+
+                // 1. Floating RUNS: consecutive floating extrudes in a layer's walk
+                //    (small supported interruptions of up to 2 moves stay in the run).
+                var runs = new List<(int Layer, List<System.Numerics.Vector2> Pts, List<float> G, List<System.Numerics.Vector2> Dir)>();
+                for (int li = 1; li < tp.Layers.Count; li++)
+                {
+                    if (layerSegs[li - 1].Count == 0) continue;
+                    List<System.Numerics.Vector2>? pts = null;
+                    List<float>? gs = null;
+                    List<System.Numerics.Vector2>? dirs = null;
+                    int miss = 0;
+                    void Flush()
+                    {
+                        if (pts is { Count: >= 2 }) runs.Add((li, pts, gs!, dirs!));
+                        pts = null; gs = null; dirs = null; miss = 0;
+                    }
+                    foreach (var mv in tp.Layers[li].Moves)
+                    {
+                        if (mv.Kind != Core.Models.MoveKind.Extrude) { Flush(); continue; }
+                        var mid = new System.Numerics.Vector2(
+                            (mv.From.X + mv.To.X) * 0.5f, (mv.From.Y + mv.To.Y) * 0.5f);
+                        float g = NearestBelow(li, mid, out var q);
+                        bool floating = g > thr && g <= maxReach;
+                        if (floating)
+                        {
+                            var d = mid - q;
+                            float dl = d.Length();
+                            var dir = dl > 1e-3f ? d / dl : System.Numerics.Vector2.Zero;
+                            if (pts is null) { pts = []; gs = []; dirs = []; }
+                            if (pts.Count == 0)
+                            {
+                                pts.Add(new System.Numerics.Vector2(mv.From.X, mv.From.Y));
+                                gs!.Add(g); dirs!.Add(dir);
+                            }
+                            pts.Add(new System.Numerics.Vector2(mv.To.X, mv.To.Y));
+                            gs!.Add(g); dirs!.Add(dir);
+                            miss = 0;
+                        }
+                        else if (pts is not null && ++miss > 2) Flush();
+                    }
+                    Flush();
+                }
+                if (runs.Count == 0) { ctx.Log("[tpfix] no floating runs found — nothing to do"); return; }
+
+                // 2. Shelves: reprint each floating run on the layers below,
+                //    stepping every vertex toward the wall by <= maxStep per layer
+                //    with the wall re-measured at EVERY layer (angled slicing moves
+                //    it in world XY). Vertices that land (gap <= thr) leave the
+                //    descent; vertices whose gap stops shrinking for 3 layers are
+                //    chasing a wall that leans away faster than 30 deg and are
+                //    abandoned. Runs split into independent sub-runs as vertices
+                //    drop out, so material only goes where it still helps.
+                int shelves = 0, abandoned = 0; float lenInjected = 0f;
+                foreach (var (lyr, pts, _, _) in runs)
+                {
+                    var seg0 = new List<(System.Numerics.Vector2 P, float LastG, int Stall)>(pts.Count);
+                    foreach (var p2 in pts) seg0.Add((p2, float.MaxValue, 0));
+                    var segsAlive = new List<List<(System.Numerics.Vector2 P, float LastG, int Stall)>> { seg0 };
+                    for (int level = 0, J = lyr - 1; level < 40 && J >= 1 && segsAlive.Count > 0; level++, J--)
+                    {
+                        var layer = tp.Layers[J];
+                        var nextSegs = new List<List<(System.Numerics.Vector2, float, int)>>();
+                        foreach (var seg in segsAlive)
+                        {
+                            int n = seg.Count;
+                            var g = new float[n];
+                            var q = new System.Numerics.Vector2[n];
+                            for (int vi = 0; vi < n; vi++)
+                                g[vi] = NearestBelow(J, seg[vi].P, out q[vi]);
+
+                            // Print this seg at layer J: wall anchor, along, anchor, back.
+                            var line = new List<System.Numerics.Vector2>(n + 2) { q[0] };
+                            for (int vi = 0; vi < n; vi++) line.Add(seg[vi].P);
+                            line.Add(q[n - 1]);
+                            int bi = -1; float bd = float.MaxValue; System.Numerics.Vector3 vAt = default;
+                            for (int i = 0; i < layer.Moves.Count; i++)
+                            {
+                                var mv = layer.Moves[i];
+                                if (mv.Kind != Core.Models.MoveKind.Extrude) continue;
+                                float d = System.Numerics.Vector2.Distance(
+                                    new System.Numerics.Vector2(mv.To.X, mv.To.Y), line[0]);
+                                if (d < bd) { bd = d; bi = i; vAt = mv.To; }
+                            }
+                            if (bi < 0 || bd > bead * 4f) { abandoned += n; continue; }
+                            var normal = layer.Moves[bi].Normal;
+                            float ZAt(System.Numerics.Vector2 p2) =>
+                                MathF.Abs(normal.Z) > 0.3f
+                                    ? vAt.Z - (normal.X * (p2.X - vAt.X) + normal.Y * (p2.Y - vAt.Y)) / normal.Z
+                                    : vAt.Z;
+                            var detour = new List<Core.Models.ToolpathMove>();
+                            var pos = vAt;
+                            void Go(System.Numerics.Vector2 p2)
+                            {
+                                var p3 = new System.Numerics.Vector3(p2.X, p2.Y, ZAt(p2));
+                                if (System.Numerics.Vector3.DistanceSquared(pos, p3) < 1e-6f) return;
+                                detour.Add(new Core.Models.ToolpathMove(pos, p3, Core.Models.MoveKind.Extrude)
+                                    { IsLightning = true, Normal = normal });
+                                lenInjected += System.Numerics.Vector3.Distance(pos, p3);
+                                pos = p3;
+                            }
+                            foreach (var p2 in line) Go(p2);
+                            for (int vi = line.Count - 2; vi >= 0; vi--) Go(line[vi]);
+                            Go(new System.Numerics.Vector2(vAt.X, vAt.Y));
+                            layer.Moves.InsertRange(bi + 1, detour);
+                            for (int vi = 1; vi < line.Count; vi++)
+                                layerSegs[J].Add((line[vi - 1], line[vi]));
+                            shelves++;
+
+                            // Step survivors toward the wall; split on dropouts.
+                            List<(System.Numerics.Vector2, float, int)>? open = null;
+                            void Close() { if (open is { Count: >= 2 }) nextSegs.Add(open); open = null; }
+                            for (int vi = 0; vi < n; vi++)
+                            {
+                                if (g[vi] <= thr) { Close(); continue; }               // landed
+                                int stall = g[vi] > seg[vi].LastG - maxStep * 0.4f
+                                    ? seg[vi].Stall + 1 : 0;
+                                if (stall >= 3) { abandoned++; Close(); continue; }    // wall leans away
+                                var d = seg[vi].P - q[vi];
+                                float dl = d.Length();
+                                var stepped = dl > 1e-3f
+                                    ? seg[vi].P - d / dl * MathF.Min(maxStep, g[vi])
+                                    : seg[vi].P;
+                                open ??= [];
+                                open.Add((stepped, g[vi], stall));
+                            }
+                            Close();
+                        }
+                        segsAlive = nextSegs
+                            .Select(sg => sg.Select(t => ((System.Numerics.Vector2)t.Item1, t.Item2, t.Item3)).ToList())
+                            .ToList();
+                    }
+                }
+                ctx.Main.Viewport.RequestActiveToolpathReupload?.Invoke();
+                ctx.Log($"[tpfix] {runs.Count} floating run(s) → {shelves} support shelf line(s), "
+                    + $"{lenInjected / 1000f:0.0} m extruded"
+                    + (abandoned > 0 ? $", {abandoned} vertex chase(s) abandoned (wall leans past 30°)" : "")
+                    + ". Applied to the CURRENT toolpath — re-run after any reslice.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "robotset",
+            Description = "Debug: get/set a RobotPanelViewModel property by name (A1..A6, E1, ...)",
+            Usage = "robotset <property> [value]",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', 2);
+                var prop = typeof(ViewModels.RobotPanelViewModel).GetProperty(parts[0]);
+                if (prop is null) { ctx.LogError($"[robotset] no property '{parts[0]}'"); return; }
+                if (ctx.Main.Viewport.Robot is not { } robot)
+                {
+                    ctx.LogError("[robotset] no robot panel");
+                    return;
+                }
+                if (parts.Length > 1 && prop.CanWrite)
+                {
+                    object value = prop.PropertyType switch
+                    {
+                        var t when t == typeof(double) => double.Parse(parts[1]),
+                        var t when t == typeof(float)  => float.Parse(parts[1]),
+                        var t when t == typeof(int)    => int.Parse(parts[1]),
+                        var t when t == typeof(bool)   => bool.Parse(parts[1]),
+                        _                              => parts[1],
+                    };
+                    prop.SetValue(robot, value);
+                }
+                ctx.Log($"[robotset] {parts[0]} = {prop.GetValue(robot)}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "simkey",
+            Description = "Sim-timeline camera keyframes: add at current %, clear, or list",
+            Usage = "simkey <add|clear|list>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "add":
+                        vp.AddSimCameraKeyframeCommand.Execute(null);
+                        ctx.Log($"[simkey] keyframe at {vp.SimTimelinePercent:0.#}% — now {vp.SimCameraKeyframeMarkers.Count} keyframe(s)");
+                        break;
+                    case "clear":
+                        vp.ClearSimCameraKeyframesCommand.Execute(null);
+                        ctx.Log("[simkey] cleared");
+                        break;
+                    default:
+                        ctx.Log($"[simkey] {vp.SimCameraKeyframeMarkers.Count} keyframe(s): "
+                            + string.Join(", ", vp.SimCameraKeyframeMarkers.Select(m => $"{m * 100:0.#}%")));
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "paint",
+            Description = "Toolpath paint marks: bridge/remove dabs, list, clear; support eval of selection",
+            Usage = "paint <bridge|remove> <x> <y> <z> <radius> | paint list | paint clear | paint support | paint support layer",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                switch (parts.FirstOrDefault())
+                {
+                    case "bridge" or "remove" when parts.Length >= 5:
+                        add.PaintMarks.Add(new MassiveSlicer.Core.Models.PaintMark(
+                            new System.Numerics.Vector3(
+                                float.Parse(parts[1]), float.Parse(parts[2]), float.Parse(parts[3])),
+                            float.Parse(parts[4]),
+                            parts[0] == "bridge"
+                                ? MassiveSlicer.Core.Models.PaintMarkKind.Bridge
+                                : MassiveSlicer.Core.Models.PaintMarkKind.Remove));
+                        add.BumpPaintStamp();
+                        ctx.Log($"[paint] {parts[0]} mark added ({add.PaintMarks.Count} total)");
+                        break;
+                    case "clear":
+                        add.ClearPaintMarksCommand.Execute(null);
+                        ctx.Log("[paint] cleared");
+                        break;
+                    case "support":
+                        // paint support        → current edit selection
+                        // paint support layer  → every island on the current scrub layer
+                        EvalPaintSupport(ctx, wholeLayer: parts.Length > 1
+                            && parts[1].Equals("layer", StringComparison.OrdinalIgnoreCase));
+                        break;
+                    default:
+                        foreach (var m in add.PaintMarks)
+                            ctx.Log($"[paint] {m.Kind} ({m.Center.X:0.#},{m.Center.Y:0.#},{m.Center.Z:0.#}) r={m.Radius:0.#}");
+                        ctx.Log($"[paint] {add.PaintMarks.Count} mark(s)");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "viewmode",
+            Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
+            Execute = (ctx, args) =>
+            {
+                var m = args.Trim();
+                if (m.Length == 0) { ctx.Log($"[viewmode] {ctx.Main.Viewport.ViewMode}"); return; }
+                ctx.Main.Viewport.ViewMode = m;
+                ctx.Log($"[viewmode] set to {ctx.Main.Viewport.ViewMode}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "speedtest",
+            Description = "Debug: toggle adaptive speed inputs and report PrintSpeedScale spread",
+            Execute = (ctx, _) =>
+            {
+                var v = ctx.Main.Viewport;
+                var add = ctx.Main.RightPanel.Additive;
+                ctx.Log($"[speedtest] before: {v.GetSpeedSpread?.Invoke() ?? "n/a"} (enabled={add.LayerSpeedAdaptEnabled})");
+                add.LayerSpeedAdaptEnabled = true;
+                add.LayerSpeedMinMmS = Math.Abs(add.LayerSpeedMinMmS - 20.0) < 0.01 ? 21.0 : 20.0;
+                ctx.Log($"[speedtest] after:  {v.GetSpeedSpread?.Invoke() ?? "n/a"} (min={add.LayerSpeedMinMmS})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "massivebrain",
+            Aliases = ["brain"],
+            Description = "MassiveBRAIN sync server: massivebrain on|off|status",
+            Execute = (ctx, args) =>
+            {
+                var brain = ctx.Main.Viewport.MassiveBrain;
+                switch (args.Trim().ToLowerInvariant())
+                {
+                    case "on":  brain.Enabled = true;  break;
+                    case "off": brain.Enabled = false; break;
+                    default:
+                        ctx.Log($"[massivebrain] {(brain.Enabled ? "enabled" : "disabled")} — {brain.Status} " +
+                                $"clients={brain.ClientCount} objects={brain.ObjectCount}");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "panel-settings",
             Aliases = ["panel"],
             Description = "Show the right-panel Settings tab",
@@ -209,11 +842,24 @@ public sealed class ConsoleCommandRegistry
             Description = "Slice the selected mesh into toolpaths",
             Execute = (ctx, _) =>
             {
-                var slice = ctx.Main.Viewport.SliceCommand;
-                if (slice.CanExecute(null))
+                var vp = ctx.Main.Viewport;
+                // Console `select` can leave HasMeshSelected false if the outliner
+                // path didn't refresh flags — recover so automation can slice.
+                if (!vp.HasMeshSelected && vp.GetSelectedSceneNode?.Invoke() is { } sel
+                    && vp.FindUserMeshOutlinerItem(sel) is not null)
+                {
+                    vp.HasMeshSelected = true;
+                    vp.SliceCommand?.RaiseCanExecuteChanged();
+                }
+                var slice = vp.SliceCommand;
+                if (slice is not null && slice.CanExecute(null))
                 {
                     slice.Execute(null);
                     ctx.Log("[slice] slicing selected mesh...");
+                }
+                else if (vp.IsSlicing)
+                {
+                    ctx.LogError("Already slicing — wait for the current slice to finish.");
                 }
                 else
                 {
@@ -329,10 +975,21 @@ public sealed class ConsoleCommandRegistry
             Name = "select",
             Aliases = ["sel"],
             Description = "Select a content object by name (drives the outliner selection path)",
-            Usage = "select <name>",
+            Usage = "select <name> [--toolpath]",
             Execute = (ctx, args) =>
             {
                 if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: select <name>  (run `objects` to list)"); return; }
+                if (args.EndsWith("--toolpath", StringComparison.OrdinalIgnoreCase))
+                {
+                    string name = args[..^"--toolpath".Length].Trim();
+                    var item = ctx.Main.Viewport.GetUserModelItems()
+                        .FirstOrDefault(m => m.Name.Contains(name, StringComparison.OrdinalIgnoreCase));
+                    var tp = item?.Children.FirstOrDefault(c => c.IsToolpath);
+                    if (tp is null) { ctx.LogError($"[select] no toolpath under '{name}'"); return; }
+                    ctx.Main.Viewport.ForceSelectNode?.Invoke(tp.Node);
+                    ctx.Log($"[select] toolpath of \"{item!.Name}\" selected.");
+                    return;
+                }
                 ctx.Log(ctx.Main.Viewport.SelectByName(args));
             },
         });
@@ -391,7 +1048,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "set-frame [tool] [base]   default: app LFAM tool/base",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
                 int tool = p.Length > 0 && int.TryParse(p[0], System.Globalization.NumberStyles.Integer, inv, out var t)
                     ? t : ctx.Main.RightPanel.Settings.Robot.KrlToolIndex;
@@ -457,7 +1114,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "scan [cpu-only] [save]",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 bool cpuOnly = p.Any(x => x.Equals("cpu-only", StringComparison.OrdinalIgnoreCase)
                                        || x.Equals("cpu", StringComparison.OrdinalIgnoreCase));
                 bool save = p.Any(x => x.Equals("save", StringComparison.OrdinalIgnoreCase)
@@ -474,7 +1131,7 @@ public sealed class ConsoleCommandRegistry
             Usage = "move-e1 <value> [vel%]",
             Execute = (ctx, args) =>
             {
-                var p = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var p = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 if (p.Length < 1 || !double.TryParse(p[0], System.Globalization.NumberStyles.Float,
                         System.Globalization.CultureInfo.InvariantCulture, out var value))
                 {
@@ -559,7 +1216,7 @@ public sealed class ConsoleCommandRegistry
 
     private static void RunWaypoint(ConsoleCommandContext ctx, string args)
     {
-        var parts = (args ?? string.Empty).Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
             ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name>");
@@ -638,7 +1295,7 @@ public sealed class ConsoleCommandRegistry
             return;
         }
 
-        var parts = args.Split([' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var parts = args.Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         string dir = parts[0].ToLowerInvariant();
         string rest = parts.Length > 1 ? string.Join(' ', parts[1..]) : string.Empty;
 
@@ -665,7 +1322,7 @@ public sealed class ConsoleCommandRegistry
     // Parses "x y z [a b c] [vel%] [tool] [base]" and fires a MS_* Cartesian move.
     private static void RunServerMove(ConsoleCommandContext ctx, string args, bool linear)
     {
-        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         double D(int i, double def) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : def;
         if (p.Length < 3) { ctx.LogError("usage: move-pose <x> <y> <z> [a b c] [vel%] [tool] [base]"); return; }
@@ -699,7 +1356,7 @@ public sealed class ConsoleCommandRegistry
 
     private static void RunServerJoints(ConsoleCommandContext ctx, string args)
     {
-        var p = args.Split([' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var p = args.Split((char[])[' ', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         double D(int i) => i < p.Length && double.TryParse(p[i], System.Globalization.NumberStyles.Float, inv, out var d) ? d : 0;
         if (p.Length < 6) { ctx.LogError("usage: move-joints <a1>..<a6> [e1] [vel%] [tool] [base]"); return; }
@@ -869,4 +1526,192 @@ public sealed class ConsoleCommandRegistry
             Description = command.Description,
             Usage = string.IsNullOrWhiteSpace(command.Usage) ? command.Name : command.Usage,
         };
+
+    /// <summary>
+    /// Report support coverage for edit selection (or every island on the current scrub
+    /// layer). A mid-bead is "unsupported" when its XY gap to the previous layer exceeds
+    /// 0.5× bead width (same threshold as <see cref="Core.Slicing.SliceLayerAnalyzer"/>).
+    /// </summary>
+    private static void EvalPaintSupport(ConsoleCommandContext ctx, bool wholeLayer)
+    {
+        var vp = ctx.Main.Viewport;
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[paint support] no active toolpath — arm a scrub / enter edit");
+            return;
+        }
+
+        float bead = (float)ctx.Main.RightPanel.Additive.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+        float thr = bead * 0.5f; // OverhangScore ≥ 0.5 ⇔ gap ≥ 0.5× bead
+
+        // Build candidate spans: selection rows, or every contour on the scrub high layer.
+        var spans = new List<(int LayerIdx, int Start, int Count, string Label)>();
+        if (!wholeLayer && vp.PaintSelectionItems.Count > 0)
+        {
+            foreach (var item in vp.PaintSelectionItems)
+            {
+                spans.Add((item.LayerIndex, item.MoveStart, item.MoveCount,
+                    $"{item.Title}  ({item.Detail})"));
+            }
+        }
+        else
+        {
+            // Prefer layer of first selection; else scrub high (1-based → 0-based).
+            int li = wholeLayer || vp.PaintSelectionItems.Count == 0
+                ? Math.Clamp((int)Math.Round(vp.ToolpathScrubLayerHigh) - 1, 0, tp.Layers.Count - 1)
+                : vp.PaintSelectionItems[0].LayerIndex;
+            li = Math.Clamp(li, 0, tp.Layers.Count - 1);
+            var layer = tp.Layers[li];
+            IReadOnlyList<ContourSpan> contours = layer.Contours.Count > 0
+                ? layer.Contours
+                : SynthesizeExtrudeRuns(layer);
+            int n = 0;
+            foreach (var c in contours)
+            {
+                if (c.Count < 1) continue;
+                n++;
+                string kind = c.Closed ? "closed" : "open";
+                spans.Add((li, c.Start, c.Count,
+                    $"L{li + 1} island #{n} · {kind} · m{c.Start}+{c.Count}"));
+            }
+            ctx.Log($"[paint support] layer L{li + 1} (Z={layer.Z:0.#} mm) — {spans.Count} island(s)");
+        }
+
+        if (spans.Count == 0)
+        {
+            ctx.Log("[paint support] nothing to evaluate — select paths in edit mode, or: paint support layer");
+            return;
+        }
+
+        ctx.Log($"[paint support] bead={bead:0.#} mm  unsupported if XY gap to layer below ≥ {thr:0.##} mm");
+        int failCount = 0;
+        for (int si = 0; si < spans.Count; si++)
+        {
+            var (layerIdx, start, count, label) = spans[si];
+            if (layerIdx < 0 || layerIdx >= tp.Layers.Count)
+            {
+                ctx.Log($"  [{si + 1}] {label}  →  invalid layer");
+                continue;
+            }
+            var layer = tp.Layers[layerIdx];
+            ToolpathLayer? prev = layerIdx > 0 ? tp.Layers[layerIdx - 1] : null;
+
+            int end = Math.Min(layer.Moves.Count, start + Math.Max(0, count));
+            double totalLen = 0, unsupLen = 0;
+            int samples = 0, unsupSamples = 0;
+            float minGap = float.MaxValue, maxGap = 0f, sumGap = 0f;
+            float minX = float.MaxValue, maxX = float.MinValue;
+            float minY = float.MaxValue, maxY = float.MinValue;
+            System.Numerics.Vector3 midSum = default;
+            int midN = 0;
+
+            for (int i = start; i < end; i++)
+            {
+                var mv = layer.Moves[i];
+                if (mv.Kind != MoveKind.Extrude) continue;
+                float dist = System.Numerics.Vector3.Distance(mv.From, mv.To);
+                totalLen += dist;
+                samples++;
+                var mid = (mv.From + mv.To) * 0.5f;
+                midSum += mid;
+                midN++;
+                if (mid.X < minX) minX = mid.X;
+                if (mid.X > maxX) maxX = mid.X;
+                if (mid.Y < minY) minY = mid.Y;
+                if (mid.Y > maxY) maxY = mid.Y;
+
+                float gap = prev is null
+                    ? float.PositiveInfinity
+                    : NearestPrevGapXy(prev, mid);
+                if (gap < minGap) minGap = gap;
+                if (gap > maxGap && !float.IsInfinity(gap)) maxGap = gap;
+                if (!float.IsInfinity(gap)) sumGap += gap;
+
+                if (prev is null || gap >= thr)
+                {
+                    unsupLen += dist;
+                    unsupSamples++;
+                }
+            }
+
+            double unsupPct = totalLen > 1e-6 ? unsupLen / totalLen * 100.0 : 0;
+            float avgGap = samples > 0 && minGap < float.MaxValue ? sumGap / samples : float.NaN;
+            bool fails = prev is null
+                ? samples > 0
+                : unsupPct >= 50.0; // majority of length has no support within 0.5 bead
+            if (fails) failCount++;
+
+            string verdict = prev is null
+                ? "NO LAYER BELOW (first layer / bed only)"
+                : fails
+                    ? "UNSUPPORTED — likely print fail without added support"
+                    : unsupPct > 5
+                        ? "PARTIAL overhang — review"
+                        : "supported";
+
+            var centroid = midN > 0 ? midSum / midN : default;
+            ctx.Log(
+                $"  [{si + 1}] {label}\n"
+                + $"      len={totalLen:0.#} mm  samples={samples}  unsup={unsupPct:0.#}% ({unsupLen:0.#} mm)\n"
+                + $"      gap to below: min={FmtGap(minGap)}  avg={FmtGap(avgGap)}  max={FmtGap(maxGap)}\n"
+                + $"      mid≈({centroid.X:0.#},{centroid.Y:0.#},{centroid.Z:0.#})  XY span {Math.Max(0, maxX - minX):0.#}×{Math.Max(0, maxY - minY):0.#} mm\n"
+                + $"      → {verdict}");
+        }
+
+        ctx.Log(failCount == 0
+            ? $"[paint support] {spans.Count} path(s): all have support under the 0.5×bead rule"
+            : $"[paint support] {failCount}/{spans.Count} path(s) FAIL support check");
+    }
+
+    private static string FmtGap(float g)
+        => float.IsInfinity(g) || float.IsNaN(g) ? "∞" : $"{g:0.##} mm";
+
+    private static float NearestPrevGapXy(ToolpathLayer prev, System.Numerics.Vector3 mid)
+    {
+        float best = float.MaxValue;
+        foreach (var mv in prev.Moves)
+        {
+            if (mv.Kind != MoveKind.Extrude) continue;
+            float d = DistPointToSeg2D(mid.X, mid.Y, mv.From.X, mv.From.Y, mv.To.X, mv.To.Y);
+            if (d < best) best = d;
+        }
+        return best == float.MaxValue ? float.PositiveInfinity : best;
+    }
+
+    private static float DistPointToSeg2D(float px, float py, float ax, float ay, float bx, float by)
+    {
+        float abx = bx - ax, aby = by - ay;
+        float len2 = abx * abx + aby * aby;
+        float t = len2 < 1e-12f ? 0f : Math.Clamp(((px - ax) * abx + (py - ay) * aby) / len2, 0f, 1f);
+        float cx = ax + t * abx - px, cy = ay + t * aby - py;
+        return MathF.Sqrt(cx * cx + cy * cy);
+    }
+
+    private static List<ContourSpan> SynthesizeExtrudeRuns(ToolpathLayer layer)
+    {
+        var spans = new List<ContourSpan>();
+        var moves = layer.Moves;
+        int i = 0;
+        while (i < moves.Count)
+        {
+            while (i < moves.Count && moves[i].Kind != MoveKind.Extrude) i++;
+            if (i >= moves.Count) break;
+            int start = i;
+            while (i < moves.Count && moves[i].Kind == MoveKind.Extrude
+                   && !moves[i].IsLayerStitch && !moves[i].IsLayerChange)
+                i++;
+            int count = i - start;
+            if (count < 1) continue;
+            bool closed = false;
+            if (count >= 2)
+            {
+                var a = moves[start].From;
+                var b = moves[start + count - 1].To;
+                closed = System.Numerics.Vector3.DistanceSquared(a, b) < 1.0f;
+            }
+            spans.Add(new ContourSpan(start, count, closed, -1));
+        }
+        return spans;
+    }
 }

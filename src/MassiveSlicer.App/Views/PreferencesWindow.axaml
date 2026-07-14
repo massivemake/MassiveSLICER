@@ -80,6 +80,7 @@
                         <Button x:Name="BtnNavigation"  Content="⊙  Navigation"  Classes="NavBtn Active" Click="NavNavigation_Click"/>
                         <Button x:Name="BtnPerformance" Content="▫  Performance" Classes="NavBtn"        Click="NavPerformance_Click"/>
                         <Button x:Name="BtnAppearance"  Content="◈  Appearance"  Classes="NavBtn"        Click="NavAppearance_Click"/>
+                        <Button x:Name="BtnConnections" Content="⇄  Connections" Classes="NavBtn"        Click="NavConnections_Click"/>
                     </StackPanel>
                 </Border>
 
@@ -247,6 +248,81 @@
                                 <TextBlock Grid.Column="0" Text="Unselected" Foreground="{DynamicResource TextPrimary}" FontSize="12" VerticalAlignment="Center"/>
                                 <ColorPicker Grid.Column="1" Color="{Binding ToolpathUnselectedColor, Mode=TwoWay}" IsAlphaEnabled="False" IsAccentColorsVisible="False"/>
                             </Grid>
+                        </StackPanel>
+
+
+                        <!-- CONNECTIONS section -->
+                        <StackPanel x:Name="SectionConnections" IsVisible="False">
+                            <TextBlock Text="ERP CONNECTION" Classes="SectionHeader" Margin="0,0,0,6"/>
+                            <TextBlock Text="Connects automatically at launch when both fields are set. The token stays in local preferences and is never written into shared .mass files."
+                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="ERP URL" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Watermark="https://lab.massivemake.com/api/slicer/v1"
+                                           Text="{Binding Erp.BaseUrl, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="API Token" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox" PasswordChar="•"
+                                           Watermark="msl_…"
+                                           Text="{Binding Erp.ApiToken, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,8" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="0" Text="Projects Root" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Watermark="/Volumes/MassiveFILES/Projects"
+                                           Text="{Binding UnasProjectsRoot, Mode=TwoWay}"
+                                           ToolTip.Tip="ERP-linked workspaces save straight into &lt;root&gt;/&lt;project number&gt; - …/06-Production Documents"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,4" ColumnDefinitions="90,*">
+                                <Button Grid.Column="1" Content="Connect Now" HorizontalAlignment="Left"
+                                        Command="{Binding Erp.ConnectCommand}"/>
+                            </Grid>
+                            <Grid Margin="0,0,0,10" ColumnDefinitions="90,*">
+                                <TextBlock Grid.Column="1" Text="{Binding Erp.Status}"
+                                           Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"/>
+                            </Grid>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,8,0,14"/>
+
+                            <TextBlock Text="ROBOT SMB (EXPORT TO ROBOT)" Classes="SectionHeader" Margin="0,0,0,6"/>
+                            <TextBlock Text="Per-cell credentials for writing .src programs straight onto the robot controller's share. Passwords stay in local preferences only."
+                                       Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                            <ItemsControl ItemsSource="{Binding SmbRows}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource Bg3}" CornerRadius="6"
+                                                Padding="12,10" Margin="0,0,0,10">
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding CellName}" FontWeight="SemiBold"
+                                                           FontSize="12" Margin="0,0,0,8"/>
+                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
+                                                    <TextBlock Grid.Column="0" Text="Robot IP" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Host, Mode=TwoWay}"/>
+                                                    <TextBlock Grid.Column="3" Text="Share" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <TextBox   Grid.Column="4" Classes="PanelTextBox" Text="{Binding Share, Mode=TwoWay}" Watermark="d"/>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
+                                                    <TextBlock Grid.Column="0" Text="Folder" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Folder, Mode=TwoWay}" Watermark="(share root)"/>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="80,*,10,80,*" Margin="0,0,0,6">
+                                                    <TextBlock Grid.Column="0" Text="Username" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Username, Mode=TwoWay}"/>
+                                                    <TextBlock Grid.Column="3" Text="Password" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                                    <TextBox   Grid.Column="4" Classes="PanelTextBox" PasswordChar="•" Text="{Binding Password, Mode=TwoWay}"/>
+                                                </Grid>
+                                                <Grid ColumnDefinitions="Auto,12,*">
+                                                    <Button Grid.Column="0" Content="Test Connection" Command="{Binding TestCommand}"/>
+                                                    <TextBlock Grid.Column="2" Text="{Binding Status}" Classes="LabelMuted"
+                                                               FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
 
                     </StackPanel>

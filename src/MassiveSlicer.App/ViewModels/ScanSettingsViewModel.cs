@@ -186,7 +186,7 @@ public sealed class ScanSettingsViewModel : ViewModelBase
     internal static string SlugifyQuickPositionName(string displayName)
     {
         var parts = displayName.Trim().ToLowerInvariant()
-            .Split([' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            .Split((char[])[' ', '_', '-'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         return parts.Length == 0 ? "quick-position" : string.Join("-", parts);
     }
 

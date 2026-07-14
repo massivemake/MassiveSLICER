@@ -107,16 +107,38 @@ public static class WorkspaceLoader
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
+    /// <summary>
+    /// Saves atomically: serialize to a sibling .tmp, then move over the target.
+    /// Writing straight into the target truncates it first — an app quit / crash /
+    /// NAS hiccup mid-serialize destroys the previous save (workspaces run to
+    /// hundreds of MB with embedded toolpaths). Errors propagate so callers can
+    /// tell the user instead of silently losing the save.
+    /// </summary>
     public static void Save(WorkspaceDocument doc, string? path = null)
     {
         path ??= DefaultPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        string tmp = path + ".tmp";
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            using var fs = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.Read);
-            JsonSerializer.Serialize(fs, doc, SaveOptions);
+            using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                JsonSerializer.Serialize(fs, doc, SaveOptions);
+                fs.Flush(flushToDisk: true);
+            }
+            // Keep one backup generation. Atomic rename protects against truncation,
+            // but macOS smbfs can still drop cached pages mid-file if the process dies
+            // before write-back completes (observed: 64K-aligned zero runs on the NAS).
+            // The .bak survives such an event one save behind.
+            if (File.Exists(path))
+                File.Move(path, path + ".bak", overwrite: true);
+            File.Move(tmp, path, overwrite: true);
         }
-        catch { /* non-fatal */ }
+        catch
+        {
+            try { if (File.Exists(tmp)) File.Delete(tmp); } catch { /* best effort */ }
+            throw;
+        }
     }
 
     public static string ResolveMeshPath(string workspacePath, string relativeMeshPath)

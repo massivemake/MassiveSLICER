@@ -28,4 +28,7 @@
     </Reference>
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MassiveSlicer.Tests" />
+  </ItemGroup>
 </Project>

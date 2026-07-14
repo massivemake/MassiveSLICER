@@ -81,6 +81,12 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// Scene node visibility was changed outside the outliner (e.g. 2D slice view
+    /// hides the robot). Refresh the bound eye-icon without firing hide callbacks.
+    /// </summary>
+    public void NotifyVisibilityFromScene() => OnPropertyChanged(nameof(Visible));
+
     public ObservableCollection<OutlinerItemViewModel> Children { get; } = [];
     public bool HasChildren => Children.Count > 0;
 
@@ -126,11 +132,34 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         }
     }
 
-    void SyncRowHighlighted() => IsRowHighlighted = _isScanMultiSelected || _isOutlinerSelected;
+    private bool _isSequenceSelected;
+
+    /// <summary>Row is part of the shift+click toolpath sequence selection.</summary>
+    public bool IsSequenceSelected
+    {
+        get => _isSequenceSelected;
+        set
+        {
+            if (_isSequenceSelected == value) return;
+            _isSequenceSelected = value;
+            OnPropertyChanged();
+            SyncRowHighlighted();
+        }
+    }
+
+    void SyncRowHighlighted()
+        => IsRowHighlighted = _isScanMultiSelected || _isOutlinerSelected || _isSequenceSelected;
 
     public void AddChild(OutlinerItemViewModel child)
     {
         Children.Add(child);
+        OnPropertyChanged(nameof(HasChildren));
+        OnPropertyChanged(nameof(ShowChildren));
+    }
+
+    public void InsertChild(OutlinerItemViewModel child, int index)
+    {
+        Children.Insert(Math.Clamp(index, 0, Children.Count), child);
         OnPropertyChanged(nameof(HasChildren));
         OnPropertyChanged(nameof(ShowChildren));
     }

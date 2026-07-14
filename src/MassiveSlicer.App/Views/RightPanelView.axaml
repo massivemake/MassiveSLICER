@@ -28,8 +28,382 @@
                               HorizontalScrollBarVisibility="Disabled">
                 <StackPanel Margin="0,0,0,8">
 
+                    <!-- Edit mode cards (hidden outside paint edit) -->
+                    <Button Classes="StepCard"
+                            HorizontalAlignment="Stretch"
+                            HorizontalContentAlignment="Stretch"
+                            Padding="10,10"
+                            Margin="0,0,0,6"
+                            IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                            Command="{Binding $parent[Window].DataContext.Viewport.ExitPaintEditCommand}"
+                            ToolTip.Tip="Leave toolpath edit mode and resume the normal workflow cards">
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                <ia:Icon Value="mdi-exit-to-app" FontSize="11"
+                                         Foreground="{DynamicResource AccentHover}"
+                                         HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <TextBlock Text="EXIT EDIT MODE" FontSize="12" LetterSpacing="2"
+                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepModificationsExpanded, Mode=TwoWay}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <ia:Icon Value="mdi-pencil-ruler" FontSize="11"
+                                             Foreground="{DynamicResource AccentHover}"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="MODIFICATIONS" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="8,0,8,8" Spacing="6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                                       Text="Click a modification to expand options. For Support, pick a second path/point on another layer to bridge Formbound scaffolding through the layers in between. Reslice to bake."/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" FontSize="11" Opacity="0.85" VerticalAlignment="Center"
+                                           Text="{Binding $parent[Window].DataContext.Viewport.PaintModificationsSummary}"/>
+                                <Button Grid.Column="1" Classes="ToolbarButton" Padding="8,3" FontSize="10"
+                                        Content="Clear all"
+                                        Command="{Binding $parent[Window].DataContext.Viewport.ClearPaintModificationsCommand}"
+                                        ToolTip.Tip="Remove every modification and paint mark"/>
+                            </Grid>
+
+                            <!-- Active bridge-target pick banner -->
+                            <Border IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintBridgePicking}"
+                                    Background="#3322AABB" CornerRadius="5" Padding="8,6"
+                                    BorderBrush="#5533D6FF" BorderThickness="1">
+                                <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#99E8FF"
+                                           Text="{Binding $parent[Window].DataContext.Viewport.PaintBridgePickHint}"/>
+                            </Border>
+
+                            <TextBlock FontSize="10" Opacity="0.55"
+                                       IsVisible="{Binding !$parent[Window].DataContext.Viewport.HasPaintModifications}"
+                                       Text="No modifications yet — select paths and Apply from the SELECTION panel."/>
+
+                            <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto"
+                                          IsVisible="{Binding $parent[Window].DataContext.Viewport.HasPaintModifications}">
+                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.PaintModifications}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{DynamicResource Bg3}"
+                                                    CornerRadius="6" Padding="8,6" Margin="0,0,0,4"
+                                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                                <StackPanel Spacing="6">
+                                                    <!-- Header row: expand / title / reselect / delete -->
+                                                    <Grid ColumnDefinitions="*,Auto,Auto,Auto">
+                                                        <Button Grid.Column="0"
+                                                                Background="Transparent" BorderThickness="0"
+                                                                Padding="0" HorizontalContentAlignment="Left"
+                                                                Command="{Binding ToggleExpandCommand}"
+                                                                ToolTip.Tip="Expand options and reselect in the viewport">
+                                                            <StackPanel Spacing="2">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <ia:Icon Value="{Binding ExpandChevron}" FontSize="12"
+                                                                             Opacity="0.7" VerticalAlignment="Center"/>
+                                                                    <Border CornerRadius="3" Padding="5,1"
+                                                                            Background="#3322AABB">
+                                                                        <TextBlock Text="{Binding KindLabel}"
+                                                                                   FontSize="9" FontWeight="Bold"
+                                                                                   Foreground="{Binding KindColor}"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource TextPrimary}"
+                                                                               VerticalAlignment="Center"
+                                                                               TextWrapping="NoWrap"/>
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding Detail}" FontSize="10"
+                                                                           Opacity="0.6"
+                                                                           FontFamily="Consolas,Courier New,monospace"/>
+                                                            </StackPanel>
+                                                        </Button>
+                                                        <Button Grid.Column="1" Classes="ToolbarButton" Padding="5"
+                                                                Margin="4,0,0,0" VerticalAlignment="Top"
+                                                                Command="{Binding SelectCommand}"
+                                                                ToolTip.Tip="Reselect anchors in viewport">
+                                                            <ia:Icon Value="mdi-cursor-default-click" FontSize="13"/>
+                                                        </Button>
+                                                        <Button Grid.Column="2" Classes="ToolbarButton" Padding="5"
+                                                                Margin="2,0,0,0" VerticalAlignment="Top"
+                                                                Command="{Binding DeleteCommand}"
+                                                                ToolTip.Tip="Delete this modification and its marks">
+                                                            <ia:Icon Value="mdi-delete-outline" FontSize="13"
+                                                                     Foreground="#ff8a8a"/>
+                                                        </Button>
+                                                    </Grid>
+
+                                                    <!-- Expanded options -->
+                                                    <StackPanel IsVisible="{Binding IsExpanded}" Spacing="6"
+                                                                Margin="4,0,0,2">
+                                                        <Border Height="1" Background="{DynamicResource Border1}"/>
+
+                                                        <!-- ANCHOR card -->
+                                                        <Border Background="#1A33D6FF" CornerRadius="6" Padding="8,7"
+                                                                BorderBrush="#5533D6FF" BorderThickness="1">
+                                                            <StackPanel Spacing="3">
+                                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                    <Border CornerRadius="3" Padding="5,1"
+                                                                            Background="#4433D6FF">
+                                                                        <TextBlock Text="ANCHOR" FontSize="9"
+                                                                                   FontWeight="Bold"
+                                                                                   Foreground="#99E8FF"
+                                                                                   LetterSpacing="0.8"/>
+                                                                    </Border>
+                                                                    <TextBlock Text="Support selection"
+                                                                               FontSize="10" Opacity="0.65"
+                                                                               VerticalAlignment="Center"/>
+                                                                </StackPanel>
+                                                                <TextBlock Text="{Binding AnchorSummary}" FontSize="11"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource TextPrimary}"
+                                                                           FontFamily="Consolas,Courier New,monospace"
+                                                                           TextWrapping="Wrap"/>
+                                                            </StackPanel>
+                                                        </Border>
+
+                                                        <!-- Support style (between Anchor and Target) -->
+                                                        <StackPanel IsVisible="{Binding IsSupport}" Spacing="4"
+                                                                    Margin="0,2,0,2">
+                                                            <TextBlock Text="SUPPORT STYLE" FontSize="9" Opacity="0.55"
+                                                                       LetterSpacing="0.8" FontWeight="SemiBold"/>
+                                                            <ComboBox HorizontalAlignment="Stretch"
+                                                                      ItemsSource="{Binding SupportTypeOptions}"
+                                                                      SelectedItem="{Binding SupportType, Mode=TwoWay}"
+                                                                      ToolTip.Tip="Per-area type: Formbound Buttress / Bridge, or Tree Support (bed-rooted). Reslice to bake."/>
+                                                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                                                       Text="Each area keeps its own type. Changing this only updates this modification."/>
+                                                            <!-- Formbound wall side: Inside notch vs Outside fin -->
+                                                            <StackPanel IsVisible="{Binding ShowSupportSideUi}" Spacing="4"
+                                                                        Margin="0,4,0,0">
+                                                                <TextBlock Text="WALL SIDE" FontSize="9" Opacity="0.55"
+                                                                           LetterSpacing="0.8" FontWeight="SemiBold"/>
+                                                                <Grid ColumnDefinitions="*,*" ColumnSpacing="6">
+                                                                    <RadioButton Grid.Column="0"
+                                                                                 Content="Inside"
+                                                                                 GroupName="{Binding Id}"
+                                                                                 HorizontalAlignment="Stretch"
+                                                                                 HorizontalContentAlignment="Center"
+                                                                                 Padding="8,5"
+                                                                                 IsChecked="{Binding IsSupportSideInside, Mode=TwoWay}"
+                                                                                 ToolTip.Tip="Formbound grows into the part (dual-wall notch hidden inside the wall)."/>
+                                                                    <RadioButton Grid.Column="1"
+                                                                                 Content="Outside"
+                                                                                 GroupName="{Binding Id}"
+                                                                                 HorizontalAlignment="Stretch"
+                                                                                 HorizontalContentAlignment="Center"
+                                                                                 Padding="8,5"
+                                                                                 IsChecked="{Binding IsSupportSideOutside, Mode=TwoWay}"
+                                                                                 ToolTip.Tip="Formbound grows as a sacrificial fin outside the wall (trim after print)."/>
+                                                                </Grid>
+                                                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                                                           Text="Inside = notch into the solid. Outside = exterior fin. Reslice to bake."/>
+                                                            </StackPanel>
+                                                        </StackPanel>
+
+                                                        <!-- BRIDGE TARGET card (Formbound only — Tree roots to bed) -->
+                                                        <StackPanel IsVisible="{Binding ShowBridgeTargetUi}" Spacing="4">
+                                                            <Border Background="#1A80B7FF" CornerRadius="6" Padding="8,7"
+                                                                    BorderBrush="#5580B7FF" BorderThickness="1">
+                                                                <StackPanel Spacing="3">
+                                                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                                                        <Border CornerRadius="3" Padding="5,1"
+                                                                                Background="#4480B7FF">
+                                                                            <TextBlock Text="TARGET" FontSize="9"
+                                                                                       FontWeight="Bold"
+                                                                                       Foreground="#B3D9FF"
+                                                                                       LetterSpacing="0.8"/>
+                                                                        </Border>
+                                                                        <TextBlock Text="Bridge foot / column start"
+                                                                                   FontSize="10" Opacity="0.65"
+                                                                                   VerticalAlignment="Center"/>
+                                                                    </StackPanel>
+                                                                    <TextBlock Text="{Binding BridgeTargetLabel}" FontSize="11"
+                                                                               FontWeight="SemiBold"
+                                                                               Foreground="{DynamicResource TextPrimary}"
+                                                                               FontFamily="Consolas,Courier New,monospace"
+                                                                               TextWrapping="Wrap"/>
+                                                                    <TextBlock Text="{Binding ScaffoldSummary}" FontSize="10"
+                                                                               Opacity="0.7" TextWrapping="Wrap"
+                                                                               Margin="0,2,0,0"/>
+                                                                </StackPanel>
+                                                            </Border>
+
+                                                            <Grid ColumnDefinitions="*,Auto" Margin="0,4,0,0">
+                                                                <Button Grid.Column="0" Classes="ToolbarButton"
+                                                                        Padding="8,5" HorizontalAlignment="Stretch"
+                                                                        HorizontalContentAlignment="Center"
+                                                                        Content="{Binding PickBridgeButtonLabel}"
+                                                                        Command="{Binding PickBridgeTargetCommand}"
+                                                                        Classes.active="{Binding IsPickingBridgeTarget}"
+                                                                        ToolTip.Tip="Click a path or point on another layer for the column foot. One perimeter mouth; T opens at the anchor support line."/>
+                                                                <Button Grid.Column="1" Classes="ToolbarButton"
+                                                                        Padding="8,5" Margin="6,0,0,0"
+                                                                        Content="Clear"
+                                                                        IsVisible="{Binding HasBridgeTarget}"
+                                                                        Command="{Binding ClearBridgeTargetCommand}"
+                                                                        ToolTip.Tip="Remove bridge target"/>
+                                                            </Grid>
+                                                        </StackPanel>
+
+                                                        <TextBlock IsVisible="{Binding IsOffset}"
+                                                                   TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                                                   Text="Offset path copies were inserted into the toolpath geometry. Reselect to highlight the original anchor."/>
+                                                        <TextBlock IsVisible="{Binding ShowRemoveHelp}"
+                                                                   TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                                                   Text="Remove marks delete beads under the anchor. Bridge/scaffold is only available on Support modifications."/>
+                                                    </StackPanel>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </StackPanel>
+                    </Expander>
+
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepCreateModificationExpanded, Mode=TwoWay}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <ia:Icon Value="mdi-plus-box-outline" FontSize="11"
+                                             Foreground="{DynamicResource AccentHover}"
+                                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="CREATE MODIFICATION" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="8,0,8,8" Spacing="6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                                       Text="Select paths in the viewport, pick an operation, then Apply. Support / Remove also remain on the SELECTION card."/>
+
+                            <!-- Search operations -->
+                            <TextBox Watermark="Search operations…"
+                                     Text="{Binding $parent[Window].DataContext.Viewport.CreateModificationSearch, Mode=TwoWay}"
+                                     FontSize="11" Padding="8,6"
+                                     Background="{DynamicResource Bg3}"
+                                     BorderBrush="{DynamicResource Border1}"/>
+
+                            <!-- Catalog list -->
+                            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto"
+                                          IsVisible="{Binding !$parent[Window].DataContext.Viewport.ShowCreateModSettings}">
+                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.FilteredCreateModifications}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Classes="ToolbarButton"
+                                                    HorizontalAlignment="Stretch"
+                                                    HorizontalContentAlignment="Left"
+                                                    Padding="8,7" Margin="0,0,0,3"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.SelectCreateModificationCommand}"
+                                                    CommandParameter="{Binding Id}"
+                                                    IsEnabled="{Binding IsAvailable}"
+                                                    ToolTip.Tip="{Binding Description}">
+                                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                                    <ia:Icon Grid.Column="0" Value="{Binding Icon}" FontSize="14"
+                                                             Margin="0,0,8,0" VerticalAlignment="Center"
+                                                             Opacity="0.85"/>
+                                                    <StackPanel Grid.Column="1" Spacing="1">
+                                                        <TextBlock Text="{Binding Title}" FontSize="12"
+                                                                   FontWeight="SemiBold"/>
+                                                        <TextBlock Text="{Binding Description}" FontSize="10"
+                                                                   Opacity="0.55" TextWrapping="Wrap"/>
+                                                    </StackPanel>
+                                                    <TextBlock Grid.Column="2" Text="soon" FontSize="9"
+                                                               Opacity="0.4" VerticalAlignment="Center"
+                                                               IsVisible="{Binding !IsAvailable}"/>
+                                                </Grid>
+                                            </Button>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+
+                            <!-- Offset path settings -->
+                            <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowOffsetPathSettings}"
+                                        Spacing="8">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <ia:Icon Value="mdi-vector-polyline" FontSize="14" Opacity="0.85"
+                                             VerticalAlignment="Center"/>
+                                    <TextBlock Text="OFFSET PATH" FontSize="11" FontWeight="SemiBold"
+                                               LetterSpacing="0.8" VerticalAlignment="Center"/>
+                                </StackPanel>
+                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                           Text="Creates parallel copies of the selected toolpaths and inserts them into the same layer."/>
+
+                                <TextBlock Text="SETTINGS" FontSize="9" Opacity="0.5" LetterSpacing="0.8" FontWeight="SemiBold"/>
+
+                                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Distance" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                HorizontalAlignment="Right">
+                                        <TextBox Width="72" FontSize="11" Padding="6,4"
+                                                 Text="{Binding $parent[Window].DataContext.Viewport.OffsetDistanceMm, Mode=TwoWay}"
+                                                 HorizontalContentAlignment="Right"/>
+                                        <TextBlock Text="mm" FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                                    </StackPanel>
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Join type" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetJoinTypeOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetJoinType, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetModeOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetMode, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Offset count" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                HorizontalAlignment="Right">
+                                        <Button Classes="ToolbarButton" Padding="8,2" Content="−"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                CommandParameter="-1"/>
+                                        <TextBlock MinWidth="20" TextAlignment="Center" FontSize="12"
+                                                   VerticalAlignment="Center"
+                                                   Text="{Binding $parent[Window].DataContext.Viewport.OffsetCount}"/>
+                                        <Button Classes="ToolbarButton" Padding="8,2" Content="+"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                CommandParameter="1"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="OPEN PATH OFFSETS" FontSize="9" Opacity="0.5"
+                                           LetterSpacing="0.8" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                <Grid ColumnDefinitions="*,*">
+                                    <TextBlock Grid.Column="0" Text="Side" FontSize="11"
+                                               Opacity="0.7" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetSideOptions}"
+                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetSide, Mode=TwoWay}"/>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
+                                    <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
+                                            Content="Cancel"
+                                            Command="{Binding $parent[Window].DataContext.Viewport.CancelCreateModificationCommand}"/>
+                                    <Button Grid.Column="1" Classes="AccentButton" Padding="14,6" Margin="8,0,0,0"
+                                            Content="Apply"
+                                            Command="{Binding $parent[Window].DataContext.Viewport.ApplyCreateModificationCommand}"
+                                            ToolTip.Tip="Insert parallel offset copies of the selected paths"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 1 MODEL -->
-                    <Expander Classes="StepCard" IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -87,7 +461,9 @@
                     </Expander>
 
                     <!-- 2 SLICE -->
-                    <Expander Classes="StepCard" IsExpanded="{Binding StepSliceExpanded, Mode=TwoWay}">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepSliceExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -255,6 +631,48 @@
                                            TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                             </Grid>
 
+                            <!-- Multi-Planar: guide-plane stack -->
+                            <StackPanel IsVisible="{Binding Additive.ShowMultiPlanarControls}" Spacing="2" Margin="0,2,0,2">
+                                <TextBlock Margin="8,0,8,2" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           Text="The slicing plane's tilt interpolates through the guide planes below as the print climbs. The first and last angles keep projecting past those guides until the whole mesh is sliced — guides shape tilt, they do not start or stop the cut. Layers become wedges — extrusion RPM follows local thickness. Click a plane in the viewport and drag: horizontal rotates, vertical slides its height."/>
+                                <Grid Margin="8,0,8,2" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Tilt axis" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="Y" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <ToggleSwitch IsChecked="{Binding Additive.MultiPlanarAxisX, Mode=TwoWay}"
+                                                      OnContent="" OffContent="" MinWidth="0" Padding="0"
+                                                      ToolTip.Tip="Off: tilt about Y (planes lean along X). On: tilt about X (planes lean along Y)."/>
+                                        <TextBlock Text="X" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+                                <Grid Margin="8,2,8,0" ColumnDefinitions="56,*,60,26">
+                                    <TextBlock Grid.Column="0" Text="Height %" Classes="LabelMuted" FontSize="9"/>
+                                    <TextBlock Grid.Column="1" Text="Tilt (°)" Classes="LabelMuted" FontSize="9"/>
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding Additive.MultiPlanarPlanes}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="8,1,8,1" ColumnDefinitions="56,*,60,26">
+                                                <TextBox Grid.Column="0" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2"
+                                                         VerticalContentAlignment="Center"
+                                                         Text="{Binding HeightPct, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                                                <Slider  Grid.Column="1" Margin="6,0" Minimum="-60" Maximum="60"
+                                                         Value="{Binding AngleDeg, Mode=TwoWay}" VerticalAlignment="Center"/>
+                                                <TextBox Grid.Column="2" Classes="PanelTextBox" TextAlignment="Right" Padding="4,2"
+                                                         VerticalContentAlignment="Center"
+                                                         Text="{Binding AngleDeg, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                                <Button  Grid.Column="3" Content="✕" FontSize="10" Padding="4,2" Margin="4,0,0,0"
+                                                         Command="{Binding RemoveCommand}"
+                                                         ToolTip.Tip="Remove this guide plane (minimum two)"/>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <Button Margin="8,4,8,2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Content="+ Add plane" FontSize="11"
+                                        Command="{Binding Additive.AddMultiPlanarPlaneCommand}"/>
+                            </StackPanel>
+
                             <SplitButton Margin="8,4,8,2" HorizontalAlignment="Stretch"
                                          HorizontalContentAlignment="Center"
                                          Content="Auto Calculate Tilt"
@@ -281,11 +699,13 @@
                               IsVisible="{Binding Additive.ShowContourOffsetOption}">
                         <StackPanel Margin="0,2,0,6">
                             <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
-                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
                                 <ComboBox  Grid.Column="1"
                                            ItemsSource="{Binding Additive.SeamModeOptions}"
                                            SelectedItem="{Binding Additive.SeamMode, Mode=TwoWay}"
-                                           Width="90" FontSize="11"/>
+                                           Width="90" FontSize="11"
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
                             </Grid>
 
                             <TextBlock Text="LOCATION" Classes="LabelMuted" FontSize="10" Margin="8,6,8,2" LetterSpacing="1"/>
@@ -321,6 +741,16 @@
                                       IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
                                       Margin="8,4,8,2"
                                       ToolTip.Tip="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+
+                            <Button Margin="8,8,8,2" HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Content="Optimize Toolpath"
+                                    Command="{Binding Additive.OptimizeToolpathCommand}"
+                                    ToolTip.Tip="Re-order the sliced toolpath so every path starts where the previous one ends (closed loops re-seam to the nearest vertex, open paths may reverse), then weld paths closer than 3× bead width together with an extruded bridge — one continuous toolpath instead of travels. Runs on the current toolpath; re-run after a reslice."/>
+                            <TextBlock Text="{Binding Additive.OptimizeToolpathSummary}"
+                                       FontSize="10" Opacity="0.75" Margin="8,0,8,4"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding Additive.OptimizeToolpathSummary, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
                         </StackPanel>
                     </Expander>                    <Expander Classes="SectionExpander" Header="MOTION" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
@@ -342,7 +772,8 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
                             </Grid>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
+                    </Expander>
+                    <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -354,40 +785,52 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ZHopMm}"/>
                             </Grid>
 
-                            <TextBlock Text="Wipe" Classes="LabelMuted" Margin="8,4,8,2"/>
-                            <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
-                                      ItemsSource="{Binding Additive.WipeModeOptions}"
-                                      SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
-                                      ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
+                            <!-- Nested Wipe settings -->
+                            <Expander Classes="SectionExpander" Header="WIPE" IsExpanded="False" Margin="0,4,0,2">
+                                <StackPanel Margin="0,2,0,4">
+                                    <ComboBox Margin="8,0,8,4" HorizontalAlignment="Stretch"
+                                              ItemsSource="{Binding Additive.WipeModeOptions}"
+                                              SelectedItem="{Binding Additive.WipeModeDisplay, Mode=TwoWay}"
+                                              ToolTip.Tip="Retrace = wipe back over the last extrusion. Same-Direction = continue forward past the travel point for the wipe length."/>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe length (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeLengthMm}"/>
+                                    </Grid>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp (e.g. 35 length, -1.5 ramp)."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe ramp (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Positive: last N mm of wipe length ramps RPM to zero. Negative: extend |N| mm past wipe length with squeeze ramp (e.g. 35 length, -1.5 ramp)."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeRampMm}"/>
+                                    </Grid>
 
-                            <Grid Margin="8,2,8,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Wipe speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Linear speed for wipe extrusion moves. Can differ from travel speed."/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeSpeed}"/>
-                            </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Wipe speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Linear speed for wipe extrusion moves. Can differ from travel speed."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.WipeSpeed}"/>
+                                    </Grid>
+
+                                    <CheckBox Content="Ignore wipe on short travels"
+                                              Margin="8,4,8,2"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.WipeSkipShortTravels, Mode=TwoWay}"
+                                              ToolTip.Tip="Do not insert a wipe when the following travel is shorter than 2× the layer height. Useful for tiny gaps between nearby beads where a full wipe is unnecessary."/>
+                                    <TextBlock Text="Threshold = 2 × layer height"
+                                               Classes="LabelMuted" FontSize="10" Margin="24,0,8,4" Opacity="0.75"/>
+                                </StackPanel>
+                            </Expander>
 
                             <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                 <TextBlock Grid.Column="0" Text="Start wait (s)" VerticalAlignment="Center" Classes="LabelMuted"
@@ -474,7 +917,9 @@
                                         
 
                     <!-- 3 PATTERN AND TEXTURE -->
-                    <Expander Classes="StepCard" IsExpanded="False">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepPatternExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -488,6 +933,9 @@
                         <StackPanel Margin="0,0,0,6">
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                        Text="Decorative wall pattern applied to the toolpath when slicing."/>
+
+                            <Expander Classes="SectionExpander" Header="PATTERN TOOLS" IsExpanded="False" Margin="0,0,0,4">
+                            <StackPanel>
 
                             <!-- Pattern tiles (effector port) -->
                             <UniformGrid Columns="4" Margin="8,0,8,4">
@@ -637,6 +1085,22 @@
                                 </Button>
                             </UniformGrid>
 
+                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Distribution" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Even: cycles spaced uniformly by distance along the printed path. Radial: classic angular wrap around the part centre (stretches on non-circular shapes)."/>
+                                <ComboBox Grid.Column="1" MinWidth="150"
+                                          ItemsSource="{Binding Additive.PatternMappingOptions}"
+                                          SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
+                            </Grid>
+
+                            <Grid Margin="10,6,10,0" ColumnDefinitions="*,80"
+                                  IsVisible="{Binding Additive.ShowPatternWavelength}">
+                                <TextBlock Grid.Column="0" Text="Wavelength (mm)" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Physical size of one pattern cycle along the path — identical on every layer. The leftover fraction of a cycle lands at the seam."/>
+                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                           Text="{Binding Additive.PatternWavelengthMm, Mode=TwoWay}"/>
+                            </Grid>
+
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Amplitude" FontSize="11" VerticalAlignment="Center"/>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
@@ -700,6 +1164,9 @@
                                 </StackPanel>
                             </Grid>
 
+                            </StackPanel>
+                            </Expander>
+
                             <!-- Live effector: draggable glowing points that locally boost the pattern -->
                             <ToggleButton Classes="ExportCta" Margin="10,12,10,4"
                                           HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
@@ -732,6 +1199,13 @@
 
                             <StackPanel IsVisible="{Binding Additive.EffectorEnabled}">
                                 <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                    <TextBlock Grid.Column="0" Text="Mode" FontSize="11" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Column="1" MinWidth="130" FontSize="11"
+                                              ItemsSource="{Binding Additive.EffectorModeOptions}"
+                                              SelectedItem="{Binding Additive.EffectorMode, Mode=TwoWay}"
+                                              ToolTip.Tip="Amplify boosts the pattern inside the influence area; Erase smooths the lines back to a plain wall"/>
+                                </Grid>
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
                                     <TextBlock Grid.Column="0" Text="Range" FontSize="11" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
                                         <TextBlock Text="{Binding Additive.EffectorRange, StringFormat={}{0:0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -740,7 +1214,8 @@
                                 </Grid>
                                 <Slider Margin="10,0,10,2" Minimum="10" Maximum="3000" TickFrequency="10" IsSnapToTickEnabled="True"
                                         Value="{Binding Additive.EffectorRange, Mode=TwoWay}"/>
-                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto">
+                                <Grid Margin="10,6,10,0" ColumnDefinitions="*,Auto"
+                                      IsVisible="{Binding Additive.IsEffectorAmplify}">
                                     <TextBlock Grid.Column="0" Text="Strength" FontSize="11" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
                                         <TextBlock Text="{Binding Additive.EffectorStrength, StringFormat={}{0:0.0}}" FontSize="11" FontWeight="Bold" VerticalAlignment="Center"/>
@@ -748,6 +1223,7 @@
                                     </StackPanel>
                                 </Grid>
                                 <Slider Margin="10,0,10,6" Minimum="0" Maximum="200" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                        IsVisible="{Binding Additive.IsEffectorAmplify}"
                                         Value="{Binding Additive.EffectorStrength, Mode=TwoWay}"/>
                             </StackPanel>
 
@@ -786,6 +1262,126 @@
                                 <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
                                            VerticalAlignment="Center" Margin="4,0,8,0"/>
                             </Grid>
+
+                            <!-- X-Bracing Wall (collapsible group under EFFECTS) -->
+                            <Expander Classes="SectionExpander" Header="X-BRACING" IsExpanded="False"
+                                      Margin="0,4,0,2"
+                                      ToolTip.Tip="Structural X braces into the wall. Orient the brace plane so hairpins grow perpendicular to it (consistent direction across the surface).">
+                                <StackPanel Margin="0,2,0,4">
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Enable X-bracing"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.XBracingEnabled, Mode=TwoWay}"
+                                              ToolTip.Tip="Cut dual-wall / single-skin X braces (LFAM-style diagonal channels). Depth is a target ceiling; single-skin grows layer-by-layer with ≥60% support."/>
+
+                                    <StackPanel IsVisible="{Binding Additive.ShowXBracingControls}" Spacing="0">
+                                        <Grid Margin="8,4,8,4" ColumnDefinitions="*,140">
+                                            <TextBlock Grid.Column="0" Text="Projection type" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Planar: one oriented plane — braces go perpendicular to it. Cylinder: braces radiate outward from a vertical cylinder you place on the bed."/>
+                                            <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch" FontSize="11"
+                                                       ItemsSource="{Binding Additive.XBracingProjectionTypeOptions}"
+                                                       SelectedItem="{Binding Additive.XBracingProjectionType, Mode=TwoWay}"/>
+                                        </Grid>
+
+                                        <ToggleButton Margin="8,0,8,4" HorizontalAlignment="Stretch" FontSize="11"
+                                                      IsChecked="{Binding Additive.XBracingShowHelper, Mode=TwoWay}"
+                                                      Content="Show helper in viewport"
+                                                      ToolTip.Tip="Toggle the brace plane / cylinder guide in the viewport. Visual only — braces still use it while hidden."/>
+
+                                        <!-- Planar projection -->
+                                        <StackPanel IsVisible="{Binding Additive.ShowXBracingPlanarControls}">
+                                            <TextBlock Margin="8,2,8,2" Text="BRACE PLANE" Classes="LabelMuted"
+                                                       FontSize="9" LetterSpacing="1"/>
+                                            <TextBlock Margin="8,0,8,4" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                                       Text="Cyan plane in the viewport = brace direction. Tilt until it sits on the face — pins go straight into that face."/>
+
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Plane tilt Y (°)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingPlaneTiltY, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Slider Margin="10,0,10,4" Minimum="-90" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    Value="{Binding Additive.XBracingPlaneTiltY, Mode=TwoWay}"/>
+
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Plane tilt X (°)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingPlaneTiltX, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Slider Margin="10,0,10,4" Minimum="-90" Maximum="90" TickFrequency="1" IsSnapToTickEnabled="True"
+                                                    Value="{Binding Additive.XBracingPlaneTiltX, Mode=TwoWay}"/>
+
+                                            <Grid Margin="8,2,8,6" ColumnDefinitions="*,6,*">
+                                                <Button Grid.Column="0" Content="Flip direction" HorizontalAlignment="Stretch" FontSize="11"
+                                                        Command="{Binding Additive.FlipXBracingPlaneCommand}"
+                                                        ToolTip.Tip="Reverse brace direction (flip the plane normal)."/>
+                                                <Button Grid.Column="2" Content="Reset plane" HorizontalAlignment="Stretch" FontSize="11"
+                                                        Command="{Binding Additive.ResetXBracingPlaneCommand}"
+                                                        ToolTip.Tip="Horizontal plane (0°/0°) — braces fall back to path left-normal."/>
+                                            </Grid>
+                                        </StackPanel>
+
+                                        <!-- Cylinder projection -->
+                                        <StackPanel IsVisible="{Binding Additive.ShowXBracingCylinderControls}">
+                                            <TextBlock Margin="8,2,8,2" Text="BRACE CYLINDER" Classes="LabelMuted"
+                                                       FontSize="9" LetterSpacing="1"/>
+                                            <TextBlock Margin="8,0,8,4" TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                                       Text="By default braces pull toward this vertical cylinder. Height matches the part. Click the cylinder in the viewport and drag on the bed to move it."/>
+
+                                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Diameter (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                           ToolTip.Tip="Cylinder diameter. Height is automatic from the model bounds."/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderDiameterMm, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Center X (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderX, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,80">
+                                                <TextBlock Grid.Column="0" Text="Center Y (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                                <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                           Text="{Binding Additive.XBracingCylinderY, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <CheckBox Margin="8,4,8,2"
+                                                      Content="Flip direction (radiate outward)"
+                                                      FontSize="11"
+                                                      IsChecked="{Binding Additive.XBracingCylinderFlipDirection, Mode=TwoWay}"
+                                                      ToolTip.Tip="Off (default): braces pull toward the cylinder axis. On: braces radiate outward from the axis."/>
+                                            <Button Margin="8,4,8,6" Content="Reset to bed center" HorizontalAlignment="Stretch" FontSize="11"
+                                                    Command="{Binding Additive.ResetXBracingCylinderCommand}"
+                                                    ToolTip.Tip="Move cylinder axis to the print bed centre (not the robot origin), reset diameter to 200 mm, and restore pull-toward."/>
+                                        </StackPanel>
+
+                                        <TextBlock Margin="8,6,8,2" Text="PATTERN" Classes="LabelMuted"
+                                                   FontSize="9" LetterSpacing="1"/>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="Depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Target how far each brace goes into the wall. Single-skin grows up to this over layers; dual-wall clamps to thickness."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingDepthMm, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="X span (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Horizontal size of one full X cell along the wall."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingSpanMm, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="Angle from vertical (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Diagonal lean of the X pattern (not the brace plane). Lower = more printable bottom-up."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingAngleDeg, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <CheckBox Margin="8,2,8,4"
+                                                  Content="Extend side edges"
+                                                  FontSize="11"
+                                                  IsChecked="{Binding Additive.XBracingExtendEdges, Mode=TwoWay}"
+                                                  ToolTip.Tip="Partial X cells at left/right wall ends. Top and bottom of the part are never extended."/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
 
                             <!-- Wave -->
                             <Grid Margin="8,2,8,4">
@@ -975,25 +1571,86 @@
 
                             <StackPanel IsVisible="{Binding Additive.ShowInfillControls}">
 
-                                <Grid Margin="8,2,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="80"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Centre-to-centre distance between infill lines in mm. Leave 0 to use the bead width."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
-                                </Grid>
+                                <!-- Line-based fills only (Rectilinear/Grid/Triangle/Ghost Mesh):
+                                     Formbound patterns are demand-driven and ignore these. -->
+                                <StackPanel IsVisible="{Binding Additive.ShowGridControls}">
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Grid width (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Centre-to-centre distance between fill lines — the grid cell width for Grid / Ghost Mesh Grid. Leave 0 to use the bead width."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillSpacingMm}"/>
+                                    </Grid>
 
-                                <Grid Margin="8,2,8,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="80"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
-                                               ToolTip.Tip="Base angle of infill lines in degrees. 0 = parallel to X axis. Grid rotates +90° every layer; Triangle rotates +60° every layer."/>
-                                    <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
-                                </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Angle (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Base angle of fill lines in degrees. 0 = parallel to X axis. Grid and Ghost Mesh rotate +90° every layer; Triangle rotates +60° every layer."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.InfillAngleDeg}"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <StackPanel IsVisible="{Binding Additive.ShowLightningControls}">
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Max overhang (°)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="How steeply a support finger may grow per layer. Lower = fingers start earlier and grow more vertically."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningOverhangDeg}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Branch spacing (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Spacing between support fingers along unsupported edges. 0 = automatic (4× bead width)."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningBranchSpacingMm}"/>
+                                    </Grid>
+                                    <Grid Margin="8,2,8,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Tip loop radius (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                   ToolTip.Tip="Radius of the support pad loop at each finger tip. 0 = plain one-bead tip."/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningTipLoopRadiusMm}"/>
+                                    </Grid>
+                                    <TextBlock Margin="8,6,8,2" Text="SUPPORT DOMAINS" Classes="LabelMuted" FontSize="10"
+                                               ToolTip.Tip="Choose where Formbound looks for overhangs. Check one or both — each domain has its own tip budget (fingers are not stolen from the other)."/>
+                                    <CheckBox Margin="8,2,8,0" FontSize="11" Content="Affect Interior"
+                                              IsChecked="{Binding Additive.LightningAffectInterior, Mode=TwoWay}"
+                                              ToolTip.Tip="Support inward overhangs, cavities, and inner walls. Fingers root on interior boundaries (notches hidden inside). Own tip budget along unsupported interior edges."/>
+                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Affect Exterior"
+                                              IsChecked="{Binding Additive.LightningAffectExterior, Mode=TwoWay}"
+                                              ToolTip.Tip="Support outward flares / free edges outside the part (sacrificial fins — trim after print). Own tip budget, independent of Interior — both can run at once."/>
+                                    <CheckBox Margin="8,2,8,4" FontSize="11" Content="Target Support Selections"
+                                              IsChecked="{Binding Additive.LightningTargetSupportSelections, Mode=TwoWay}"
+                                              ToolTip.Tip="Formbound only near edit-mode Support selections (Apply). Rest of the toolpath stays normal shells — no auto Formbound, no global wall scarring. Without Support paint, Formbound does not run at all."/>
+                                    <StackPanel IsVisible="{Binding Additive.ShowButtressControls}">
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="80"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Horizontal bar (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Formbound Buttress: length of the single-bead horizontal support bar under the overhang. The wall cut morphs into this bar as one continuous line."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.LightningButtressBarMm}"/>
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+
+                                <TextBlock Margin="8,2,8,4" TextWrapping="Wrap"
+                                           Classes="LabelMuted" FontSize="10"
+                                           IsVisible="{Binding Additive.SurfaceModeActive}"
+                                           Text="In Surface mode the fill runs across closed boundary chains; open chains keep their boundary paths."/>
 
                             </StackPanel>
                         </StackPanel>
@@ -1002,7 +1659,9 @@
                     </Expander>
 
                     <!-- 4 TOOLPATH -->
-                    <Expander Classes="StepCard" IsExpanded="False">
+                    <Expander Classes="StepCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepToolpathExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
                                 <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
@@ -1094,9 +1753,10 @@
                                 <Border Height="10" CornerRadius="5" ClipToBounds="True">
                                     <Border.Background>
                                         <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                            <GradientStop Color="#D94F3D" Offset="0"/>
-                                            <GradientStop Color="#E8A43B" Offset="0.5"/>
-                                            <GradientStop Color="#3DB87A" Offset="1"/>
+                                            <!-- Matches the viewport Speed/RPM/Thermal gradient (ToolpathRenderer.GradientColor): blue = low/slow/cold → red = high/fast/hot. -->
+                                            <GradientStop Color="#3373FF" Offset="0"/>
+                                            <GradientStop Color="#40D94D" Offset="0.5"/>
+                                            <GradientStop Color="#FF4026" Offset="1"/>
                                         </LinearGradientBrush>
                                     </Border.Background>
                                 </Border>
@@ -1134,11 +1794,22 @@
                                                    FormatString="F0" FontSize="11"/>
                                 </Grid>
                             </StackPanel>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                            <Button Content="Simulate Thermomechanical"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Command="{Binding Additive.SimulateThermalCommand}"
+                                    ToolTip.Tip="Analytical interlayer-cooling simulation: predicts the temperature each layer lands on, derives the safe layer-time window between sag and bonding limits, and sets the Adaptive Speed low/high values. View the result with the Thermal view pill."/>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                       IsVisible="{Binding Additive.HasThermalSummary}"
+                                       Text="{Binding Additive.ThermalSummary}"/>
                         </StackPanel>
                     </Border>
                     </Expander>
 
-                    <Expander Classes="SectionExpander" Header="GLOBAL" IsExpanded="False" Margin="0,0,0,4">
+                    <Expander Classes="SectionExpander" Header="GLOBAL"
+                              IsExpanded="{Binding GlobalSectionExpanded, Mode=TwoWay}" Margin="0,0,0,4">
                         <StackPanel>
 
                         <TextBlock Text="HOME POSITION" Classes="SectionHeader"/>
@@ -1162,6 +1833,8 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
+                        <Border Classes="FlashTarget" Classes.flash="{Binding HighlightToolheadOrientation}">
+                        <StackPanel>
                         <TextBlock Text="TOOLHEAD GLOBAL ORIENTATION" Classes="SectionHeader"
                                    ToolTip.Tip="Global-axis rotations: R_global = Rz(Z) × Ry(Y) × Rx(X). Default 0,90,0 = nozzle vertical."/>
 
@@ -1215,6 +1888,9 @@
                                        Text="{Binding Additive.ToolheadA, Mode=TwoWay, StringFormat={}{0:F1}}"
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                         </Grid>
+
+                        </StackPanel>
+                        </Border>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
@@ -1500,7 +2176,8 @@
                                         
 
                     <!-- Other workflows (tab bar was removed; steps are the panel home) -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4">
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="4" Margin="0,10,0,4"
+                                IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}">
                         <TextBlock Text="Other workflows:" FontSize="10" Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
                         <Button Content="SCAN" FontSize="10" Padding="6,2" Background="Transparent"
                                 Foreground="{DynamicResource TextSecondary}" BorderThickness="0"

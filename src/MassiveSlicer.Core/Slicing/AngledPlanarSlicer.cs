@@ -67,12 +67,114 @@ public static class AngledPlanarSlicer
         var seamDirLocal = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
 
         var   toolpath   = new Toolpath();
-        float step       = tMin + settings.FirstLayerHeight;
         int   idx        = 0;
         var   prevTracks = new List<ContourTrack>();
+        Vector3? prevEnd = null;
 
-        while (step < tMax - 1e-4f)
+        var steps = new List<float>();
+        for (float st = tMin + settings.FirstLayerHeight; st < tMax - 1e-4f; st += settings.LayerHeight)
+            steps.Add(st);
+
+        // ── Lightning Bridge pre-pass (see PlanarSlicer): cache contours for every
+        //    plane, then build the top-down finger plan in plane-local 2D.
+        //    Constant tilt ⇒ same (u,v,n) every layer; still pass per-layer frames
+        //    (Origin = n·step) so Target Support Selections / paint projection use
+        //    the real tilted plane equation — not world-Z planar assumptions.
+        List<List<List<Vector2>>>? lightningCache = null;
+        Lightning.LightningPlan? lightningPlan = null;
+        TreeSupport.TreeSupportPlan? treePlan = null;
+        bool hasFormboundPaint = PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks);
+        bool hasTreePaint = PaintSupportStyleUtil.HasTreePaint(settings.PaintMarks);
+        // Target Support Selections: Formbound only from paint, not the global dropdown.
+        bool formboundActive = settings.LightningTargetSupportSelections
+            ? hasFormboundPaint
+            : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+               || hasFormboundPaint);
+        bool needLightning = formboundActive || settings.XBracingEnabled || hasTreePaint;
+        if (needLightning)
         {
+            bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+            lightningCache = new(steps.Count);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(steps.Count);
+            var heights = new List<float>(steps.Count);
+            // Constant-tilt frames (parallel planes). Formbound paint demand keys
+            // off signed distance along normal — works for Angled, not only MultiPlanar.
+            var frames = new List<(Vector3 Origin, Vector3 U, Vector3 V)>(steps.Count);
+            for (int si = 0; si < steps.Count; si++)
+            {
+                var contours = ComputeInsetContours(meshes, normal, steps[si], normal * steps[si], u, v, settings);
+                lightningCache.Add(contours);
+                fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
+                heights.Add(si == 0 ? settings.FirstLayerHeight : settings.LayerHeight);
+                frames.Add((normal * steps[si], u, v));
+            }
+            // The oracle probes just BELOW the plane: the demanding solid occupies
+            // the layer beneath it, and a grazing plane itself is ambiguous.
+            var meshTester = new Lightning.MeshInsideTester(meshes);
+            float halfBand = FormboundPaintHalfBandMm(settings, angledConstantTilt: true);
+            Func<int, (Vector3 Origin, Vector3 Normal, Vector3 U, Vector3 V)> frameOf =
+                li => (normal * steps[li], normal, u, v);
+
+            if (formboundActive)
+            {
+                // Constant-tilt is a PARALLEL-plane stack: the plane-local demand
+                // path is correct here. Passing frames activates the multi-planar
+                // reprojection / gravity machinery, which mis-classifies demand on
+                // parallel planes (lost perimeter + floating fingers). Multi-planar
+                // (SliceMultiPlanar) genuinely rotates frames and keeps them.
+                lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings,
+                    solidAt: (li, p) => meshTester.IsInside(
+                        normal * (steps[li] - 0.4f * heights[li]) + u * p.X + v * p.Y),
+                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                        settings.PaintMarks, steps.Count, frameOf,
+                        halfBandMm: halfBand,
+                        targetSupportSelectionsOnly: settings.LightningTargetSupportSelections,
+                        styleFilter: PaintSupportStyleUtil.IsFormbound));
+            }
+            else
+                lightningPlan = new Lightning.LightningPlan(steps.Count);
+
+            if (hasTreePaint)
+            {
+                var treeDemand = ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, steps.Count, frameOf,
+                    halfBandMm: halfBand,
+                    targetSupportSelectionsOnly: true,
+                    styleFilter: PaintSupportStyleUtil.IsTree);
+                treePlan = TreeSupport.TreeSupportPlanner.Build(
+                    fillPolysPerLayer, heights, settings, treeDemand, frames);
+            }
+
+            if (settings.XBracingEnabled)
+            {
+                var polysForX = new List<List<List<Vector2>>>(steps.Count);
+                for (int si = 0; si < steps.Count; si++)
+                {
+                    var fill = fillPolysPerLayer[si];
+                    if (fill.Count > 0) polysForX.Add(fill);
+                    else polysForX.Add(lightningCache![si]);
+                }
+                Lightning.XBracingPlanner.Apply(
+                    lightningPlan, polysForX, steps, heights, settings);
+            }
+
+            // Generator oracles: SolidAt probes both sides of the plane (fresh
+            // islands have material only above their first plane); SolidAtPlane
+            // probes exactly at it (a real contour's interior is solid there).
+            for (int li = 0; li < steps.Count; li++)
+            {
+                int cap = li;
+                lightningPlan.Layers[li].SolidAt = p =>
+                    meshTester.IsInside(normal * (steps[cap] - 0.4f * heights[cap]) + u * p.X + v * p.Y)
+                    || meshTester.IsInside(normal * (steps[cap] + 0.4f * heights[cap]) + u * p.X + v * p.Y);
+                lightningPlan.Layers[li].SolidAtPlane = p =>
+                    meshTester.IsInside(normal * steps[cap] + u * p.X + v * p.Y);
+            }
+        }
+
+        for (int si = 0; si < steps.Count; si++)
+        {
+            float step = steps[si];
             // origin = closest point on this plane to the world origin.
             var origin = normal * step;
 
@@ -82,17 +184,390 @@ public static class AngledPlanarSlicer
             float repZ = normal.Z > 1e-6f ? step / normal.Z : step;
             var   layer = new ToolpathLayer(idx++, repZ) { PlaneNormal = normal };
 
-            bool isLastLayer = step + settings.LayerHeight >= tMax - 1e-4f;
+            bool isLastLayer = si == steps.Count - 1;
             prevTracks = BuildLayer(meshes, normal, step, origin, u, v,
-                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer);
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
+                cachedContours: lightningCache?[si],
+                lightningPlan:  lightningPlan?.Layers[si],
+                treePlan:       treePlan?.Layers[si],
+                prevEnd: prevEnd);
 
             if (layer.Moves.Count > 0)
+            {
                 toolpath.Layers.Add(layer);
-            step += settings.LayerHeight;
+                prevEnd = layer.Moves[^1].To;
+            }
         }
+
+        if (settings.PaintMarks.Count > 0)
+            ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
+
+        if (lightningPlan is not null)
+            toolpath.FormboundStats = lightningPlan.ToStats();
 
         return toolpath;
     }
+
+    /// <summary>
+    /// Multi-Planar slicing: the cutting plane's tilt interpolates through the guide
+    /// plane stack (height % → angle). Outside the first/last guide the angle
+    /// <b>holds</b> and keeps projecting along that same tilt until the mesh is fully
+    /// covered — end guides never truncate the stack. Because consecutive planes are
+    /// not parallel, each layer is a wedge: per-move <see cref="ToolpathMove.HeightScale"/>
+    /// records the local thickness relative to the nominal layer height so export can
+    /// scale extrusion RPM and the preview can draw the true bead height. The per-layer
+    /// tilt change is clamped so the thin side never drops below a quarter layer.
+    /// </summary>
+    public static Toolpath SliceMultiPlanar(IReadOnlyList<Vector3[]> meshes, SliceSettings settings)
+    {
+        // Bounds and the vertical axis the guide planes anchor to.
+        float xMin = float.MaxValue, xMax = float.MinValue;
+        float yMin = float.MaxValue, yMax = float.MinValue;
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        foreach (var verts in meshes)
+            foreach (var vert in verts)
+            {
+                if (vert.X < xMin) xMin = vert.X; if (vert.X > xMax) xMax = vert.X;
+                if (vert.Y < yMin) yMin = vert.Y; if (vert.Y > yMax) yMax = vert.Y;
+                if (vert.Z < zMin) zMin = vert.Z; if (vert.Z > zMax) zMax = vert.Z;
+            }
+        if (zMax <= zMin) return new Toolpath();
+
+        float cx = (xMin + xMax) * 0.5f;
+        float cy = (yMin + yMax) * 0.5f;
+        bool axisX = settings.MultiPlanarAxisX;
+        // Thickness varies along the lean direction: X for tilt-about-Y, Y for
+        // tilt-about-X — the lever arm is the part's largest reach on that axis.
+        float lever = axisX
+            ? MathF.Max(MathF.Max(yMax - cy, cy - yMin), 1f)
+            : MathF.Max(MathF.Max(xMax - cx, cx - xMin), 1f);
+
+        float layerH = MathF.Max(settings.LayerHeight, 0.1f);
+
+        // Guide stack, sorted by height. First/last angles hold and project past
+        // those heights — guides only shape the tilt, they do not start/stop the cut.
+        var guides = (settings.MultiPlanarPlanes is { Count: >= 2 } g
+                ? g.OrderBy(pl => pl.HeightPct).ToArray()
+                : [new MultiPlanarPlane(0f, 0f), new MultiPlanarPlane(100f, 30f)]);
+
+        // Planes must not cross inside the part: thickness at the far edge is
+        // layerH − Δθ·lever, so cap the per-layer rotation at 75% of the nominal.
+        float maxStepRad = 0.75f * layerH / lever;
+
+        float ThetaAt(float f)
+        {
+            float pct = f * 100f;
+            // Below first guide → hold first angle (project past the bottom guide).
+            if (pct <= guides[0].HeightPct) return guides[0].AngleDeg * MathF.PI / 180f;
+            for (int k = 1; k < guides.Length; k++)
+            {
+                if (pct > guides[k].HeightPct) continue;
+                float span = MathF.Max(guides[k].HeightPct - guides[k - 1].HeightPct, 1e-3f);
+                float t = (pct - guides[k - 1].HeightPct) / span;
+                float a = guides[k - 1].AngleDeg + (guides[k].AngleDeg - guides[k - 1].AngleDeg) * t;
+                return a * MathF.PI / 180f;
+            }
+            // Above last guide → hold last angle (project past the top guide).
+            return guides[^1].AngleDeg * MathF.PI / 180f;
+        }
+
+        var toolpath  = new Toolpath();
+        var prevTracks = new List<ContourTrack>();
+        int idx = 0;
+        Vector3? prevEnd = null;
+
+        var sd = settings.SeamDirection;
+        float sdLen = sd.Length();
+        if (sdLen < 1e-6f) sd = new Vector2(0f, 1f); else sd /= sdLen;
+        float reach = (xMax - xMin + yMax - yMin) + 10f;
+        var seamOriginXY = new Vector2(cx + sd.X * reach, cy + sd.Y * reach);
+
+        // ── Pre-compute the whole plane march (needed twice for lightning). Frames
+        //    are anchored at the part's central axis: consecutive frames rotate at
+        //    most maxStepRad, so a point's plane-local coordinates drift by at most
+        //    0.75·layerH per layer at the far edge — under the lightning planner's
+        //    support radius, which is what lets its cross-layer propagation work on
+        //    a slowly rotating frame stack.
+        //
+        //    Z range is padded by lever·tan(max|θ|) so a tilted first/last plane
+        //    still reaches the high/low corners of the AABB. March continues with
+        //    the held end angles until the plane no longer intersects the mesh —
+        //    never stopping at a guide height or at raw zMax alone.
+        var march = new List<(float H, float Theta, Vector3 Normal, float PlaneD, Vector3 Origin, Vector3 U, Vector3 V)>();
+        {
+            float maxAbsTheta = 0f;
+            foreach (var gp in guides)
+                maxAbsTheta = MathF.Max(maxAbsTheta, MathF.Abs(gp.AngleDeg) * MathF.PI / 180f);
+            float zPad = lever * MathF.Tan(MathF.Min(maxAbsTheta, 75f * MathF.PI / 180f))
+                       + layerH * 2f;
+
+            var aabbMin = new Vector3(xMin, yMin, zMin);
+            var aabbMax = new Vector3(xMax, yMax, zMax);
+
+            // Does infinite plane n·x = planeD intersect the mesh AABB?
+            static bool PlaneHitsAabb(Vector3 n, float planeD, Vector3 bmin, Vector3 bmax)
+            {
+                // Min/max of n·x over the box = sum of min/max contributions per axis.
+                float tMin = 0f, tMax = 0f;
+                if (n.X >= 0f) { tMin += n.X * bmin.X; tMax += n.X * bmax.X; }
+                else           { tMin += n.X * bmax.X; tMax += n.X * bmin.X; }
+                if (n.Y >= 0f) { tMin += n.Y * bmin.Y; tMax += n.Y * bmax.Y; }
+                else           { tMin += n.Y * bmax.Y; tMax += n.Y * bmin.Y; }
+                if (n.Z >= 0f) { tMin += n.Z * bmin.Z; tMax += n.Z * bmax.Z; }
+                else           { tMin += n.Z * bmax.Z; tMax += n.Z * bmin.Z; }
+                const float eps = 1e-3f;
+                return planeD >= tMin - eps && planeD <= tMax + eps;
+            }
+
+            // Start below the mesh so the first held angle can still cut the low
+            // corner under tilt; first-layer offset matches the classic bottom pad.
+            float h0 = zMin - zPad + MathF.Max(settings.FirstLayerHeight, layerH * 0.5f);
+            float hCeil = zMax + zPad + layerH * 4f;
+            float thetaWalk = ThetaAt(0f);
+            var refAxis = axisX ? new Vector3(1f, 0f, 0f) : new Vector3(0f, 1f, 0f);
+            bool seenHit = false;
+            int emptyAfterHit = 0;
+            const int emptyStop = 3; // a few empty planes past the mesh → done
+            int safety = 0;
+            const int maxLayers = 200_000;
+
+            while (h0 < hCeil && safety++ < maxLayers)
+            {
+                // Height fraction for guide interpolation is relative to the mesh
+                // body only — outside [zMin,zMax] f clamps so end angles hold.
+                float f = Math.Clamp((h0 - zMin) / (zMax - zMin), 0f, 1f);
+                float theta = Math.Clamp(ThetaAt(f), thetaWalk - maxStepRad, thetaWalk + maxStepRad);
+                var normal = axisX
+                    ? Vector3.Normalize(new Vector3(0f, -MathF.Sin(theta), MathF.Cos(theta)))
+                    : Vector3.Normalize(new Vector3(MathF.Sin(theta), 0f, MathF.Cos(theta)));
+                var anchor = new Vector3(cx, cy, h0);
+                float planeD = Vector3.Dot(anchor, normal);
+                bool hits = PlaneHitsAabb(normal, planeD, aabbMin, aabbMax);
+
+                if (hits)
+                {
+                    seenHit = true;
+                    emptyAfterHit = 0;
+                    var u = Vector3.Normalize(Vector3.Cross(refAxis, normal));
+                    var v = Vector3.Cross(normal, u);
+                    march.Add((h0, theta, normal, planeD, anchor, u, v));
+                }
+                else if (seenHit)
+                {
+                    // Past the mesh along this stack — stop after a few empties so a
+                    // grazing miss mid-part doesn't abort early.
+                    emptyAfterHit++;
+                    if (emptyAfterHit >= emptyStop) break;
+                }
+                // else: still approaching the mesh from below — keep walking
+
+                thetaWalk = theta;
+                h0 += layerH / MathF.Max(MathF.Cos(theta), 0.2f);
+            }
+        }
+        if (march.Count == 0) return toolpath;
+
+        // ── Formbound / X-bracing pre-pass: cache every plane's contours, then build
+        //    the top-down finger plan across the (slowly rotating) frame stack.
+        List<List<List<Vector2>>>? lightningCache = null;
+        Lightning.LightningPlan? lightningPlan = null;
+        TreeSupport.TreeSupportPlan? treePlan = null;
+        bool hasFormboundPaintMp = PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks);
+        bool hasTreePaintMp = PaintSupportStyleUtil.HasTreePaint(settings.PaintMarks);
+        bool formboundActiveMp = settings.LightningTargetSupportSelections
+            ? hasFormboundPaintMp
+            : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+               || hasFormboundPaintMp);
+        bool needLightningMp = formboundActiveMp || settings.XBracingEnabled || hasTreePaintMp;
+        if (needLightningMp)
+        {
+            bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+            var dedupedMeshes = meshes;
+            lightningCache = new(march.Count);
+            var fillPolysPerLayer = new List<List<List<Vector2>>>(march.Count);
+            var heights = new List<float>(march.Count);
+            var frames  = new List<(Vector3 Origin, Vector3 U, Vector3 V)>(march.Count);
+            foreach (var st in march)
+            {
+                var contours = ComputeInsetContours(dedupedMeshes, st.Normal, st.PlaneD, st.Origin, st.U, st.V, settings);
+                lightningCache.Add(contours);
+                fillPolysPerLayer.Add(FilterFillPolys(contours, surfaceMode));
+                heights.Add(layerH);
+                frames.Add((st.Origin, st.U, st.V));
+            }
+            // The oracle probes just BELOW the plane: the demanding solid occupies
+            // the layer beneath it, and a grazing plane itself is ambiguous.
+            var meshTester = new Lightning.MeshInsideTester(meshes);
+            float halfBand = FormboundPaintHalfBandMm(settings, angledConstantTilt: false);
+            Func<int, (Vector3 Origin, Vector3 Normal, Vector3 U, Vector3 V)> frameOf =
+                li => (march[li].Origin, march[li].Normal, march[li].U, march[li].V);
+
+            if (formboundActiveMp)
+            {
+                lightningPlan = Lightning.LightningPlanner.Build(fillPolysPerLayer, heights, settings, frames,
+                    solidAt: (li, p) => meshTester.IsInside(
+                        march[li].Origin - march[li].Normal * (0.4f * layerH)
+                        + march[li].U * p.X + march[li].V * p.Y),
+                    manualDemand: ToolpathPaintFilter.ProjectBridgeMarks(
+                        settings.PaintMarks, march.Count, frameOf,
+                        halfBandMm: halfBand,
+                        targetSupportSelectionsOnly: settings.LightningTargetSupportSelections,
+                        styleFilter: PaintSupportStyleUtil.IsFormbound));
+            }
+            else
+                lightningPlan = new Lightning.LightningPlan(march.Count);
+
+            if (hasTreePaintMp)
+            {
+                var treeDemand = ToolpathPaintFilter.ProjectBridgeMarks(
+                    settings.PaintMarks, march.Count, frameOf,
+                    halfBandMm: halfBand,
+                    targetSupportSelectionsOnly: true,
+                    styleFilter: PaintSupportStyleUtil.IsTree);
+                treePlan = TreeSupport.TreeSupportPlanner.Build(
+                    fillPolysPerLayer, heights, settings, treeDemand, frames);
+            }
+
+            if (settings.XBracingEnabled)
+            {
+                var zProxy = new float[march.Count];
+                for (int i = 0; i < march.Count; i++) zProxy[i] = i * layerH;
+                Lightning.XBracingPlanner.Apply(
+                    lightningPlan, fillPolysPerLayer, zProxy, heights, settings);
+            }
+
+            // Generator oracles: SolidAt probes both sides of the plane (fresh
+            // islands have material only above their first plane); SolidAtPlane
+            // probes exactly at it (a real contour's interior is solid there).
+            for (int li = 0; li < march.Count; li++)
+            {
+                int cap = li;
+                lightningPlan.Layers[li].SolidAt = p =>
+                    meshTester.IsInside(march[cap].Origin - march[cap].Normal * (0.4f * layerH)
+                        + march[cap].U * p.X + march[cap].V * p.Y)
+                    || meshTester.IsInside(march[cap].Origin + march[cap].Normal * (0.4f * layerH)
+                        + march[cap].U * p.X + march[cap].V * p.Y);
+                lightningPlan.Layers[li].SolidAtPlane = p =>
+                    meshTester.IsInside(march[cap].Origin + march[cap].U * p.X + march[cap].V * p.Y);
+            }
+        }
+
+        Vector3 nPrev = default; float dPrev = 0f; bool hasPrev = false;
+
+        for (int si = 0; si < march.Count; si++)
+        {
+            var (h, theta, normal, planeD, origin, u, v) = march[si];
+
+            var sd3d = new Vector3(sd.X, sd.Y, 0f);
+            sd3d -= Vector3.Dot(sd3d, normal) * normal;
+            float sd3dLen = sd3d.Length();
+            if (sd3dLen < 1e-6f) sd3d = u; else sd3d /= sd3dLen;
+            var seamDirLocal    = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
+            var seamOriginLocal = ToLocal(seamOriginXY, normal, planeD, origin, u, v);
+
+            // Use world-space plane origin Z for layer.Z (NOT march height h).
+            // Storing h (often ≪ 0 on multiplanar stacks) broke 2D slice grid/HUD
+            // and made tree geometry appear far below the bed.
+            var layer = new ToolpathLayer(toolpath.Layers.Count, origin.Z)
+            {
+                PlaneNormal = normal,
+                Height = layerH,
+            };
+            idx++;
+
+            bool isLastLayer = si == march.Count - 1;
+            prevTracks = BuildLayer(meshes, normal, planeD, origin, u, v,
+                seamOriginLocal, seamDirLocal, settings, prevTracks, layer, isLastLayer,
+                cachedContours: lightningCache?[si],
+                lightningPlan:  lightningPlan?.Layers[si],
+                treePlan:       treePlan?.Layers[si],
+                prevEnd: prevEnd);
+
+            // Wedge thickness: distance from each move to the PREVIOUS plane, relative
+            // to nominal. First layer sits on the bed at nominal thickness.
+            if (hasPrev && layer.Moves.Count > 0)
+            {
+                for (int mi = 0; mi < layer.Moves.Count; mi++)
+                {
+                    var move = layer.Moves[mi];
+                    if (move.Kind != MoveKind.Extrude) continue;
+                    var mid = (move.From + move.To) * 0.5f;
+                    float thick = MathF.Abs(Vector3.Dot(mid, nPrev) - dPrev);
+                    float scale = Math.Clamp(thick / layerH, 0.25f, 3f);
+                    layer.Moves[mi] = move with { HeightScale = scale };
+                }
+            }
+
+            // Prefer representative Z from actual extrusion mids (stable for 2D slice).
+            if (layer.Moves.Count > 0)
+            {
+                float zSum = 0f;
+                int zN = 0;
+                foreach (var mv in layer.Moves)
+                {
+                    if (mv.Kind != MoveKind.Extrude || mv.IsLayerStitch || mv.IsLayerChange) continue;
+                    zSum += (mv.From.Z + mv.To.Z) * 0.5f;
+                    zN++;
+                    if (zN >= 32) break;
+                }
+                if (zN > 0)
+                {
+                    // ToolpathLayer.Z is set in ctor only — rebuild with better Z.
+                    var fixedLayer = new ToolpathLayer(layer.Index, zSum / zN)
+                    {
+                        PlaneNormal = layer.PlaneNormal,
+                        Height = layer.Height,
+                        ThermalTempC = layer.ThermalTempC,
+                    };
+                    fixedLayer.Moves.AddRange(layer.Moves);
+                    fixedLayer.Contours.AddRange(layer.Contours);
+                    layer = fixedLayer;
+                }
+
+                toolpath.Layers.Add(layer);
+                prevEnd = layer.Moves[^1].To;
+            }
+
+            nPrev = normal; dPrev = planeD; hasPrev = true;
+        }
+
+        if (settings.PaintMarks.Count > 0)
+            ToolpathPaintFilter.ApplyRemovals(toolpath, settings.PaintMarks);
+
+        if (lightningPlan is not null)
+            toolpath.FormboundStats = lightningPlan.ToStats();
+
+        return toolpath;
+    }
+
+    /// <summary>Surface mode fills across closed boundary chains only (1 mm closure).</summary>
+    /// <summary>
+    /// Half-band (mm) along the cutting-plane normal for projecting edit Support
+    /// paint onto Formbound layers. Angled constant-tilt uses a slightly larger
+    /// band so bead mids on a tilted path still hit their plane; Multi-Planar uses
+    /// the same helper with room for guide-plane drift.
+    /// </summary>
+    private static float FormboundPaintHalfBandMm(SliceSettings settings, bool angledConstantTilt)
+    {
+        float lh = MathF.Max(settings.LayerHeight, 0.1f);
+        float bead = MathF.Max(settings.BeadWidth, 0.5f);
+        if (settings.LightningTargetSupportSelections)
+        {
+            // Target Support Selections: prefer reliable capture of wall-path marks.
+            // Constant tilt: marks lie on parallel planes → band ~ 1.5 layer + bead.
+            // Multi-Planar: frames rotate slowly → a bit more slack.
+            return angledConstantTilt
+                ? MathF.Max(lh * 1.5f, bead * 1.25f)
+                : MathF.Max(lh * 1.75f, bead * 1.5f);
+        }
+        return MathF.Max(lh * 0.75f, bead * 0.75f);
+    }
+
+    private static List<List<Vector2>> FilterFillPolys(List<List<Vector2>> contours, bool surfaceMode)
+        => surfaceMode
+            ? contours.Where(c => c.Count >= 3
+                && Vector2.DistanceSquared(c[0], c[^1]) <= 1.0f).ToList()
+            : contours;
 
     // Projects a world-XY point to plane-local (u,v) by solving the plane equation for Z.
     private static Vector2 ToLocal(Vector2 xy, Vector3 normal, float planeD,
@@ -115,7 +590,46 @@ public static class AngledPlanarSlicer
         SliceSettings settings,
         List<ContourTrack> prevTracks,
         ToolpathLayer layer,
-        bool isLastLayer = false)
+        bool isLastLayer = false,
+        List<List<Vector2>>? cachedContours = null,
+        Lightning.LightningLayerPlan? lightningPlan = null,
+        TreeSupport.TreeSupportLayerPlan? treePlan = null,
+        Vector3? prevEnd = null)
+    {
+        var insetContours = cachedContours
+            ?? ComputeInsetContours(meshes, normal, planeD, origin, u, v, settings);
+        // Empty mesh cut: still emit freestanding tree columns (bed foundation).
+        if (insetContours.Count == 0)
+        {
+            if (treePlan is { Branches.Count: > 0 })
+            {
+                int first = layer.Moves.Count;
+                float zFloor = origin.Z - MathF.Abs(settings.LayerHeight) * 0.25f;
+                TreeSupport.TreeSupportGenerator.Emit(
+                    treePlan, planeD, layer, settings.BeadWidth, partFillPolys: null,
+                    project: p => origin + p.X * u + p.Y * v,
+                    minWorldZ: zFloor);
+                for (int i = first; i < layer.Moves.Count; i++)
+                    layer.Moves[i] = layer.Moves[i] with { Normal = Vector3.UnitZ };
+            }
+            return new List<ContourTrack>();
+        }
+
+        return BuildLayerBody(settings, layer, normal, planeD, origin, u, v,
+            seamOrigin2d, seamDir2d, prevTracks, insetContours, isLastLayer, lightningPlan,
+            treePlan, prevEnd);
+    }
+
+    /// <summary>
+    /// Stages 1–3: mesh∩plane segments (plane-local 2D) → chained contours →
+    /// nesting/orientation/offset. Extracted so the Lightning pre-pass can compute
+    /// and cache every layer's contours before any moves are emitted.
+    /// </summary>
+    private static List<List<Vector2>> ComputeInsetContours(
+        IReadOnlyList<Vector3[]> meshes,
+        Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v,
+        SliceSettings settings)
     {
         // ── Stage 1: collect 3D intersection segments, project to plane-local 2D ─
         var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
@@ -147,15 +661,15 @@ public static class AngledPlanarSlicer
             }
             if (segs.Count > 0) perMeshSegs.Add(segs);
         }
-        if (perMeshSegs.Count == 0) return new List<ContourTrack>();
+        if (perMeshSegs.Count == 0) return new List<List<Vector2>>();
 
         // ── Stage 2: chain by endpoint proximity in 2D ───────────────────────
         var rawContours = new List<List<Vector2>>();
         foreach (var segs in perMeshSegs)
             rawContours.AddRange(ChainByProximity(segs));
 
-        // ── Stage 3: nesting depth + bead-width offset + seam ────────────────
-        if (rawContours.Count == 0) return new List<ContourTrack>();
+        // ── Stage 3: nesting depth + bead-width offset ───────────────────────
+        if (rawContours.Count == 0) return new List<List<Vector2>>();
 
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
 
@@ -209,12 +723,59 @@ public static class AngledPlanarSlicer
                         insetContours.Add(simpTol > 0f ? SimplifyContour2D(r, simpTol) : r);
             }
         }
-        if (insetContours.Count == 0) return new List<ContourTrack>();
+        return insetContours;
+    }
+
+    private static List<ContourTrack> BuildLayerBody(
+        SliceSettings settings, ToolpathLayer layer,
+        Vector3 normal, float planeD,
+        Vector3 origin, Vector3 u, Vector3 v,
+        Vector2 seamOrigin2d, Vector2 seamDir2d,
+        List<ContourTrack> prevTracks,
+        List<List<Vector2>> insetContours,
+        bool isLastLayer,
+        Lightning.LightningLayerPlan? lightningPlan,
+        TreeSupport.TreeSupportLayerPlan? treePlan = null,
+        Vector3? prevEnd = null)
+    {
+        bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+        bool targetSel = settings.LightningTargetSupportSelections;
+        bool hasPaintTrees = lightningPlan is not null
+            && lightningPlan.Trees.Any(t =>
+                (t.Manual || t.PaintColumn) && !lightningPlan.DroppedTrees.Contains(t.Id));
+        bool formboundEmit = targetSel
+            ? hasPaintTrees
+            : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
+               || (hasPaintTrees && PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks)));
+        Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
+
+        void EmitTree()
+        {
+            if (treePlan is null || treePlan.Branches.Count == 0) return;
+            int first = layer.Moves.Count;
+            // Freestanding trees: pass part only for inside-push / soft clip (generator
+            // no longer aggressively Differences expanded part — that wiped bed columns).
+            var fill = FilterFillPolys(insetContours, surfaceMode);
+            if (fill.Count == 0) fill = insetContours.Where(c => c.Count >= 3).ToList();
+            // Never emit below this plane's world height (trees stay on the slice).
+            float zFloor = origin.Z - MathF.Abs(settings.LayerHeight) * 0.5f;
+            TreeSupport.TreeSupportGenerator.Emit(
+                treePlan, planeD, layer, settings.BeadWidth, fill, Unproject,
+                minWorldZ: zFloor);
+            // Keep world-up tool normal for freestanding columns (not plane-tilted).
+            for (int i = first; i < layer.Moves.Count; i++)
+                layer.Moves[i] = layer.Moves[i] with { Normal = Vector3.UnitZ };
+        }
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Contours are plane-local 2D; the projector lifts infill back onto the tilted plane.
-        if (!surfaceMode && settings.InfillPattern != InfillPattern.None)
+        if (settings.InfillPattern != InfillPattern.None || formboundEmit)
         {
+            // Surface mode fills across closed boundary chains only (1 mm closure
+            // threshold, same as ChainByProximity); open chains keep their paths.
+            var fillPolys = FilterFillPolys(insetContours, surfaceMode);
+            if (fillPolys.Count > 0)
+            {
             float baseAngle = settings.InfillAngleDeg;
             float infillAngle = settings.InfillPattern switch
             {
@@ -226,25 +787,57 @@ public static class AngledPlanarSlicer
             float infillSpacing = settings.InfillSpacingMm > 0f
                 ? settings.InfillSpacingMm
                 : settings.BeadWidth;
-            Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
 
             int firstInfillMove = layer.Moves.Count;
-            if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
-                InfillGenerator.EmitGhostMesh(insetContours, planeD, layer, infillSpacing, infillAngle,
-                                              isLastLayer, Unproject);
+            if (formboundEmit
+                || (settings.XBracingEnabled && lightningPlan is not null && !targetSel))
+            {
+                Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject, prevEnd,
+                    localSupportOnly: targetSel);
+            }
+            else if (settings.InfillPattern == InfillPattern.GhostMeshGrid)
+                InfillGenerator.EmitGhostMesh(fillPolys, planeD, layer, infillSpacing, infillAngle,
+                                              isLastLayer, Unproject, settings.BeadWidth);
+            else if (settings.InfillPattern != InfillPattern.None
+                     && !Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern))
+                InfillGenerator.Emit(fillPolys, planeD, layer, infillSpacing, infillAngle, Unproject);
             else
-                InfillGenerator.Emit(insetContours, planeD, layer, infillSpacing, infillAngle, Unproject);
+            {
+                // Target Support with no paint trees this layer → clean shells.
+                goto ShellPath;
+            }
 
             // Infill moves need the plane normal for tool orientation on tilted layers.
             for (int i = firstInfillMove; i < layer.Moves.Count; i++)
                 layer.Moves[i] = layer.Moves[i] with { Normal = normal };
 
+            EmitTree();
             return new List<ContourTrack>();
+            }
         }
 
+        if (settings.XBracingEnabled && lightningPlan is not null)
+        {
+            var fillPolys = FilterFillPolys(insetContours, settings.SlicingMode == SlicingMode.Surface);
+            if (fillPolys.Count > 0)
+            {
+                int first = layer.Moves.Count;
+                Lightning.LightningGenerator.EmitLightning(fillPolys, lightningPlan, planeD, layer,
+                    settings.BeadWidth, settings.LightningTipLoopRadiusMm, Unproject, prevEnd,
+                    localSupportOnly: targetSel && hasPaintTrees);
+                for (int i = first; i < layer.Moves.Count; i++)
+                    layer.Moves[i] = layer.Moves[i] with { Normal = normal };
+                EmitTree();
+                return new List<ContourTrack>();
+            }
+        }
+
+        ShellPath:
         var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);
         EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour),
             origin, u, v, normal, layer);
+        EmitTree();
         return tracks;
     }
 
@@ -311,10 +904,16 @@ public static class AngledPlanarSlicer
 
     // Greedy nearest-endpoint walk — identical logic to PlanarSlicer.ChainByProximity.
     private static List<List<Vector2>> ChainByProximity(List<(Vector2 A, Vector2 B)> segs)
+        => ChainGrid(segs);
+
+    private static List<List<Vector2>> ChainGrid(List<(Vector2 A, Vector2 B)> segs)
     {
         int n = segs.Count;
         var used     = new bool[n];
         var contours = new List<List<Vector2>>();
+        // Endpoint spatial hash — the full O(n) scan per step made this O(n²),
+        // which never finished on dense Multi-Planar sections (V80 drone hang).
+        var grid = new SegmentEndpointGrid(segs);
 
         for (int start = 0; start < n; start++)
         {
@@ -325,20 +924,7 @@ public static class AngledPlanarSlicer
 
             while (true)
             {
-                var   tail = chain[^1];
-                float best = float.MaxValue;
-                int   bi   = -1;
-                bool  flip = false;
-
-                for (int i = 0; i < n; i++)
-                {
-                    if (used[i]) continue;
-                    float dA = Dist2(tail, segs[i].A);
-                    float dB = Dist2(tail, segs[i].B);
-                    if (dA < best) { best = dA; bi = i; flip = false; }
-                    if (dB < best) { best = dB; bi = i; flip = true;  }
-                }
-
+                int bi = grid.FindNearest(chain[^1], used, out bool flip, out float best);
                 if (bi < 0 || best > 1.0f) break;
 
                 used[bi] = true;

@@ -123,7 +123,10 @@ public enum SliceMethod
     /// <summary>Surface-following conformal toolpaths.</summary>
     Geodesic,
     /// <summary>Non-planar layers interpolating between LOW/HIGH surface boundaries (ETH sweep).</summary>
-    Curved
+    Curved,
+    /// <summary>Plane tilt interpolates through three guide angles (base/middle/top) —
+    /// wedge layers whose thickness varies along the path.</summary>
+    MultiPlanar
 }
 
 /// <summary>Application colour theme.</summary>

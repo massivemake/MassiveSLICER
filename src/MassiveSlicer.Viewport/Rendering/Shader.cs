@@ -19,13 +19,26 @@ public sealed class Shader : IDisposable
     /// <param name="vertexSource">GLSL source for the vertex stage.</param>
     /// <param name="fragmentSource">GLSL source for the fragment stage.</param>
     public Shader(string vertexSource, string fragmentSource)
+        : this(vertexSource, fragmentSource, geometrySource: null)
+    {
+    }
+
+    /// <summary>
+    /// Compiles vertex + fragment, and optionally a geometry stage, then links.
+    /// </summary>
+    public Shader(string vertexSource, string fragmentSource, string? geometrySource)
     {
         int vert = Compile(ShaderType.VertexShader,   vertexSource);
         int frag = Compile(ShaderType.FragmentShader, fragmentSource);
+        int geom = 0;
+        if (geometrySource is not null)
+            geom = Compile(ShaderType.GeometryShader, geometrySource);
 
         _handle = GL.CreateProgram();
         GL.AttachShader(_handle, vert);
         GL.AttachShader(_handle, frag);
+        if (geom != 0)
+            GL.AttachShader(_handle, geom);
         GL.LinkProgram(_handle);
 
         GL.GetProgram(_handle, GetProgramParameterName.LinkStatus, out int linkStatus);
@@ -41,6 +54,11 @@ public sealed class Shader : IDisposable
         GL.DetachShader(_handle, frag);
         GL.DeleteShader(vert);
         GL.DeleteShader(frag);
+        if (geom != 0)
+        {
+            GL.DetachShader(_handle, geom);
+            GL.DeleteShader(geom);
+        }
     }
 
     /// <summary>Activates this shader program for subsequent draw calls.</summary>

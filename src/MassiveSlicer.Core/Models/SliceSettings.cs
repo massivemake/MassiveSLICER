@@ -41,6 +41,12 @@ public sealed class SliceSettings
     /// </summary>
     public float WipeRampMm { get; init; } = 5f;
 
+    /// <summary>
+    /// When true, skip wipe insertion before travels shorter than
+    /// <c>2 ×</c> the layer height (short gaps do not get a wipe).
+    /// </summary>
+    public bool WipeSkipShortTravels { get; init; }
+
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
 
@@ -81,12 +87,18 @@ public sealed class SliceSettings
     public IReadOnlyList<System.Numerics.Vector3> EffectorPoints { get; set; } = [];
     /// <summary>Effector influence radius (mm).</summary>
     public float EffectorRadiusMm { get; set; } = 400f;
-    /// <summary>Amplitude boost at an effector's centre (mm).</summary>
+    /// <summary>Amplitude boost at an effector's centre (mm). Amplify mode only.</summary>
     public float EffectorStrengthMm { get; set; } = 30f;
+    /// <summary>What the effector does inside its influence bell.</summary>
+    public EffectorMode EffectorMode { get; set; } = EffectorMode.Amplify;
 
     // ── Pattern & texture (MassiveCODE effector port) ─────────────────────
     /// <summary>Decorative wall pattern applied to the toolpath after slicing.</summary>
     public Slicing.Effects.PatternType PatternType { get; init; } = Slicing.Effects.PatternType.Smooth;
+
+    /// <summary>How the pattern wraps the part: evenly by path distance, or by polar angle.</summary>
+    public MassiveSlicer.Core.Slicing.Effects.PatternMappingMode PatternMapping { get; init; }
+        = MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.ArcLength;
     /// <summary>Pattern relief depth in mm (0 disables).</summary>
     public float PatternAmplitude { get; init; } = 0f;
     /// <summary>Pattern repetitions around the part.</summary>
@@ -144,6 +156,63 @@ public sealed class SliceSettings
     /// <summary>Minimum layer height used by adaptive slicing (mm). Must be ≤ LayerHeight.</summary>
     public float MinLayerHeight      { get; init; } = 1.0f;
 
+    // -- X-Bracing wall (structural notches) ------------------------------------
+
+    /// <summary>
+    /// When true, cut dual-wall X-bracing notches into the perimeter (Formbound-style
+    /// slits) for back-support on thin walls. Independent of infill pattern.
+    /// </summary>
+    public bool XBracingEnabled { get; init; }
+
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    public float XBracingDepthMm { get; init; } = 50f;
+
+    /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
+    public float XBracingSpanMm { get; init; } = 120f;
+
+    /// <summary>
+    /// Brace angle from vertical (deg). Smaller = more printable (shallower overhang
+    /// when built bottom-up). Typical 25–40°.
+    /// </summary>
+    public float XBracingAngleDeg { get; init; } = 30f;
+
+    /// <summary>
+    /// When true, place partial X cells at the left/right ends of the wall so braces
+    /// reach the vertical edges. Top and bottom of the part are never extended.
+    /// </summary>
+    public bool XBracingExtendEdges { get; init; } = true;
+
+    /// <summary>
+    /// Brace-direction plane tilt about Y (deg). Same convention as angled slice:
+    /// normal = (sin Y, −sin X · cos Y, cos X · cos Y). Hairpins grow along the
+    /// XY projection of this normal (perpendicular to the plane).
+    /// </summary>
+    public float XBracingPlaneTiltY { get; init; }
+
+    /// <summary>Brace-direction plane tilt about X (deg). See <see cref="XBracingPlaneTiltY"/>.</summary>
+    public float XBracingPlaneTiltX { get; init; }
+
+    /// <summary>
+    /// How brace direction is projected onto the surface:
+    /// <c>Planar</c> (default) or <c>Cylinder</c> (radial from a vertical cylinder).
+    /// </summary>
+    public string XBracingProjectionType { get; init; } = "Planar";
+
+    /// <summary>Cylinder projection diameter (mm). Height is taken from the part AABB.</summary>
+    public float XBracingCylinderDiameterMm { get; init; } = 200f;
+
+    /// <summary>Cylinder axis X on the bed (mm, world).</summary>
+    public float XBracingCylinderX { get; init; }
+
+    /// <summary>Cylinder axis Y on the bed (mm, world).</summary>
+    public float XBracingCylinderY { get; init; }
+
+    /// <summary>
+    /// When false (default), cylinder braces pull toward the axis.
+    /// When true, braces radiate outward from the axis.
+    /// </summary>
+    public bool XBracingCylinderFlipDirection { get; init; }
+
     // -- Wave effect --------------------------------------------------------------
 
     /// <summary>Which wave post-processing effect to apply after slicing. None = disabled.</summary>
@@ -195,6 +264,12 @@ public sealed class SliceSettings
     /// </summary>
     public bool ZigZagSeam { get; init; } = false;
 
+    /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
+    public bool Spiralize { get; init; }
+
+    /// <summary>Cycle size in mm for <see cref="MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Wavelength"/> mapping.</summary>
+    public float PatternWavelengthMm { get; init; } = 60f;
+
     // -- Wave gradient ------------------------------------------------------------
 
     /// <summary>When true, amplitude and wavelength are linearly interpolated per layer between
@@ -243,6 +318,88 @@ public sealed class SliceSettings
     /// subsequent layers are rotated by the pattern's step angle.
     /// </summary>
     public float InfillAngleDeg { get; init; } = 0f;
+
+    // -- Lightning Bridge infill ----------------------------------------------------
+
+    /// <summary>Max unsupported overhang angle for lightning finger growth (degrees).
+    /// Per-layer lateral step = min(layerHeight · tan(angle), 0.5 · BeadWidth).</summary>
+    public float LightningOverhangDeg { get; init; } = 30f;
+
+    /// <summary>Spacing between lightning finger roots along unsupported arcs (mm).
+    /// 0 = auto (4 × BeadWidth).</summary>
+    public float LightningBranchSpacingMm { get; init; } = 0f;
+
+    /// <summary>Radius of the support pad loop at each finger tip (mm). 0 = plain
+    /// rounded tip (one bead wide).</summary>
+    public float LightningTipLoopRadiusMm { get; init; } = 0f;
+
+    /// <summary>Allow fingers to anchor on interior boundaries (holes / inner walls —
+    /// notches stay hidden inside the part).</summary>
+    public bool LightningAnchorInterior { get; init; } = true;
+
+    /// <summary>Allow fingers to anchor on the outer perimeter (notches visible on
+    /// the outside surface).</summary>
+    public bool LightningAnchorExterior { get; init; } = true;
+
+    /// <summary>Grow sacrificial external support fins under OUTWARD overhangs
+    /// (material added outside the part — cut away after printing).</summary>
+    public bool LightningExteriorOverhangs { get; init; } = false;
+
+    /// <summary>Formbound Buttress: length of the single-bead horizontal support bar
+    /// (mm) under an overhang. The approach from the wall mouth morphs into this bar.
+    /// Default 40 mm.</summary>
+    public float LightningButtressBarMm { get; init; } = 40f;
+
+    /// <summary>Formbound Buttress: prefer mouths on interior boundaries (holes /
+    /// inner walls) before scarifying the outer face.</summary>
+    public bool LightningPreferInteriorMouths { get; init; } = true;
+
+    /// <summary>
+    /// When true, Formbound Bridge/Buttress only grows under edit-mode Support
+    /// selections (Bridge paint marks). Automatic geometric overhang detection is
+    /// skipped so support is limited to what the user selected.
+    /// </summary>
+    public bool LightningTargetSupportSelections { get; init; }
+
+    // ── Toolpath paint marks (brush tool in the preview view) ─────────────────
+
+    /// <summary>World-space brush dabs painted on the toolpath. Bridge marks inject
+    /// manual Formbound demand (fingers grow under the painted beads); Remove marks
+    /// delete the painted beads and splice the gap with a travel. Persist with the
+    /// workspace and survive re-slices.</summary>
+    public IReadOnlyList<PaintMark> PaintMarks { get; init; } = [];
+
+    // ── Multi-Planar slicing (a stack of guide planes) ───────────────────────
+
+    /// <summary>Guide planes as (height % of the part, tilt °): the slicing plane's
+    /// tilt interpolates linearly between adjacent guides as the print climbs.
+    /// Constant tilt below the first and above the last guide. Minimum two planes.</summary>
+    public IReadOnlyList<MultiPlanarPlane> MultiPlanarPlanes { get; init; } =
+        [new(0f, 0f), new(50f, 15f), new(100f, 30f)];
+
+    /// <summary>False = tilt about Y (planes lean along X, like <see cref="TiltAngle"/>);
+    /// true = tilt about X (planes lean along Y).</summary>
+    public bool MultiPlanarAxisX { get; init; } = false;
+
+    // ── Thermomechanical simulation (analytical interlayer cooling) ──────────
+
+    /// <summary>Melt temperature at deposition (°C) — hottest extruder zone.</summary>
+    public float ThermalDepositTempC { get; init; } = 230f;
+
+    /// <summary>Glass-transition (bonding-relevant) temperature of the material (°C).</summary>
+    public float ThermalGlassTransitionC { get; init; } = 105f;
+
+    /// <summary>Ambient / build-environment temperature (°C).</summary>
+    public float ThermalAmbientTempC { get; init; } = 30f;
+
+    /// <summary>Material density (g/cm³) for the thermal mass.</summary>
+    public float ThermalDensityGmCc { get; init; } = 1.05f;
+
+    /// <summary>Bonding limit = Tg + this margin (°C). Default 10.</summary>
+    public float ThermalBondMarginC { get; init; } = 10f;
+
+    /// <summary>Sag limit = Tg + this margin (°C). Default 45.</summary>
+    public float ThermalSagMarginC { get; init; } = 45f;
 
     // -- Overhang orientation -----------------------------------------------------
 
@@ -309,4 +466,14 @@ public sealed class SliceSettings
     /// Lower values keep the toolhead more vertical for body clearance on curved paths.
     /// </summary>
     public float OrientationFollowStrength { get; init; } = 1f;
+}
+
+/// <summary>Live effector behaviour inside the influence radius.</summary>
+public enum EffectorMode
+{
+    /// <summary>Boost the local pattern amplitude (smoothstep bell × strength).</summary>
+    Amplify,
+    /// <summary>Suppress the pattern toward zero — smooths the lines back to the
+    /// plain wall inside the influence area (full erase at the centre).</summary>
+    Erase,
 }

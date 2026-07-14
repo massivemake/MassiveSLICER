@@ -4,6 +4,7 @@
              xmlns:ctrl="clr-namespace:MassiveSlicer.Controls"
              xmlns:local="clr-namespace:MassiveSlicer.App.Views"
              xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+             xmlns:ctl="using:MassiveSlicer.Controls"
              xmlns:conv="clr-namespace:MassiveSlicer.Converters;assembly=MassiveSlicer.App"
              x:Class="MassiveSlicer.App.Views.ViewportOverlayView"
              x:DataType="vm:ViewportViewModel"
@@ -17,7 +18,7 @@
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
     <Grid Background="Transparent" Margin="320,52,320,0">
 
-        <!-- View-mode pills (effector style) — top right -->
+        <!-- View-mode pills — top right -->
         <Border HorizontalAlignment="Right" VerticalAlignment="Top"
                 Margin="0,8,0,0" ZIndex="15"
                 Background="#B3222222" CornerRadius="6"
@@ -37,9 +38,192 @@
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=RPM}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="RPM"
                         ToolTip.Tip="Extrusion rate / flowrate demand"/>
+                <Button Classes="ViewPill" Content="Thermal"
+                        Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Thermal}"
+                        Command="{Binding SetViewModeCommand}" CommandParameter="Thermal"
+                        ToolTip.Tip="Thermomechanical simulation — predicted interlayer temperature per layer"/>
                 <Button Classes="ViewPill" Content="Preview"
                         Classes.active="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}"
                         Command="{Binding SetViewModeCommand}" CommandParameter="Preview"/>
+            </StackPanel>
+        </Border>
+
+        <!-- 2D Slice Plane Viewer — per-layer statistics (left side of viewport) -->
+        <Border IsVisible="{Binding ShowSlicePlaneStatsOverlay}"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Margin="56,8,0,0" ZIndex="16"
+                Background="#CC1A1A1A" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="10,8" MinWidth="228" MaxWidth="290"
+                IsHitTestVisible="False">
+            <StackPanel Spacing="5">
+                <TextBlock Text="{Binding SlicePlaneStatsHeader}"
+                           FontSize="11" FontWeight="SemiBold"
+                           Foreground="{DynamicResource Accent}"
+                           FontFamily="Consolas,Courier New,monospace"/>
+                <Border Height="1" Background="{DynamicResource Border1}" Opacity="0.55"/>
+                <TextBlock Text="{Binding SlicePlaneStatsBody}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextPrimary}"
+                           FontFamily="Consolas,Courier New,monospace"
+                           LineHeight="16"
+                           Opacity="0.92"/>
+                <StackPanel IsVisible="{Binding HasSlicePlaneStatsBelow}">
+                    <Border Height="1" Background="{DynamicResource Border1}" Opacity="0.4" Margin="0,2,0,3"/>
+                    <TextBlock Text="{Binding SlicePlaneStatsBelow}"
+                               FontSize="10"
+                               Foreground="{DynamicResource TextSecondary}"
+                               FontFamily="Consolas,Courier New,monospace"
+                               LineHeight="14"
+                               Opacity="0.88"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- Cut Tool — interactive floating panel (ghost plane + RGB gizmo in viewport) -->
+        <Border IsVisible="{Binding ShowCutToolPanel}"
+                HorizontalAlignment="Right" VerticalAlignment="Top"
+                Margin="0,52,0,0" ZIndex="20"
+                Background="{DynamicResource Bg2}"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                CornerRadius="8" Padding="12,10"
+                Width="280" MaxHeight="520"
+                Opacity="0.96">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="500">
+                <StackPanel Spacing="6">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <ia:Icon Value="mdi-content-cut" FontSize="15" Foreground="{DynamicResource Accent}"/>
+                            <TextBlock Text="Cut Tool" FontWeight="SemiBold" FontSize="13"
+                                       Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <Button HorizontalAlignment="Right" Classes="ToolbarButton" Padding="4,2"
+                                Command="{Binding CancelCutToolCommand}"
+                                ToolTip.Tip="Cancel cut tool">
+                            <ia:Icon Value="mdi-close" FontSize="13"/>
+                        </Button>
+                    </Grid>
+
+                    <TextBlock Text="{Binding CutToolSession.ModelName}" FontSize="11" FontWeight="SemiBold"
+                               TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Classes="LabelMuted" FontSize="10" TextWrapping="Wrap"
+                               Text="Drag the gizmo to move / rotate the cut plane. Use Move (G) or Rotate (R) tools."/>
+
+                    <TextBlock Text="CUT PLANE" Classes="SectionHeader" Margin="0,4,0,0"/>
+
+                    <Grid ColumnDefinitions="*,90">
+                        <TextBlock Text="Height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"
+                                   ToolTip.Tip="Offset along the plane normal from world origin"/>
+                        <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                 Text="{Binding CutToolSession.Height, Mode=TwoWay}"/>
+                    </Grid>
+
+                    <TextBlock Text="Normal" Classes="LabelMuted" FontSize="10" Margin="0,2,0,0"/>
+                    <Grid ColumnDefinitions="*,*,*">
+                        <StackPanel Grid.Column="0" Margin="0,0,3,0">
+                            <TextBlock Text="X" FontSize="9" Classes="LabelMuted" Foreground="#E05555"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalX, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" Margin="1.5,0">
+                            <TextBlock Text="Y" FontSize="9" Classes="LabelMuted" Foreground="#55C055"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalY, Mode=TwoWay}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2" Margin="3,0,0,0">
+                            <TextBlock Text="Z" FontSize="9" Classes="LabelMuted" Foreground="#5580E0"/>
+                            <TextBox Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.NormalZ, Mode=TwoWay}"/>
+                        </StackPanel>
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="4">
+                        <Button Content="XY (Z↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalZCommand}"/>
+                        <Button Content="XZ (Y↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalYCommand}"/>
+                        <Button Content="YZ (X↑)" Classes="ToolbarButton" Padding="6,3" FontSize="10"
+                                Command="{Binding CutToolNormalXCommand}"/>
+                    </StackPanel>
+
+                    <CheckBox Content="Place both halves on the cut"
+                              IsChecked="{Binding CutToolSession.PlaceOnCut, Mode=TwoWay}"
+                              FontSize="11" Margin="0,4,0,0"/>
+
+                    <TextBlock Text="CONNECTORS" Classes="SectionHeader" Margin="0,6,0,0"/>
+                    <CheckBox Content="Formbound tabs + bolt lugs"
+                              IsChecked="{Binding CutToolSession.AddConnectors, Mode=TwoWay}" FontSize="11"/>
+
+                    <StackPanel IsVisible="{Binding CutToolSession.AddConnectors}" Spacing="4" Margin="0,2,0,0">
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Spacing" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.ConnectorSpacing, Mode=TwoWay}"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Tab W / D / H" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabWidth, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabDepth, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="24"
+                                         Text="{Binding CutToolSession.TabHeight, Mode=TwoWay}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Bolt / Lug Ø" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                         Text="{Binding CutToolSession.BoltDiameter, Mode=TwoWay}"/>
+                                <TextBox Classes="PanelTextBox" FontSize="10" Width="36"
+                                         Text="{Binding CutToolSession.BoltLugDiameter, Mode=TwoWay}"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,80">
+                            <TextBlock Text="Min corner R" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" FontSize="11"
+                                     Text="{Binding CutToolSession.MinCornerRadius, Mode=TwoWay}"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6" Margin="0,10,0,0">
+                        <Button Content="Cancel" Classes="ToolbarButton" Padding="12,5" FontSize="11"
+                                Command="{Binding CancelCutToolCommand}"/>
+                        <Button Content="Perform cut" Classes="AccentButton" Padding="12,5" FontSize="11"
+                                Command="{Binding PerformCutToolCommand}"/>
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- Toolpath EDIT menu — left edge of the viewport (inside the panel-clearance
+             margin), Preview view only. The pencil expands the tool stack; realtime
+             slicing PAUSES while the menu is open (edits accumulate) and the deferred
+             re-slice fires when it collapses or when the Reslice button is pressed.
+             Brushes: left-drag paints, Alt erases, right-drag resizes. Line tools:
+             click one bead line to mark the whole contour as supported (bridge) /
+             removed; Alt-click unmarks it. -->
+        <Border HorizontalAlignment="Left" VerticalAlignment="Center"
+                Margin="8,0,0,0" ZIndex="15"
+                Background="#B3222222" CornerRadius="6"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="3"
+                IsVisible="{Binding ViewMode, Converter={StaticResource EnumMatchCvt}, ConverterParameter=Preview}">
+            <StackPanel Orientation="Vertical" Spacing="2">
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding IsPaintEditOpen, Mode=TwoWay}"
+                              Classes.active="{Binding IsPaintEditOpen}"
+                              ToolTip.Tip="Edit toolpath — slicing pauses while open; collapsing re-slices with your edits">
+                    <ia:Icon Value="mdi-pencil" FontSize="15"/>
+                </ToggleButton>
+                <!-- 2D Slice Plane Viewer — edit mode only, directly under the pencil. -->
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsVisible="{Binding IsPaintEditOpen}"
+                              IsChecked="{Binding IsSlicePlaneViewerActive, Mode=TwoWay}"
+                              Classes.active="{Binding IsSlicePlaneViewerActive}"
+                              ToolTip.Tip="2D Slice Plane Viewer — top-down orthographic; current layer (2× thick), three layers below at 60%/30%/17% opacity, dashed layer above. Only current and the three below are pickable.">
+                    <ia:Icon Value="mdi-layers-triple" FontSize="15"/>
+                </ToggleButton>
             </StackPanel>
         </Border>
 
@@ -302,6 +486,57 @@
                 </Expander>
             </Border>
 
+            <!-- MASSIVEBRAIN — MassiveSLICER-hosted sync server for Blender / Rhino addons -->
+            <Border Background="#E6303030"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="5"
+                    Padding="10,8"
+                    Width="268"
+                    Opacity="0.94">
+                <Expander Padding="0" IsExpanded="False" HorizontalAlignment="Stretch">
+                    <Expander.Header>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <ia:Icon Value="mdi-brain" FontSize="13"/>
+                            <TextBlock Text="MASSIVEBRAIN" Classes="LabelMuted" FontSize="10" LetterSpacing="1" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Expander.Header>
+                    <StackPanel Spacing="8" Margin="0,8,0,0">
+                        <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.7" MaxWidth="240"
+                                   Text="Server and bridge settings. Enable, then connect the MassiveBRAIN addon in Blender or Rhino — edits there sync into the scene live."/>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Enabled" FontSize="11" VerticalAlignment="Center"/>
+                            <ToggleSwitch Grid.Column="1" IsChecked="{Binding MassiveBrain.Enabled, Mode=TwoWay}"
+                                          OnContent="" OffContent="" MinWidth="0" Padding="0"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,6,*">
+                            <StackPanel Grid.Column="0" Spacing="2">
+                                <TextBlock Text="HOST" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                <TextBox Classes="PanelTextBox" Text="{Binding MassiveBrain.Host}"
+                                         IsEnabled="{Binding !MassiveBrain.Enabled}" Watermark="localhost"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Spacing="2">
+                                <TextBlock Text="PORT" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                <TextBox Classes="PanelTextBox" Text="{Binding MassiveBrain.Port}"
+                                         IsEnabled="{Binding !MassiveBrain.Enabled}" Watermark="4547"/>
+                            </StackPanel>
+                        </Grid>
+                        <CheckBox Content="Auto-slice after update" FontSize="11" IsChecked="{Binding MassiveBrain.AutoSlice}"/>
+                        <Grid ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="Unit scale (→ mm)" Classes="LabelMuted" FontSize="10" VerticalAlignment="Center"/>
+                            <TextBox Grid.Column="1" Classes="PanelTextBox" Width="70" Text="{Binding MassiveBrain.UnitScaleMm}"
+                                     ToolTip.Tip="Addons send metres on the wire; the slicer works in millimetres (default 1000)."/>
+                        </Grid>
+                        <TextBlock Text="{Binding MassiveBrain.Status}" TextWrapping="Wrap" FontSize="10" Opacity="0.75" MaxWidth="240"/>
+                        <TextBlock FontSize="10" Opacity="0.55">
+                            <Run Text="{Binding MassiveBrain.ClientCount, StringFormat=Clients: {0}}"/>
+                            <Run Text="   "/>
+                            <Run Text="{Binding MassiveBrain.ObjectCount, StringFormat=Synced objects: {0}}"/>
+                        </TextBlock>
+                    </StackPanel>
+                </Expander>
+            </Border>
+
             <Border Background="#E6303030"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="1"
@@ -349,40 +584,89 @@
             </Border>
         </StackPanel>
 
+        <!-- ERP project attachment — bottom-left dock (mirror of the Live I/O dock) -->
+        <Border HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="{Binding BottomDockMargin}"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="480"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding Erp.IsExpanded}">
+                    <local:ErpDockPanelView DataContext="{Binding Erp}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding Erp.IsExpanded}"
+                        Command="{Binding Erp.ToggleExpandedCommand}"
+                        HorizontalAlignment="Left"
+                        ToolTip.Tip="ERP project attachment — link this workspace to a Project/Lead">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding Erp.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding Erp.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
         <!-- LFAM 3 workflow timeline — always visible on LFAM 3; minimize via left chevron in bar -->
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>
 
-        <local:Lfam3WorkflowTimelineView IsVisible="{Binding ShowLfam3ToolPicker}"
+        <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
+             Same LiveIo view model — the extruder/milling bridge config is set on
+             every cell swap, so the monitor works on any cell. -->
+        <Border x:Name="LiveIoDock"
+                IsVisible="{Binding ShowStandaloneLiveIo}"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Bottom"
+                Margin="{Binding BottomDockMargin}"
+                Background="#E6303030"
+                BorderBrush="{DynamicResource Border1}"
+                BorderThickness="1"
+                CornerRadius="6"
+                Padding="8,6"
+                ZIndex="27"
+                ClipToBounds="False">
+            <StackPanel Spacing="6">
+                <ScrollViewer MaxHeight="620"
+                              VerticalScrollBarVisibility="Auto"
+                              IsVisible="{Binding LiveIo.IsExpanded}">
+                    <local:Lfam3LiveIoPanelView DataContext="{Binding LiveIo}"/>
+                </ScrollViewer>
+                <Button Classes="Lfam3LiveIoToggleBar"
+                        Classes.expanded="{Binding LiveIo.IsExpanded}"
+                        Command="{Binding LiveIo.ToggleExpandedCommand}"
+                        HorizontalAlignment="Right"
+                        ToolTip.Tip="Live I/O monitor — extruder zones, KUKA I/O, bridge state">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <ia:Icon Value="{Binding LiveIo.ToggleIcon}" FontSize="14" Foreground="#40b840"/>
+                        <TextBlock Text="{Binding LiveIo.ToggleLabel}"
+                                   FontSize="10"
+                                   FontWeight="SemiBold"
+                                   Foreground="#40b840"
+                                   LetterSpacing="0.6"/>
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <local:Lfam3WorkflowTimelineView x:Name="Lfam3WorkflowBar"
+                                         IsVisible="{Binding ShowLfam3ToolPicker}"
                                          HorizontalAlignment="Stretch"
                                          VerticalAlignment="Bottom"
                                          Margin="{Binding Lfam3WorkflowMargin}"
                                          ClipToBounds="False"
                                          ZIndex="26"/>
-
-        <!-- Data Visualization panel — bottom-left, above timeline -->
-        <Border IsVisible="{Binding IsToolpathSelected}"
-                HorizontalAlignment="Left"
-                VerticalAlignment="Bottom"
-                Margin="8,8,8,78"
-                Background="{DynamicResource Bg2}"
-                BorderBrush="{DynamicResource Border1}"
-                BorderThickness="1"
-                CornerRadius="5">
-            <Expander Classes="SectionExpander"
-                      Header="DATA VISUALIZATION"
-                      IsExpanded="False">
-                <StackPanel Margin="8,6,8,8" Spacing="6">
-                    <CheckBox Content="Bead Overhang"
-                              IsChecked="{Binding ShowBeadOverhang}"
-                              FontSize="11"/>
-                    <CheckBox Content="Orientation Rate"
-                              IsChecked="{Binding ShowOrientationPreview}"
-                              FontSize="11"
-                              ToolTip.Tip="Colour by orientation change rate. Dark blue = 0°/mm (smooth) → cyan → green → yellow → orange → red → magenta → purple = 3°/mm+ (extreme slowdown)."/>
-                </StackPanel>
-            </Expander>
-        </Border>
 
         <!-- Transform toolbar — top-center: icon tab above the axis-value row -->
         <StackPanel HorizontalAlignment="Center"
@@ -544,9 +828,60 @@
                         ToolTip.Tip="Mesh Cleanup — repair common mesh problems (duplicate faces, welded vertices, degenerate polygons) before slicing">
                     <ia:Icon Value="mdi-broom" FontSize="14"/>
                 </Button>
+                <Button Classes="ToolbarButton"
+                        Padding="6,4"
+                        Margin="2,0,0,0"
+                        Command="{Binding CutToolCommand}"
+                        IsVisible="{Binding !IsToolpathSelected}"
+                        IsEnabled="{Binding CanCutTool}"
+                        ToolTip.Tip="Cut Tool — split model into two halves with Formbound alignment tabs and bolt lugs along the cut perimeter">
+                    <ia:Icon Value="mdi-content-cut" FontSize="14"/>
+                </Button>
 
                 <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
                         IsVisible="{Binding !IsToolpathSelected}"/>
+
+                <!-- Data visualizer: toolpath display layers (visible for toolpaths) -->
+                <Button Classes="ToolbarButton"
+                        Padding="6,4"
+                        IsVisible="{Binding IsToolpathSelected}"
+                        ToolTip.Tip="Data visualizer — toggle toolpath display layers">
+                    <StackPanel Orientation="Horizontal" Spacing="3">
+                        <ia:Icon Value="mdi-chart-scatter-plot" FontSize="14" VerticalAlignment="Center"/>
+                        <ia:Icon Value="mdi-chevron-down" FontSize="13" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <Button.Flyout>
+                        <Flyout Placement="Bottom">
+                            <StackPanel Width="200" Spacing="6">
+                                <TextBlock Text="DATA VISUALIZER" Classes="LabelMuted" FontSize="10" LetterSpacing="1" Margin="2,0,0,2"/>
+                                <CheckBox Content="Extrusion lines" FontSize="11"
+                                          IsChecked="{Binding ShowExtrusionMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Print moves as coloured lines (Speed/RPM views recolour them)"/>
+                                <CheckBox Content="Travel moves" FontSize="11"
+                                          IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Rapid repositioning moves"/>
+                                <CheckBox Content="Wipe moves" FontSize="11"
+                                          IsChecked="{Binding ShowWipeMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Pre-travel filament wipe extrusions — separate from the main toolpath lines"/>
+                                <CheckBox Content="Formbound bridges" FontSize="11"
+                                          IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
+                                          ToolTip.Tip="Formbound Bridge / Buttress support (orange) — uncheck Extrusion lines to isolate them"/>
+                                <CheckBox Content="Seam points" FontSize="11"
+                                          IsChecked="{Binding ShowSeam, Mode=TwoWay}"
+                                          ToolTip.Tip="Layer seam locations"/>
+                                <CheckBox Content="Bead surface" FontSize="11"
+                                          IsChecked="{Binding ShowBead, Mode=TwoWay}"
+                                          ToolTip.Tip="Solid extruded-bead preview (printed-part look)"/>
+                                <CheckBox Content="Bead overhang heatmap" FontSize="11"
+                                          IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
+                                          ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>
+                                <CheckBox Content="Orientation preview" FontSize="11"
+                                          IsChecked="{Binding ShowOrientationPreview, Mode=TwoWay}"
+                                          ToolTip.Tip="Bead colored by tool orientation change rate"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
 
                 <!-- Material options: view channels + exposure/reflection adjust -->
                 <Button Classes="ToolbarButton"
@@ -612,7 +947,7 @@
                     Spacing="6"
                     ZIndex="32">
             <!-- Toolpath stats -->
-            <Border IsVisible="{Binding HasToolpathStats}"
+            <Border IsVisible="{Binding ShowToolpathStatsOverlay}"
                     Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"
@@ -628,15 +963,60 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
                 <TextBlock Grid.Row="0" Grid.Column="0" Text="Time"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center"/>
                 <TextBlock Grid.Row="0" Grid.Column="2" Text="{Binding StatsTime}"   Classes="Readout" FontSize="11"/>
                 <TextBlock Grid.Row="1" Grid.Column="0" Text="Material" Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
                 <TextBlock Grid.Row="1" Grid.Column="2" Text="{Binding StatsWeight}" Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="2" Grid.Column="0" Text="Cost"     Classes="LabelMuted" FontSize="11" VerticalAlignment="Center" Margin="0,4,0,0"/>
-                <TextBlock Grid.Row="2" Grid.Column="2" Text="{Binding StatsCost}"   Classes="Readout" FontSize="11" Margin="0,4,0,0"/>
             </Grid>
+            </Border>
+
+            <!-- Cost — collapsed by default so it never shows on screen shares / client demos -->
+            <Border IsVisible="{Binding ShowToolpathStatsOverlay}"
+                    Background="{DynamicResource Bg2}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="1"
+                    CornerRadius="5"
+                    Opacity="0.88"
+                    Padding="6,4"
+                    HorizontalAlignment="Right">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <ToggleButton x:Name="CostReveal"
+                                  Padding="6,2"
+                                  Classes="ToolbarButton"
+                                  Background="Transparent"
+                                  BorderThickness="0"
+                                  ToolTip.Tip="Show/hide the estimated cost. Kept collapsed so pricing never appears on the viewport by default.">
+                        <StackPanel Orientation="Horizontal" Spacing="5">
+                            <ia:Icon Value="mdi-currency-usd" FontSize="12"/>
+                            <TextBlock Text="Cost" FontSize="11" VerticalAlignment="Center" Classes="LabelMuted"/>
+                            <ia:Icon Value="mdi-chevron-right" FontSize="12"
+                                     IsVisible="{Binding !#CostReveal.IsChecked}"/>
+                            <ia:Icon Value="mdi-chevron-down" FontSize="12"
+                                     IsVisible="{Binding #CostReveal.IsChecked}"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <TextBlock Text="{Binding StatsCost}" Classes="Readout" FontSize="11"
+                               VerticalAlignment="Center" Margin="0,0,4,0"
+                               IsVisible="{Binding #CostReveal.IsChecked}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Multi-Planar: show/hide the guide plane quads. Hidden in edit mode —
+                 the bottom toolbar already has the same Planes control. -->
+            <Border IsVisible="{Binding ShowMultiPlanarPlanesButton, FallbackValue=False}"
+                    Background="#B3222222" CornerRadius="6"
+                    BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                    Padding="3" HorizontalAlignment="Right">
+                <ToggleButton Classes="ToolbarButton" Padding="8,4" FontSize="11"
+                              IsChecked="{Binding ShowMultiPlanarPlanes, Mode=TwoWay}"
+                              Classes.active="{Binding ShowMultiPlanarPlanes}"
+                              ToolTip.Tip="Show/hide the Multi-Planar guide planes (the distortion spine stays visible)">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <ia:Icon Value="mdi-layers-outline" FontSize="13"/>
+                        <TextBlock Text="Planes" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </ToggleButton>
             </Border>
         </StackPanel>
 
@@ -664,8 +1044,12 @@
                          ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <TextBlock FontSize="11"
-                                       Text="{Binding StringFormat='Point {0:F0}, {1:F0}, {2:F0}'}"/>
+                            <TextBlock FontSize="11">
+                                <Run Text="Point"/>
+                                <Run Text="{Binding X, StringFormat={}{0:F0}}"/><Run Text=","/>
+                                <Run Text="{Binding Y, StringFormat={}{0:F0}}"/><Run Text=","/>
+                                <Run Text="{Binding Z, StringFormat={}{0:F0}}"/>
+                            </TextBlock>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
@@ -773,16 +1157,47 @@
                 Classes="PrimaryButton"
                 ZIndex="25"
                 Command="{Binding MergeToolpathsCommand}"
-                ToolTip.Tip="Combine the selected toolpaths into one continuous path with retraction and travel between each segment">
+                ToolTip.Tip="Print the selected objects one after another: each toolpath completes, retracts, and travels to the next (selection order = print order)">
             <StackPanel Orientation="Horizontal" Spacing="6">
                 <ia:Icon Value="mdi-vector-combine" FontSize="14"/>
-                <TextBlock Text="Merge Toolpaths" FontSize="11" VerticalAlignment="Center"/>
+                <TextBlock Text="Create Toolpath Sequence" FontSize="11" VerticalAlignment="Center"/>
             </StackPanel>
         </Button>
 
+        <!-- Speed/RPM value tags — projected beside the toolpath every 6 inches of height -->
+        <ItemsControl IsVisible="{Binding ShowViewTags}"
+                      ItemsSource="{Binding ViewTags}"
+                      IsHitTestVisible="False"
+                      ZIndex="18">
+            <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <Canvas/>
+                </ItemsPanelTemplate>
+            </ItemsControl.ItemsPanel>
+            <ItemsControl.Styles>
+                <Style Selector="ContentPresenter" x:DataType="vm:ViewportViewModel+ViewTag">
+                    <Setter Property="Canvas.Left" Value="{Binding X}"/>
+                    <Setter Property="Canvas.Top"  Value="{Binding Y}"/>
+                </Style>
+            </ItemsControl.Styles>
+            <ItemsControl.ItemTemplate>
+                <DataTemplate x:DataType="vm:ViewportViewModel+ViewTag">
+                    <Border Background="#D0262626"
+                            BorderBrush="{DynamicResource Border1}"
+                            BorderThickness="1"
+                            CornerRadius="5"
+                            Padding="6,2">
+                        <TextBlock Text="{Binding Text}" FontSize="10"
+                                   Foreground="{DynamicResource TextPrimary}"/>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
         <!-- Simulate timeline — bottom-center, Toolpath view (hidden when the
              full playback card for a selected toolpath is showing) -->
-        <Border IsVisible="{Binding ShowSimTimeline}"
+        <Border x:Name="SimTimelineBar"
+                IsVisible="{Binding ShowSimTimeline}"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Bottom"
                 Margin="0,0,0,16"
@@ -793,7 +1208,7 @@
                 CornerRadius="6"
                 Padding="10,5"
                 ZIndex="24">
-            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto,Auto,Auto,Auto">
                 <Button Grid.Column="0" Classes="ToolbarButton" Padding="6,4" Margin="0,0,2,0"
                         Command="{Binding SimResetCommand}"
                         ToolTip.Tip="Reset simulation to 0%">
@@ -807,25 +1222,294 @@
                         <ia:Icon Value="mdi-pause" FontSize="15" IsVisible="{Binding SimPlaying}"/>
                     </Panel>
                 </Button>
-                <Slider Grid.Column="2" Classes="ScrubSlider"
-                        Minimum="0" Maximum="100"
-                        VerticalAlignment="Center"
-                        Value="{Binding SimTimelinePercent, Mode=TwoWay}"/>
+                <Grid Grid.Column="2" VerticalAlignment="Center">
+                    <Slider x:Name="SimTimelineSlider" Classes="ScrubSlider"
+                            Minimum="0" Maximum="100"
+                            VerticalAlignment="Center"
+                            DoubleTapped="OnSimTimelineSliderDoubleTapped"
+                            Value="{Binding SimTimelinePercent, Mode=TwoWay}"/>
+                    <!-- Camera keyframe markers — cyan ticks -->
+                    <ctrl:ScrubMarkerBar Markers="{Binding SimCameraKeyframeMarkers}"
+                                         MarkerBrush="#55C8E8"
+                                         Height="10" VerticalAlignment="Center"
+                                         IsHitTestVisible="False"/>
+                </Grid>
                 <TextBlock Grid.Column="3" Text="{Binding SimTimelineLabel}"
                            Classes="Readout" FontSize="11" Width="38"
                            TextAlignment="Right" VerticalAlignment="Center" Margin="8,0,0,0"/>
                 <Button Grid.Column="4" Classes="ToolbarButton" Padding="6,4" Margin="6,0,0,0"
+                        Command="{Binding AddSimCameraKeyframeCommand}"
+                        ToolTip.Tip="Keyframe the current camera at this timeline position (double-clicking the slider does the same). Play or export flies the view between keyframes.">
+                    <ia:Icon Value="mdi-plus" FontSize="15"/>
+                </Button>
+                <Button Grid.Column="5" Classes="ToolbarButton" Padding="6,4" Margin="2,0,0,0"
+                        IsVisible="{Binding HasSimCameraKeyframes}"
+                        Command="{Binding ClearSimCameraKeyframesCommand}"
+                        ToolTip.Tip="Clear all camera keyframes">
+                    <ia:Icon Value="mdi-camera-off-outline" FontSize="15"/>
+                </Button>
+                <Button Grid.Column="6" Classes="ToolbarButton" Padding="6,4" Margin="6,0,0,0"
                         Command="{Binding SimExportVideoCommand}"
                         IsEnabled="{Binding !SimRecording}"
-                        ToolTip.Tip="Download the 6-second simulation as an MP4 video">
+                        ToolTip.Tip="Download the 6-second simulation as an MP4 video (camera keyframes animate the view)">
                     <ia:Icon Value="mdi-download" FontSize="15"/>
                 </Button>
             </Grid>
         </Border>
 
+        <!-- Edit-mode selection toolbar — sits above the timeline. Hand = navigate,
+             pointer = click-a-path select (shift accumulates), box = marquee select.
+             Filter narrows what is pickable; Support / Remove apply marks to every
+             selected path (slicing stays paused until Reslice / collapse). -->
+        <Border IsVisible="{Binding IsPaintEditOpen}"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,86" ZIndex="16"
+                Background="#D9191919" CornerRadius="8"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="8,5">
+            <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                <ToggleButton Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding PaintHandActive, Mode=TwoWay}"
+                              Classes.active="{Binding PaintHandActive}"
+                              ToolTip.Tip="Navigate — clicks do nothing, camera as normal">
+                    <ia:Icon Value="mdi-hand-back-right-outline" FontSize="15"/>
+                </ToggleButton>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SelectPathToolCommand}"
+                        Classes.active="{Binding PaintPathSelectActive}"
+                        ToolTip.Tip="Select — click to select; Shift adds more">
+                    <ia:Icon Value="mdi-cursor-default-outline" FontSize="15"/>
+                </Button>
+                <!-- Region select: click arms tool; long-press toggles Square ↔ Lasso -->
+                <ToggleButton x:Name="RegionSelectButton" Classes="ToolbarButton" Padding="7"
+                              IsChecked="{Binding PaintBoxSelectActive, Mode=TwoWay}"
+                              Classes.active="{Binding PaintBoxSelectActive}"
+                              ToolTip.Tip="{Binding PaintRegionSelectToolTip}">
+                    <ia:Icon Value="{Binding PaintRegionSelectIcon}" FontSize="15"/>
+                </ToggleButton>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SetPathGranularityCommand}"
+                        Classes.active="{Binding PaintPathGranularityActive}"
+                        ToolTip.Tip="Lines — select path sections; viewport switches to centre-line only (no beads)">
+                    <ia:Icon Value="mdi-chart-timeline-variant" FontSize="15"/>
+                </Button>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding SetPointGranularityCommand}"
+                        Classes.active="{Binding PaintPointGranularityActive}"
+                        ToolTip.Tip="Points — select a single bead; lines gray out and seam points stand out">
+                    <ia:Icon Value="mdi-dots-hexagon" FontSize="15"/>
+                </Button>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <ia:Icon Value="mdi-filter-variant" FontSize="15" Foreground="White"
+                         VerticalAlignment="Center"
+                         ToolTip.Tip="Filter selection — what hover / click / box may pick"/>
+                <ComboBox ItemsSource="{Binding PaintPickFilterOptions}"
+                          SelectedItem="{Binding PaintPickFilter, Mode=TwoWay}"
+                          MinWidth="104" FontSize="11" VerticalAlignment="Center"
+                          ToolTip.Tip="Filter selection — what hover / click / box may pick"/>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <!-- Selection count → popup list of layers/paths with per-item deselect -->
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11"
+                        Content="{Binding PaintSelectionLabel}"
+                        MinWidth="108"
+                        IsEnabled="{Binding HasPaintSelection}"
+                        ToolTip.Tip="Show selected paths / points — remove one from the list">
+                    <Button.Flyout>
+                        <Flyout Placement="Top" ShowMode="Standard">
+                            <Border Background="{DynamicResource Bg2}"
+                                    BorderBrush="{DynamicResource Border1}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="8,8,8,6"
+                                    MinWidth="280" MaxWidth="360"
+                                    MaxHeight="300">
+                                <DockPanel>
+                                    <Grid DockPanel.Dock="Top" Margin="2,0,2,8"
+                                          ColumnDefinitions="*,Auto">
+                                        <TextBlock Grid.Column="0"
+                                                   Text="Selection"
+                                                   FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimary}"
+                                                   VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1"
+                                                Classes="ToolbarButton"
+                                                Padding="8,3" FontSize="10"
+                                                Content="Clear all"
+                                                Command="{Binding DeselectPaintCommand}"
+                                                ToolTip.Tip="Deselect everything"/>
+                                    </Grid>
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                                  MaxHeight="240">
+                                        <ItemsControl ItemsSource="{Binding PaintSelectionItems}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate x:DataType="vm:PaintSelectionListItem">
+                                                    <Border Background="{DynamicResource Bg3}"
+                                                            CornerRadius="5"
+                                                            Padding="8,5"
+                                                            Margin="0,0,0,4"
+                                                            BorderBrush="{DynamicResource Border1}"
+                                                            BorderThickness="1">
+                                                        <Grid ColumnDefinitions="*,Auto">
+                                                            <StackPanel Grid.Column="0"
+                                                                        Spacing="1"
+                                                                        VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding Title}"
+                                                                           FontSize="11"
+                                                                           FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource TextPrimary}"/>
+                                                                <TextBlock Text="{Binding Detail}"
+                                                                           FontSize="10"
+                                                                           Foreground="{DynamicResource TextSecondary}"
+                                                                           FontFamily="Consolas,Courier New,monospace"/>
+                                                            </StackPanel>
+                                                            <Button Grid.Column="1"
+                                                                    Classes="ToolbarButton"
+                                                                    Padding="6"
+                                                                    Margin="8,0,0,0"
+                                                                    VerticalAlignment="Center"
+                                                                    Command="{Binding RemoveCommand}"
+                                                                    ToolTip.Tip="Deselect this item">
+                                                                <ia:Icon Value="mdi-close" FontSize="13"
+                                                                         Foreground="#ff8a8a"/>
+                                                            </Button>
+                                                        </Grid>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </DockPanel>
+                            </Border>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Deselect"
+                        Command="{Binding DeselectPaintCommand}"
+                        ToolTip.Tip="Deselect all"/>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Support"
+                        Command="{Binding ApplySupportSelectionCommand}"
+                        ToolTip.Tip="Mark every selected path for Formbound support"/>
+                <Button Classes="ToolbarButton" Padding="10,5" FontSize="11" Content="Remove"
+                        Command="{Binding ApplyRemoveSelectionCommand}"
+                        ToolTip.Tip="Delete every selected path from the toolpath"/>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <!-- Visibility menu: seams, toolpaths, travel, paint markers, beads… -->
+                <Button Classes="ToolbarButton" Padding="7"
+                        ToolTip.Tip="Visibility — seams, toolpaths, travel moves, paint markers, bead mesh…">
+                    <ia:Icon Value="mdi-eye-outline" FontSize="15"/>
+                    <Button.Flyout>
+                        <Flyout Placement="Top" ShowMode="Standard">
+                            <Border Background="{DynamicResource Bg2}"
+                                    BorderBrush="{DynamicResource Border1}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="10,8"
+                                    MinWidth="210">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="VISIBILITY"
+                                               Classes="LabelMuted"
+                                               FontSize="10"
+                                               LetterSpacing="1"
+                                               Margin="2,0,0,2"/>
+                                    <CheckBox Content="Toolpaths"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowExtrusionMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Print / extrusion centre-lines"/>
+                                    <CheckBox Content="Travel moves"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowTravelMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Rapid repositioning moves"/>
+                                    <CheckBox Content="Wipe moves"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowWipeMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Pre-travel filament wipe extrusions — separate from the main toolpath lines"/>
+                                    <CheckBox Content="Formbound bridges"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowLightningMoves, Mode=TwoWay}"
+                                              ToolTip.Tip="Formbound Bridge / Buttress support (orange)"/>
+                                    <CheckBox Content="Seam points"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowSeam, Mode=TwoWay}"
+                                              ToolTip.Tip="Layer seam start locations"/>
+                                    <CheckBox Content="Paint markers"
+                                              FontSize="11"
+                                              IsChecked="{Binding ShowPaintMarkers, Mode=TwoWay}"
+                                              ToolTip.Tip="Support / Remove paint dabs"/>
+                                    <CheckBox Content="Bead mesh"
+                                              FontSize="11"
+                                              IsChecked="{Binding PaintShowBeads, Mode=TwoWay}"
+                                              ToolTip.Tip="Solid extruded-bead preview"/>
+                                </StackPanel>
+                            </Border>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+
+                <Border Width="1" Height="20" Background="{DynamicResource Border1}" Margin="2,0"/>
+
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding AdditiveSettings.ClearPaintMarksCommand}"
+                        ToolTip.Tip="Clear all painted marks">
+                    <ia:Icon Value="mdi-broom" FontSize="15"/>
+                </Button>
+                <Button Classes="ToolbarButton" Padding="7"
+                        Command="{Binding ReslicePaintCommand}"
+                        ToolTip.Tip="Re-slice now with the accumulated edits">
+                    <ia:Icon Value="mdi-refresh" FontSize="15"/>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- Edit-mode LAYERS window — dual handle only. Double-click a thumb to type.
+             Width is ~55% of the prior 92px panel (45% thinner). -->
+        <Border IsVisible="{Binding IsPaintEditOpen}"
+                HorizontalAlignment="Right" VerticalAlignment="Stretch"
+                Margin="0,64,6,150" ZIndex="16"
+                Background="{DynamicResource Bg2}" CornerRadius="10"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="6,8"
+                Opacity="0.96">
+            <Grid RowDefinitions="Auto,*" Width="50">
+                <TextBlock Grid.Row="0" Text="LAYERS" FontSize="9" FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextSecondary}"
+                           HorizontalAlignment="Center" LetterSpacing="0.5" Margin="0,0,0,6"
+                           ToolTip.Tip="Drag handles to isolate a layer window (full slice stays 1…N). Double-click a handle to type a layer number."/>
+                <ctl:DualRangeSlider Grid.Row="1" MinWidth="48"
+                          Minimum="1"
+                          Maximum="{Binding ToolpathScrubLayerCount}"
+                          HighValue="{Binding ToolpathScrubLayerHigh, Mode=TwoWay}"
+                          LowValue="{Binding ToolpathScrubLayerLow, Mode=TwoWay}"/>
+            </Grid>
+        </Border>
+
+        <!-- Square marquee -->
+        <Canvas IsVisible="{Binding PaintMarqueeVisible}" ZIndex="40" IsHitTestVisible="False">
+            <Border Canvas.Left="{Binding PaintMarqueeX}" Canvas.Top="{Binding PaintMarqueeY}"
+                    Width="{Binding PaintMarqueeW}" Height="{Binding PaintMarqueeH}"
+                    BorderBrush="#80B7FF" BorderThickness="1" Background="#2280B7FF"/>
+        </Canvas>
+
+        <!-- Lasso freehand path (Avalonia 12: StrokeJoin, not StrokeLineJoin) -->
+        <Canvas IsVisible="{Binding PaintLassoVisible}" ZIndex="40" IsHitTestVisible="False">
+            <Polyline Points="{Binding PaintLassoPoints}"
+                      Stroke="#80B7FF" StrokeThickness="1.5"
+                      Fill="#2280B7FF"
+                      StrokeJoin="Round" StrokeLineCap="Round"/>
+        </Canvas>
+
         <!-- Horizontal timeline — Preview view only, while a scrub session is live
              (stays up when the TCP is selected for keyframe adjustments) -->
-        <Border IsVisible="{Binding ShowPlaybackTimeline}"
+        <Border x:Name="PlaybackTimelineBar"
+                IsVisible="{Binding ShowPlaybackTimeline}"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Margin="8"
@@ -869,6 +1553,14 @@
                                 ToolTip.Tip="Clear all TCP keyframes and restore the original toolpath">
                             <ia:Icon Value="mdi-key-remove" FontSize="15"/>
                         </Button>
+                        <TextBlock Text="{Binding ToolpathScrubSpeedRpmLabel}"
+                                   Classes="Readout"
+                                   FontSize="10"
+                                   VerticalAlignment="Center"
+                                   Margin="6,0,0,0"
+                                   MinWidth="110"
+                                   IsVisible="{Binding ToolpathScrubSpeedRpmLabel, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                   ToolTip.Tip="Linear speed and extruder RPM of the current move — the same $VEL.CP and $ANOUT[4] values the KRL export writes"/>
                     </StackPanel>
 
                     <!-- Horizontal scrubber track -->
@@ -914,6 +1606,12 @@
                                        FontSize="10"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
+                        <TextBlock Text="{Binding ToolpathScrubLayerLabel}"
+                                   Classes="Readout"
+                                   FontSize="9"
+                                   HorizontalAlignment="Right"
+                                   Opacity="0.85"
+                                   ToolTip.Tip="Current layer / total layers"/>
                     </StackPanel>
                     <Button Classes="ToolbarButton" Padding="6,4" VerticalAlignment="Center"
                             Command="{Binding SimExportVideoCommand}"
@@ -956,11 +1654,12 @@
             </StackPanel>
         </Border>
 
-        <!-- Bead overhang legend — bottom-right, visible when bead overhang active -->
+        <!-- Bead overhang legend — bottom-right, floats above the Live I/O dock,
+             timelines, and anything else parked in that corner -->
         <Border IsVisible="{Binding ShowBeadOverhang}"
                 HorizontalAlignment="Right"
                 VerticalAlignment="Bottom"
-                Margin="8,8,8,78"
+                Margin="{Binding BottomRightLegendMargin}"
                 Background="{DynamicResource Bg2}"
                 BorderBrush="{DynamicResource Border1}"
                 BorderThickness="1"

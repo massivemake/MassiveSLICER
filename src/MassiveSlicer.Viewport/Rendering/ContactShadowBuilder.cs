@@ -36,11 +36,15 @@ public static class ContactShadowBuilder
             if (!SceneBounds.TryComputeSubtreeWorldAabb(child, out var cMin, out var cMax))
                 continue;
 
-            float floorTop = ContactZ(cMin, cMax, floorOffsetMm);
+            // The thin-plate rule (shadows received on the TOP surface) is for cell
+            // geometry like the print bed — a user's flat imported part must never
+            // project its own shadow onto itself.
+            bool plateEligible = !child.Selectable;
+            float floorTop = ContactZ(cMin, cMax, floorOffsetMm, plateEligible);
             AddToBucket(buckets, floorTop, cMin, cMax);
 
             // Raised plates (print bed) also cast a rim shadow on the ground below.
-            if (IsThinGroundPlate(cMin, cMax))
+            if (plateEligible && IsThinGroundPlate(cMin, cMax))
             {
                 float floorBottom = cMin.Z + floorOffsetMm;
                 if (MathF.Abs(floorBottom - floorTop) > FloorBucketMm)
@@ -99,10 +103,11 @@ public static class ContactShadowBuilder
         if (!SceneBounds.TryComputeSubtreeWorldAabb(root, out var min, out var max))
             return false;
 
-        float top    = ContactZ(min, max, floorOffsetMm);
+        bool plateEligible = !root.Selectable;
+        float top    = ContactZ(min, max, floorOffsetMm, plateEligible);
         float bottom = min.Z + floorOffsetMm;
         return MathF.Abs(top - floorZ) <= FloorBucketMm
-            || (IsThinGroundPlate(min, max) && MathF.Abs(bottom - floorZ) <= FloorBucketMm);
+            || (plateEligible && IsThinGroundPlate(min, max) && MathF.Abs(bottom - floorZ) <= FloorBucketMm);
     }
 
     private static void AddToBucket(
@@ -131,11 +136,9 @@ public static class ContactShadowBuilder
         return height < 80f && footprint > 400f;
     }
 
-    private static float ContactZ(Vector3 min, Vector3 max, float floorOffsetMm)
+    private static float ContactZ(Vector3 min, Vector3 max, float floorOffsetMm, bool plateEligible = true)
     {
-        float height    = max.Z - min.Z;
-        float footprint = MathF.Max(max.X - min.X, max.Y - min.Y);
-        bool thinGround = height < 80f && footprint > 400f;
+        bool thinGround = plateEligible && IsThinGroundPlate(min, max);
         return (thinGround ? max.Z : min.Z) + floorOffsetMm;
     }
 

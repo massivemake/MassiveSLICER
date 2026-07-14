@@ -144,7 +144,12 @@ internal static class ImportHelper
             node.SourceFilePath = Path.GetFullPath(filePath);
             return node;
         }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            // Surface the reason in the app console — a silent null reads as "nothing happened".
+            System.Console.WriteLine($"[import] {Path.GetFileName(filePath)} failed: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>

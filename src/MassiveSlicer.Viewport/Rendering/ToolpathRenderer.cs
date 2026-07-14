@@ -25,15 +25,22 @@ public enum ToolpathColorMode
     Speed,
     /// <summary>Gradient by extrusion rate / RPM demand (blue low → red high).</summary>
     Rpm,
+    /// <summary>Gradient by simulated interlayer temperature (blue cold → red hot).</summary>
+    Thermal,
 }
 
 public sealed class ToolpathRenderer : IDisposable
 {
     // Separate VAOs per category so each can be toggled independently.
     private int  _extrudeVao, _extrudeVbo, _extrudeCount;
+    private int  _wipeVao, _wipeVbo, _wipeCount;
     private int  _travelVao,  _travelVbo,  _travelCount;
+    private int  _lightningVao, _lightningVbo, _lightningCount;
     private int  _ptVao, _ptVbo;
     private int  _pointCount;
+    /// <summary>All extrude midpoints (edit Point mode) — denser than seam-only points.</summary>
+    private int  _allPtVao, _allPtVbo;
+    private int  _allPointCount;
     private int  _beadVao, _beadVbo, _beadEbo, _beadCount;   // _beadCount = index count
     private int  _beadOverhangVao, _beadOverhangVbo, _beadOverhangCount;
     private int  _orientationVao, _orientationVbo, _orientationCount;
@@ -43,6 +50,9 @@ public sealed class ToolpathRenderer : IDisposable
 
     private readonly Shader _shader;
     private readonly Shader _beadShader;
+    private readonly Shader _pointShader;
+    /// <summary>Null if geometry-shader thick lines failed to compile (fallback to GL lines).</summary>
+    private readonly Shader? _depthLineShader;
     private Vector3 _beadMaterialColor;
 
     private static readonly string VertSrc = """
@@ -57,17 +67,159 @@ public sealed class ToolpathRenderer : IDisposable
         }
         """;
 
+    // Keep GLSL pure ASCII - some drivers choke on unicode in comments (em-dash etc.).
     private static readonly string FragSrc = """
-        #version 330 core
-        in vec3 vColor;
-        uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
-        uniform vec3  uOverrideColor;
-        uniform float uOpacity;        // line transparency (1 = opaque)
-        out vec4 fragColor;
-        void main() {
-            fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
-        }
-        """;
+#version 330 core
+in vec3 vColor;
+uniform float uOverride;       // 1 = use uOverrideColor; 0 = per-vertex
+uniform vec3  uOverrideColor;
+uniform float uOpacity;        // line transparency (1 = opaque)
+uniform float uDashPeriodPx;   // 0 = solid; >0 = screen-space dash period (px)
+out vec4 fragColor;
+void main() {
+    if (uDashPeriodPx > 0.5) {
+        // Diagonal screen-space stipple - consistent dash length at any zoom.
+        float t = (gl_FragCoord.x + gl_FragCoord.y) / uDashPeriodPx;
+        if (fract(t) > 0.55) discard;
+    }
+    fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, uOpacity);
+}
+""";
+
+    /// <summary>
+    /// Edit Point mode: size + alpha from camera distance so near beads pop and
+    /// far ones shrink/fade (~20% opacity) for easier depth reading and picking.
+    /// Requires GL_PROGRAM_POINT_SIZE.
+    /// </summary>
+    // Keep GLSL pure ASCII — some drivers choke on unicode in comments.
+    private static readonly string PointVertSrc = """
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aColor;
+uniform mat4  uMVP;
+uniform vec3  uEye;
+uniform vec3  uPointColor;
+uniform float uRefDist;
+uniform float uBaseSize;
+uniform float uMinSize;
+uniform float uMaxSize;
+out vec3  vColor;
+out float vAlpha;
+void main() {
+    gl_Position = vec4(aPos, 1.0) * uMVP;
+    vColor = uPointColor;
+    float dist = max(length(aPos - uEye), 1.0);
+    float refD = max(uRefDist, 80.0);
+    gl_PointSize = clamp(uBaseSize * (refD / dist), uMinSize, uMaxSize);
+    float t = smoothstep(refD * 0.35, refD * 2.8, dist);
+    vAlpha = mix(1.0, 0.20, t);
+}
+""";
+
+    private static readonly string PointFragSrc = """
+#version 330 core
+in vec3  vColor;
+in float vAlpha;
+out vec4 fragColor;
+void main() {
+    vec2 c = gl_PointCoord * 2.0 - 1.0;
+    float r2 = dot(c, c);
+    if (r2 > 1.0) discard;
+    float edge = smoothstep(1.0, 0.55, r2);
+    fragColor = vec4(vColor, vAlpha * edge);
+}
+""";
+
+    /// <summary>
+    /// Path edit mode: expand GL_LINES to screen-space quads.
+    /// Depth from clip-space (NDC z): near = thick + opaque, far = thin + translucent.
+    /// (World-space eye distance was unreliable with local toolpath transforms.)
+    /// </summary>
+    private static readonly string DepthLineVertSrc = """
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aColor;
+uniform mat4  uMVP;
+uniform float uNearWidthPx;
+uniform float uFarWidthPx;
+out VS_OUT {
+    vec3  color;
+    float alpha;
+    float widthPx;
+} vs_out;
+void main() {
+    gl_Position = vec4(aPos, 1.0) * uMVP;
+    vs_out.color = aColor;
+    // OpenGL NDC z: -1 = near clip, +1 = far clip. Use that as visual depth.
+    float w = max(abs(gl_Position.w), 1e-5);
+    float ndcZ = gl_Position.z / w;
+    // t = 0 at near, 1 at far
+    float t = smoothstep(-0.92, 0.88, ndcZ);
+    vs_out.alpha = mix(1.0, 0.18, t);
+    vs_out.widthPx = mix(uNearWidthPx, uFarWidthPx, t);
+}
+""";
+
+    private static readonly string DepthLineGeomSrc = """
+#version 330 core
+layout(lines) in;
+layout(triangle_strip, max_vertices = 4) out;
+uniform vec2 uViewport;
+in VS_OUT {
+    vec3  color;
+    float alpha;
+    float widthPx;
+} gs_in[];
+out vec3  vColor;
+out float vAlpha;
+void main() {
+    vec4 p0 = gl_in[0].gl_Position;
+    vec4 p1 = gl_in[1].gl_Position;
+    float w0abs = abs(p0.w);
+    float w1abs = abs(p1.w);
+    if (w0abs < 1e-5 || w1abs < 1e-5) return;
+
+    vec2 ndc0 = p0.xy / p0.w;
+    vec2 ndc1 = p1.xy / p1.w;
+    vec2 vp = max(uViewport, vec2(1.0));
+    vec2 s0 = (ndc0 * 0.5 + 0.5) * vp;
+    vec2 s1 = (ndc1 * 0.5 + 0.5) * vp;
+    vec2 dir = s1 - s0;
+    float len = length(dir);
+    if (len < 1e-4) dir = vec2(1.0, 0.0);
+    else dir /= len;
+    vec2 n = vec2(-dir.y, dir.x);
+
+    // Half-width in screen pixels (near endpoints thicker when widthPx is larger).
+    float hw0 = max(gs_in[0].widthPx, 1.0) * 0.5;
+    float hw1 = max(gs_in[1].widthPx, 1.0) * 0.5;
+    vec2 o0 = n * hw0;
+    vec2 o1 = n * hw1;
+    // Convert pixel offset to clip space (use abs(w) so sign does not flip sides).
+    vec4 off0 = vec4((o0 / vp) * 2.0 * w0abs, 0.0, 0.0);
+    vec4 off1 = vec4((o1 / vp) * 2.0 * w1abs, 0.0, 0.0);
+
+    vColor = gs_in[0].color; vAlpha = gs_in[0].alpha;
+    gl_Position = p0 + off0; EmitVertex();
+    gl_Position = p0 - off0; EmitVertex();
+    vColor = gs_in[1].color; vAlpha = gs_in[1].alpha;
+    gl_Position = p1 + off1; EmitVertex();
+    gl_Position = p1 - off1; EmitVertex();
+    EndPrimitive();
+}
+""";
+
+    private static readonly string DepthLineFragSrc = """
+#version 330 core
+in vec3  vColor;
+in float vAlpha;
+uniform float uOverride;
+uniform vec3  uOverrideColor;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(uOverride > 0.5 ? uOverrideColor : vColor, vAlpha);
+}
+""";
 
     private static readonly string BeadVertSrc = """
         #version 330 core
@@ -133,7 +285,8 @@ public sealed class ToolpathRenderer : IDisposable
         public required NVec3[] CsR;          // m+1 blended right vectors
         public required int[]   SegFirstFlat; // m: first flat move index covered by segment j
         public required int[]   SegLastFlat;  // m: last  flat move index covered by segment j
-        public required float   Hh;           // half layer height
+        public required float[] Hh;           // per-section half layer height (wedge layers vary)
+        public required NVec3   Up;           // layer plane normal — beads stack along it (angled prints)
     }
     private List<BeadContour> _beadPlan = [];
     private Toolpath _toolpath;
@@ -148,8 +301,12 @@ public sealed class ToolpathRenderer : IDisposable
     private int   _totalMoveCount;
     private int[] _extrudeVertexCumulative = [];
     private int[] _travelVertexCumulative  = [];
+    private int[] _lightningVertexCumulative = [];
+    private int[] _wipeVertexCumulative = [];
+    private static readonly Vector3 LightningColor = new(1.00f, 0.58f, 0.12f);
     private int[] _beadVertexCumulative    = [];
     private int[] _seamVertexCumulative    = [];
+    private int[] _allPointVertexCumulative = [];
 
     public ToolpathRenderer(Toolpath toolpath, NVec3 origin = default,
         float beadWidth = 6f, float layerHeight = 3f, NVec3 materialColor = default,
@@ -157,8 +314,19 @@ public sealed class ToolpathRenderer : IDisposable
     {
         _toolpath   = toolpath;
         _origin     = origin;
-        _shader     = new Shader(VertSrc,     FragSrc);
-        _beadShader = new Shader(BeadVertSrc, BeadFragSrc);
+        _shader      = new Shader(VertSrc,      FragSrc);
+        _beadShader  = new Shader(BeadVertSrc,  BeadFragSrc);
+        _pointShader = new Shader(PointVertSrc, PointFragSrc);
+        Shader? depthLines = null;
+        try
+        {
+            depthLines = new Shader(DepthLineVertSrc, DepthLineFragSrc, DepthLineGeomSrc);
+        }
+        catch (Exception ex)
+        {
+            System.Console.Error.WriteLine($"[toolpath] depth line shader unavailable: {ex.Message}");
+        }
+        _depthLineShader = depthLines;
         Upload(toolpath, origin);
         UploadBead(beadToolpath ?? toolpath, origin, beadWidth, layerHeight,
             materialColor == NVec3.Zero ? NVec3.One : materialColor);
@@ -179,6 +347,22 @@ public sealed class ToolpathRenderer : IDisposable
             (_extrudeVao, _extrudeVbo) = BuildVao(extData);
             _extrudeCount = extData.Length / 6;
         }
+        if (_lightningVao != 0) { GL.DeleteVertexArray(_lightningVao); GL.DeleteBuffer(_lightningVbo); }
+        _lightningVao = _lightningVbo = _lightningCount = 0;
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0)
+        {
+            (_lightningVao, _lightningVbo) = BuildVao(lgData);
+            _lightningCount = lgData.Length / 6;
+        }
+        if (_wipeVao != 0) { GL.DeleteVertexArray(_wipeVao); GL.DeleteBuffer(_wipeVbo); }
+        _wipeVao = _wipeVbo = _wipeCount = 0;
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0)
+        {
+            (_wipeVao, _wipeVbo) = BuildVao(wpData);
+            _wipeCount = wpData.Length / 6;
+        }
     }
 
     /// <summary>
@@ -190,6 +374,43 @@ public sealed class ToolpathRenderer : IDisposable
     private ToolpathColorMode _colorMode = ToolpathColorMode.Normal;
 
     /// <summary>Switches the extrude-line colour mode and rebuilds VBOs. GL thread only.</summary>
+    /// <summary>
+    /// Cavity exclusion: writes alpha-0 (mask-off) fragments over this toolpath's
+    /// pixels in the normal-prepass buffer so the composite skips cavity shading
+    /// there. Caller binds the normal FBO and sets Lequal/DepthMask(false).
+    /// </summary>
+    public void DrawCavityPunch(Matrix4 mvp, bool lines, bool bead)
+    {
+        if (_disposed) return;
+        _shader.Use();
+        _shader.SetMatrix4("uMVP", ref mvp);
+        _shader.SetFloat("uOverride", 1f);
+        _shader.SetVector3("uOverrideColor", Vector3.Zero);
+        _shader.SetFloat("uOpacity", 0f);           // alpha 0 = cavity mask off
+
+        if (lines && _extrudeVao != 0 && _extrudeCount > 0)
+        {
+            GL.BindVertexArray(_extrudeVao);
+            GL.DrawArrays(PrimitiveType.Lines, 0, _extrudeCount);
+        }
+        if (lines && _wipeVao != 0 && _wipeCount > 0)
+        {
+            GL.BindVertexArray(_wipeVao);
+            GL.DrawArrays(PrimitiveType.Lines, 0, _wipeCount);
+        }
+        if (bead && _beadVao != 0 && _beadCount > 0)
+        {
+            GL.Disable(EnableCap.CullFace);
+            GL.BindVertexArray(_beadVao);
+            GL.DrawElements(PrimitiveType.Triangles, _beadCount, DrawElementsType.UnsignedInt, 0);
+            GL.Enable(EnableCap.CullFace);
+        }
+        GL.BindVertexArray(0);
+    }
+
+    /// <summary>Diagnostics: the gradient mode this renderer's VBOs were built with.</summary>
+    public ToolpathColorMode ColorMode => _colorMode;
+
     public void SetColorMode(ToolpathColorMode mode)
     {
         if (_colorMode == mode) return;
@@ -221,6 +442,16 @@ public sealed class ToolpathRenderer : IDisposable
         var extData = BuildExtrudeData();
         if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
 
+        if (_lightningVao != 0) { GL.DeleteVertexArray(_lightningVao); GL.DeleteBuffer(_lightningVbo); }
+        _lightningVao = _lightningVbo = _lightningCount = 0;
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
+
+        if (_wipeVao != 0) { GL.DeleteVertexArray(_wipeVao); GL.DeleteBuffer(_wipeVbo); }
+        _wipeVao = _wipeVbo = _wipeCount = 0;
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0) { (_wipeVao, _wipeVbo) = BuildVao(wpData); _wipeCount = wpData.Length / 6; }
+
         if (_travelVao != 0) { GL.DeleteVertexArray(_travelVao); GL.DeleteBuffer(_travelVbo); }
         _travelVao = _travelVbo = _travelCount = 0;
         var trData = BuildTravelData();
@@ -231,14 +462,27 @@ public sealed class ToolpathRenderer : IDisposable
         var ptData = BuildSeamData();
         _pointCount = ptData.Length / 6;
         if (_pointCount > 0) (_ptVao, _ptVbo) = BuildVao(ptData);
+
+        if (_allPtVao != 0) { GL.DeleteVertexArray(_allPtVao); GL.DeleteBuffer(_allPtVbo); }
+        _allPtVao = _allPtVbo = _allPointCount = 0;
+        var allPtData = BuildAllPathPointData();
+        _allPointCount = allPtData.Length / 6;
+        if (_allPointCount > 0) (_allPtVao, _allPtVbo) = BuildVao(allPtData);
     }
 
-    private float[] BuildExtrudeData()
+    private float[] BuildExtrudeData(bool lightningOnly = false, bool wipeOnly = false)
     {
+        // Three display buckets: lightning fingers, wipes, plain extrusion.
+        bool Match(ToolpathMove m) => lightningOnly
+            ? m.IsLightning
+            : wipeOnly
+                ? !m.IsLightning && m.IsWipe
+                : !m.IsLightning && !m.IsWipe;
         int extrudeCount = 0;
         foreach (var layer in _toolpath.Layers)
             foreach (var move in layer.Moves)
-                if (move.Kind is MoveKind.Extrude or MoveKind.Mill) extrudeCount++;
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill
+                    && Match(move)) extrudeCount++;
 
         var extData = new float[extrudeCount * 2 * 6];
         int ei = 0, mi = 0;
@@ -268,7 +512,8 @@ public sealed class ToolpathRenderer : IDisposable
         {
             foreach (var move in layer.Moves)
             {
-                if (move.Kind is MoveKind.Extrude or MoveKind.Mill)
+                if (move.Kind is MoveKind.Extrude or MoveKind.Mill
+                    && Match(move))
                 {
                     Vector3 color;
                     if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
@@ -279,6 +524,8 @@ public sealed class ToolpathRenderer : IDisposable
                         color = scalarRange < 1e-6f
                             ? GradientColor(0.5f)
                             : GradientColor((MoveScalar(move, layer) - scalarMin) / scalarRange);
+                    else if (lightningOnly)
+                        color = LightningColor;
                     else if (move.IsWipe)
                         color = _wipeColor;
                     else
@@ -295,13 +542,15 @@ public sealed class ToolpathRenderer : IDisposable
     /// <summary>Per-move factor for the active gradient mode (relative units — normalised later).</summary>
     private float MoveScalar(ToolpathMove move, ToolpathLayer layer)
     {
+        if (_colorMode == ToolpathColorMode.Thermal)
+            return float.IsNaN(layer.ThermalTempC) ? 0f : layer.ThermalTempC;
         float speed = move.PrintSpeedScale * (move.IsResumeRamp ? move.ResumeSpeedScale : 1f);
         if (_colorMode == ToolpathColorMode.Speed) return speed;
         // RPM demand ∝ speed · layer height (bead width constant per slice) · ramp/wipe scales.
         float rpm = speed
                   * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
                   * (move.IsWipe ? move.WipeRpmScale : 1f)
-                  * MathF.Max(0.1f, layer.Height);
+                  * MathF.Max(0.1f, layer.Height * move.HeightScale);
         return rpm;
     }
 
@@ -344,19 +593,28 @@ public sealed class ToolpathRenderer : IDisposable
             total += layer.Moves.Count;
         _totalMoveCount = total;
 
-        _extrudeVertexCumulative = new int[total + 1];
-        _travelVertexCumulative  = new int[total + 1];
+        _extrudeVertexCumulative   = new int[total + 1];
+        _travelVertexCumulative    = new int[total + 1];
+        _lightningVertexCumulative = new int[total + 1];
+        _wipeVertexCumulative      = new int[total + 1];
 
-        int ei = 0, ti = 0, fi = 0;
+        int ei = 0, ti = 0, li = 0, wi = 0, fi = 0;
         foreach (var layer in _toolpath.Layers)
         {
             foreach (var move in layer.Moves)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind)) ei += 2;
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    if (move.IsLightning) li += 2;
+                    else if (move.IsWipe) wi += 2;
+                    else ei += 2;
+                }
                 else if (ToolpathMoveKinds.IsTravelSegment(move.Kind)) ti += 2;
                 fi++;
-                _extrudeVertexCumulative[fi] = ei;
-                _travelVertexCumulative[fi]  = ti;
+                _extrudeVertexCumulative[fi]   = ei;
+                _travelVertexCumulative[fi]    = ti;
+                _lightningVertexCumulative[fi] = li;
+                _wipeVertexCumulative[fi]      = wi;
             }
         }
     }
@@ -395,12 +653,22 @@ public sealed class ToolpathRenderer : IDisposable
         var extData = BuildExtrudeData();
         if (extData.Length > 0) { (_extrudeVao, _extrudeVbo) = BuildVao(extData); _extrudeCount = extData.Length / 6; }
 
+        var lgData = BuildExtrudeData(lightningOnly: true);
+        if (lgData.Length > 0) { (_lightningVao, _lightningVbo) = BuildVao(lgData); _lightningCount = lgData.Length / 6; }
+
+        var wpData = BuildExtrudeData(wipeOnly: true);
+        if (wpData.Length > 0) { (_wipeVao, _wipeVbo) = BuildVao(wpData); _wipeCount = wpData.Length / 6; }
+
         var trData = BuildTravelData();
         if (trData.Length > 0) { (_travelVao, _travelVbo) = BuildVao(trData); _travelCount = trData.Length / 6; }
 
         var ptData = BuildSeamData();
         _pointCount = ptData.Length / 6;
         if (_pointCount > 0) (_ptVao, _ptVbo) = BuildVao(ptData);
+
+        var allPtData = BuildAllPathPointData();
+        _allPointCount = allPtData.Length / 6;
+        if (_allPointCount > 0) (_allPtVao, _allPtVbo) = BuildVao(allPtData);
     }
 
     private float[] BuildTravelData()
@@ -497,6 +765,50 @@ public sealed class ToolpathRenderer : IDisposable
         return ptData;
     }
 
+    /// <summary>
+    /// One point at the midpoint of every extrude bead — used by edit Point mode so
+    /// the user sees every pickable vertex, not only contour seam ends.
+    /// </summary>
+    private float[] BuildAllPathPointData()
+    {
+        var events = new List<(int FlatIdx, NVec3 Pos)>();
+        int fi = 0;
+        foreach (var layer in _toolpath.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                if (move.Kind == MoveKind.Extrude
+                    && !move.IsLayerStitch && !move.IsLayerChange)
+                    events.Add((fi, (move.From + move.To) * 0.5f));
+                fi++;
+            }
+        }
+
+        // Lime vertex fallback (live colour is uPointColor uniform).
+        var col = new Vector3(0.55f, 1.0f, 0.18f);
+        var ptData = new float[events.Count * 6];
+        int pi = 0;
+        foreach (var (_, pos) in events)
+        {
+            ptData[pi++] = pos.X - _origin.X; ptData[pi++] = pos.Y - _origin.Y; ptData[pi++] = pos.Z - _origin.Z;
+            ptData[pi++] = col.X;             ptData[pi++] = col.Y;             ptData[pi++] = col.Z;
+        }
+
+        _allPointVertexCumulative = new int[_totalMoveCount + 1];
+        int ei = 0;
+        for (int i = 1; i <= _totalMoveCount; i++)
+        {
+            _allPointVertexCumulative[i] = _allPointVertexCumulative[i - 1];
+            while (ei < events.Count && events[ei].FlatIdx < i)
+            {
+                _allPointVertexCumulative[i]++;
+                ei++;
+            }
+        }
+
+        return ptData;
+    }
+
     // Chord-error tolerance for bead decimation: points are dropped only where the
     // path stays within this distance of the straight chord — invisible at bead scale,
     // but preserves wave/curve shape exactly where it matters.
@@ -505,9 +817,9 @@ public sealed class ToolpathRenderer : IDisposable
 
     // Side normals: blend of adjacent face normals only (no fwd component).
     // Identical on both sides of a junction, eliminating shading seams.
-    private static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r) => (
-        NVec3.Normalize(-r - NVec3.UnitZ), NVec3.Normalize( r - NVec3.UnitZ),
-        NVec3.Normalize(-r + NVec3.UnitZ), NVec3.Normalize( r + NVec3.UnitZ));
+    private static (NVec3 lb, NVec3 rb, NVec3 lt, NVec3 rt) SideNormals(NVec3 r, NVec3 up) => (
+        NVec3.Normalize(-r - up), NVec3.Normalize( r - up),
+        NVec3.Normalize(-r + up), NVec3.Normalize( r + up));
 
     /// <summary>
     /// Builds the shared bead plan: contours of chord-error-decimated polyline points.
@@ -517,26 +829,38 @@ public sealed class ToolpathRenderer : IDisposable
     private void BuildBeadPlan(Toolpath toolpath, float layerHeight)
     {
         // Collect raw contours: positions + flat move indices of consecutive cut runs.
-        var raw = new List<(List<NVec3> pts, List<int> flats, float hh)>();
+        // Half-heights are PER POINT: Multi-Planar wedge layers vary in thickness
+        // along the path (ToolpathMove.HeightScale).
+        var raw = new List<(List<NVec3> pts, List<int> flats, List<float> hhs, NVec3 up)>();
         int flatIdx = 0;
         foreach (var layer in toolpath.Layers)
         {
             float lh  = layer.Height > 0f ? layer.Height : layerHeight;
             float lhh = lh * 0.5f;
-            List<NVec3>? pts = null; List<int>? flats = null;
+            // Beads stack along the slicing-plane normal, not world Z — on angled
+            // prints the cross-section must tilt with the layers or the preview
+            // renders overlapping parallelogram-sheared beads.
+            var layerUp = layer.PlaneNormal.LengthSquared() > 1e-6f
+                ? NVec3.Normalize(layer.PlaneNormal)
+                : NVec3.UnitZ;
+            List<NVec3>? pts = null; List<int>? flats = null; List<float>? hhs = null;
             foreach (var move in layer.Moves)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                // Wipes are extrude-kind but deposit a ramping-down dribble, not a
+                // bead — rendering them as solid geometry grows full-width prongs
+                // past every contour end in the printed-part preview.
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind) && !move.IsWipe)
                 {
                     if (pts is null)
                     {
-                        pts = [move.From]; flats = [];
-                        raw.Add((pts, flats, lhh));
+                        pts = [move.From]; flats = []; hhs = [lhh * move.HeightScale];
+                        raw.Add((pts, flats, hhs, layerUp));
                     }
                     pts.Add(move.To);
                     flats!.Add(flatIdx);
+                    hhs!.Add(lhh * move.HeightScale);
                 }
-                else { pts = null; flats = null; }
+                else { pts = null; flats = null; hhs = null; }
                 flatIdx++;
             }
         }
@@ -547,15 +871,16 @@ public sealed class ToolpathRenderer : IDisposable
         {
             _beadPlan = [];
             long totalSegs = 0;
-            foreach (var (pts, flats, hh) in raw)
+            foreach (var (pts, flats, hhs, contourUp) in raw)
             {
                 var keep = DecimatePolyline(pts, eps);
                 int m = keep.Count - 1;
                 if (m <= 0) continue;
                 var cPts  = new NVec3[m + 1];
+                var cHh   = new float[m + 1];
                 var first = new int[m];
                 var last  = new int[m];
-                for (int j = 0; j <= m; j++) cPts[j] = pts[keep[j]];
+                for (int j = 0; j <= m; j++) { cPts[j] = pts[keep[j]]; cHh[j] = hhs[keep[j]]; }
                 for (int j = 0; j <  m; j++)
                 {
                     first[j] = flats[keep[j]];
@@ -564,7 +889,10 @@ public sealed class ToolpathRenderer : IDisposable
 
                 // Blended cross-section right vectors (same construction as before).
                 var rights = new NVec3[m];
-                var up = NVec3.UnitZ;
+                var up = contourUp;
+                // Stable in-plane perpendicular of `up` for degenerate segments.
+                var upPerp = NVec3.Normalize(NVec3.Cross(up,
+                    MathF.Abs(up.X) < 0.9f ? NVec3.UnitX : NVec3.UnitY));
                 for (int j = 0; j < m; j++)
                 {
                     var d = cPts[j + 1] - cPts[j];
@@ -572,15 +900,26 @@ public sealed class ToolpathRenderer : IDisposable
                         ? NVec3.Normalize(d)
                         : (j > 0 ? NVec3.Normalize(cPts[j] - cPts[j - 1]) : NVec3.UnitX);
                     var r = NVec3.Cross(fwd, up);
-                    if (r.LengthSquared() < 1e-6f) r = NVec3.Cross(fwd, NVec3.UnitX);
-                    rights[j] = NVec3.Normalize(r);
+                    // Segments climbing out of the layer plane (layer stitches, ramps)
+                    // run nearly parallel to `up`: the cross product collapses and its
+                    // normalized direction is numeric noise that renders as fat twisted
+                    // tubes. Within ~9° of parallel, carry the previous right instead.
+                    rights[j] = r.LengthSquared() < 0.025f
+                        ? (j > 0 ? rights[j - 1] : upPerp)
+                        : NVec3.Normalize(r);
                 }
                 var csR = new NVec3[m + 1];
                 csR[0] = rights[0];
-                for (int j = 1; j < m; j++) csR[j] = NVec3.Normalize(rights[j - 1] + rights[j]);
+                for (int j = 1; j < m; j++)
+                {
+                    // Opposite rights (180° turnaround) sum to ~zero — normalizing that
+                    // is NaN; keep the incoming segment's frame there.
+                    var sum = rights[j - 1] + rights[j];
+                    csR[j] = sum.LengthSquared() > 1e-6f ? NVec3.Normalize(sum) : rights[j];
+                }
                 csR[m] = rights[m - 1];
 
-                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = hh });
+                _beadPlan.Add(new BeadContour { Pts = cPts, CsR = csR, SegFirstFlat = first, SegLastFlat = last, Hh = cHh, Up = contourUp });
                 totalSegs += m;
             }
             if (totalSegs <= MaxBeadSegments || attempt >= 4) break;
@@ -648,7 +987,6 @@ public sealed class ToolpathRenderer : IDisposable
         }
 
         float hw = beadWidth * 0.5f;
-        var   up = NVec3.UnitZ;
 
         int sections = 0, segs = 0;
         foreach (var c in _beadPlan) { sections += c.Pts.Length; segs += c.Pts.Length - 1; }
@@ -663,13 +1001,14 @@ public sealed class ToolpathRenderer : IDisposable
         foreach (var c in _beadPlan)
         {
             int   m  = c.Pts.Length;   // cross-sections in this contour (segments + 1)
-            float hh = c.Hh;
+            var   up = c.Up;
 
             for (int s = 0; s < m; s++)
             {
                 var r  = c.CsR[s];
                 var pt = c.Pts[s];
-                var (nLb, nRb, nLt, nRt) = SideNormals(r);
+                float hh = c.Hh[s];
+                var (nLb, nRb, nLt, nRt) = SideNormals(r, up);
                 // corner order: 0=lb, 1=rb, 2=lt, 3=rt
                 EmitCorner(verts, ref vi, pt - r*hw - up*hh, nLb);
                 EmitCorner(verts, ref vi, pt + r*hw - up*hh, nRb);
@@ -789,7 +1128,6 @@ public sealed class ToolpathRenderer : IDisposable
         if (sections == 0) return [];
 
         float hw = _beadWidth * 0.5f;
-        var   up = NVec3.UnitZ;
         var   verts = new float[sections * 4 * 6];
         int   vi = 0;
 
@@ -802,6 +1140,7 @@ public sealed class ToolpathRenderer : IDisposable
         foreach (var c in _beadPlan)
         {
             int m = c.Pts.Length;
+            var up = c.Up;
             for (int s = 0; s < m; s++)
             {
                 // Section s is coloured by the segment it starts (last section reuses
@@ -813,10 +1152,11 @@ public sealed class ToolpathRenderer : IDisposable
 
                 var r  = c.CsR[s];
                 var pt = c.Pts[s];
-                EmitColored(pt - r*hw - up*c.Hh, col);
-                EmitColored(pt + r*hw - up*c.Hh, col);
-                EmitColored(pt - r*hw + up*c.Hh, col);
-                EmitColored(pt + r*hw + up*c.Hh, col);
+                float hh = c.Hh[s];
+                EmitColored(pt - r*hw - up*hh, col);
+                EmitColored(pt + r*hw - up*hh, col);
+                EmitColored(pt - r*hw + up*hh, col);
+                EmitColored(pt + r*hw + up*hh, col);
             }
         }
 
@@ -837,55 +1177,145 @@ public sealed class ToolpathRenderer : IDisposable
                      bool showExtrusion = true, bool showTravel = true, bool showSeam = true,
                      bool showBead = false, bool showBeadOverhang = false,
                      bool showOrientationPreview = false, int scrubIndex = int.MaxValue,
-                     Vector3 eyeLocal = default, float lineOpacity = 1f)
+                     Vector3 eyeLocal = default, float lineOpacity = 1f,
+                     bool showLightning = true, int scrubStart = 0,
+                     bool showWipe = true,
+                     bool showAllPathPoints = false,
+                     bool showDepthLines = false,
+                     float viewportW = 0f, float viewportH = 0f,
+                     float dashPeriodPx = 0f,
+                     float lineWidth = 1f)
     {
         if (_disposed) return;
 
-        _shader.Use();
-        _shader.SetMatrix4("uMVP", ref mvp);
-        _shader.SetFloat("uOpacity", lineOpacity);
-
         int extCount   = ScrubCount(_extrudeVertexCumulative, _extrudeCount, scrubIndex);
+        int lgCount    = ScrubCount(_lightningVertexCumulative, _lightningCount, scrubIndex);
+        int wpCount    = ScrubCount(_wipeVertexCumulative,    _wipeCount,    scrubIndex);
         int trCount    = ScrubCount(_travelVertexCumulative,  _travelCount,  scrubIndex);
         int beadCount  = ScrubCount(_beadVertexCumulative,    _beadCount,    scrubIndex);
         int seamCount  = ScrubCount(_seamVertexCumulative,    _pointCount,   scrubIndex);
+        int allPtCount = ScrubCount(_allPointVertexCumulative, _allPointCount, scrubIndex);
 
-        if (!selected)
+        // Layer-window low bound (edit mode): first vertex per buffer to draw.
+        int extFirst = 0, lgFirst = 0, wpFirst = 0, trFirst = 0, beadFirst = 0, seamFirst = 0, allPtFirst = 0;
+        if (scrubStart > 0)
         {
-            if (showExtrusion && extCount > 0)
-            {
-                _shader.SetFloat("uOverride", 1f);
-                _shader.SetVector3("uOverrideColor", _unselectedGray);
-                GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
-            }
+            extFirst  = Math.Min(ScrubCount(_extrudeVertexCumulative,  _extrudeCount, scrubStart), extCount);
+            lgFirst   = Math.Min(ScrubCount(_lightningVertexCumulative, _lightningCount, scrubStart), lgCount);
+            wpFirst   = Math.Min(ScrubCount(_wipeVertexCumulative,     _wipeCount,    scrubStart), wpCount);
+            trFirst   = Math.Min(ScrubCount(_travelVertexCumulative,   _travelCount,  scrubStart), trCount);
+            beadFirst = Math.Min(ScrubCount(_beadVertexCumulative,     _beadCount,    scrubStart), beadCount);
+            seamFirst = Math.Min(ScrubCount(_seamVertexCumulative,     _pointCount,   scrubStart), seamCount);
+            allPtFirst = Math.Min(ScrubCount(_allPointVertexCumulative, _allPointCount, scrubStart), allPtCount);
+        }
+
+        // Path edit mode: depth-cued thick lines (near = 2.5x, far = fade). Prefer the
+        // geometry-shader path; fall back to plain GL lines if unavailable.
+        // Dashed neighbour layers force the simple line path (depth shader has no dash).
+        bool useDepthLines = showDepthLines
+            && !showAllPathPoints
+            && dashPeriodPx <= 0.5f
+            && _depthLineShader is not null
+            && viewportW > 1f && viewportH > 1f;
+
+        if (useDepthLines)
+        {
+            DrawDepthAwareLines(mvp, eyeLocal, viewportW, viewportH,
+                selected, showExtrusion, showLightning, showTravel, showWipe,
+                extFirst, extCount, lgFirst, lgCount, trFirst, trCount, wpFirst, wpCount);
         }
         else
         {
+            _shader.Use();
+            _shader.SetMatrix4("uMVP", ref mvp);
+            _shader.SetFloat("uOpacity", lineOpacity);
+            _shader.SetFloat("uDashPeriodPx", dashPeriodPx);
+
+            // Point edit mode: slightly thicker centre-lines under the dots.
+            float appliedWidth = showAllPathPoints ? Math.Max(2.5f, lineWidth) : lineWidth;
+            if (appliedWidth > 1.01f)
+                GL.LineWidth(appliedWidth);
+
+            if (!selected)
+            {
+                if (showExtrusion && extCount > 0)
+                {
+                    // Speed/RPM gradients ARE the information — never flatten them to the
+                    // unselected override colour (the persistent timeline leaves toolpaths
+                    // unselected, so the override was hiding the gradient entirely).
+                    bool gradient = _colorMode != ToolpathColorMode.Normal;
+                    _shader.SetFloat("uOverride", gradient ? 0f : 1f);
+                    if (!gradient)
+                        _shader.SetVector3("uOverrideColor", _unselectedGray);
+                    GL.BindVertexArray(_extrudeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
+                }
+                if (showLightning && lgCount > 0)
+                {
+                    // Lightning orange is the layer's identity — keep it when unselected.
+                    _shader.SetFloat("uOverride", 0f);
+                    GL.BindVertexArray(_lightningVao);
+                    GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
+                }
+                if (showWipe && wpCount > 0)
+                {
+                    _shader.SetFloat("uOverride", 0f);
+                    GL.BindVertexArray(_wipeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+                }
+            }
+            else
+            {
+                _shader.SetFloat("uOverride", 0f);
+
+                if (showExtrusion && extCount > 0)
+                {
+                    GL.BindVertexArray(_extrudeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
+                }
+
+                if (showLightning && lgCount > 0)
+                {
+                    GL.BindVertexArray(_lightningVao);
+                    GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
+                }
+
+                if (showWipe && wpCount > 0)
+                {
+                    GL.BindVertexArray(_wipeVao);
+                    GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+                }
+
+                if (showTravel && trCount > 0)
+                {
+                    GL.BindVertexArray(_travelVao);
+                    GL.DrawArrays(PrimitiveType.Lines, trFirst, trCount - trFirst);
+                }
+            }
+
+            if (appliedWidth > 1.01f)
+                GL.LineWidth(1f);
+            // Reset dash so other draws default to solid.
+            _shader.SetFloat("uDashPeriodPx", 0f);
+        }
+
+        // Seam / singularity points (selected appearance only).
+        if (selected || showAllPathPoints)
+        {
+            _shader.Use();
+            _shader.SetMatrix4("uMVP", ref mvp);
+            _shader.SetFloat("uOpacity", 1f);
             _shader.SetFloat("uOverride", 0f);
 
-            if (showExtrusion && extCount > 0)
-            {
-                GL.BindVertexArray(_extrudeVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, extCount);
-            }
-
-            if (showTravel && trCount > 0)
-            {
-                GL.BindVertexArray(_travelVao);
-                GL.DrawArrays(PrimitiveType.Lines, 0, trCount);
-            }
-
-            _shader.SetFloat("uOpacity", 1f);
-            if (showSeam && seamCount > 0)
+            if (selected && showSeam && !showAllPathPoints && seamCount > 0)
             {
                 GL.PointSize(8f);
                 GL.BindVertexArray(_ptVao);
-                GL.DrawArrays(PrimitiveType.Points, 0, seamCount);
+                GL.DrawArrays(PrimitiveType.Points, seamFirst, seamCount - seamFirst);
                 GL.PointSize(1f);
             }
 
-            if (_singularityPtVao != 0)
+            if (selected && _singularityPtVao != 0)
             {
                 int singCount = ScrubCount(_singularityVertexCumulative, _singularityPointCount, scrubIndex);
                 if (singCount > 0)
@@ -898,6 +1328,33 @@ public sealed class ToolpathRenderer : IDisposable
             }
         }
 
+        // Edit Point mode: every extrude midpoint. Size + opacity scale with camera
+        // distance so near beads are large/solid and far ones shrink to ~20% alpha.
+        if (showAllPathPoints && allPtCount > allPtFirst && _allPtVao != 0)
+        {
+            // eyeLocal is camera position in toolpath-local space (matches aPos).
+            float refDist = eyeLocal.Length;
+            if (refDist < 80f) refDist = 500f; // sane default when eye is near origin
+
+            _pointShader.Use();
+            _pointShader.SetMatrix4("uMVP", ref mvp);
+            _pointShader.SetVector3("uEye", eyeLocal);
+            // Lime green base beads; hover/select recolour yellow via paint overlay points.
+            _pointShader.SetVector3("uPointColor", new Vector3(0.55f, 1.0f, 0.18f));
+            _pointShader.SetFloat("uRefDist", refDist);
+            _pointShader.SetFloat("uBaseSize", 7f);   // px at ref distance
+            _pointShader.SetFloat("uMinSize", 2.0f);
+            _pointShader.SetFloat("uMaxSize", 16f);
+
+            GL.Enable(EnableCap.ProgramPointSize);
+            // Soft sprites need blending; keep depth test so near dots win ties.
+            GL.DepthMask(false);
+            GL.BindVertexArray(_allPtVao);
+            GL.DrawArrays(PrimitiveType.Points, allPtFirst, allPtCount - allPtFirst);
+            GL.DepthMask(true);
+            GL.Disable(EnableCap.ProgramPointSize);
+        }
+
         if (showOrientationPreview && _orientationVao != 0 && beadCount > 0)
         {
             _shader.Use();
@@ -906,8 +1363,9 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_orientationVao);
-            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_orientationCount, beadCount),
-                DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles,
+                Math.Max(0, Math.Min(_orientationCount, beadCount) - beadFirst),
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBeadOverhang && _beadOverhangVao != 0 && beadCount > 0)
@@ -917,8 +1375,9 @@ public sealed class ToolpathRenderer : IDisposable
             _shader.SetFloat("uOverride", 0f);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadOverhangVao);
-            GL.DrawElements(PrimitiveType.Triangles, Math.Min(_beadOverhangCount, beadCount),
-                DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles,
+                Math.Max(0, Math.Min(_beadOverhangCount, beadCount) - beadFirst),
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
         else if (showBead && beadCount > 0)
@@ -929,10 +1388,84 @@ public sealed class ToolpathRenderer : IDisposable
             _beadShader.SetVector3("uEye",   eyeLocal);
             GL.Disable(EnableCap.CullFace);
             GL.BindVertexArray(_beadVao);
-            GL.DrawElements(PrimitiveType.Triangles, beadCount, DrawElementsType.UnsignedInt, 0);
+            GL.DrawElements(PrimitiveType.Triangles, beadCount - beadFirst,
+                DrawElementsType.UnsignedInt, (IntPtr)((long)beadFirst * sizeof(uint)));
             GL.Enable(EnableCap.CullFace);
         }
 
+        GL.BindVertexArray(0);
+    }
+
+    /// <summary>
+    /// Path-edit depth cue: expands each line to a screen-space quad. Near lines are
+    /// 2.5x the base width and fully opaque; far lines shrink and fade to ~20%.
+    /// </summary>
+    private void DrawDepthAwareLines(
+        Matrix4 mvp, Vector3 eyeLocal, float viewportW, float viewportH,
+        bool selected, bool showExtrusion, bool showLightning, bool showTravel, bool showWipe,
+        int extFirst, int extCount, int lgFirst, int lgCount, int trFirst, int trCount,
+        int wpFirst, int wpCount)
+    {
+        if (_depthLineShader is null) return;
+
+        _depthLineShader.Use();
+        _depthLineShader.SetMatrix4("uMVP", ref mvp);
+        // Screen-space widths (px): near endpoints ~2.5x the far base.
+        _depthLineShader.SetFloat("uNearWidthPx", 5.5f);
+        _depthLineShader.SetFloat("uFarWidthPx", 2.2f);
+        _depthLineShader.SetVector2("uViewport", new Vector2(viewportW, viewportH));
+
+        GL.DepthMask(false); // soft fade without z-fighting thick quads
+
+        if (!selected)
+        {
+            bool gradient = _colorMode != ToolpathColorMode.Normal;
+            _depthLineShader.SetFloat("uOverride", gradient ? 0f : 1f);
+            if (!gradient)
+                _depthLineShader.SetVector3("uOverrideColor", _unselectedGray);
+            if (showExtrusion && extCount > extFirst)
+            {
+                GL.BindVertexArray(_extrudeVao);
+                GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
+            }
+            _depthLineShader.SetFloat("uOverride", 0f);
+            if (showLightning && lgCount > lgFirst)
+            {
+                GL.BindVertexArray(_lightningVao);
+                GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
+            }
+            if (showWipe && wpCount > wpFirst)
+            {
+                GL.BindVertexArray(_wipeVao);
+                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+            }
+        }
+        else
+        {
+            _depthLineShader.SetFloat("uOverride", 0f);
+            if (showExtrusion && extCount > extFirst)
+            {
+                GL.BindVertexArray(_extrudeVao);
+                GL.DrawArrays(PrimitiveType.Lines, extFirst, extCount - extFirst);
+            }
+            if (showWipe && wpCount > wpFirst)
+            {
+                GL.BindVertexArray(_wipeVao);
+                GL.DrawArrays(PrimitiveType.Lines, wpFirst, wpCount - wpFirst);
+            }
+            if (showLightning && lgCount > lgFirst)
+            {
+                GL.BindVertexArray(_lightningVao);
+                GL.DrawArrays(PrimitiveType.Lines, lgFirst, lgCount - lgFirst);
+            }
+            if (showTravel && trCount > trFirst)
+            {
+                GL.BindVertexArray(_travelVao);
+                GL.DrawArrays(PrimitiveType.Lines, trFirst, trCount - trFirst);
+            }
+        }
+
+        GL.DepthMask(true);
         GL.BindVertexArray(0);
     }
 
@@ -986,7 +1519,10 @@ public sealed class ToolpathRenderer : IDisposable
         _disposed = true;
         if (_extrudeVao       != 0) { GL.DeleteVertexArray(_extrudeVao);       GL.DeleteBuffer(_extrudeVbo);       }
         if (_travelVao        != 0) { GL.DeleteVertexArray(_travelVao);        GL.DeleteBuffer(_travelVbo);        }
+        if (_lightningVao     != 0) { GL.DeleteVertexArray(_lightningVao);     GL.DeleteBuffer(_lightningVbo);     }
+        if (_wipeVao          != 0) { GL.DeleteVertexArray(_wipeVao);          GL.DeleteBuffer(_wipeVbo);          }
         if (_ptVao            != 0) { GL.DeleteVertexArray(_ptVao);            GL.DeleteBuffer(_ptVbo);            }
+        if (_allPtVao         != 0) { GL.DeleteVertexArray(_allPtVao);         GL.DeleteBuffer(_allPtVbo);         }
         if (_beadVao          != 0) { GL.DeleteVertexArray(_beadVao);          GL.DeleteBuffer(_beadVbo);          }
         if (_beadEbo          != 0) GL.DeleteBuffer(_beadEbo);
         if (_beadOverhangVao  != 0) { GL.DeleteVertexArray(_beadOverhangVao);  GL.DeleteBuffer(_beadOverhangVbo);  }
@@ -994,5 +1530,7 @@ public sealed class ToolpathRenderer : IDisposable
         if (_singularityPtVao != 0) { GL.DeleteVertexArray(_singularityPtVao); GL.DeleteBuffer(_singularityPtVbo); }
         _shader.Dispose();
         _beadShader.Dispose();
+        _pointShader.Dispose();
+        _depthLineShader?.Dispose();
     }
 }

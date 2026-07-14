@@ -18,6 +18,23 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // UI-thread exceptions otherwise abort with a symbol-less SIGABRT on macOS.
+        // Log the managed exception first so we have a useful trail in /tmp.
+        Avalonia.Threading.Dispatcher.UIThread.UnhandledException += (_, e) =>
+        {
+            try
+            {
+                var path = Path.Combine(Path.GetTempPath(), "massiveslicer-crash.log");
+                File.AppendAllText(path,
+                    $"[{DateTime.Now:O}] Dispatcher.UIThread.UnhandledException\n{e.Exception}\n\n");
+                global::System.Console.Error.WriteLine($"[crash] UI exception: {e.Exception}");
+            }
+            catch
+            {
+                // best-effort logging
+            }
+        };
+
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             SliderTypeIn.Install();
