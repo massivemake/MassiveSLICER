@@ -1464,10 +1464,10 @@ public partial class ViewportView : UserControl
         }
 
         if (_fkController is not null && IsToolNodeSelected() && _renderer.TcpFrameMatrix is null
-            && DataContext is ViewportViewModel { Robot: not null } tcpVm)
+            && _vm is ViewportViewModel { Robot: not null } tcpVm)
             SyncTcpReadout(tcpVm);
 
-        if (DataContext is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
+        if (_vm is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
         {
             _renderer.GizmoPivotWorld = new Vector3(
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
@@ -3431,11 +3431,17 @@ public partial class ViewportView : UserControl
         var items = e.DataTransfer.TryGetFiles();
         if (items is null) return;
 
-        var files = items
-            .Select(f => f.TryGetLocalPath())
-            .Where(p => p is not null && ImportHelper.IsSupported(p))
-            .Cast<string>()
-            .ToList();
+        var paths = items.Select(f => f.TryGetLocalPath()).Where(p => p is not null).Cast<string>().ToList();
+
+        // A dropped .mass workspace file opens it outright (same as File -> Open),
+        // replacing the current workspace -- it's not a mesh to import into the scene.
+        if (paths.FirstOrDefault(p => p.EndsWith(".mass", StringComparison.OrdinalIgnoreCase)) is { } massPath)
+        {
+            vm.Erp.OpenWorkspaceFile?.Invoke(massPath);
+            return;
+        }
+
+        var files = paths.Where(ImportHelper.IsSupported).ToList();
 
         if (files.Count == 0) return;
 

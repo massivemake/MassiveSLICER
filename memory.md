@@ -1,6 +1,6 @@
 # MassiveSLICER V3 — Project Memory
 
-Last updated: 2026-07-12 (2D Slice Plane Viewer, edit-mode multipass, Target Support Selections, LFAM1 bed BASE align, ortho zoom clip fix)
+Last updated: 2026-07-16 (Windows launch crash fix + `.mass` drag-and-drop; large-STL import crash diagnosed, not yet fixed)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -501,10 +501,25 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 3. ~~**KRL import**~~ — **done** (2026-06-25 milestone). Remaining: path-tangent IK for scrub on mill moves with zero normals; optional bead width from tool diameter.
 4. **User verification** — confirm: no N tab on boot; N key opens HUD; LFAM3 timeline expands on click; **rivets aligned on connector** (done); **Pick/Deposit pills above active phase** after expand + phase select, details expand **upward** on pill click (session-6 Canvas fix); transform bar; rock select → Focus bar; Live I/O **Position** column shows A1–A6/E1 + TCP when robot synced; P1–P3 I/O live on LFAM 3 (`extIp` 192.168.0.196, `millIp` 192.168.0.249).
 5. **Spindle RPM display** — not implemented; would need KUKA spindle `$ANOUT` or ATV340 Modbus (see LFAM 3 Live I/O map).
+6. **Large STL import crash (1.5GB+)** — `StlLoader` loads the whole file unindexed/unstreamed, no size guard; crashes on huge files (native access violation, likely OOM/GPU-driver on the resulting multi-GB single buffer). Two fix options logged in the 2026-07-16 changelog entry below (quick safety-net error vs. real streaming/indexed-geometry fix). Not started.
 
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-16 — Windows launch crash fix + `.mass` drag-and-drop (Jeff, Windows side, w/ Claude)
+
+**Boot/render crash — same class as the 2026-06-21 "Boot crash" fix, different call sites:** `ViewportView.OnRender` — the TCP-readout guard and cut-tool gizmo check (~lines 1467/1470) read Avalonia `DataContext` directly from the GL render thread instead of the established `_vm` cache field (see the class-level comment at ~line 115: "set on the UI thread in WireGlCanvas, read from GL thread in OnRender"). Crashed on every launch: `InvalidOperationException` — "the calling thread cannot access this object because a different thread owns it." Looks like newer cut-tool/TCP-readout code just didn't follow the existing pattern. **Fix:** swapped both `DataContext` reads to `_vm`, matching every other spot in `OnRender`.
+
+**`.mass` drag-and-drop added:** `ViewportView.OnDrop` only recognized mesh imports (OBJ/3MF/STL/etc via `ImportHelper`) — dragging a `.mass` workspace file onto the viewport silently did nothing. Added a check: a dropped `.mass` path now calls `vm.Erp.OpenWorkspaceFile?.Invoke(path)`, the same open-workspace codepath File → Open already uses (no unsaved-changes prompt — matches existing behavior, not a new gap).
+
+**Known issue — NOT fixed, just diagnosed — large STL import crashes the app:** dropping a ~1.5GB STL crashes with a raw `0xc0000005` access violation (no managed stack trace, "unknown module" — native-level, not a clean .NET exception). Root cause: `StlLoader.ReadBinary` (`MassiveSlicer.Viewport/Loading/StlLoader.cs`) loads the entire file in one shot into two flat, non-indexed `Vector3[]` arrays (every triangle stores its own 3 verts, no dedup) with zero size guard or streaming — a 1.5GB file (~30M triangles) is 2+GB of managed arrays, then one giant single-shot GPU buffer upload. Plausible OOM or GPU-driver failure on the huge single allocation. Two fix options, neither built:
+1. **Quick safety net** — catch it, show a clean in-app error instead of crashing (doesn't remove the size ceiling).
+2. **Real fix** — stream the file instead of loading it whole, dedupe vertices into indexed geometry, chunk the GPU upload (bigger change, actually solves it).
+
+Workaround for now: simplify meshes outside the slicer before importing.
+
+Key files: `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`, `src/MassiveSlicer.Viewport/Loading/StlLoader.cs`.
 
 <<<<<<< HEAD
 ### 2026-07-04 — Branch convention (agreed with Thom)
