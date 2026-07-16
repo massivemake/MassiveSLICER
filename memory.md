@@ -1,6 +1,6 @@
 # MassiveSLICER V3 — Project Memory
 
-Last updated: 2026-07-16 (Brim + simplification fix; Header/Footer gear menu; URM honors edited templates)
+Last updated: 2026-07-16 (Brim fix; Header/Footer gear; URM edits honored; ANALOGHANDLER re-latch guard)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -505,6 +505,26 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-16 (later 2) — URM re-latch guard (extruder-stays-cold fix)
+
+**Field:** Rev05 exported fine (header identical to a known-good file) but the extruder never
+heated. Cause was NOT the file — the KUKA ANALOGHANDLER converter had latched at zero: a prior
+program end left $ANOUT=0 while T1/T2/T3 still read the target, so setting the same target
+produced no change and it never re-wrote. Confirmed live: T1=250 but $ANOUT[1]=0; nudging T
+240->250 immediately restored $ANOUT to 0.2912/0.3232.
+
+- **Slicer fix (firmware-independent):** URM header MAT now nudges temps to `target-5C`
+  (floored 150), `WAIT SEC 0.4`, then the target — forcing ANALOGHANDLER to re-latch every
+  print from any stuck state. target-5 stays hot if a print pauses on the nudge line. New
+  placeholders `{{TEMPn_NUDGE_C}}`. Verified this unsticks even the pre-self-heal converter.
+- **KUKA-side complement (staged, needs cold boot):** ANALOGHANDLER.sub self-heal reads the
+  actual $ANOUT each cycle so external zeroing is caught in ~12ms. Belt-and-suspenders with the
+  slicer nudge.
+- Header/footer are identical between the "broken" and "working" files — the export was already
+  correct; the standard is unchanged apart from adding the re-latch guard. Test: DSS test asserts
+  the nudge precedes the target. 410 pass / 13 pre-existing.
+
 
 ### 2026-07-16 (later) — Brim over-sampling fix + Header/Footer gear menu
 

@@ -253,6 +253,11 @@ public sealed class KrlExporterTest
         Assert.Contains(";FOLD CaracolSafety", krl);
         Assert.Contains(";FOLD MAT out of INI", krl);
         Assert.Contains("T1 = 250", krl);
+        // Re-latch guard: nudge (target-5) before the target so ANALOGHANDLER always re-writes.
+        Assert.Contains("T1 = 245", krl);
+        Assert.True(krl.IndexOf("T1 = 245", System.StringComparison.Ordinal)
+                    < krl.IndexOf("T1 = 250", System.StringComparison.Ordinal),
+                    "nudge must precede the target temperature");
         Assert.Contains("MassiveSLICER", krl);
         Assert.Contains(";ULTRARESPONSIVE MODE", krl); // footer
         Assert.DoesNotContain("$ANOUT[1]", krl);

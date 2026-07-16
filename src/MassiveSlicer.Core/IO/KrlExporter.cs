@@ -301,6 +301,14 @@ public static class KrlExporter
         ;robot-mode gate (MIO_req) ON for the whole print - CARACOL obeys T/RPM only while high
         $OUT[9] = TRUE
 
+        ;Re-latch guard: ANALOGHANDLER only writes $ANOUT when T changes. A prior program end
+        ;can leave $ANOUT at 0 while T still reads the target, so setting the same target does
+        ;nothing and the extruder stays cold. Command a slightly lower temp first (still hot if
+        ;paused), then the target, forcing a change the converter must act on.
+        T1 = {{TEMP1_NUDGE_C}}
+        T2 = {{TEMP2_NUDGE_C}}
+        T3 = {{TEMP3_NUDGE_C}}
+        WAIT SEC 0.4
         T1 = {{TEMP1_C}}
         T2 = {{TEMP2_C}}
         T3 = {{TEMP3_C}}
@@ -895,6 +903,9 @@ public static class KrlExporter
             .Replace("{{TEMP1_C}}",       s.Temperature1.ToString("F0", Inv))
             .Replace("{{TEMP2_C}}",       s.Temperature2.ToString("F0", Inv))
             .Replace("{{TEMP3_C}}",       s.Temperature3.ToString("F0", Inv))
+            .Replace("{{TEMP1_NUDGE_C}}", System.Math.Max(150f, s.Temperature1 - 5f).ToString("F0", Inv))
+            .Replace("{{TEMP2_NUDGE_C}}", System.Math.Max(150f, s.Temperature2 - 5f).ToString("F0", Inv))
+            .Replace("{{TEMP3_NUDGE_C}}", System.Math.Max(150f, s.Temperature3 - 5f).ToString("F0", Inv))
             .Replace("{{RPM_IDLE_V}}",    ResolveAnout4IdleText(s))
             .Replace("{{PRINT_SPEED}}",   s.PrintSpeedMps.ToString("F6", Inv))
             .Replace("{{FEED_MPS}}",      (s.CuttingFeedMmMin / 60000f).ToString("F6", Inv))
