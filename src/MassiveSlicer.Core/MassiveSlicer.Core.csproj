@@ -11,16 +11,20 @@
     <PackageReference Include="Clipper2" Version="2.0.0" />
   </ItemGroup>
 
+  <PropertyGroup>
+    <ZividSdkInstalled Condition="Exists('C:\Program Files\Zivid\bin\ZividCoreNET.dll')">true</ZividSdkInstalled>
+  </PropertyGroup>
+
   <ItemGroup>
     <Compile Remove="Scanning\ZividScanService.Windows.cs" />
     <Compile Remove="Scanning\ZividScanService.NonWindows.cs" />
     <Compile Include="Scanning\ZividScanService.Windows.cs"
-             Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
+             Condition="$([MSBuild]::IsOSPlatform('Windows')) AND '$(ZividSdkInstalled)' == 'true'" />
     <Compile Include="Scanning\ZividScanService.NonWindows.cs"
-             Condition="!$([MSBuild]::IsOSPlatform('Windows'))" />
+             Condition="!$([MSBuild]::IsOSPlatform('Windows')) OR '$(ZividSdkInstalled)' != 'true'" />
   </ItemGroup>
 
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows')) AND '$(ZividSdkInstalled)' == 'true'">
     <!-- Zivid SDK .NET wrapper (installed with Zivid SDK 2.16). Native DLLs are
          resolved at runtime from the SDK bin directory via SetDllDirectory. -->
     <Reference Include="ZividCoreNET">
