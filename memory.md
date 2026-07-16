@@ -1,6 +1,6 @@
 # MassiveSLICER V3 — Project Memory
 
-Last updated: 2026-07-12 (2D Slice Plane Viewer, edit-mode multipass, Target Support Selections, LFAM1 bed BASE align, ortho zoom clip fix)
+Last updated: 2026-07-16 (URM output fix OUT[8], robot-mode gate latch, T5 calibrated travel defaults)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
 
@@ -505,6 +505,45 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-16 — URM output fix (OUT[8]) + calibrated travel defaults (T5)
+
+**Scope:** Field debugging on LFAM 2 found the URM/Digital-Start-Stop export used the **wrong
+output**: the Caracol slide deck says OUT[9]=URM, but on the actual LFAM machines (verified by
+live pendant-toggle tests 2026-07-13/16) **OUT[8] → DI_01_URM (ultra-responsive request)** and
+**OUT[9] → DI_01_MIO_req (robot-mode gate)**. Exported URM files pulsed the *gate* around travels
+and never latched it → CARACOL ignored all temp/RPM setpoints (setpoint 0, deadlock at
+`WAIT FOR $IN[6]`). Fixed at the source.
+
+**Machine-verified extruder signal map (LFAM 1 & 2):**
+
+| Signal | Role |
+|--------|------|
+| `$OUT[7]` | screw strobe / print enable → `DI_05_startPrinting_req` |
+| `$OUT[8]` | **URM request** (pulse TRUE only around travels) → `DI_01_URM` |
+| `$OUT[9]` | **robot-mode gate** (latch TRUE for the whole job in MAT) → `DI_01_MIO_req` |
+| `$IN[5]` | fire alarm (Antincendio) |
+| `$IN[6]` | extruder ready ← `DO_06_extruderReady` |
+| `$IN[7]` | Effecto QS anti-collision breakaway |
+
+**Changes:**
+- `KrlExporter.cs`: `DefaultUrmHeaderTemplate` inits `$OUT[8]=FALSE` and **latches `$OUT[9]=TRUE`
+  in MAT**; `EmitCaracolSsPreTravel`/`EmitCaracolSsPostTravel` pulse `$OUT[8]` (not 9);
+  `DefaultUrmFooterTemplate` clears OUT[8] (URM) then OUT[9] (gate); doc comments updated.
+- **App defaults = T5 winner** from the LFAM 2 8-cell travel calibration (2026-07-16, 15 mm/s
+  print / 3 mm layers): `AdditiveSettingsViewModel` — travel **600 mm/s**, wipe **Same-Direction**,
+  length **12 mm**, ramp **4 mm**, wipe speed **600 mm/s**, z-hop **3 mm**, resume pause **0.5 s**.
+  (T4=250 ms lost narrowly to T5=500 ms; next A/B: 300–400 ms.) Core `SliceSettings` left
+  library-neutral on purpose — recommended values live at the app layer.
+- `KrlExporterTest.cs`: URM assertions now expect OUT[8] pulses + latched OUT[9] gate.
+
+**Tests:** 403 passed; 13 failures are pre-existing WIP/environmental (verified unrelated —
+same set fails with defaults reverted). App builds clean.
+
+**Ops note:** the broken mapping shipped in `SS 8-cell matrix Rev09` — fixed by hand on the
+LFAM 2 D:\ share the same day; controller-side complements: sps.sub URM-latch guard, ANALOGHANDLER
+$OV_PRO speed-scaled RPM + self-heal, ID3 submit re-registration (see LFAM install session notes).
+
 
 ### 2026-07-12 — 2D Slice Plane Viewer + edit multipass + Target Support Selections
 

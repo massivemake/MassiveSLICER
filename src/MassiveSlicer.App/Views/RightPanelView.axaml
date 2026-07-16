@@ -695,52 +695,59 @@
                                     Command="{Binding Additive.ReverseTiltDirectionCommand}"
                                     ToolTip.Tip="Flip the angled-slice direction (negates the X and Y tilt). The perimeter arrow shows the current slice direction."/>
                         </StackPanel>
-                    </Expander>                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False"
-                              IsVisible="{Binding Additive.ShowContourOffsetOption}">
+                    </Expander>                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
                             <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
                                 <TextBlock Grid.Column="0" Text="Mode" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin open wall (longest face), reverse each layer — works with Planar, Angled, Multi-Planar, Geodesic, and Curved (Sweep). Spiral: vase mode (planar-style)."/>
                                 <ComboBox  Grid.Column="1"
                                            ItemsSource="{Binding Additive.SeamModeOptions}"
                                            SelectedItem="{Binding Additive.SeamMode, Mode=TwoWay}"
                                            Width="90" FontSize="11"
-                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin wall (longest face only, no back panel) — end of line, Z up, reverse each layer. Spiral: vase mode."/>
+                                           ToolTip.Tip="Normal: closed loops. Zig-zag: single-skin open wall (longest face), reverse each layer — works with Planar, Angled, Multi-Planar, Geodesic, and Curved (Sweep). Spiral: vase mode (planar-style)."/>
                             </Grid>
 
-                            <TextBlock Text="LOCATION" Classes="LabelMuted" FontSize="10" Margin="8,6,8,2" LetterSpacing="1"/>
+                            <CheckBox Content="Allow same-layer travel"
+                                      IsChecked="{Binding Additive.ZigZagAllowSameLayerTravel, Mode=TwoWay}"
+                                      IsVisible="{Binding Additive.ShowZigZagTravelOption}"
+                                      Margin="8,2,8,2"
+                                      ToolTip.Tip="Zig-zag: when a layer has multiple open faces, keep them all and Travel (start/stop) between faces. Off = only the longest face per layer. Use with Digital Start/Stop for clean travels. Recommended for Geodesic / Multi-Planar panels."/>
 
-                            <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
-                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
-                                    <TextBlock Text="Seam position guides" Classes="LabelMuted"/>
-                                    <TextBlock Text="{Binding Additive.SeamGuideSummary}" FontSize="10" Opacity="0.7"/>
-                                </StackPanel>
-                                <Button Grid.Column="1"
-                                        Content="Edit"
-                                        Classes="ToolbarButton"
-                                        Padding="10,4"
-                                        Command="{Binding Additive.OpenSeamEditorCommand}"
-                                        ToolTip.Tip="Place points on the model. Seams start at the contour point closest to each guide."/>
-                            </Grid>
+                            <StackPanel IsVisible="{Binding Additive.ShowPlanarSeamExtras}">
+                                <TextBlock Text="LOCATION" Classes="LabelMuted" FontSize="10" Margin="8,6,8,2" LetterSpacing="1"/>
 
-                            <CheckBox Content="Overhang orientation"
-                                      IsChecked="{Binding Additive.OverhangOrientation, Mode=TwoWay}"
-                                      Margin="8,2,8,2"/>
+                                <Grid ColumnDefinitions="*,Auto" Margin="8,2,8,4">
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                                        <TextBlock Text="Seam position guides" Classes="LabelMuted"/>
+                                        <TextBlock Text="{Binding Additive.SeamGuideSummary}" FontSize="10" Opacity="0.7"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1"
+                                            Content="Edit"
+                                            Classes="ToolbarButton"
+                                            Padding="10,4"
+                                            Command="{Binding Additive.OpenSeamEditorCommand}"
+                                            ToolTip.Tip="Place points on the model. Seams start at the contour point closest to each guide."/>
+                                </Grid>
 
-                            <Grid ColumnDefinitions="*,Auto"
-                                  Margin="8,2,8,4"
-                                  IsVisible="{Binding Additive.ShowOverhangTilt}">
-                                <TextBlock Grid.Column="0" Text="Max tilt (°)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
-                                <NumericUpDown Grid.Column="1"
-                                              Value="{Binding Additive.MaxOverhangTiltDeg, Mode=TwoWay}"
-                                              Minimum="0" Maximum="89" Increment="5"
-                                              FormatString="F0" Width="80" FontSize="11"/>
-                            </Grid>
+                                <CheckBox Content="Overhang orientation"
+                                          IsChecked="{Binding Additive.OverhangOrientation, Mode=TwoWay}"
+                                          Margin="8,2,8,2"/>
 
-                            <CheckBox Content="Disable contour offset"
-                                      IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
-                                      Margin="8,4,8,2"
-                                      ToolTip.Tip="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+                                <Grid ColumnDefinitions="*,Auto"
+                                      Margin="8,2,8,4"
+                                      IsVisible="{Binding Additive.ShowOverhangTilt}">
+                                    <TextBlock Grid.Column="0" Text="Max tilt (°)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="11"/>
+                                    <NumericUpDown Grid.Column="1"
+                                                  Value="{Binding Additive.MaxOverhangTiltDeg, Mode=TwoWay}"
+                                                  Minimum="0" Maximum="89" Increment="5"
+                                                  FormatString="F0" Width="80" FontSize="11"/>
+                                </Grid>
+
+                                <CheckBox Content="Disable contour offset"
+                                          IsChecked="{Binding Additive.DisableContourOffset, Mode=TwoWay}"
+                                          Margin="8,4,8,2"
+                                          ToolTip.Tip="Disables offsetting contours by bead width / 2. The print line treats the surface as the center line, adding extra material on the outside. Useful for prints requiring finish milling."/>
+                            </StackPanel>
 
                             <Button Margin="8,8,8,2" HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Center"
@@ -1283,10 +1290,11 @@
                                                        SelectedItem="{Binding Additive.XBracingProjectionType, Mode=TwoWay}"/>
                                         </Grid>
 
-                                        <ToggleButton Margin="8,0,8,4" HorizontalAlignment="Stretch" FontSize="11"
-                                                      IsChecked="{Binding Additive.XBracingShowHelper, Mode=TwoWay}"
-                                                      Content="Show helper in viewport"
-                                                      ToolTip.Tip="Toggle the brace plane / cylinder guide in the viewport. Visual only — braces still use it while hidden."/>
+                                        <CheckBox Margin="8,2,8,4"
+                                                  Content="Show helper in viewport"
+                                                  FontSize="11"
+                                                  IsChecked="{Binding Additive.XBracingShowHelper, Mode=TwoWay}"
+                                                  ToolTip.Tip="Show the brace plane / cylinder guide in the viewport. Saved with the workspace. Visual only — braces still use the projection while hidden."/>
 
                                         <!-- Planar projection -->
                                         <StackPanel IsVisible="{Binding Additive.ShowXBracingPlanarControls}">
@@ -1357,11 +1365,33 @@
                                         <TextBlock Margin="8,6,8,2" Text="PATTERN" Classes="LabelMuted"
                                                    FontSize="9" LetterSpacing="1"/>
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
-                                            <TextBlock Grid.Column="0" Text="Depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"
-                                                       ToolTip.Tip="Target how far each brace goes into the wall. Single-skin grows up to this over layers; dual-wall clamps to thickness."/>
+                                            <TextBlock Grid.Column="0" Text="Depth top (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="How far each brace goes into the wall at the TOP of the part. Single-skin grows up to this over layers; dual-wall clamps to thickness."/>
                                             <TextBox   Grid.Column="1" Classes="PanelTextBox"
                                                        Text="{Binding Additive.XBracingDepthMm, Mode=TwoWay}"/>
                                         </Grid>
+                                        <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                            <TextBlock Grid.Column="0" Text="Depth bottom (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="Brace depth at the BOTTOM of the part. 0 = constant (same as top); set a value to taper depth over height with the ease dropdowns — e.g. a deeper base than tip on a cylinder."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                       Text="{Binding Additive.XBracingDepthBottomMm, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <StackPanel IsVisible="{Binding Additive.ShowXBracingDepthEase}">
+                                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,140">
+                                                <TextBlock Grid.Column="0" Text="Ease bottom" VerticalAlignment="Center" Classes="LabelMuted"
+                                                           ToolTip.Tip="How the depth taper behaves near the BOTTOM of the part. Linear = constant rate; Ease-In = slow start (holds bottom depth longer); Ease-Out = fast start; Smooth = flat start/end (smoothstep)."/>
+                                                <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch" FontSize="11"
+                                                           ItemsSource="{Binding Additive.XBracingDepthEaseOptions}"
+                                                           SelectedItem="{Binding Additive.XBracingDepthEaseBottom, Mode=TwoWay}"/>
+                                            </Grid>
+                                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,140">
+                                                <TextBlock Grid.Column="0" Text="Ease top" VerticalAlignment="Center" Classes="LabelMuted"
+                                                           ToolTip.Tip="How the depth taper behaves near the TOP of the part. Linear = constant rate; Ease-In = steep finish; Ease-Out = soft settle to top depth; Smooth = flat end (smoothstep)."/>
+                                                <ComboBox  Grid.Column="1" HorizontalAlignment="Stretch" FontSize="11"
+                                                           ItemsSource="{Binding Additive.XBracingDepthEaseOptions}"
+                                                           SelectedItem="{Binding Additive.XBracingDepthEaseTop, Mode=TwoWay}"/>
+                                            </Grid>
+                                        </StackPanel>
                                         <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
                                             <TextBlock Grid.Column="0" Text="X span (mm)" VerticalAlignment="Center" Classes="LabelMuted"
                                                        ToolTip.Tip="Horizontal size of one full X cell along the wall."/>
@@ -1889,6 +1919,40 @@
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                         </Grid>
 
+                        <!-- LFAM 1 linear rail (E1): path tracking within Y+/Y− of home (export-time). -->
+                        <StackPanel Margin="0,0,0,4">
+                            <TextBlock Text="E1 RAIL MOTION" Classes="SectionHeader"
+                                       ToolTip.Tip="When enabled, Export-to-Robot plans E1 so the carriage tracks the toolpath within the Y+/Y− allowance from the home E1. Keeps the arm closer to its sweet spot with tilted toolheads. Only applies on cells with a linear rail (LFAM 1)."/>
+                            <CheckBox Content="Enable E1 movement"
+                                      IsChecked="{Binding Additive.E1MotionEnabled, Mode=TwoWay}"
+                                      Margin="8,2,8,4"
+                                      ToolTip.Tip="Samples E1 across Y+/Y− for each point, picks the best reachable carriage pose, re-runs reachability, and drives the rail in scrub/playback simulation. Export writes the planned E1 on every LIN."/>
+                            <StackPanel IsVisible="{Binding Additive.ShowE1AllowanceControls}">
+                                <Grid Margin="8,0,8,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Y+ allowance (mm)" Classes="LabelMuted" VerticalAlignment="Center"
+                                               ToolTip.Tip="How far E1 may travel in the positive direction from the home E1 (mm)."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                               Text="{Binding Additive.E1YPlusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                               TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                                <Grid Margin="8,0,8,8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="72"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Y− allowance (mm)" Classes="LabelMuted" VerticalAlignment="Center"
+                                               ToolTip.Tip="How far E1 may travel in the negative direction from the home E1 (mm)."/>
+                                    <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                               Text="{Binding Additive.E1YMinusMm, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                               TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+
                         </StackPanel>
                         </Border>
 
@@ -2068,16 +2132,24 @@
                               IsVisible="{Binding $parent[Window].DataContext.Viewport.Lfam3ToolpathShowPrintOptions}">
                         <StackPanel>
 
-                        <TextBlock Text="Pellet extrusion paths — export temps and RPM to KUKA $ANOUT."
+                        <TextBlock Text="Pellet extrusion paths. URM uses Caracol T1/T2/T3/RPM; off uses LFAM $ANOUT."
                                    Classes="LabelMuted" Margin="8,0,8,6" TextWrapping="Wrap"/>
 
+                        <CheckBox Content="Digital Start/Stop (URM)"
+                                  Margin="8,0,8,4"
+                                  FontSize="11"
+                                  IsChecked="{Binding Additive.DigitalStartStopEnabled, Mode=TwoWay}"
+                                  ToolTip.Tip="Caracol Eidos / MTruck style: header with CaracolSafety + T1/T2/T3/RPM (no $ANOUT MAT), body ;travel start/end + ;rpm change + RPM = N. Unchecked = LFAM $ANOUT[1–4] export."/>
+                        <TextBlock Text="When checked: Caracol MAT (T1/T2/T3/RPM), not $ANOUT. Travel uses ;travel start/end and ;rpm change."
+                                   Classes="LabelMuted" FontSize="10" Margin="24,0,8,8" TextWrapping="Wrap" Opacity="0.75"/>
+
                         <TextBlock Text="KRL EXPORT" Classes="SectionHeader"
-                                   ToolTip.Tip="Values written to the SRC file. Temperatures and extrusion speed are converted to $ANOUT automatically."/>
+                                   ToolTip.Tip="Values written to the SRC file. URM: T1/T2/T3/RPM globals. Off: $ANOUT channels."/>
 
                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
                             <TextBlock Grid.Column="0" Text="Temp all zones (°C)"
                                        VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Material preset temperature for all extruder zones. Written to $ANOUT[1–3] at export."/>
+                                       ToolTip.Tip="Material preset temperature for all extruder zones. URM writes T1/T2/T3; LFAM writes $ANOUT[1–3]."/>
                             <TextBlock Grid.Column="1"
                                        Text="{Binding Additive.ExportTemperatureC, StringFormat={}{0:F0}}"
                                        VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"/>

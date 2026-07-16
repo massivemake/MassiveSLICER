@@ -168,6 +168,8 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, float[][]>  _ikSolutionsByNode  = new();
     private readonly ConcurrentDictionary<SceneNode, float[]>    _moveTimesMsByNode   = new(); // ms per move
     private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
+    /// <summary>Per-move planned rail E1 (mm), parallel to IK solutions / move list.</summary>
+    private readonly ConcurrentDictionary<SceneNode, float[]>    _e1MmByNode          = new();
 
     // Playback timing state.
     private double           _playbackStartElapsedMs;
@@ -531,7 +533,14 @@ public partial class ViewportView : UserControl
                         var interp = new float[6];
                         for (int j = 0; j < 6; j++)
                             interp[j] = a[j] + (b[j] - a[j]) * t;
-                        SetRobotAnglesDirectly(interp);
+                        float? e1 = null;
+                        if (_e1MmByNode.TryGetValue(node, out var e1s) && e1s.Length > 0)
+                        {
+                            float e0 = e1s[Math.Clamp(prevIdx, 0, e1s.Length - 1)];
+                            float e1b = e1s[Math.Clamp(moveIdx, 0, e1s.Length - 1)];
+                            e1 = e0 + (e1b - e0) * t;
+                        }
+                        SetRobotAnglesDirectly(interp, e1);
                     }
                 }
                 else
@@ -696,12 +705,15 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.XBracingShowHelper))
                     GlCanvas.RequestNextFrameRendering();
 
-                // Re-solve IK live when the toolhead orientation offset changes so the
-                // user can see the effect in the viewport without moving the scrubber.
-                // Also re-run full validation so reachability and singularity markers update.
+                // Re-solve IK + re-validate when toolhead orientation or E1 rail settings change.
+                // E1 planning is O(n) envelope samples (not × multi full DLS per point), so it is
+                // safe to re-run; planned E1 is used for both reachability and simulation.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ToolheadA)
                                     or nameof(AdditiveSettingsViewModel.ToolheadB)
-                                    or nameof(AdditiveSettingsViewModel.ToolheadC))
+                                    or nameof(AdditiveSettingsViewModel.ToolheadC)
+                                    or nameof(AdditiveSettingsViewModel.E1MotionEnabled)
+                                    or nameof(AdditiveSettingsViewModel.E1YPlusMm)
+                                    or nameof(AdditiveSettingsViewModel.E1YMinusMm))
                 {
                     if (vm.IsToolpathSelected)
                         ScrubIk(vm.ToolpathScrubIndex);
@@ -711,6 +723,7 @@ public partial class ViewportView : UserControl
                     {
                         _validationCts?.Cancel();
                         _validationDone = false;
+                        _validationNode = null; // force re-key so E1 plan is not skipped
                         ValidateToolpathAsync(nd, tp);
                     }
                 }
@@ -1166,6 +1179,7 @@ public partial class ViewportView : UserControl
                 _ikSolutionsByNode.TryRemove(removing, out _);
                 _moveTimesMsByNode.TryRemove(removing, out _);
                 _singularityByNode.TryRemove(removing, out _);
+                _e1MmByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 GpuMeshCache.ReleaseSubtree(removing);
                 // Detach from the node's actual parent — scans live under the rotary pivot, not SceneRoot.
@@ -1355,6 +1369,7 @@ public partial class ViewportView : UserControl
                 _ikSolutionsByNode.TryRemove(entry.Node, out _);
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
+                _e1MmByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
                 UploadToolpathEntry(entry, addToScene: false);
                 var replacedNode = entry.Node;
@@ -1766,6 +1781,19 @@ public partial class ViewportView : UserControl
         }
 
         vm.ApplyUiSessionViewState(session);
+
+        // Restore realtime-slice pause *after* toolpaths exist so BAKED matrices stay intact.
+        // When pause is requested, also drop any pending realtime work from prefs load.
+        if (session.RealtimeSlicingPaused == true || HasProtectedBakedToolpath(vm))
+        {
+            _realtimeSlicePending = false;
+            vm.RealtimeSlicingPaused = true;
+        }
+        else if (session.RealtimeSlicingPaused == false)
+        {
+            vm.RealtimeSlicingPaused = false;
+        }
+
         // Re-bind MODIFICATIONS after scrub/toolpath is armed (layers available).
         if (session.PaintModifications is { Count: > 0 } mods)
             RestorePaintModificationsState(mods);
@@ -1850,6 +1878,7 @@ public partial class ViewportView : UserControl
         _ikSolutionsByNode.Clear();
         _moveTimesMsByNode.Clear();
         _singularityByNode.Clear();
+        _e1MmByNode.Clear();
         _activeScrubNode = null;
     }
 
@@ -3540,9 +3569,13 @@ public partial class ViewportView : UserControl
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
             ZigZagSeam             = s.SeamMode == "Zig-zag",
+            ZigZagAllowSameLayerTravel = s.ZigZagAllowSameLayerTravel,
             Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
             XBracingEnabled     = s.XBracingEnabled,
             XBracingDepthMm     = (float)s.XBracingDepthMm,
+            XBracingDepthBottomMm = (float)s.XBracingDepthBottomMm,
+            XBracingDepthEaseBottom = s.XBracingDepthEaseBottom,
+            XBracingDepthEaseTop    = s.XBracingDepthEaseTop,
             XBracingSpanMm      = (float)s.XBracingSpanMm,
             XBracingAngleDeg    = (float)s.XBracingAngleDeg,
             XBracingExtendEdges = s.XBracingExtendEdges,
@@ -4649,6 +4682,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
+        nameof(AdditiveSettingsViewModel.ZigZagAllowSameLayerTravel),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
@@ -4672,10 +4706,15 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningButtressBarMm),
         nameof(AdditiveSettingsViewModel.LightningPreferInteriorMouths),
         nameof(AdditiveSettingsViewModel.LightningTargetSupportSelections),
+        nameof(AdditiveSettingsViewModel.OverhangOrientation),
+        nameof(AdditiveSettingsViewModel.MaxOverhangTiltDeg),
         nameof(AdditiveSettingsViewModel.MultiPlanarStamp),
         nameof(AdditiveSettingsViewModel.PaintStamp),
         nameof(AdditiveSettingsViewModel.XBracingEnabled),
         nameof(AdditiveSettingsViewModel.XBracingDepthMm),
+        nameof(AdditiveSettingsViewModel.XBracingDepthBottomMm),
+        nameof(AdditiveSettingsViewModel.XBracingDepthEaseBottom),
+        nameof(AdditiveSettingsViewModel.XBracingDepthEaseTop),
         nameof(AdditiveSettingsViewModel.XBracingSpanMm),
         nameof(AdditiveSettingsViewModel.XBracingAngleDeg),
         nameof(AdditiveSettingsViewModel.XBracingExtendEdges),
@@ -4724,6 +4763,13 @@ public partial class ViewportView : UserControl
             if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
                 && !vm.RealtimeSlicingPaused && _realtimeSlicePending)
             {
+                // Never auto-fire a deferred re-slice over a protected baked toolpath.
+                if (HasProtectedBakedToolpath(vm))
+                {
+                    _realtimeSlicePending = false;
+                    return;
+                }
+
                 _realtimeSlicePending = false;
                 ScheduleRealtimeSlice(vm);
             }
@@ -4847,8 +4893,32 @@ public partial class ViewportView : UserControl
             LogPaintConsole($"[edit] reslice: support paint formbound={formN} tree={treeN}");
     }
 
+    /// <summary>
+    /// Start/Stop calibration (and similar) workspaces ship a pre-baked multi-recipe toolpath.
+    /// Realtime re-slice would replace it with one global wipe/z-hop and destroy the matrix.
+    /// </summary>
+    private static bool HasProtectedBakedToolpath(ViewportViewModel vm)
+    {
+        foreach (var model in vm.EnumerateUserModelItems())
+        {
+            foreach (var child in model.Children)
+            {
+                if (child.IsToolpath
+                    && child.Name.Contains("BAKED", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private void ScheduleRealtimeSlice(ViewportViewModel vm)
     {
+        if (HasProtectedBakedToolpath(vm))
+        {
+            _realtimeSlicePending = false;
+            return;
+        }
+
         // Always mark pending so a mid-slice change forces a follow-up with latest state.
         _realtimeSlicePending = true;
 
@@ -4893,6 +4963,9 @@ public partial class ViewportView : UserControl
 
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
+        if (HasProtectedBakedToolpath(vm))
+            return;
+
         var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
                    ?? vm.EnumerateUserModelItems().FirstOrDefault();
         if (item is null) return;
@@ -10380,10 +10453,56 @@ public partial class ViewportView : UserControl
             worldNormal = new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z);
         }
 
-        // IK expects the target in ROBROOT frame (world − live ROBROOT origin).
+        // Prefer pre-solved joints + planned E1 from validation (instant, matches reachability).
+        int moveIdx = Math.Clamp(index > 0 ? index - 1 : 0, 0, int.MaxValue);
+        if (_ikSolutionsByNode.TryGetValue(scrubNode, out var sols)
+            && sols is { Length: > 0 })
+        {
+            moveIdx = Math.Clamp(moveIdx, 0, sols.Length - 1);
+            var angles = sols[moveIdx];
+            float? e1 = null;
+            if (_e1MmByNode.TryGetValue(scrubNode, out var e1s) && e1s.Length > 0)
+                e1 = e1s[Math.Clamp(moveIdx, 0, e1s.Length - 1)];
+            SetRobotAnglesDirectly(angles, e1);
+            return;
+        }
+
+        // Fallback live IK: target relative to planned (or live) rail pose.
+        float scrubE1 = (float)robot.E1;
+        if (_e1MmByNode.TryGetValue(scrubNode, out var e1Arr) && e1Arr.Length > 0)
+            scrubE1 = e1Arr[Math.Clamp(moveIdx, 0, e1Arr.Length - 1)];
+        else if (_toolpathByNode.TryGetValue(scrubNode, out var tpScrub))
+        {
+            int mi = 0, want = Math.Max(0, moveIdx);
+            foreach (var layer in tpScrub.Layers)
+            foreach (var mv in layer.Moves)
+            {
+                if (mi == want && !float.IsNaN(mv.E1Mm))
+                {
+                    scrubE1 = mv.E1Mm;
+                    break;
+                }
+                mi++;
+            }
+        }
+
         RefreshIkSceneKinematics();
-        var robrootPos    = GetLiveRobrootWorldPos();
-        var targetRobroot = worldPos - robrootPos;
+        var cell = vm.ActiveCell;
+        TkVector3 targetRobroot;
+        if (robot.IsRobotRail && cell?.RobotRail is { } rail
+            && vm.AdditiveSettings is { E1MotionEnabled: true })
+        {
+            var homeWorld = new NVec3(
+                cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z);
+            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, scrubE1);
+            targetRobroot = new TkVector3(
+                worldPos.X - baseW.X, worldPos.Y - baseW.Y, worldPos.Z - baseW.Z);
+        }
+        else
+        {
+            var robrootPos = GetLiveRobrootWorldPos();
+            targetRobroot = worldPos - robrootPos;
+        }
 
         // Tool orientation: approach along -normal, forward fixed to world +X.
         // Fixing the forward eliminates azimuthal spin when tilt axis changes.
@@ -10405,6 +10524,8 @@ public partial class ViewportView : UserControl
         _scrubIkCts?.Cancel();
         _scrubIkCts = new CancellationTokenSource();
         var cts = _scrubIkCts;
+        float e1Capture = scrubE1;
+        bool setE1 = robot.IsRobotRail && vm.AdditiveSettings is { E1MotionEnabled: true };
 
         Task.Run(() =>
         {
@@ -10421,6 +10542,8 @@ public partial class ViewportView : UserControl
                 robot.A4 = Math.Round(result[3], 2);
                 robot.A5 = Math.Round(result[4], 2);
                 robot.A6 = Math.Round(result[5], 2);
+                if (setE1)
+                    robot.E1 = Math.Round(e1Capture, 2);
                 GlCanvas.RequestNextFrameRendering();
             });
         }, cts.Token);
@@ -10468,26 +10591,62 @@ public partial class ViewportView : UserControl
             (float)robot.A1, (float)robot.A2, (float)robot.A3,
             (float)robot.A4, (float)robot.A5, (float)robot.A6,
         };
+        // Plan E1 (reachability-aware) before IK when rail motion is enabled.
+        bool e1Motion = addSettings is { E1MotionEnabled: true }
+                        && vm?.ActiveCell?.RobotRail is not null;
+        float homeE1 = (float)robot.E1;
+        var cellForE1 = vm?.ActiveCell;
+        var homeWorld = cellForE1 is not null
+            ? new NVec3(cellForE1.Robot.WorldPosition.X, cellForE1.Robot.WorldPosition.Y, cellForE1.Robot.WorldPosition.Z)
+            : new NVec3(robroot.X, robroot.Y, robroot.Z);
 
         Task.Run(() =>
         {
             int total = 0;
             foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
+            if (total == 0) return;
 
+            // Bake planned E1 onto moves (workspace envelope + mid-reach scoring).
+            if (e1Motion && cellForE1?.RobotRail is { } railPlan && addSettings is not null)
+            {
+                PlanRailE1ForExport(toolpath, cellForE1, addSettings, origin, wt, homeE1);
+            }
+            else
+            {
+                foreach (var layer in toolpath.Layers)
+                foreach (var m in layer.Moves)
+                    m.E1Mm = float.NaN;
+            }
+
+            var e1PerMove = new float[total];
             var targets    = new TkVector3[total];
             var normals    = new TkVector3[total];
             int mi         = 0;
             var lastNormN  = NVec3.UnitZ; // last valid extrude normal; held through transitions
+            var railCfg    = cellForE1?.RobotRail;
             foreach (var layer in toolpath.Layers)
             {
                 foreach (var move in layer.Moves)
                 {
                     var (pos, _) = cache[Math.Min(mi + 1, cache.Length - 1)];
                     float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
-                    targets[mi] = new TkVector3(
+                    var world = new TkVector3(
                         lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
                         lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
-                        lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43) - robroot;
+                        lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+
+                    float e1 = !float.IsNaN(move.E1Mm) ? move.E1Mm : homeE1;
+                    e1PerMove[mi] = e1;
+
+                    // Target in ROBROOT of the carriage at planned E1 (pure translation rail).
+                    if (e1Motion && railCfg is { } rail)
+                    {
+                        var baseW = RailE1Planner.BaseWorld(homeWorld, rail, e1);
+                        targets[mi] = new TkVector3(
+                            world.X - baseW.X, world.Y - baseW.Y, world.Z - baseW.Z);
+                    }
+                    else
+                        targets[mi] = world - robroot;
 
                     // Travel and layer-stitch moves carry no orientation — hold the last
                     // extrude normal to prevent a sudden IK jump at layer transitions.
@@ -10677,6 +10836,7 @@ public partial class ViewportView : UserControl
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
+            _e1MmByNode[node]         = e1PerMove;
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
@@ -10930,8 +11090,9 @@ public partial class ViewportView : UserControl
     /// <summary>
     /// Drives the robot joints directly from pre-solved angles without launching an IK task.
     /// Used by the playback timer to animate Cartesian motion in real time.
+    /// When <paramref name="e1Mm"/> is set, also slides the linear rail for simulation.
     /// </summary>
-    private void SetRobotAnglesDirectly(float[] angles)
+    private void SetRobotAnglesDirectly(float[] angles, float? e1Mm = null)
     {
         var robot = _vm?.Robot;
         if (robot is null) return;
@@ -10942,6 +11103,8 @@ public partial class ViewportView : UserControl
         robot.A4 = Math.Round(angles[3], 2);
         robot.A5 = Math.Round(angles[4], 2);
         robot.A6 = Math.Round(angles[5], 2);
+        if (e1Mm is { } e && robot.IsRobotRail)
+            robot.E1 = Math.Round(e, 2);
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -13155,7 +13318,14 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
+        // Enforce PointLoader-safe stem even if the user typed special characters in the dialog.
+        path = SavePathUtil.Normalize(path, "src");
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var stem = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(path));
+        if (string.IsNullOrWhiteSpace(stem)) stem = "PrintJob";
+        path = Path.Combine(dir, stem + ".src");
+
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
     }
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
@@ -13169,8 +13339,9 @@ public partial class ViewportView : UserControl
         if (toolpath is null || node is null || cell is null || settings is null) return null;
 
         // Rev in the filename (and therefore the KRL program name) so the operator
-        // can tell revisions apart on the controller, e.g. "… Rev04.src".
-        string path = Path.Combine(dir, $"{RobotKrlPaths.SuggestedFileName(node.Name)} Rev{rev:00}.src");
+        // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
+        // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
+        string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
         await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
         return path;
     }
@@ -13206,11 +13377,14 @@ public partial class ViewportView : UserControl
         if (nasSrc is { } n)
         {
             srcPath  = n.Path;
-            fileName = Path.GetFileName(n.Path);
+            // Sanitize upload name (PointLoader rejects odd punctuation in the module filename).
+            fileName = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(n.Path));
+            if (string.IsNullOrWhiteSpace(fileName)) fileName = "PrintJob";
+            fileName += ".src";
         }
         else
         {
-            fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
+            fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
             await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
@@ -13230,6 +13404,184 @@ public partial class ViewportView : UserControl
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
     }
 
+    /// <summary>
+    /// Home PTP E1: first planned move E1 when motion is on, else live rail pose.
+    /// </summary>
+    private static float ResolveHomeE1Mm(
+        CellConfig cell, ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel settings)
+    {
+        if (cell.RobotRail is null) return float.NaN;
+        if (settings.E1MotionEnabled)
+        {
+            foreach (var layer in toolpath.Layers)
+            foreach (var m in layer.Moves)
+                if (!float.IsNaN(m.E1Mm))
+                    return m.E1Mm;
+        }
+        return vm.Robot is { } r ? (float)r.E1 : 0f;
+    }
+
+    /// <summary>
+    /// For each move endpoint, sample E1 across the Y+/Y− allowance and pick the
+    /// carriage position that keeps the TCP in the arm workspace (prefer mid-reach).
+    /// Bakes <see cref="ToolpathMove.E1Mm"/> for the KRL exporter.
+    /// </summary>
+    private void PlanRailE1ForExport(
+        Toolpath toolpath,
+        CellConfig cell,
+        AdditiveSettingsViewModel settings,
+        NVec3 origin,
+        Matrix4 wt,
+        float homeE1)
+    {
+        var rail = cell.RobotRail;
+        if (rail is null) return;
+
+        float yPlus  = (float)settings.E1YPlusMm;
+        float yMinus = (float)settings.E1YMinusMm;
+        var homeWorld = new NVec3(
+            cell.Robot.WorldPosition.X,
+            cell.Robot.WorldPosition.Y,
+            cell.Robot.WorldPosition.Z);
+
+        // Collect world-space move endpoints in export order.
+        var worlds = new List<NVec3>(4096);
+        var moves  = new List<ToolpathMove>(4096);
+        foreach (var layer in toolpath.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                float lx = move.To.X - origin.X, ly = move.To.Y - origin.Y, lz = move.To.Z - origin.Z;
+                var world = new NVec3(
+                    lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                    lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                    lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+                worlds.Add(world);
+                moves.Add(move);
+            }
+        }
+        if (worlds.Count == 0) return;
+
+        // Prefer mid-reach from the live IK envelope when available; else ~900 mm.
+        float prefReach = 900f;
+        Func<NVec3, bool>? inWs = null;
+        var solver = _ikSolver;
+        if (solver is not null)
+        {
+            prefReach = solver.PreferredHorizontalReachMm;
+            // Envelope is translation-invariant for pure rail travel — evaluate TCP
+            // relative to a virtual base at candidate E1 (no UpdateSceneBase needed).
+            inWs = rel => solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
+        }
+
+        // Subsample dense paths for speed: plan every keyframe, interpolate between.
+        const float KeyMm = 40f;
+        var keyIdx = new List<int> { 0 };
+        float acc = 0f;
+        for (int i = 1; i < worlds.Count; i++)
+        {
+            acc += NVec3.Distance(worlds[i - 1], worlds[i]);
+            if (acc >= KeyMm)
+            {
+                keyIdx.Add(i);
+                acc = 0f;
+            }
+        }
+        if (keyIdx[^1] != worlds.Count - 1)
+            keyIdx.Add(worlds.Count - 1);
+
+        var keyWorlds = new List<NVec3>(keyIdx.Count);
+        foreach (int i in keyIdx)
+            keyWorlds.Add(worlds[i]);
+
+        float[] keyE1 = RailE1Planner.PlanPath(
+            keyWorlds, homeWorld, rail, homeE1, yPlus, yMinus,
+            prefReach, inWs, gridCount: 11, smoothBlend: 0.45f);
+
+        // Interpolate key E1 → every move; sparse full-IK refinement on unreachable keys.
+        if (solver is not null)
+            RefineKeyE1WithIk(keyWorlds, keyE1, homeWorld, rail, homeE1, yPlus, yMinus, solver, settings);
+
+        // Paint onto moves
+        int k = 0;
+        for (int i = 0; i < moves.Count; i++)
+        {
+            while (k + 1 < keyIdx.Count && i > keyIdx[k + 1]) k++;
+            float e1;
+            if (k + 1 < keyIdx.Count && keyIdx[k + 1] != keyIdx[k])
+            {
+                float t = (i - keyIdx[k]) / (float)(keyIdx[k + 1] - keyIdx[k]);
+                e1 = keyE1[k] * (1f - t) + keyE1[k + 1] * t;
+            }
+            else
+                e1 = keyE1[Math.Min(k, keyE1.Length - 1)];
+
+            e1 = RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+            moves[i].E1Mm = e1;
+        }
+    }
+
+    /// <summary>
+    /// For keyframes still outside the workspace envelope at their planned E1, try a few
+    /// more E1 samples with a cheap position-only IK solve (serial — no Parallel.For).
+    /// </summary>
+    private static void RefineKeyE1WithIk(
+        List<NVec3> keyWorlds,
+        float[] keyE1,
+        NVec3 homeWorld,
+        RobotRailCellConfig rail,
+        float homeE1,
+        float yPlus,
+        float yMinus,
+        GltfNumericalIkSolver solver,
+        AdditiveSettingsViewModel settings)
+    {
+        float offA = (float)settings.ToolheadA;
+        float offB = (float)settings.ToolheadB;
+        float offC = (float)settings.ToolheadC;
+        var seed = new float[6]; // home-ish zeros; Solve will iterate
+
+        for (int i = 0; i < keyWorlds.Count; i++)
+        {
+            var w = keyWorlds[i];
+            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, keyE1[i]);
+            var rel = w - baseW;
+            if (solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z)))
+                continue;
+
+            // Failed envelope at planned E1 — re-pick using full sample set + quick Solve.
+            var candidates = RailE1Planner.BuildCandidates(
+                w, homeWorld, rail, homeE1, yPlus, yMinus, gridCount: 11);
+            float best = keyE1[i];
+            float bestScore = float.MaxValue;
+            var normal = TkVector3.UnitZ;
+            var rot = solver.TargetRotFromGlobalOrientation(normal, offA, offB, offC);
+
+            foreach (float e1 in candidates)
+            {
+                var b = RailE1Planner.BaseWorld(homeWorld, rail, e1);
+                var r = w - b;
+                var tgt = new TkVector3(r.X, r.Y, r.Z);
+                bool env = solver.IsInWorkspace(tgt);
+                // Position-only solve (faster) as quality check when in envelope
+                float[]? sol = env
+                    ? solver.Solve(tgt, seed, maxIterations: 25, finalTolerance: 15f)
+                    : null;
+                float dxy = MathF.Sqrt(r.X * r.X + r.Y * r.Y);
+                float score = (sol is not null ? 0f : env ? 50_000f : 1_000_000f)
+                    + MathF.Abs(dxy - solver.PreferredHorizontalReachMm)
+                    + 0.1f * MathF.Abs(e1 - homeE1);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = e1;
+                    if (sol is not null) Array.Copy(sol, seed, 6);
+                }
+            }
+            keyE1[i] = best;
+        }
+    }
+
     private async Task WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
@@ -13246,6 +13598,33 @@ public partial class ViewportView : UserControl
             wt.M41, wt.M42, wt.M43, wt.M44);
 
         _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        // Reachability-aware E1 plan: sample +/− allowance, pick carriage pose that
+        // keeps the TCP in the arm workspace, bake onto each move before export.
+        if (settings.E1MotionEnabled && cell.RobotRail is not null)
+        {
+            float homeE1 = vm.Robot is { } rr ? (float)rr.E1 : 0f;
+            RefreshIkSceneKinematics();
+            await Task.Run(() => PlanRailE1ForExport(
+                toolpath, cell, settings, origin, wt, homeE1));
+            float eMin = float.MaxValue, eMax = float.MinValue;
+            int nSet = 0;
+            foreach (var layer in toolpath.Layers)
+            foreach (var m in layer.Moves)
+            {
+                if (float.IsNaN(m.E1Mm)) continue;
+                eMin = MathF.Min(eMin, m.E1Mm);
+                eMax = MathF.Max(eMax, m.E1Mm);
+                nSet++;
+            }
+            if (nSet > 0)
+            {
+                var mvm = TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel;
+                mvm?.Console.Log(
+                    $"[E1] Reachability plan: {nSet} points, E1 range [{eMin:0.#} … {eMax:0.#}] mm " +
+                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0})");
+            }
+        }
 
         // Relief-milling toolpath: export a spindle program (LIN cuts + rapids), not extrusion.
         bool isMill = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
@@ -13269,6 +13648,13 @@ public partial class ViewportView : UserControl
                 HomeE1Mm         = cell.RobotRail is not null && vm.Robot is { } millRobot
                                        ? (float)millRobot.E1
                                        : float.NaN,
+                E1MotionEnabled  = cell.RobotRail is not null && settings.E1MotionEnabled,
+                E1YPlusMm        = (float)settings.E1YPlusMm,
+                E1YMinusMm       = (float)settings.E1YMinusMm,
+                RailMinMm        = cell.RobotRail?.MinMm ?? -4650f,
+                RailMaxMm        = cell.RobotRail?.MaxMm ?? 150f,
+                RailAxis         = cell.RobotRail?.Axis ?? "Y",
+                RailE1Sign       = cell.RobotRail?.E1Sign ?? 1f,
                 ApoCvel          = (int)settings.ApoCvel,
                 NodeWorldTransform = sysWt,
                 NodeOrigin       = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
@@ -13310,9 +13696,14 @@ public partial class ViewportView : UserControl
             LayerHeightMm       = (float)settings.LayerHeight,
             FlowRate            = flow,
             HomePosition              = settings.SelectedHomeAngles,
-            HomeE1Mm                  = cell.RobotRail is not null && vm.Robot is { } railRobot
-                                            ? (float)railRobot.E1
-                                            : float.NaN,
+            HomeE1Mm                  = ResolveHomeE1Mm(cell, vm, toolpath, settings),
+            E1MotionEnabled           = cell.RobotRail is not null && settings.E1MotionEnabled,
+            E1YPlusMm                 = (float)settings.E1YPlusMm,
+            E1YMinusMm                = (float)settings.E1YMinusMm,
+            RailMinMm                 = cell.RobotRail?.MinMm ?? -4650f,
+            RailMaxMm                 = cell.RobotRail?.MaxMm ?? 150f,
+            RailAxis                  = cell.RobotRail?.Axis ?? "Y",
+            RailE1Sign                = cell.RobotRail?.E1Sign ?? 1f,
             ApoCvel                   = (int)settings.ApoCvel,
             OrientationLookAheadMm    = (float)settings.OrientationLookAheadMm,
             OrientationSigmaMm        = (float)settings.OrientationSigmaMm,
@@ -13328,11 +13719,14 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.Z),
             SliceBedWorldZ     = _renderer.BedZ,
             TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
-            HeaderTemplate      = postProcess.HeaderText,
-            FooterTemplate      = postProcess.FooterText,
+            // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
+            // forces DefaultUrmHeaderTemplate when DigitalStartStopEnabled is true.
+            HeaderTemplate = settings.DigitalStartStopEnabled ? null : postProcess.HeaderText,
+            FooterTemplate = settings.DigitalStartStopEnabled ? null : postProcess.FooterText,
             ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
+            DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
 
         var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));

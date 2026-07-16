@@ -451,4 +451,207 @@ public sealed class ZigZagSingleSkinTest
         Assert.True(avgExtrude > 100f,
             $"avg extrude length {avgExtrude:0.#} mm is too short for the long face");
     }
+
+    /// <summary>Two separate thin walls → multi-island zig-zag with same-layer travels.</summary>
+    private static Vector3[] TwoThinWalls(float gap = 80f, float len = 120f, float thick = 18f, float h = 45f)
+    {
+        var tris = new List<Vector3>();
+        void AddBox(float cx)
+        {
+            float hx = len * 0.5f, hy = thick * 0.5f;
+            var v = new Vector3[]
+            {
+                new(cx - hx, -hy, 0), new(cx + hx, -hy, 0), new(cx + hx, hy, 0), new(cx - hx, hy, 0),
+                new(cx - hx, -hy, h), new(cx + hx, -hy, h), new(cx + hx, hy, h), new(cx - hx, hy, h),
+            };
+            int[][] faces =
+            [
+                [0,1,2],[0,2,3], [4,6,5],[4,7,6],
+                [0,4,5],[0,5,1], [1,5,6],[1,6,2],
+                [2,6,7],[2,7,3], [3,7,4],[3,4,0],
+            ];
+            foreach (var f in faces)
+                tris.AddRange([v[f[0]], v[f[1]], v[f[2]]]);
+        }
+        AddBox(-gap * 0.5f - len * 0.5f);
+        AddBox(gap * 0.5f + len * 0.5f);
+        return [.. tris];
+    }
+
+    [Fact]
+    public void ZigZagAllowSameLayerTravelKeepsMultiIslandTravels()
+    {
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.None,
+            ZigZagSeam = true,
+            ZigZagAllowSameLayerTravel = true,
+        };
+        var tp = PlanarSlicer.Slice([TwoThinWalls()], settings, null);
+        Assert.True(tp.Layers.Count >= 3);
+
+        int layersWithTravel = 0;
+        foreach (var lyr in tp.Layers)
+        {
+            bool hasTravel = false;
+            foreach (var m in lyr.Moves)
+            {
+                if (m.Kind != MoveKind.Travel || m.IsLayerChange) continue;
+                float d = Vector2.Distance(
+                    new Vector2(m.From.X, m.From.Y), new Vector2(m.To.X, m.To.Y));
+                if (d > Bead * 2f) { hasTravel = true; break; }
+            }
+            if (hasTravel) layersWithTravel++;
+        }
+        Assert.True(layersWithTravel >= tp.Layers.Count / 2,
+            $"expected same-layer travels between islands, got {layersWithTravel}/{tp.Layers.Count}");
+    }
+
+    [Fact]
+    public void ZigZagDisallowSameLayerTravelKeepsOnlyLongestFace()
+    {
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.None,
+            ZigZagSeam = true,
+            ZigZagAllowSameLayerTravel = false,
+        };
+        var tp = PlanarSlicer.Slice([TwoThinWalls()], settings, null);
+        Assert.True(tp.Layers.Count >= 3);
+
+        // With only one face, same-layer travel between islands should vanish.
+        int longTravels = 0;
+        foreach (var lyr in tp.Layers)
+        {
+            foreach (var m in lyr.Moves)
+            {
+                if (m.Kind != MoveKind.Travel || m.IsLayerChange) continue;
+                float d = Vector2.Distance(
+                    new Vector2(m.From.X, m.From.Y), new Vector2(m.To.X, m.To.Y));
+                if (d > Bead * 2f) longTravels++;
+            }
+        }
+        Assert.True(longTravels == 0,
+            $"disallow same-layer travel should drop second island; longTravels={longTravels}");
+    }
+
+    [Fact]
+    public void AngledZigZagEmitsOpenPathsNotClosedLoops()
+    {
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.None,
+            ZigZagSeam = true,
+            ZigZagAllowSameLayerTravel = true,
+            TiltAngle = 10f,
+        };
+        var tp = AngledPlanarSlicer.Slice([ThinWallBox(len: 200f, thick: 20f, h: 60f)], settings);
+        Assert.True(tp.Layers.Count >= 4, $"expected layers, got {tp.Layers.Count}");
+
+        float avgExtrude = 0f;
+        int n = 0;
+        foreach (var lyr in tp.Layers)
+        {
+            float len = 0f;
+            foreach (var m in lyr.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsLayerChange || m.IsLayerStitch) continue;
+                len += Vector3.Distance(m.From, m.To);
+            }
+            if (len < 1f) continue;
+            avgExtrude += len;
+            n++;
+        }
+        Assert.True(n > 0);
+        avgExtrude /= n;
+        // Open single skin ~200 mm face, not ~440 mm closed perimeter.
+        Assert.True(avgExtrude < 320f,
+            $"angled zig-zag avg extrude {avgExtrude:0.#} mm looks closed (back panel)");
+        Assert.True(avgExtrude > 80f,
+            $"angled zig-zag avg extrude {avgExtrude:0.#} mm too short");
+    }
+
+    private static Vector3[] SolidCylinder(float r = 40f, float h = 60f, int segs = 48)
+    {
+        var tris = new List<Vector3>();
+        // Side wall + caps so planar slices yield one closed ring.
+        for (int i = 0; i < segs; i++)
+        {
+            float a0 = 2f * MathF.PI * i / segs;
+            float a1 = 2f * MathF.PI * (i + 1) / segs;
+            var b0 = new Vector3(r * MathF.Cos(a0), r * MathF.Sin(a0), 0);
+            var b1 = new Vector3(r * MathF.Cos(a1), r * MathF.Sin(a1), 0);
+            var t0 = new Vector3(r * MathF.Cos(a0), r * MathF.Sin(a0), h);
+            var t1 = new Vector3(r * MathF.Cos(a1), r * MathF.Sin(a1), h);
+            tris.AddRange([b0, b1, t1, b0, t1, t0]);
+            // bottom / top fan (origin)
+            var oB = new Vector3(0, 0, 0);
+            var oT = new Vector3(0, 0, h);
+            tris.AddRange([oB, b1, b0, oT, t0, t1]);
+        }
+        return [.. tris];
+    }
+
+    [Fact]
+    public void IsRingLike_DetectsCircleNotThinWall()
+    {
+        // Unit circle-ish polygon
+        var circle = new List<Vector2>();
+        for (int i = 0; i < 40; i++)
+        {
+            float a = 2f * MathF.PI * i / 40;
+            circle.Add(new Vector2(40f * MathF.Cos(a), 40f * MathF.Sin(a)));
+        }
+        Assert.True(PlanarSlicer.IsRingLikeContour(circle));
+
+        // Thin wall rectangle outline 200×20
+        var wall = new List<Vector2>
+        {
+            new(-100, -10), new(100, -10), new(100, 10), new(-100, 10),
+        };
+        Assert.False(PlanarSlicer.IsRingLikeContour(wall));
+    }
+
+    [Fact]
+    public void ZigZagPrintsRingsAsFullClosedLoops()
+    {
+        const float r = 40f;
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            InfillPattern = InfillPattern.None,
+            ZigZagSeam = true,
+            ZigZagAllowSameLayerTravel = true,
+        };
+        var tp = PlanarSlicer.Slice([SolidCylinder(r, h: 45f)], settings, null);
+        Assert.True(tp.Layers.Count >= 4, $"expected layers, got {tp.Layers.Count}");
+
+        // Full circumference ~ 2πr; half-skin bug would be ~πr. Inset shrinks a bit.
+        float fullCirc = 2f * MathF.PI * r;
+        float avgExtrude = 0f;
+        int n = 0;
+        foreach (var lyr in tp.Layers)
+        {
+            float len = 0f;
+            foreach (var m in lyr.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsLayerChange || m.IsLayerStitch) continue;
+                len += Vector3.Distance(m.From, m.To);
+            }
+            if (len < 1f) continue;
+            avgExtrude += len;
+            n++;
+        }
+        Assert.True(n > 0);
+        avgExtrude /= n;
+        // Must be clearly more than half-circle (0.5 * 2πr) — require ≥ 70% of full ring.
+        Assert.True(avgExtrude > fullCirc * 0.70f,
+            $"ring under zig-zag avg extrude {avgExtrude:0.#} mm looks half-open (full≈{fullCirc:0.#})");
+        // And not wildly more than one ring (dual wall would be ~2×).
+        Assert.True(avgExtrude < fullCirc * 1.6f,
+            $"ring avg extrude {avgExtrude:0.#} mm looks like dual wall / multi-loop");
+    }
 }

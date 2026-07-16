@@ -164,8 +164,31 @@ public sealed class SliceSettings
     /// </summary>
     public bool XBracingEnabled { get; init; }
 
-    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).
+    /// This is the depth at the TOP of the part; see <see cref="XBracingDepthBottomMm"/>
+    /// to taper it over height.</summary>
     public float XBracingDepthMm { get; init; } = 50f;
+
+    /// <summary>
+    /// Brace depth at the BOTTOM of the part (mm). When &gt; 0 the depth interpolates
+    /// with height from this at the part's lowest slice to
+    /// <see cref="XBracingDepthMm"/> at the top (e.g. a deeper base than tip on a
+    /// cylinder). 0 (default) = constant depth equal to <see cref="XBracingDepthMm"/>.
+    /// Curve shape uses <see cref="XBracingDepthEaseBottom"/> / <see cref="XBracingDepthEaseTop"/>.
+    /// </summary>
+    public float XBracingDepthBottomMm { get; init; }
+
+    /// <summary>
+    /// Easing of the depth taper at the BOTTOM of the part: Linear, Ease-In, Ease-Out, Smooth.
+    /// Controls the start slope of the height→depth curve (how quickly depth leaves the bottom value).
+    /// </summary>
+    public string XBracingDepthEaseBottom { get; init; } = "Linear";
+
+    /// <summary>
+    /// Easing of the depth taper at the TOP of the part: Linear, Ease-In, Ease-Out, Smooth.
+    /// Controls the end slope of the height→depth curve (how depth settles to the top value).
+    /// </summary>
+    public string XBracingDepthEaseTop { get; init; } = "Linear";
 
     /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
     public float XBracingSpanMm { get; init; } = 120f;
@@ -263,6 +286,14 @@ public sealed class SliceSettings
     /// Has no effect on closed contours.
     /// </summary>
     public bool ZigZagSeam { get; init; } = false;
+
+    /// <summary>
+    /// When <see cref="ZigZagSeam"/> is on and a layer has multiple open faces (islands),
+    /// keep all of them and insert Travel moves (start/stop) between faces.
+    /// When false, only the longest open face on each layer is printed.
+    /// Default true — Multi-Planar organic panels often need multi-island travel.
+    /// </summary>
+    public bool ZigZagAllowSameLayerTravel { get; init; } = true;
 
     /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
     public bool Spiralize { get; init; }

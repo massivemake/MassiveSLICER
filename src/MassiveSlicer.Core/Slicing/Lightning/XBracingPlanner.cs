@@ -99,6 +99,12 @@ public static class XBracingPlanner
         /// Used so bed-supported births get full depth even when the mesh sits far above Z=0.
         /// </summary>
         public float? FirstOpenPathZ { get; set; }
+        /// <summary>Part AABB Z range (world), set once by the slicer. Enables depth
+        /// tapering from bottom to top (<see cref="SliceSettings.XBracingDepthBottomMm"/>).</summary>
+        public float? PartZMin { get; set; }
+        public float? PartZMax { get; set; }
+        /// <summary>Formbound fingers spliced into single-skin open paths (whole slice).</summary>
+        public int FormboundDetours { get; set; }
         /// <summary>Per-contour locked baseline orientation (key = contour index).</summary>
         public Dictionary<int, BaselineLock> BaselineLocks { get; } = new();
 
@@ -121,6 +127,58 @@ public static class XBracingPlanner
         public Vector2 Mouth { get; init; }
         public Vector2 Tip { get; init; }
         public float Depth { get; init; }
+    }
+
+    /// <summary>
+    /// Remap height fraction t∈[0,1] with independent bottom/top ease modes.
+    /// Bottom sets the start slope (how depth leaves the base value); top sets the
+    /// end slope (how it settles to the top value). Modes: Linear, Ease-In, Ease-Out, Smooth.
+    /// </summary>
+    internal static float DepthTaperEase(float t, string? bottomMode, string? topMode)
+    {
+        t = Math.Clamp(t, 0f, 1f);
+        float m0 = EaseStartSlope(bottomMode);
+        float m1 = EaseEndSlope(topMode);
+        // Cubic Hermite from 0→1 with endpoint slopes m0, m1.
+        float t2 = t * t;
+        float t3 = t2 * t;
+        float y = (t3 - 2f * t2 + t) * m0
+                + (-2f * t3 + 3f * t2)
+                + (t3 - t2) * m1;
+        return Math.Clamp(y, 0f, 1f);
+    }
+
+    private static float EaseStartSlope(string? mode) => NormalizeEaseMode(mode) switch
+    {
+        "Ease-In"  => 0f,   // slow leave bottom
+        "Ease-Out" => 2f,   // fast leave bottom
+        "Smooth"   => 0f,   // flat start (smoothstep-like)
+        _          => 1f,   // Linear
+    };
+
+    private static float EaseEndSlope(string? mode) => NormalizeEaseMode(mode) switch
+    {
+        "Ease-In"  => 2f,   // steep into top
+        "Ease-Out" => 0f,   // soft settle at top
+        "Smooth"   => 0f,   // flat end
+        _          => 1f,   // Linear
+    };
+
+    private static string NormalizeEaseMode(string? mode)
+    {
+        if (string.IsNullOrWhiteSpace(mode)) return "Linear";
+        // Accept common aliases
+        var m = mode.Trim();
+        if (m.Equals("EaseIn", StringComparison.OrdinalIgnoreCase)
+            || m.Equals("Ease-In", StringComparison.OrdinalIgnoreCase))
+            return "Ease-In";
+        if (m.Equals("EaseOut", StringComparison.OrdinalIgnoreCase)
+            || m.Equals("Ease-Out", StringComparison.OrdinalIgnoreCase))
+            return "Ease-Out";
+        if (m.Equals("Smooth", StringComparison.OrdinalIgnoreCase)
+            || m.Equals("Smoothstep", StringComparison.OrdinalIgnoreCase))
+            return "Smooth";
+        return "Linear";
     }
 
     /// <summary>Minimum fraction of each hairpin that must rest on the previous layer.</summary>
@@ -150,7 +208,20 @@ public static class XBracingPlanner
         state ??= new OpenPathDetourState();
 
         float bead = MathF.Max(settings.BeadWidth, 0.1f);
-        float wantDepth = MathF.Max(settings.XBracingDepthMm, bead * 3f);
+        // Depth may taper over height: XBracingDepthMm is the TOP depth, and when
+        // XBracingDepthBottomMm > 0 the base uses that, interpolating with height
+        // between zMin (bottom) and zMax (top). Bottom/top ease modes shape the curve.
+        float topDepth = MathF.Max(settings.XBracingDepthMm, bead * 3f);
+        float wantDepth = topDepth;
+        if (settings.XBracingDepthBottomMm > 0.01f
+            && state.PartZMin is float zLo && state.PartZMax is float zHi
+            && zHi > zLo + 1e-3f)
+        {
+            float bottomDepth = MathF.Max(settings.XBracingDepthBottomMm, bead * 3f);
+            float frac = Math.Clamp((z - zLo) / (zHi - zLo), 0f, 1f);
+            float te = DepthTaperEase(frac, settings.XBracingDepthEaseBottom, settings.XBracingDepthEaseTop);
+            wantDepth = MathF.Max(bottomDepth + (topDepth - bottomDepth) * te, bead * 3f);
+        }
         float span = MathF.Max(settings.XBracingSpanMm, bead * 10f);
         float angleDeg = Math.Clamp(settings.XBracingAngleDeg, 10f, 60f);
         bool extendEdges = settings.XBracingExtendEdges;
@@ -975,6 +1046,62 @@ public static class XBracingPlanner
     /// → back to path. Tip is always re-based from the on-path mouth so drawn length
     /// equals planned depth (never a long ray to an off-path tip).
     /// </summary>
+    /// <summary>
+    /// Zig-zag single-skin Formbound: splice each planned Bridge/Buttress finger
+    /// into the open wall path as a dual-wall hairpin detour. The trunks were
+    /// planned inside the CLOSED wall ring (pre single-skin extract), so each fin
+    /// protrudes on the wall's interior side — the backside of the printed skin —
+    /// under the overhang demand the planner found. The mouth is whichever trunk
+    /// end sits on the printed skin; trees whose trunk never comes near the open
+    /// path (e.g. rooted on the discarded back face with the far end deep inside)
+    /// are skipped. Returns the number of fins spliced.
+    /// </summary>
+    public static int ApplyFormboundOpenPathDetours(
+        List<List<Vector2>> contours, List<bool> closed,
+        LightningLayerPlan plan, float beadWidth)
+    {
+        if (plan.Trees.Count == 0 || contours.Count == 0) return 0;
+        float bead = MathF.Max(beadWidth, 0.1f);
+        float snapTol = bead * 2.5f;
+        int total = 0;
+        var used = new HashSet<int>();
+
+        for (int ci = 0; ci < contours.Count; ci++)
+        {
+            if (ci < closed.Count && closed[ci]) continue;   // open single-skin paths only
+            var path = contours[ci];
+            if (path.Count < 2) continue;
+            float totalLen = PolyLengthOpen(path);
+            if (totalLen < bead * 2f) continue;
+
+            float DistToPath(Vector2 p)
+                => Vector2.Distance(PointAtArcOpen(path, totalLen, NearestArcS(path, totalLen, p)), p);
+
+            var sites = new List<(float U, Vector2 PathMouth, Vector2 Tip, Vector2 Along)>();
+            foreach (var t in plan.Trees)
+            {
+                if (used.Contains(t.Id) || plan.DroppedTrees.Contains(t.Id)) continue;
+                if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+                var line = t.Branches[0].Centerline;
+                var a = line[0];
+                var b = line[^1];
+                float da = DistToPath(a);
+                float db = DistToPath(b);
+                bool useA = da <= db;
+                if ((useA ? da : db) > snapTol) continue;
+                var mouth = useA ? a : b;
+                var tip   = useA ? b : a;
+                if (Vector2.Distance(mouth, tip) < bead * 0.6f) continue;
+                sites.Add((0f, mouth, tip, Vector2.Zero));
+                used.Add(t.Id);
+            }
+            if (sites.Count == 0) continue;
+            contours[ci] = InsertHairpins(path, totalLen, sites, bead);
+            total += sites.Count;
+        }
+        return total;
+    }
+
     private static List<Vector2> InsertHairpins(
         List<Vector2> path, float totalLen,
         List<(float U, Vector2 PathMouth, Vector2 Tip, Vector2 Along)> sites, float bead)

@@ -101,3 +101,10 @@ session that introduced them.
 - Status bar shows the loaded workspace filename instead of "No file loaded".
 - 30: repeatable wording in the export warning; timeline markers preserved
   after Go-to-issue.
+
+## 2026-07-16 — URM output fix (OUT[8]) + calibrated travel defaults
+- Export-to-Robot (Digital Start/Stop URM): pulses now emit on `$OUT[8]` (verified URM input on
+  the LFAM cells) and the robot-mode gate `$OUT[9]` is latched TRUE in MAT — previous builds
+  pulsed the gate itself (Caracol slide numbering), which froze extruder setpoints at 0.
+- New-project defaults set to the calibrated T5 travel recipe: 600 mm/s travel + wipe,
+  Same-Direction wipe 12 mm, ramp 4 mm, z-hop 3 mm, resume pause 0.5 s.

@@ -83,10 +83,14 @@ public static class PlanarSlicer
             ? hasFormboundPaint
             : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
                || hasFormboundPaint);
-        // Zig-zag single-skin prints open faces only — skip Formbound/X dual-wall plans
-        // that would re-create a closed back panel.
+        // Zig-zag single-skin prints open faces only — X / tree dual-wall emits stay
+        // off (they would re-create a closed back panel). Formbound DOES plan here:
+        // it plans over the CLOSED wall rings (pre single-skin extract) and its
+        // fingers are spliced into the open path as detours protruding into the
+        // wall interior — the backside of the printed skin.
         bool needLightning = !settings.ZigZagSeam
-            && (formboundActive || settings.XBracingEnabled || hasTreePaint);
+            ? (formboundActive || settings.XBracingEnabled || hasTreePaint)
+            : formboundActive;
         if (needLightning)
         {
             bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
@@ -132,7 +136,7 @@ public static class PlanarSlicer
             else
                 lightningPlan = new Lightning.LightningPlan(zPositions.Length);
 
-            if (hasTreePaint)
+            if (hasTreePaint && !settings.ZigZagSeam)
             {
                 // Tree: pin demand to the painted tip only (target-support band).
                 // Planner grows freestanding columns from layer 0 → tip regardless.
@@ -186,7 +190,8 @@ public static class PlanarSlicer
         // Cross-layer state for single-skin X hairpins (≥60% support from prior layer).
         Lightning.XBracingPlanner.OpenPathDetourState? xDetourState =
             settings.XBracingEnabled && settings.ZigZagSeam
-                ? new Lightning.XBracingPlanner.OpenPathDetourState()
+                ? new Lightning.XBracingPlanner.OpenPathDetourState
+                    { PartZMin = zMin, PartZMax = zMax }
                 : null;
 
         for (int zi = 0; zi < zPositions.Length; zi++)
@@ -244,6 +249,11 @@ public static class PlanarSlicer
 
         if (lightningPlan is not null)
             toolpath.FormboundStats = lightningPlan.ToStats();
+
+        if (xDetourState is { FormboundDetours: > 0 })
+            System.Console.WriteLine(
+                $"[formbound] zig-zag single-skin: {xDetourState.FormboundDetours} fin detour(s) " +
+                "spliced into the open path (wall-interior / backside)");
 
         return toolpath;
     }
@@ -494,6 +504,8 @@ public static class PlanarSlicer
                 }
             }
             ExtractSingleSkinOpenFaces(insetContours, insetClosed);
+            if (!settings.ZigZagAllowSameLayerTravel)
+                KeepLongestOpenFaceOnly(insetContours, insetClosed);
         }
 
         // Single-skin X-bracing: hairpin detours into the wall along the open path.
@@ -529,6 +541,18 @@ public static class PlanarSlicer
                || (lightningPlan is not null
                    && PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks)
                    && hasPaintTrees));
+
+        // Zig-zag single-skin Formbound: planned fingers splice into the open wall
+        // path as dual-wall detours protruding into the WALL INTERIOR — the backside
+        // of the printed skin — under the overhang demand the planner found above.
+        // (Applied after X-bracing so the X pin state marches on the clean path.)
+        if (singleSkinZigZag && formboundEmit && lightningPlan is not null)
+        {
+            int fins = Lightning.XBracingPlanner.ApplyFormboundOpenPathDetours(
+                insetContours, insetClosed, lightningPlan, settings.BeadWidth);
+            if (fins > 0 && xDetourState is not null)
+                xDetourState.FormboundDetours += fins;
+        }
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
         // Surface mode fills across CLOSED boundary chains (open chains can't bound
@@ -621,15 +645,27 @@ public static class PlanarSlicer
         var guideXY = settings.SeamGuidePoints.Select(g => g.ToXY()).ToList();
         var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir, guideXY);
 
-        // Assign per-vertex surface normals for overhang orientation.
+        // Assign per-vertex normals for overhang orientation: aim the EXTRUDER AT
+        // THE PREVIOUS LAYER'S BEAD. Tilt direction = this vertex's XY shift from
+        // the nearest previous-layer path point; tilt angle = the local overhang
+        // angle atan(shift / layerHeight), capped at Max tilt. Supported wall (no
+        // shift) prints straight down. The old face-normal approach leaned the
+        // nozzle the full Max tilt outward even on perfectly vertical wall; it
+        // remains only as the fallback when no previous layer exists nearby.
         if (normalLookup != null && normalLookup.Count > 0)
         {
             float maxTiltRad = settings.MaxOverhangTiltDeg * (MathF.PI / 180f);
+            var prevGrid = BuildPrevContourGrid(prevTracks);
+            float lhN = MathF.Max(layer.Height, 0.1f);
             foreach (var track in tracks)
             {
                 track.Normals = new List<Vector3>(track.Contour.Count);
                 foreach (var pt in track.Contour)
-                    track.Normals.Add(ClampNormalTilt(NearestNormal(pt, normalLookup), maxTiltRad));
+                {
+                    var fallback = ClampNormalTilt(NearestNormal(pt, normalLookup), maxTiltRad);
+                    track.Normals.Add(OverhangNormalTowardPrevLayer(
+                        pt, prevGrid, lhN, maxTiltRad, fallback));
+                }
             }
         }
 
@@ -661,8 +697,11 @@ public static class PlanarSlicer
     /// Zig-zag single-skin: each closed wall loop becomes the longest open face only
     /// (front OR back, not both). Printing is one continuous line that reverses each
     /// layer — end of line → Z hop → reverse direction.
+    /// <b>Ring-like</b> contours (columns, tubes, near-circular islands) stay fully
+    /// closed so half-circle skins are not produced.
+    /// Shared with <see cref="AngledPlanarSlicer"/> (Multi-Planar / Angled).
     /// </summary>
-    private static void ExtractSingleSkinOpenFaces(
+    internal static void ExtractSingleSkinOpenFaces(
         List<List<Vector2>> contours, List<bool> closed)
     {
         for (int i = 0; i < contours.Count; i++)
@@ -671,6 +710,10 @@ public static class PlanarSlicer
             var c = contours[i];
             if (c.Count < 4) continue;
 
+            // Columns / tubes / circular bumps: print the full closed loop.
+            if (IsRingLikeContour(c))
+                continue;
+
             var face = LongestOpenFace(c);
             if (face.Count < 2) continue;
             // Orient so left-of-travel points into the original closed wall (for X hairpins).
@@ -678,6 +721,83 @@ public static class PlanarSlicer
             contours[i] = face;
             if (i < closed.Count) closed[i] = false;
         }
+    }
+
+    /// <summary>
+    /// True for near-circular / compact closed contours that should stay full rings
+    /// under zig-zag (not split into a half-perimeter open skin).
+    /// Thin elongated wall loops (high aspect ratio) return false → open face extract.
+    /// </summary>
+    internal static bool IsRingLikeContour(IReadOnlyList<Vector2> ring)
+    {
+        int n = ring.Count;
+        if (n < 6) return false;
+        // Drop duplicate closing vertex if present.
+        if (Dist2(ring[0], ring[^1]) < 1e-6f)
+            n--;
+        if (n < 6) return false;
+
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        float perim = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            var p = ring[i];
+            if (p.X < minX) minX = p.X; if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y;
+            var q = ring[(i + 1) % n];
+            perim += Vector2.Distance(p, q);
+        }
+        float w = maxX - minX;
+        float h = maxY - minY;
+        float shortSide = MathF.Min(w, h);
+        float longSide  = MathF.Max(w, h);
+        if (shortSide < 1e-3f || perim < 1e-3f) return false;
+
+        // Thin wall loops are long and skinny (aspect often 5–20). Rings / columns
+        // are compact (aspect near 1). Threshold ~2.5 keeps mild ellipses closed.
+        float aspect = longSide / shortSide;
+        if (aspect > 2.5f) return false;
+
+        // Compactness: 4πA / P² is 1 for a circle, lower for skinny shapes.
+        // Use shoelace area on the n-vertex ring.
+        float area2 = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            var a = ring[i];
+            var b = ring[(i + 1) % n];
+            area2 += a.X * b.Y - b.X * a.Y;
+        }
+        float area = MathF.Abs(area2) * 0.5f;
+        float compactness = 4f * MathF.PI * area / (perim * perim);
+        // Circles ~1; thin rectangles ~0.1–0.3; require reasonably plump.
+        return compactness >= 0.45f;
+    }
+
+    /// <summary>
+    /// When same-layer travel is disallowed, keep only the longest open face on the layer.
+    /// </summary>
+    internal static void KeepLongestOpenFaceOnly(List<List<Vector2>> contours, List<bool> closed)
+    {
+        if (contours.Count <= 1) return;
+        int best = -1;
+        float bestLen = -1f;
+        for (int i = 0; i < contours.Count; i++)
+        {
+            var c = contours[i];
+            if (c.Count < 2) continue;
+            float len = 0f;
+            for (int k = 1; k < c.Count; k++)
+                len += Vector2.Distance(c[k - 1], c[k]);
+            if (len > bestLen) { bestLen = len; best = i; }
+        }
+        if (best < 0) return;
+        var keepC = contours[best];
+        bool keepClosed = best < closed.Count && closed[best];
+        contours.Clear();
+        closed.Clear();
+        contours.Add(keepC);
+        closed.Add(keepClosed);
     }
 
     /// <summary>
@@ -1149,6 +1269,76 @@ public static class PlanarSlicer
     // Clamps the normal so that its angle from straight-down (+Z) does not exceed maxTiltRad.
     // This prevents the robot from tilting to unreachable configurations on near-vertical or
     // inverted surfaces.
+    /// <summary>Spatial hash over the previous layer's contour segments (16 mm cells,
+    /// 3×3 ring lookup) so per-vertex nearest-previous-bead queries stay O(1).</summary>
+    private const float PrevGridCell = 16f;
+
+    private static Dictionary<(int X, int Y), List<(Vector2 A, Vector2 B)>>? BuildPrevContourGrid(
+        List<ContourTrack> prevTracks)
+    {
+        if (prevTracks.Count == 0) return null;
+        var grid = new Dictionary<(int, int), List<(Vector2, Vector2)>>();
+        void Add(Vector2 p, (Vector2, Vector2) seg)
+        {
+            var k = ((int)MathF.Floor(p.X / PrevGridCell), (int)MathF.Floor(p.Y / PrevGridCell));
+            if (!grid.TryGetValue(k, out var list))
+                grid[k] = list = new List<(Vector2, Vector2)>(4);
+            list.Add(seg);
+        }
+        foreach (var t in prevTracks)
+        {
+            var c = t.Contour;
+            for (int i = 1; i < c.Count; i++)
+            {
+                var seg = (c[i - 1], c[i]);
+                Add(c[i - 1], seg);
+                Add(c[i], seg);
+                Add((c[i - 1] + c[i]) * 0.5f, seg);
+            }
+        }
+        return grid.Count > 0 ? grid : null;
+    }
+
+    /// <summary>
+    /// Tool axis for overhang orientation: aim the extruder back at the previous
+    /// layer's bead so overhang extrusion is pressed onto supported material.
+    /// Tilt direction = the vertex's XY shift from the nearest previous-layer path
+    /// point; tilt angle = atan(shift / layerHeight) capped at the user's Max tilt.
+    /// Stacked wall (no shift) → vertical tool. No previous material within one
+    /// grid ring (~16 mm) → <paramref name="fallback"/> (mesh-face orientation).
+    /// </summary>
+    private static Vector3 OverhangNormalTowardPrevLayer(
+        Vector2 pt, Dictionary<(int X, int Y), List<(Vector2 A, Vector2 B)>>? prevGrid,
+        float layerHeight, float maxTiltRad, Vector3 fallback)
+    {
+        if (prevGrid is null) return fallback;
+        int kx = (int)MathF.Floor(pt.X / PrevGridCell);
+        int ky = (int)MathF.Floor(pt.Y / PrevGridCell);
+        float bestSq = float.MaxValue;
+        Vector2 bestQ = pt;
+        for (int dx = -1; dx <= 1; dx++)
+        for (int dy = -1; dy <= 1; dy++)
+        {
+            if (!prevGrid.TryGetValue((kx + dx, ky + dy), out var segs)) continue;
+            foreach (var (a, b) in segs)
+            {
+                var ab = b - a;
+                float l2 = ab.LengthSquared();
+                float t = l2 < 1e-12f ? 0f : Math.Clamp(Vector2.Dot(pt - a, ab) / l2, 0f, 1f);
+                var q = a + ab * t;
+                float d2 = Vector2.DistanceSquared(pt, q);
+                if (d2 < bestSq) { bestSq = d2; bestQ = q; }
+            }
+        }
+        if (bestSq >= float.MaxValue * 0.5f) return fallback;   // no previous bead nearby
+        float shift = MathF.Sqrt(bestSq);
+        if (shift < 0.05f) return Vector3.UnitZ;                // stacked — print straight down
+        float tilt = MathF.Min(MathF.Atan(shift / layerHeight), maxTiltRad);
+        var dir = (pt - bestQ) / shift;
+        float s = MathF.Sin(tilt);
+        return new Vector3(dir.X * s, dir.Y * s, MathF.Cos(tilt));
+    }
+
     private static Vector3 ClampNormalTilt(Vector3 n, float maxTiltRad)
     {
         float minZ = MathF.Cos(maxTiltRad); // e.g. cos(45°) ≈ 0.707

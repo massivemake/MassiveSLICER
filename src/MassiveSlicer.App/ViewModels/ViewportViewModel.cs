@@ -5092,6 +5092,11 @@ public sealed class ViewportViewModel : ViewModelBase
         if (session.ShowMultiPlanarPlanes is bool showPlanes)
             ShowMultiPlanarPlanes = showPlanes;
 
+        // X-bracing helper visibility (plane / cylinder guide). Prefer UiSession when
+        // present so it always round-trips with the .mass even if Settings lagged.
+        if (session.XBracingShowHelper is bool showXHelper && AdditiveSettings is { } add)
+            add.XBracingShowHelper = showXHelper;
+
         if (!string.IsNullOrWhiteSpace(session.PaintSelectGranularity))
             PaintSelectGranularity = session.PaintSelectGranularity;
         if (!string.IsNullOrWhiteSpace(session.PaintPickFilter))

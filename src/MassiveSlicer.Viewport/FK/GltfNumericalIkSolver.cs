@@ -119,6 +119,17 @@ public sealed class GltfNumericalIkSolver
     ///   r_min ≤ _maxReachFromShoulder   (arm can extend far enough)
     ///   r_max ≥ _minReachFromShoulder   (arm can fold close enough)
     /// </summary>
+    /// <summary>
+    /// True when a TCP target in ROBROOT frame lies inside the arm's position envelope
+    /// (A1 free to rotate). Used by E1 rail planning to score carriage positions without
+    /// a full DLS solve.
+    /// </summary>
+    public bool IsInWorkspace(Vector3 targetRobroot) => IsWorkspaceReachable(targetRobroot);
+
+    /// <summary>Preferred mid-reach horizontal distance (mm) for scoring rail E1 samples.</summary>
+    public float PreferredHorizontalReachMm
+        => 0.5f * (_minReachFromShoulder + _maxReachFromShoulder);
+
     private bool IsWorkspaceReachable(Vector3 targetRobroot)
     {
         float dxy        = MathF.Sqrt(targetRobroot.X * targetRobroot.X + targetRobroot.Y * targetRobroot.Y);

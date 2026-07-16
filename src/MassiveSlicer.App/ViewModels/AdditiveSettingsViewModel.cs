@@ -182,8 +182,9 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(MethodDisplayName));
                 OnPropertyChanged(nameof(ShowTiltAngle));
-            OnPropertyChanged(nameof(ShowMultiPlanarControls));
+                OnPropertyChanged(nameof(ShowMultiPlanarControls));
                 OnPropertyChanged(nameof(ShowContourOffsetOption));
+                OnPropertyChanged(nameof(ShowPlanarSeamExtras));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowSlicingMode));
@@ -275,7 +276,13 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool ShowCurvedControls      => Method == SliceMethod.Curved;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
     public bool ShowMultiPlanarControls => Method == SliceMethod.MultiPlanar;
+    /// <summary>Bead-width contour inset — planar / angled / multi-planar only.</summary>
     public bool ShowContourOffsetOption => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
+    /// <summary>
+    /// Seam guides + spiral extras that only apply to planar-style slicing.
+    /// Geodesic / Curved still show SEAM for Zig-zag mode.
+    /// </summary>
+    public bool ShowPlanarSeamExtras => Method is not SliceMethod.Geodesic and not SliceMethod.Curved;
 
     private bool _disableContourOffset;
 
@@ -299,8 +306,27 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public string SeamMode
     {
         get => _seamMode;
-        set => SetField(ref _seamMode, value);
+        set
+        {
+            if (SetField(ref _seamMode, value))
+                OnPropertyChanged(nameof(ShowZigZagTravelOption));
+        }
     }
+
+    private bool _zigZagAllowSameLayerTravel = true;
+
+    /// <summary>
+    /// Zig-zag only: keep multiple open faces on one layer and Travel (start/stop)
+    /// between them. Off = print only the longest open face per layer.
+    /// </summary>
+    public bool ZigZagAllowSameLayerTravel
+    {
+        get => _zigZagAllowSameLayerTravel;
+        set => SetField(ref _zigZagAllowSameLayerTravel, value);
+    }
+
+    public bool ShowZigZagTravelOption =>
+        string.Equals(_seamMode, "Zig-zag", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>World-space seam position guides for planar slicing.</summary>
     public ObservableCollection<SeamGuidePoint> SeamGuides { get; } = [];
@@ -648,7 +674,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _printSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
-    private double _travelSpeed = 120.0;
+    private double _travelSpeed = 600.0;
 
     /// <summary>Travel (non-extrusion) move speed in mm/s.</summary>
     public double TravelSpeed
@@ -723,6 +749,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowXBracingControls));
                 OnPropertyChanged(nameof(ShowXBracingPlanarControls));
                 OnPropertyChanged(nameof(ShowXBracingCylinderControls));
+                OnPropertyChanged(nameof(ShowXBracingDepthEase));
             }
         }
     }
@@ -754,7 +781,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool ShowXBracingCylinderControls => XBracingEnabled && XBracingProjectionType == "Cylinder";
 
     private bool _xBracingShowHelper = true;
-    /// <summary>Show the brace plane / cylinder helper in the viewport (visual only).</summary>
+    /// <summary>Show the brace plane / cylinder helper in the viewport (visual only).
+    /// Persisted with app prefs and the .mass workspace (Settings + UiSession).</summary>
     public bool XBracingShowHelper
     {
         get => _xBracingShowHelper;
@@ -762,11 +790,48 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     private double _xBracingDepthMm = 50.0;
-    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    /// <summary>Brace depth at the TOP of the part (mm).</summary>
     public double XBracingDepthMm
     {
         get => _xBracingDepthMm;
         set => SetField(ref _xBracingDepthMm, Math.Clamp(value, 5.0, 500.0));
+    }
+
+    private double _xBracingDepthBottomMm;
+    /// <summary>Brace depth at the BOTTOM of the part (mm). 0 = constant depth
+    /// (same as <see cref="XBracingDepthMm"/>); &gt; 0 tapers over height with ease modes.</summary>
+    public double XBracingDepthBottomMm
+    {
+        get => _xBracingDepthBottomMm;
+        set
+        {
+            if (SetField(ref _xBracingDepthBottomMm, value <= 0.0 ? 0.0 : Math.Clamp(value, 5.0, 500.0)))
+                OnPropertyChanged(nameof(ShowXBracingDepthEase));
+        }
+    }
+
+    /// <summary>True when bottom depth is set so the height taper (and ease) is active.</summary>
+    public bool ShowXBracingDepthEase => XBracingEnabled && _xBracingDepthBottomMm > 0.01;
+
+    public string[] XBracingDepthEaseOptions { get; } =
+        ["Linear", "Ease-In", "Ease-Out", "Smooth"];
+
+    private string _xBracingDepthEaseBottom = "Linear";
+    /// <summary>Depth-taper ease at the bottom (start of the height curve).</summary>
+    public string XBracingDepthEaseBottom
+    {
+        get => _xBracingDepthEaseBottom;
+        set => SetField(ref _xBracingDepthEaseBottom,
+            XBracingDepthEaseOptions.Contains(value) ? value : "Linear");
+    }
+
+    private string _xBracingDepthEaseTop = "Linear";
+    /// <summary>Depth-taper ease at the top (end of the height curve).</summary>
+    public string XBracingDepthEaseTop
+    {
+        get => _xBracingDepthEaseTop;
+        set => SetField(ref _xBracingDepthEaseTop,
+            XBracingDepthEaseOptions.Contains(value) ? value : "Linear");
     }
 
     private double _xBracingSpanMm = 120.0;
@@ -1394,6 +1459,43 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _toolheadC, Math.Clamp(value, -180.0, 180.0));
     }
 
+    private bool _e1MotionEnabled;
+
+    /// <summary>
+    /// LFAM linear rail (E1): when true, export/validation let the carriage track the
+    /// path within <see cref="E1YPlusMm"/> / <see cref="E1YMinusMm"/> of the home E1
+    /// to reduce arm kinematic strain (especially with tilted toolhead).
+    /// </summary>
+    public bool E1MotionEnabled
+    {
+        get => _e1MotionEnabled;
+        set
+        {
+            if (SetField(ref _e1MotionEnabled, value))
+                OnPropertyChanged(nameof(ShowE1AllowanceControls));
+        }
+    }
+
+    private double _e1YPlusMm = 500.0;
+
+    /// <summary>Max E1 travel (mm) in the positive direction from home.</summary>
+    public double E1YPlusMm
+    {
+        get => _e1YPlusMm;
+        set => SetField(ref _e1YPlusMm, Math.Clamp(value, 0.0, 10000.0));
+    }
+
+    private double _e1YMinusMm = 500.0;
+
+    /// <summary>Max E1 travel (mm) in the negative direction from home.</summary>
+    public double E1YMinusMm
+    {
+        get => _e1YMinusMm;
+        set => SetField(ref _e1YMinusMm, Math.Clamp(value, 0.0, 10000.0));
+    }
+
+    public bool ShowE1AllowanceControls => _e1MotionEnabled;
+
     // -- Material temperatures -------------------------------------------------
 
     // T1/T2/T3 are set by the selected material preset (see ApplyPreset).
@@ -1530,7 +1632,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _extrusionStartWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
-    private double _extrusionResumeWaitSec;
+    private double _extrusionResumeWaitSec = 0.5;
 
     /// <summary>Pause (seconds) after each travel before the next extrusion move.</summary>
     public double ExtrusionResumeWaitSec
@@ -1539,9 +1641,59 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0));
     }
 
+    private bool _digitalStartStopEnabled;
+
+    /// <summary>
+    /// Digital Start/Stop (URM): Caracol Eidos / MTruck export — <c>T1/T2/T3/RPM</c>
+    /// globals, travel start/end framing, and Caracol safety header (not LFAM <c>$ANOUT</c>).
+    /// </summary>
+    public bool DigitalStartStopEnabled
+    {
+        get => _digitalStartStopEnabled;
+        set
+        {
+            if (!SetField(ref _digitalStartStopEnabled, value)) return;
+            // Keep Export-to-Robot post-process header/footer in sync so the editor and
+            // export never keep an LFAM $ANOUT MAT block while URM is checked.
+            ApplyUrmPostProcessTemplates(value);
+        }
+    }
+
+    /// <summary>
+    /// Swap KRL post-process header/footer between Caracol URM and LFAM ANOUT defaults.
+    /// Called when URM is toggled and after prefs/workspace load.
+    /// </summary>
+    public void ApplyUrmPostProcessTemplates(bool urmEnabled)
+    {
+        string h = KrlPostProcess.HeaderText ?? "";
+        string f = KrlPostProcess.FooterText ?? "";
+        bool headerIsLfamAnout = h.Contains("$ANOUT[1]", StringComparison.Ordinal)
+            || (h.Contains(";FOLD MAT", StringComparison.Ordinal)
+                && !h.Contains("MAT out of INI", StringComparison.Ordinal));
+        bool headerIsUrm = h.Contains("CaracolSafety", StringComparison.Ordinal)
+            || h.Contains("MAT out of INI", StringComparison.Ordinal);
+        bool footerIsUrm = f.Contains(";AIR COMMAND", StringComparison.Ordinal)
+            || f.Contains(";EXTRUDER MOTOR COMMAND", StringComparison.Ordinal);
+
+        if (urmEnabled)
+        {
+            if (headerIsLfamAnout || !headerIsUrm)
+                KrlPostProcess.HeaderText = KrlExporter.DefaultUrmHeaderTemplate;
+            if (!footerIsUrm)
+                KrlPostProcess.FooterText = KrlExporter.DefaultUrmFooterTemplate;
+        }
+        else
+        {
+            if (headerIsUrm)
+                KrlPostProcess.HeaderText = KrlExporter.DefaultHeaderTemplate;
+            if (footerIsUrm)
+                KrlPostProcess.FooterText = KrlExporter.DefaultFooterTemplate;
+        }
+    }
+
     // -- Movement (z-hop, wipe) ------------------------------------------------
 
-    private double _zHopMm;
+    private double _zHopMm = 3.0;
 
     /// <summary>Vertical lift on travel moves in mm. 0 = disabled.</summary>
     public double ZHopMm
@@ -1552,7 +1704,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public string[] WipeModeOptions { get; } = ["Off", "Retrace", "Same-Direction"];
 
-    private string _wipeModeDisplay = "Off";
+    private string _wipeModeDisplay = "Same-Direction";
 
     /// <summary>Wipe path before travel: Off, Retrace (back), or Same-Direction (forward past the point).</summary>
     public string WipeModeDisplay
@@ -1561,7 +1713,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeModeDisplay, value);
     }
 
-    private double _wipeLengthMm = 10.0;
+    private double _wipeLengthMm = 12.0;
 
     /// <summary>Total wipe distance in mm.</summary>
     public double WipeLengthMm
@@ -1570,7 +1722,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeLengthMm, Math.Max(0.0, value));
     }
 
-    private double _wipeRampMm = 5.0;
+    private double _wipeRampMm = 4.0;
 
     /// <summary>
     /// Wipe ramp (mm). Positive = last N mm of wipe length ramps RPM down.
@@ -1582,7 +1734,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _wipeRampMm, Math.Clamp(value, -500.0, 500.0));
     }
 
-    private double _wipeSpeed = 120.0;
+    private double _wipeSpeed = 600.0;
 
     /// <summary>Linear speed for wipe moves in mm/s (independent of travel speed).</summary>
     public double WipeSpeed

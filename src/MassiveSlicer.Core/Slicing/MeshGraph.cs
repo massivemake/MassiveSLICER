@@ -148,6 +148,7 @@ public static class MeshGraph
         var toolpath     = new Toolpath();
         int   layerIdx   = 0;
         var   prevTracks = new List<ContourTrack>();
+        bool  zigZag     = settings.ZigZagSeam;
 
         foreach (float param in layerParameters)
         {
@@ -160,10 +161,26 @@ public static class MeshGraph
 
             var (closed, open) = ChainSegments(segments);
             StitchChains(open);
-            var rawContours = closed;
-            rawContours.AddRange(open);
+            // Promote open chains that almost meet into closed (same 1 mm rule as emit).
+            for (int i = open.Count - 1; i >= 0; i--)
+            {
+                var c = open[i];
+                if (c.Count >= 3 && (c[^1].pos - c[0].pos).LengthSquared() <= 1.0f)
+                {
+                    closed.Add(c);
+                    open.RemoveAt(i);
+                }
+            }
 
-            var tracks = AssignSeams(rawContours, prevTracks, seamOrigin, seamDir);
+            var rawContours = new List<List<(Vector3 pos, Vector3 normal)>>(closed.Count + open.Count);
+            var rawClosed   = new List<bool>(closed.Count + open.Count);
+            foreach (var c in closed) { rawContours.Add(c); rawClosed.Add(true); }
+            foreach (var c in open)   { rawContours.Add(c); rawClosed.Add(false); }
+
+            if (zigZag)
+                ApplyZigZagSingleSkin3D(rawContours, rawClosed, settings.ZigZagAllowSameLayerTravel);
+
+            var tracks = AssignSeams(rawContours, rawClosed, prevTracks, seamOrigin, seamDir, zigZag);
             prevTracks = tracks;
 
             float avgZ = 0f; int ptCount = 0;
@@ -171,13 +188,248 @@ public static class MeshGraph
                 foreach (var (p, _) in t.Contour) { avgZ += p.Z; ptCount++; }
             if (ptCount > 0) avgZ /= ptCount;
 
-            var layer = new ToolpathLayer(layerIdx++, avgZ);
-            EmitMoves(tracks, layer);
+            var layer = new ToolpathLayer(layerIdx, avgZ);
+            EmitMoves(tracks, layer, zigZag, layerIdx);
+            layerIdx++;
             if (layer.Moves.Count > 0)
                 toolpath.Layers.Add(layer);
         }
 
         return toolpath;
+    }
+
+    /// <summary>
+    /// Zig-zag for curved/geodesic isocurves (3D): closed elongated walls → longest open
+    /// face; ring-like islands stay closed; reverse open faces at emit by layer parity.
+    /// </summary>
+    private static void ApplyZigZagSingleSkin3D(
+        List<List<(Vector3 pos, Vector3 normal)>> contours,
+        List<bool> closed,
+        bool allowSameLayerTravel)
+    {
+        for (int i = 0; i < contours.Count; i++)
+        {
+            if (i < closed.Count && !closed[i]) continue;
+            var c = contours[i];
+            if (c.Count < 4) continue;
+
+            var xy = ToXyList(c);
+            // Columns / compact loops: print full closed ring (no half-circle skins).
+            if (PlanarSlicer.IsRingLikeContour(xy))
+                continue;
+
+            // Reuse 2D longest-face on XY projection, map the face poly back to 3D.
+            var face2d = LongestOpenFaceFromRing2d(xy);
+            if (face2d.Count < 2) continue;
+
+            int n = c.Count;
+            if (n > 2 && (c[0].pos - c[^1].pos).LengthSquared() < 1e-6f) n--;
+            // Map each 2D face sample to the nearest ring vertex, then take the
+            // *shorter* arc between first and last (the face, not the back panel).
+            int i0 = NearestVertIndex(c, n, face2d[0]);
+            int i1 = NearestVertIndex(c, n, face2d[^1]);
+            if (i0 == i1 && face2d.Count >= 3)
+                i1 = NearestVertIndex(c, n, face2d[face2d.Count / 2]);
+            var face3d = ShorterArc(c, n, i0, i1);
+            // Prefer the arc that better matches face2d length.
+            float face2dLen = 0f;
+            for (int k = 1; k < face2d.Count; k++)
+                face2dLen += Vector2.Distance(face2d[k - 1], face2d[k]);
+            var longer = ContiguousRun(c, n, i0, i1); // longer arc
+            if (MathF.Abs(PathLength3D(longer) - face2dLen)
+                < MathF.Abs(PathLength3D(face3d) - face2dLen))
+                face3d = longer;
+            if (face3d.Count < 2) continue;
+            contours[i] = face3d;
+            if (i < closed.Count) closed[i] = false;
+        }
+
+        if (!allowSameLayerTravel)
+            KeepLongest3DOnly(contours, closed);
+    }
+
+    private static List<Vector2> ToXyList(List<(Vector3 pos, Vector3 normal)> c)
+    {
+        var xy = new List<Vector2>(c.Count);
+        foreach (var (p, _) in c)
+            xy.Add(new Vector2(p.X, p.Y));
+        return xy;
+    }
+
+    private static int NearestVertIndex(
+        List<(Vector3 pos, Vector3 normal)> c, int n, Vector2 target)
+    {
+        int best = 0;
+        float bestD = float.MaxValue;
+        for (int i = 0; i < n; i++)
+        {
+            float d = (Xy(c[i].pos) - target).LengthSquared();
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        return best;
+    }
+
+    private static List<(Vector3 pos, Vector3 normal)> ContiguousRun(
+        List<(Vector3 pos, Vector3 normal)> ring, int n, int i0, int i1)
+    {
+        // Longer of the two arcs (rarely needed — prefer ShorterArc for face extract).
+        var a = Walk(ring, n, i0, i1, forward: true);
+        var b = Walk(ring, n, i0, i1, forward: false);
+        return PathLength3D(a) >= PathLength3D(b) ? a : b;
+    }
+
+    private static List<(Vector3 pos, Vector3 normal)> ShorterArc(
+        List<(Vector3 pos, Vector3 normal)> ring, int n, int i0, int i1)
+    {
+        var a = Walk(ring, n, i0, i1, forward: true);
+        var b = Walk(ring, n, i0, i1, forward: false);
+        return PathLength3D(a) <= PathLength3D(b) ? a : b;
+    }
+
+    private static List<(Vector3 pos, Vector3 normal)> Walk(
+        List<(Vector3 pos, Vector3 normal)> ring, int n, int i0, int i1, bool forward)
+    {
+        var path = new List<(Vector3, Vector3)>();
+        int i = i0;
+        for (int step = 0; step < n; step++)
+        {
+            path.Add(ring[i]);
+            if (i == i1 && step > 0) break;
+            i = forward ? (i + 1) % n : (i - 1 + n) % n;
+        }
+        return path;
+    }
+
+    private static float PathLength3D(List<(Vector3 pos, Vector3 normal)> path)
+    {
+        float len = 0f;
+        for (int i = 1; i < path.Count; i++)
+            len += Vector3.Distance(path[i - 1].pos, path[i].pos);
+        return len;
+    }
+
+    private static void KeepLongest3DOnly(
+        List<List<(Vector3 pos, Vector3 normal)>> contours, List<bool> closed)
+    {
+        if (contours.Count <= 1) return;
+        int best = -1;
+        float bestLen = -1f;
+        for (int i = 0; i < contours.Count; i++)
+        {
+            float len = PathLength3D(contours[i]);
+            if (len > bestLen) { bestLen = len; best = i; }
+        }
+        if (best < 0) return;
+        var keepC = contours[best];
+        bool keepClosed = best < closed.Count && closed[best];
+        contours.Clear();
+        closed.Clear();
+        contours.Add(keepC);
+        closed.Add(keepClosed);
+    }
+
+    /// <summary>
+    /// Longest near-straight open face on a 2D closed ring (same rules as planar zig-zag).
+    /// </summary>
+    private static List<Vector2> LongestOpenFaceFromRing2d(List<Vector2> closedRing)
+    {
+        // Delegate to planar extract path by building a temporary closed list and
+        // calling the same geometry used for planar single-skin (via public ring test
+        // + local longest-run). Keep logic inlined to avoid mutating shared planar state.
+        int n = closedRing.Count;
+        if (n > 2 && (closedRing[0] - closedRing[^1]).LengthSquared() < 1e-6f)
+            n--;
+        if (n < 3) return new List<Vector2>(closedRing);
+
+        float bestLen = -1f;
+        int bestI0 = 0, bestCount = n;
+        for (int start = 0; start < n; start++)
+        {
+            float runLen = 0f;
+            int count = 1;
+            for (int k = 0; k < n - 1; k++)
+            {
+                int i0 = (start + k) % n;
+                int i1 = (start + k + 1) % n;
+                int i2 = (start + k + 2) % n;
+                var t0 = closedRing[i1] - closedRing[i0];
+                var t1 = closedRing[i2] - closedRing[i1];
+                float l0 = t0.Length(), l1 = t1.Length();
+                runLen += l0;
+                count++;
+                float turn = 0f;
+                if (l0 > 1e-6f && l1 > 1e-6f)
+                    turn = MathF.Abs(MathF.Acos(Math.Clamp(Vector2.Dot(t0 / l0, t1 / l1), -1f, 1f)));
+                if (turn > 0.6f) break;
+            }
+            if (runLen > bestLen)
+            {
+                bestLen = runLen;
+                bestI0 = start;
+                bestCount = count;
+            }
+        }
+
+        if (bestCount >= n - 1)
+        {
+            // Smooth loop: half-perimeter by projection (thin elongated wall skin).
+            return LongestSkinByProjection2d(closedRing, n);
+        }
+
+        var face = new List<Vector2>(bestCount);
+        for (int k = 0; k < bestCount; k++)
+            face.Add(closedRing[(bestI0 + k) % n]);
+        return face;
+    }
+
+    private static List<Vector2> LongestSkinByProjection2d(List<Vector2> ring, int n)
+    {
+        float minX = float.MaxValue, maxX = float.MinValue;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            var p = ring[i];
+            if (p.X < minX) minX = p.X; if (p.X > maxX) maxX = p.X;
+            if (p.Y < minY) minY = p.Y; if (p.Y > maxY) maxY = p.Y;
+        }
+        bool longInX = (maxX - minX) >= (maxY - minY);
+        float mid = longInX ? 0.5f * (minY + maxY) : 0.5f * (minX + maxX);
+
+        List<Vector2> best = new();
+        foreach (bool high in new[] { true, false })
+        {
+            var runs = new List<List<Vector2>>();
+            List<Vector2>? cur = null;
+            for (int i = 0; i < n; i++)
+            {
+                var p = ring[i];
+                float v = longInX ? p.Y : p.X;
+                bool onSide = high ? v >= mid : v <= mid;
+                if (onSide) { cur ??= new List<Vector2>(); cur.Add(p); }
+                else if (cur is not null) { runs.Add(cur); cur = null; }
+            }
+            if (cur is not null) runs.Add(cur);
+            if (runs.Count >= 2
+                && (longInX ? ring[0].Y >= mid == high : ring[0].X >= mid == high)
+                && (longInX ? ring[n - 1].Y >= mid == high : ring[n - 1].X >= mid == high))
+            {
+                var merged = new List<Vector2>(runs[^1]);
+                merged.AddRange(runs[0]);
+                runs[0] = merged;
+                runs.RemoveAt(runs.Count - 1);
+            }
+            foreach (var r in runs)
+            {
+                float len = 0;
+                for (int k = 1; k < r.Count; k++)
+                    len += Vector2.Distance(r[k - 1], r[k]);
+                float bestLen = 0;
+                for (int k = 1; k < best.Count; k++)
+                    bestLen += Vector2.Distance(best[k - 1], best[k]);
+                if (len > bestLen) best = r;
+            }
+        }
+        return best.Count >= 2 ? best : ring.Take(n).ToList();
     }
 
     public static void CollectScalarCrossings(
@@ -366,11 +618,24 @@ public static class MeshGraph
         List<List<(Vector3 pos, Vector3 normal)>> contours,
         List<ContourTrack> prevTracks,
         Vector2 seamOrigin, Vector2 seamDir)
+        => AssignSeams(
+            contours,
+            contours.Select(c => c.Count >= 3 && (c[^1].pos - c[0].pos).LengthSquared() <= 1.0f).ToList(),
+            prevTracks, seamOrigin, seamDir, zigZag: false);
+
+    public static List<ContourTrack> AssignSeams(
+        List<List<(Vector3 pos, Vector3 normal)>> contours,
+        List<bool> closedFlags,
+        List<ContourTrack> prevTracks,
+        Vector2 seamOrigin, Vector2 seamDir,
+        bool zigZag)
     {
         var tracks = new List<ContourTrack>(contours.Count);
-        foreach (var raw in contours)
+        for (int i = 0; i < contours.Count; i++)
         {
-            var contour = new List<(Vector3, Vector3)>(raw);
+            var raw = contours[i];
+            var contour = new List<(Vector3 pos, Vector3 normal)>(raw);
+            bool isClosed = i < closedFlags.Count ? closedFlags[i] : true;
 
             float bestScore = 0f;
             ContourTrack? bestParent = null;
@@ -384,8 +649,13 @@ public static class MeshGraph
                 ? bestParent.SeamXY
                 : new Vector2(float.NaN, float.NaN);
 
-            AlignSeam(contour, seamOrigin, seamDir, ref seamRef);
-            tracks.Add(new ContourTrack(contour, seamRef));
+            // Closed: align seam. Open zig-zag skins keep chained endpoints for reverse parity.
+            if (isClosed)
+                AlignSeam(contour, seamOrigin, seamDir, ref seamRef);
+            else if (contour.Count >= 2)
+                seamRef = Xy(contour[0].pos);
+
+            tracks.Add(new ContourTrack(contour, seamRef, isClosed));
         }
         return tracks;
     }
@@ -485,37 +755,87 @@ public static class MeshGraph
     }
 
     public static void EmitMoves(List<ContourTrack> tracks, ToolpathLayer layer)
+        => EmitMoves(tracks, layer, zigZag: false, layerIndex: 0);
+
+    public static void EmitMoves(
+        List<ContourTrack> tracks, ToolpathLayer layer, bool zigZag, int layerIndex)
     {
+        var remaining = tracks.Where(t => t.Contour.Count >= 2).ToList();
         var lastPos    = new Vector3(float.NaN);
         var lastNormal = Vector3.UnitZ;
 
-        foreach (var track in tracks)
+        while (remaining.Count > 0)
         {
-            var contour = track.Contour;
-            if (contour.Count < 2) continue;
+            int bestI = 0;
+            bool bestRev = false;
+            float bestCost = float.MaxValue;
 
-            var (startPos, startNormal) = contour[0];
+            for (int ti = 0; ti < remaining.Count; ti++)
+            {
+                var c = remaining[ti].Contour;
+                var e0 = c[0].pos;
+                var e1 = c[^1].pos;
+                float d0 = float.IsNaN(lastPos.X) ? 0f : Vector3.Distance(lastPos, e0);
+                float d1 = float.IsNaN(lastPos.X) ? 0f : Vector3.Distance(lastPos, e1);
+
+                if (zigZag && !remaining[ti].IsClosed && c.Count >= 2)
+                {
+                    // Canonicalize by XY endpoint, then layer parity (same as planar ContourSeamPlanner).
+                    var p0 = Xy(e0);
+                    var p1 = Xy(e1);
+                    bool flipped = p1.X < p0.X - 1e-6f
+                        || (MathF.Abs(p1.X - p0.X) <= 1e-6f && p1.Y < p0.Y - 1e-6f);
+                    bool wantReverse = flipped ^ (layerIndex % 2 == 1);
+                    float d = wantReverse ? d1 : d0;
+                    if (d < bestCost) { bestCost = d; bestI = ti; bestRev = wantReverse; }
+                }
+                else if (!remaining[ti].IsClosed)
+                {
+                    if (d0 < bestCost) { bestCost = d0; bestI = ti; bestRev = false; }
+                    if (d1 < bestCost) { bestCost = d1; bestI = ti; bestRev = true; }
+                }
+                else
+                {
+                    if (d0 < bestCost) { bestCost = d0; bestI = ti; bestRev = false; }
+                }
+            }
+
+            var track = remaining[bestI];
+            remaining.RemoveAt(bestI);
+            var contour = track.Contour;
+            bool reverse = bestRev && !track.IsClosed;
+            int n = contour.Count;
+
+            Vector3 startPos = reverse ? contour[^1].pos : contour[0].pos;
+            Vector3 startNormal = reverse ? contour[^1].normal : contour[0].normal;
 
             if (!float.IsNaN(lastPos.X))
                 layer.Moves.Add(new ToolpathMove(lastPos, startPos, MoveKind.Travel) { Normal = lastNormal });
 
-            var (prevPos, prevNormal) = contour[0];
-            for (int i = 1; i < contour.Count; i++)
+            Vector3 prevPos = startPos, prevNormal = startNormal;
+            for (int vi = 1; vi < n; vi++)
             {
-                var (nextPos, nextNormal) = contour[i];
+                int ci = reverse ? n - 1 - vi : vi;
+                var (nextPos, nextNormal) = contour[ci];
                 layer.Moves.Add(new ToolpathMove(prevPos, nextPos, MoveKind.Extrude) { Normal = prevNormal });
                 prevPos = nextPos; prevNormal = nextNormal;
             }
 
-            if (contour.Count > 2)
+            // Close only genuine closed rings (not open zig-zag skins).
+            if (track.IsClosed && n > 2)
             {
                 float gapSq = (prevPos - startPos).LengthSquared();
-                if (gapSq <= 1.0f)
-                    layer.Moves.Add(new ToolpathMove(prevPos, startPos, MoveKind.Extrude) { Normal = prevNormal });
+                if (gapSq > 1e-8f)
+                    layer.Moves.Add(new ToolpathMove(prevPos, startPos, MoveKind.Extrude)
+                        { Normal = prevNormal });
+                lastPos = startPos;
+                lastNormal = startNormal;
             }
-
-            lastPos    = contour[^1].pos;
-            lastNormal = contour[^1].normal;
+            else
+            {
+                lastPos = prevPos;
+                lastNormal = prevNormal;
+            }
         }
     }
 
@@ -541,9 +861,13 @@ public static class MeshGraph
         return t > -1e-4f && s >= -1e-4f && s <= 1f + 1e-4f;
     }
 
-    public sealed class ContourTrack(List<(Vector3 pos, Vector3 normal)> contour, Vector2 seamXY)
+    public sealed class ContourTrack(
+        List<(Vector3 pos, Vector3 normal)> contour,
+        Vector2 seamXY,
+        bool isClosed = true)
     {
         public readonly List<(Vector3 pos, Vector3 normal)> Contour = contour;
         public readonly Vector2 SeamXY = seamXY;
+        public readonly bool IsClosed = isClosed;
     }
 }

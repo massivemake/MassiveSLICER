@@ -32,6 +32,7 @@ public static class ToolpathClone
                     IsZHop            = move.IsZHop,
                     IsMergeConnector  = move.IsMergeConnector,
                     TravelSpeedMps    = move.TravelSpeedMps,
+                    ResumeWaitSec     = move.ResumeWaitSec,
                     PrintSpeedScale   = move.PrintSpeedScale,
                     IsLightning       = move.IsLightning,
                     HeightScale       = move.HeightScale,

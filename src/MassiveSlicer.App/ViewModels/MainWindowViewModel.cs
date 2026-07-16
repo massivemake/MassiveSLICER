@@ -2729,8 +2729,20 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private void ApplyWorkspaceStateCore(WorkspaceDocument doc, string workspacePath)
     {
+        // Pause realtime slice *before* prefs hit AdditiveSettings PropertyChanged, so
+        // baked calibration toolpaths are not immediately re-sliced away on open.
+        if (ShouldPauseRealtimeSlicingOnOpen(doc))
+        {
+            Viewport.RealtimeSlicingPaused = true;
+            Console.Log("[workspace] Real-time slicing paused (baked toolpath / workspace flag).");
+        }
+
         CopyPreferences(doc.Settings);
         SyncViewportFromPrefs();
+        // UiSession can override Settings for helper visibility (saved after prefs snapshot
+        // quirks; older mass files leave this null and keep the Settings value).
+        if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
+            RightPanel.Additive.XBracingShowHelper = showXHelper;
         RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName);
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
@@ -2770,6 +2782,28 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log(restoredCount == doc.Models.Count
             ? $"[workspace] Restored {restoredCount} model(s) from {workspacePath}"
             : $"[workspace] Restored {restoredCount} of {doc.Models.Count} model(s) from {workspacePath} (some meshes missing).");
+    }
+
+    /// <summary>
+    /// True when the workspace asks for pause, or any saved toolpath is marked BAKED
+    /// (Start/Stop calibration matrix — re-slice would destroy per-cell settings).
+    /// </summary>
+    private static bool ShouldPauseRealtimeSlicingOnOpen(WorkspaceDocument doc)
+    {
+        if (doc.UiSession?.RealtimeSlicingPaused == true)
+            return true;
+
+        foreach (var model in doc.Models)
+        {
+            foreach (var tp in model.Toolpaths)
+            {
+                if (!string.IsNullOrEmpty(tp.Name)
+                    && tp.Name.Contains("BAKED", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnSettingsChanged()
@@ -2888,6 +2922,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WipeSkipShortTravels    = copy.WipeSkipShortTravels;
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
+        live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
         live.ResumeRampStartRpmPercent = copy.ResumeRampStartRpmPercent;
@@ -2912,6 +2947,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MinLayerHeight         = copy.MinLayerHeight;
         live.DisableContourOffset   = copy.DisableContourOffset;
         live.SeamMode               = copy.SeamMode;
+        live.ZigZagAllowSameLayerTravel = copy.ZigZagAllowSameLayerTravel;
         live.OverhangOrientation    = copy.OverhangOrientation;
         live.MaxOverhangTiltDeg     = copy.MaxOverhangTiltDeg;
         live.SmoothRotation                = copy.SmoothRotation;
@@ -2933,6 +2969,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
+        live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
+        live.XBracingDepthEaseBottom = copy.XBracingDepthEaseBottom;
+        live.XBracingDepthEaseTop   = copy.XBracingDepthEaseTop;
         live.XBracingSpanMm         = copy.XBracingSpanMm;
         live.XBracingAngleDeg       = copy.XBracingAngleDeg;
         live.XBracingExtendEdges    = copy.XBracingExtendEdges;
@@ -2983,6 +3022,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.BaseDataIndex          = copy.BaseDataIndex;
         live.ToolheadA              = copy.ToolheadA;
         live.ToolheadB              = copy.ToolheadB;
+        live.E1MotionEnabled        = copy.E1MotionEnabled;
+        live.E1YPlusMm              = copy.E1YPlusMm;
+        live.E1YMinusMm             = copy.E1YMinusMm;
         live.ToolheadC              = copy.ToolheadC;
         live.OrientationFollowPercent = copy.OrientationFollowPercent;
         live.OrientationLookAheadMm   = copy.OrientationLookAheadMm;
@@ -3120,6 +3162,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.MinLayerHeight      = p.MinLayerHeight;
         add.DisableContourOffset = p.DisableContourOffset;
         add.SeamMode = add.SeamModeOptions.Contains(p.SeamMode) ? p.SeamMode : "Normal";
+        add.ZigZagAllowSameLayerTravel = p.ZigZagAllowSameLayerTravel;
         add.OverhangOrientation = p.OverhangOrientation;
         add.MaxOverhangTiltDeg  = p.MaxOverhangTiltDeg;
         add.SmoothRotation                = p.SmoothRotation;
@@ -3149,6 +3192,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.BumpMultiPlanarStamp();
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
+        add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
+        add.XBracingDepthEaseBottom = add.XBracingDepthEaseOptions.Contains(p.XBracingDepthEaseBottom)
+            ? p.XBracingDepthEaseBottom : "Linear";
+        add.XBracingDepthEaseTop = add.XBracingDepthEaseOptions.Contains(p.XBracingDepthEaseTop)
+            ? p.XBracingDepthEaseTop : "Linear";
         add.XBracingSpanMm      = p.XBracingSpanMm;
         add.XBracingAngleDeg    = p.XBracingAngleDeg;
         add.XBracingExtendEdges = p.XBracingExtendEdges;
@@ -3217,6 +3265,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WipeSkipShortTravels    = p.WipeSkipShortTravels;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
+        add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
+        // Ensure post-process header is Caracol URM (not LFAM $ANOUT MAT) when flag is on.
+        // SetField no-ops if value already matched, so always re-apply templates after load.
+        add.ApplyUrmPostProcessTemplates(p.DigitalStartStopEnabled);
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
         add.ResumeRampStartSpeed      = p.ResumeRampStartSpeed;
         add.ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent;
@@ -3251,6 +3303,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadA     = p.ToolheadA;
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
+        add.E1MotionEnabled = p.E1MotionEnabled;
+        add.E1YPlusMm     = p.E1YPlusMm;
+        add.E1YMinusMm    = p.E1YMinusMm;
         add.OrientationFollowPercent = p.OrientationFollowPercent;
         add.OrientationLookAheadMm   = p.OrientationLookAheadMm;
         add.OrientationSigmaMm       = p.OrientationSigmaMm;
@@ -3414,6 +3469,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MinLayerHeight      = add.MinLayerHeight;
         p.DisableContourOffset = add.DisableContourOffset;
         p.SeamMode            = add.SeamMode;
+        p.ZigZagAllowSameLayerTravel = add.ZigZagAllowSameLayerTravel;
         p.OverhangOrientation = add.OverhangOrientation;
         p.MaxOverhangTiltDeg  = add.MaxOverhangTiltDeg;
         p.SmoothRotation                = add.SmoothRotation;
@@ -3436,6 +3492,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
+        p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;
+        p.XBracingDepthEaseBottom = add.XBracingDepthEaseBottom;
+        p.XBracingDepthEaseTop = add.XBracingDepthEaseTop;
         p.XBracingSpanMm       = add.XBracingSpanMm;
         p.XBracingAngleDeg     = add.XBracingAngleDeg;
         p.XBracingExtendEdges  = add.XBracingExtendEdges;
@@ -3490,6 +3549,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeSkipShortTravels    = add.WipeSkipShortTravels;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
+        p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
         p.ResumeRampStartRpmPercent = add.ResumeRampStartRpmPercent;
@@ -3518,6 +3578,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadA        = add.ToolheadA;
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
+        p.E1MotionEnabled  = add.E1MotionEnabled;
+        p.E1YPlusMm        = add.E1YPlusMm;
+        p.E1YMinusMm       = add.E1YMinusMm;
         p.OrientationFollowPercent = add.OrientationFollowPercent;
         p.OrientationLookAheadMm   = add.OrientationLookAheadMm;
         p.OrientationSigmaMm       = add.OrientationSigmaMm;

@@ -739,14 +739,19 @@ public static class AngledPlanarSlicer
         Vector3? prevEnd = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
+        // Zig-zag single-skin (same as Planar): closed loops → longest open face,
+        // reverse direction each layer. Multi-island layers travel between faces
+        // when ZigZagAllowSameLayerTravel (start/stop OK).
+        bool singleSkinZigZag = settings.ZigZagSeam;
+
         bool targetSel = settings.LightningTargetSupportSelections;
         bool hasPaintTrees = lightningPlan is not null
             && lightningPlan.Trees.Any(t =>
                 (t.Manual || t.PaintColumn) && !lightningPlan.DroppedTrees.Contains(t.Id));
-        bool formboundEmit = targetSel
+        bool formboundEmit = !singleSkinZigZag && (targetSel
             ? hasPaintTrees
             : (Lightning.LightningPlanner.IsFormboundPattern(settings.InfillPattern)
-               || (hasPaintTrees && PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks)));
+               || (hasPaintTrees && PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks))));
         Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
 
         void EmitTree()
@@ -765,6 +770,30 @@ public static class AngledPlanarSlicer
             // Keep world-up tool normal for freestanding columns (not plane-tilted).
             for (int i = first; i < layer.Moves.Count; i++)
                 layer.Moves[i] = layer.Moves[i] with { Normal = Vector3.UnitZ };
+        }
+
+        // Closed flags (1 mm threshold, same as Planar Surface). Needed for zig-zag extract.
+        var insetClosed = new List<bool>(insetContours.Count);
+        for (int i = 0; i < insetContours.Count; i++)
+        {
+            var c = insetContours[i];
+            insetClosed.Add(c.Count >= 3 && Vector2.DistanceSquared(c[0], c[^1]) <= 1.0f);
+        }
+
+        if (singleSkinZigZag)
+        {
+            PlanarSlicer.ExtractSingleSkinOpenFaces(insetContours, insetClosed);
+            if (!settings.ZigZagAllowSameLayerTravel)
+                PlanarSlicer.KeepLongestOpenFaceOnly(insetContours, insetClosed);
+
+            var tracksZz = new List<ContourTrack>(insetContours.Count);
+            for (int i = 0; i < insetContours.Count; i++)
+                tracksZz.Add(new ContourTrack(insetContours[i], new Vector2(float.NaN),
+                    i < insetClosed.Count && insetClosed[i]));
+
+            EmitZigZagContours(tracksZz, origin, u, v, normal, layer, layer.Index);
+            EmitTree();
+            return tracksZz;
         }
 
         // ── Infill mode: replace shell contours with a continuous fill pattern.
@@ -836,7 +865,7 @@ public static class AngledPlanarSlicer
         ShellPath:
         var tracks = AssignSeams(insetContours, prevTracks, seamOrigin2d, seamDir2d);
         EmitContours(tracks.Select(t => (IEnumerable<Vector2>)t.Contour),
-            origin, u, v, normal, layer);
+            origin, u, v, normal, layer, closeLoops: true);
         EmitTree();
         return tracks;
     }
@@ -846,7 +875,8 @@ public static class AngledPlanarSlicer
         IEnumerable<IEnumerable<Vector2>> contours,
         Vector3 origin, Vector3 u, Vector3 v,
         Vector3 normal,
-        ToolpathLayer layer)
+        ToolpathLayer layer,
+        bool closeLoops = true)
     {
         var lastPos = new Vector3(float.NaN);
         foreach (var c in contours)
@@ -869,11 +899,105 @@ public static class AngledPlanarSlicer
                 }
                 prev = p3d; count++;
             }
-            if (count > 2 && first.HasValue)
+            if (closeLoops && count > 2 && first.HasValue)
             {
                 // Always close the loop. Clipper2 polygons have a genuine last→first edge
                 // that can be longer than 1mm, so capping on distance caused a visible gap.
                 // Only skip the closing move when the gap is effectively zero (first == last).
+                float gapSq = (prev - first.Value).LengthSquared();
+                if (gapSq > 1e-8f)
+                    layer.Moves.Add(new ToolpathMove(prev, first.Value, MoveKind.Extrude) { Normal = normal });
+                lastPos = first.Value;
+            }
+            else if (count > 0)
+            {
+                lastPos = prev;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Zig-zag open faces on a tilted/multi-planar frame: force direction by layer
+    /// parity, Travel between islands (start/stop OK), never close open skins.
+    /// </summary>
+    private static void EmitZigZagContours(
+        IReadOnlyList<ContourTrack> tracks,
+        Vector3 origin, Vector3 u, Vector3 v,
+        Vector3 normal,
+        ToolpathLayer layer,
+        int layerIndex)
+    {
+        Vector3 Unproject(Vector2 p) => origin + p.X * u + p.Y * v;
+
+        var remaining = tracks.Where(t => t.Contour.Count >= 2).ToList();
+        var lastPos = new Vector3(float.NaN);
+
+        while (remaining.Count > 0)
+        {
+            int bestI = 0;
+            bool bestRev = false;
+            float bestCost = float.MaxValue;
+
+            for (int ti = 0; ti < remaining.Count; ti++)
+            {
+                var c = remaining[ti].Contour;
+                var e0 = Unproject(c[0]);
+                var e1 = Unproject(c[^1]);
+                // For zig-zag parity we still order by nearest endpoint travel cost,
+                // but reverse is forced later for open faces — only use nearest for order.
+                float d0 = float.IsNaN(lastPos.X) ? 0f : Vector3.Distance(lastPos, e0);
+                float d1 = float.IsNaN(lastPos.X) ? 0f : Vector3.Distance(lastPos, e1);
+                // Prefer the end that matches the forced print direction when possible.
+                bool open = !remaining[ti].IsClosed;
+                if (open && c.Count >= 2)
+                {
+                    var p0 = c[0];
+                    var p1 = c[^1];
+                    bool flipped = p1.X < p0.X - 1e-6f
+                        || (MathF.Abs(p1.X - p0.X) <= 1e-6f && p1.Y < p0.Y - 1e-6f);
+                    bool wantReverse = flipped ^ (layerIndex % 2 == 1);
+                    // Entry is start of path after reverse: wantReverse → enter at e1.
+                    float d = wantReverse ? d1 : d0;
+                    if (d < bestCost) { bestCost = d; bestI = ti; bestRev = wantReverse; }
+                }
+                else
+                {
+                    if (d0 < bestCost) { bestCost = d0; bestI = ti; bestRev = false; }
+                    if (d1 < bestCost) { bestCost = d1; bestI = ti; bestRev = true; }
+                }
+            }
+
+            var chosen = remaining[bestI];
+            remaining.RemoveAt(bestI);
+            var contour = chosen.Contour;
+            bool reverse = bestRev;
+            if (chosen.IsClosed)
+                reverse = false; // closed shells on zig-zag layers are rare; print as-is
+
+            int n = contour.Count;
+            Vector3? first = null;
+            Vector3 prev = default;
+            int count = 0;
+            for (int vi = 0; vi < n; vi++)
+            {
+                int ci = reverse ? n - 1 - vi : vi;
+                var p3d = Unproject(contour[ci]);
+                if (count == 0)
+                {
+                    first = p3d;
+                    if (!float.IsNaN(lastPos.X))
+                        layer.Moves.Add(new ToolpathMove(lastPos, p3d, MoveKind.Travel) { Normal = normal });
+                }
+                else
+                {
+                    layer.Moves.Add(new ToolpathMove(prev, p3d, MoveKind.Extrude) { Normal = normal });
+                }
+                prev = p3d;
+                count++;
+            }
+
+            if (chosen.IsClosed && count > 2 && first.HasValue)
+            {
                 float gapSq = (prev - first.Value).LengthSquared();
                 if (gapSq > 1e-8f)
                     layer.Moves.Add(new ToolpathMove(prev, first.Value, MoveKind.Extrude) { Normal = normal });
@@ -1162,9 +1286,10 @@ public static class AngledPlanarSlicer
 
     // -- Per-contour seam tracking ---------------------------------------------
 
-    private sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY)
+    private sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY, bool isClosed = true)
     {
         public readonly List<Vector2> Contour = contour;
         public readonly Vector2 SeamXY = seamXY;
+        public readonly bool IsClosed = isClosed;
     }
 }
