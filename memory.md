@@ -507,6 +507,12 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Session changelog (reverse chronological)
 
+### 2026-07-16 — Auto build numbers, RPM calibration inputs, launcher TFM fix
+- **Build identity is now auto-generated** (`GenerateBuildInfo` target in MassiveSlicer.App.csproj): build number = git commit count, shown as `build N · date · sha`. Hand-edited `BuildInfo.cs` deleted. Same number on every machine; `git log --oneline` maps builds → commits.
+- **Calibration dialog takes true RPM** (read off the extruder drive) plus a one-time "RPM at 100% output" drive scale (default 100 — on our machine %==RPM, e.g. 60% = 60 RPM). `CalibMotorPercent` remains as a computed property for the calibration-scene generator.
+- **macOS launcher fix:** the Zivid-optional merge changed the macOS TargetFramework to `net8.0`; `tools/make_macos_app.sh` now resolves the correct bin dir (it was silently launching a stale `net8.0-windows` build).
+- Synced with master repeatedly (UI/UX overhaul, TreeSupport/Formbound, Zivid-optional). Note: one upstream history rewrite (force-push) was adopted after verifying content-identical.
+
 ### 2026-07-16 — Windows launch crash fix + `.mass` drag-and-drop (Jeff, Windows side, w/ Claude)
 
 **Boot/render crash — same class as the 2026-06-21 "Boot crash" fix, different call sites:** `ViewportView.OnRender` — the TCP-readout guard and cut-tool gizmo check (~lines 1467/1470) read Avalonia `DataContext` directly from the GL render thread instead of the established `_vm` cache field (see the class-level comment at ~line 115: "set on the UI thread in WireGlCanvas, read from GL thread in OnRender"). Crashed on every launch: `InvalidOperationException` — "the calling thread cannot access this object because a different thread owns it." Looks like newer cut-tool/TCP-readout code just didn't follow the existing pattern. **Fix:** swapped both `DataContext` reads to `_vm`, matching every other spot in `OnRender`.
