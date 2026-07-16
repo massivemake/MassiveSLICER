@@ -1,5 +1,11 @@
 # MassiveSLICER Build Log
 
+> **Build numbering (2026-07-16, build 416+):** the build number is now generated
+> automatically at compile time as the **git commit count**, shown in the status bar
+> as `build N · date · sha`. It is identical on every machine, increments with every
+> commit, and maps 1:1 to a commit — `git log --oneline` connects any build number
+> to its changes. Builds 1–30 below were hand-numbered before this scheme.
+
 Build numbers appear in the status bar (bottom center). Numbering began mid-development
 during the Jefre curtain project debugging; builds 1–8 are reconstructed from the
 session that introduced them.
