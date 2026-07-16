@@ -2967,6 +2967,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningTargetSupportSelections = copy.LightningTargetSupportSelections;
         live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
+        live.BrimEnabled            = copy.BrimEnabled;
+        live.BrimLoops              = copy.BrimLoops;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
         live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
@@ -3190,6 +3192,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         add.MultiPlanarAxisX = p.MultiPlanarAxisX;
         add.BumpMultiPlanarStamp();
+        add.BrimEnabled         = p.BrimEnabled;
+        add.BrimLoops           = p.BrimLoops;
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
         add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
@@ -3490,6 +3494,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
             .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
+        p.BrimEnabled          = add.BrimEnabled;
+        p.BrimLoops            = add.BrimLoops;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
         p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;

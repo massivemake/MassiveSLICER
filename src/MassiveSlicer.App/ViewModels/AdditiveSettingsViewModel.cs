@@ -735,6 +735,30 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _baseDataIndex, Math.Clamp(value, 1, 32));
     }
 
+    // -- Brim (bed adhesion) -------------------------------------------------------
+
+    private bool _brimEnabled;
+    /// <summary>Outward offset loops around the first layer for bed adhesion (applied last, encloses X-bracing).</summary>
+    public bool BrimEnabled
+    {
+        get => _brimEnabled;
+        set
+        {
+            if (SetField(ref _brimEnabled, value))
+                OnPropertyChanged(nameof(ShowBrimControls));
+        }
+    }
+
+    public bool ShowBrimControls => BrimEnabled;
+
+    private int _brimLoops = 3;
+    /// <summary>Number of brim offset loops (one bead width apart).</summary>
+    public int BrimLoops
+    {
+        get => _brimLoops;
+        set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
+    }
+
     // -- X-Bracing Wall ----------------------------------------------------------
 
     private bool _xBracingEnabled;

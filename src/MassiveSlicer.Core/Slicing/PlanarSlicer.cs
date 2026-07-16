@@ -255,6 +255,11 @@ public static class PlanarSlicer
                 $"[formbound] zig-zag single-skin: {xDetourState.FormboundDetours} fin detour(s) " +
                 "spliced into the open path (wall-interior / backside)");
 
+        // Brim is the LAST toolpath step: its footprint is built from the actual
+        // layer-0 extrude segments, so X-bracing detours and pattern bulges are
+        // enclosed by the offset loops.
+        BrimPlanner.Apply(toolpath, settings);
+
         return toolpath;
     }
 

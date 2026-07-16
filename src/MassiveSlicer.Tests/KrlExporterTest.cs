@@ -482,4 +482,41 @@ public sealed class KrlExporterTest
         Assert.DoesNotContain("wipe)", wipeBlock.Replace("extruder off (wipe)", ""));
         Assert.DoesNotContain("= 0.5 ; wipe", wipeBlock);
     }
+
+    [Fact]
+    public void Urm_honors_edited_header_and_footer_but_falls_back_if_not_urm()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        // Gear menu edited a URM-shaped header/footer (e.g. tuned $ADVANCE) — must flow through.
+        var editedHeader = KrlExporter.DefaultUrmHeaderTemplate.Replace("$ADVANCE=5", "$ADVANCE=3");
+        var editedFooter = KrlExporter.DefaultUrmFooterTemplate.Replace("WAIT SEC 2", "WAIT SEC 4");
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "test_edit", ExtrusionRpmPercent = 50f,
+            Temperature1 = 250f, Temperature2 = 250f, Temperature3 = 250f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate = editedHeader, FooterTemplate = editedFooter,
+        });
+        Assert.Contains("$ADVANCE=3", krl);
+        Assert.Contains("WAIT SEC 4", krl);
+        Assert.Contains(";FOLD CaracolSafety", krl);
+
+        // A stale LFAM (ANOUT) header while URM is on must fall back to the URM default.
+        var krl2 = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "test_fallback", ExtrusionRpmPercent = 50f,
+            Temperature1 = 250f, Temperature2 = 250f, Temperature3 = 250f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate = KrlExporter.DefaultHeaderTemplate,
+        });
+        Assert.DoesNotContain("$ANOUT[1]", krl2);
+        Assert.Contains(";FOLD CaracolSafety", krl2);
+    }
+
 }

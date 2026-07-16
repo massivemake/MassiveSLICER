@@ -203,6 +203,12 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
+    /// <summary>Brim: outward offset loops around the first layer for bed adhesion.</summary>
+    public bool BrimEnabled { get; set; }
+
+    /// <summary>Number of brim offset loops.</summary>
+    public int BrimLoops { get; set; } = 3;
+
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }
 

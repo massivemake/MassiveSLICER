@@ -3571,6 +3571,8 @@ public partial class ViewportView : UserControl
             ZigZagSeam             = s.SeamMode == "Zig-zag",
             ZigZagAllowSameLayerTravel = s.ZigZagAllowSameLayerTravel,
             Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
+            BrimEnabled         = s.BrimEnabled,
+            BrimLoops           = s.BrimLoops,
             XBracingEnabled     = s.XBracingEnabled,
             XBracingDepthMm     = (float)s.XBracingDepthMm,
             XBracingDepthBottomMm = (float)s.XBracingDepthBottomMm,
@@ -4710,6 +4712,8 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.MaxOverhangTiltDeg),
         nameof(AdditiveSettingsViewModel.MultiPlanarStamp),
         nameof(AdditiveSettingsViewModel.PaintStamp),
+        nameof(AdditiveSettingsViewModel.BrimEnabled),
+        nameof(AdditiveSettingsViewModel.BrimLoops),
         nameof(AdditiveSettingsViewModel.XBracingEnabled),
         nameof(AdditiveSettingsViewModel.XBracingDepthMm),
         nameof(AdditiveSettingsViewModel.XBracingDepthBottomMm),
@@ -13720,9 +13724,10 @@ public partial class ViewportView : UserControl
             SliceBedWorldZ     = _renderer.BedZ,
             TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
             // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
-            // forces DefaultUrmHeaderTemplate when DigitalStartStopEnabled is true.
-            HeaderTemplate = settings.DigitalStartStopEnabled ? null : postProcess.HeaderText,
-            FooterTemplate = settings.DigitalStartStopEnabled ? null : postProcess.FooterText,
+            // The exporter renders placeholders and, in URM mode, keeps the edited header
+            // only if it is still URM-shaped (else falls back to the Caracol URM default).
+            HeaderTemplate = postProcess.HeaderText,
+            FooterTemplate = postProcess.FooterText,
             ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,

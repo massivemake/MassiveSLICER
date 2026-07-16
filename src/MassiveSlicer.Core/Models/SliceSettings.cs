@@ -47,6 +47,16 @@ public sealed class SliceSettings
     /// </summary>
     public bool WipeSkipShortTravels { get; init; }
 
+    /// <summary>
+    /// Brim: outward offset loops around the full first-layer footprint for bed adhesion.
+    /// Applied as the LAST toolpath step so first-layer additions (X-bracing, patterns)
+    /// are enclosed.
+    /// </summary>
+    public bool BrimEnabled { get; init; }
+
+    /// <summary>Number of brim offset loops (spaced one bead width apart).</summary>
+    public int BrimLoops { get; init; } = 3;
+
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
 

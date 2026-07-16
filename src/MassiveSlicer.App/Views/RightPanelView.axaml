@@ -1413,6 +1413,33 @@
                                 </StackPanel>
                             </Expander>
 
+                            <!-- Brim (collapsible group under EFFECTS) -->
+                            <Expander Classes="SectionExpander" Header="BRIM" IsExpanded="False"
+                                      Margin="0,4,0,2"
+                                      ToolTip.Tip="Bed-adhesion brim: outward offset loops around the first layer. Generated as the last toolpath step, so it wraps X-bracing and any other first-layer additions.">
+                                <StackPanel Margin="0,2,0,4">
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Enable brim"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.BrimEnabled, Mode=TwoWay}"
+                                              ToolTip.Tip="Print offset loops around the first layer to secure the part to the bed. The footprint comes from the actual first-layer toolpath, so X-bracing and pattern bulges are enclosed."/>
+
+                                    <StackPanel IsVisible="{Binding Additive.ShowBrimControls}">
+                                        <Grid Margin="8,2,8,4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="80"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Offset loops" VerticalAlignment="Center" Classes="LabelMuted"
+                                                       ToolTip.Tip="How many loops to print around the part. More loops = wider skirt = stronger hold."/>
+                                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.BrimLoops, Mode=TwoWay}"/>
+                                        </Grid>
+                                        <TextBlock Margin="10,0,10,4" FontSize="10" Opacity="0.6" TextWrapping="Wrap"
+                                                   Text="Loops are one bead width apart, printed outermost-in before the part so the innermost loop fuses to the first bead."/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Expander>
+
                             <!-- Wave -->
                             <Grid Margin="8,2,8,4">
                                 <Grid.ColumnDefinitions>
@@ -2143,8 +2170,15 @@
                         <TextBlock Text="When checked: Caracol MAT (T1/T2/T3/RPM), not $ANOUT. Travel uses ;travel start/end and ;rpm change."
                                    Classes="LabelMuted" FontSize="10" Margin="24,0,8,8" TextWrapping="Wrap" Opacity="0.75"/>
 
-                        <TextBlock Text="KRL EXPORT" Classes="SectionHeader"
-                                   ToolTip.Tip="Values written to the SRC file. URM: T1/T2/T3/RPM globals. Off: $ANOUT channels."/>
+                        <Grid Margin="0,0,8,0" ColumnDefinitions="*,Auto">
+                            <TextBlock Grid.Column="0" Text="KRL EXPORT" Classes="SectionHeader"
+                                       ToolTip.Tip="Values written to the SRC file. URM: T1/T2/T3/RPM globals. Off: $ANOUT channels."/>
+                            <Button Grid.Column="1" Classes="ToolbarButton" Padding="6,2"
+                                    Click="OnKrlPostProcessClicked"
+                                    ToolTip.Tip="Header / Footer settings — view and edit exactly what is written to the SRC: $ADVANCE, $APO.CVEL, $ACC.CP, $VEL.CP, the MAT (T1/T2/T3/RPM) block, and the CaracolSafety interrupts.">
+                                <ia:Icon Value="mdi-cog-outline" FontSize="14"/>
+                            </Button>
+                        </Grid>
 
                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
                             <TextBlock Grid.Column="0" Text="Temp all zones (°C)"

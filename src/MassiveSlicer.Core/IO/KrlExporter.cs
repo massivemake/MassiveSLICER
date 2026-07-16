@@ -734,7 +734,12 @@ public static class KrlExporter
         if (s.IsMilling)
             template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultMillHeaderTemplate : s.HeaderTemplate!;
         else if (s.DigitalStartStopEnabled)
-            template = DefaultUrmHeaderTemplate;
+            // Honor an edited URM header (gear menu) as long as it is still URM-shaped;
+            // otherwise fall back so URM mode never exports an ANOUT header by mistake.
+            template = !string.IsNullOrWhiteSpace(s.HeaderTemplate)
+                       && s.HeaderTemplate!.Contains("CaracolSafety", System.StringComparison.Ordinal)
+                ? s.HeaderTemplate!
+                : DefaultUrmHeaderTemplate;
         else
             template = string.IsNullOrWhiteSpace(s.HeaderTemplate) ? DefaultHeaderTemplate : s.HeaderTemplate!;
         AppendRenderedTemplate(sb, RenderHeaderTemplate(template, name, s));
@@ -855,7 +860,10 @@ public static class KrlExporter
         // Caracol air / temp / RPM shutdown (MTruck footer).
         string template;
         if (s.DigitalStartStopEnabled && !s.IsMilling)
-            template = DefaultUrmFooterTemplate;
+            template = !string.IsNullOrWhiteSpace(s.FooterTemplate)
+                       && s.FooterTemplate!.Contains("EXTRUDER MOTOR COMMAND", System.StringComparison.Ordinal)
+                ? s.FooterTemplate!
+                : DefaultUrmFooterTemplate;
         else
             template = string.IsNullOrWhiteSpace(s.FooterTemplate) ? DefaultFooterTemplate : s.FooterTemplate!;
         AppendRenderedTemplate(sb, template.TrimEnd());
