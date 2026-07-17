@@ -6300,6 +6300,13 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         if (node is null) return null;
 
+        // Effector handles resolve directly from their registered slots, so clicking
+        // a handle highlights its "Effector N" row (identifies which one is which).
+        for (int i = 0; i < _effectorNodes.Length; i++)
+            if (_effectorNodes[i] is { } en
+                && (en == node || en.SelfAndDescendants().Any(n => n == node)))
+                return _effectorItems[i];
+
         var item = FindToolheadOutlinerItem(node)
                    ?? FindUserMeshOutlinerItem(node)
                    ?? FindOutlinerItem(node);
