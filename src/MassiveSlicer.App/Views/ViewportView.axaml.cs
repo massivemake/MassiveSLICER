@@ -696,6 +696,14 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.XBracingShowHelper))
                     GlCanvas.RequestNextFrameRendering();
 
+                // Live-effector master toggle: hide inert handles while off, restore
+                // each handle's outliner eye state on re-enable.
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.EffectorEnabled))
+                {
+                    vm.SetEffectorHandlesEnabled(additive.EffectorEnabled);
+                    GlCanvas.RequestNextFrameRendering();
+                }
+
                 // Re-solve IK live when the toolhead orientation offset changes so the
                 // user can see the effect in the viewport without moving the scrubber.
                 // Also re-run full validation so reachability and singularity markers update.

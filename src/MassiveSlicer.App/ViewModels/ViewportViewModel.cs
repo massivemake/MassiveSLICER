@@ -4221,6 +4221,31 @@ public sealed class ViewportViewModel : ViewModelBase
     // ── Live effector handles (glowing draggable points, up to 3) ──────────
     private readonly SceneNode?[] _effectorNodes = new SceneNode?[3];
     private readonly OutlinerItemViewModel?[] _effectorItems = new OutlinerItemViewModel?[3];
+    private readonly bool[] _effectorEyeBeforeDisable = [true, true, true];
+
+    /// <summary>
+    /// Master-toggle sync: while "Live effector" is off, spawned handles are hidden
+    /// (they have no effect on the slice, so showing them was misleading). Re-enabling
+    /// restores each handle's own outliner eye state.
+    /// </summary>
+    public void SetEffectorHandlesEnabled(bool enabled)
+    {
+        for (int i = 0; i < _effectorNodes.Length; i++)
+        {
+            if (_effectorNodes[i] is not { } node) continue;
+            if (!enabled)
+            {
+                _effectorEyeBeforeDisable[i] = node.Visible;
+                node.Visible = false;
+            }
+            else
+            {
+                node.Visible = _effectorEyeBeforeDisable[i];
+            }
+            _effectorItems[i]?.NotifyVisibilityFromScene();
+        }
+        NotifyRenderNeeded();
+    }
 
     public bool EffectorPoint1Active => _effectorNodes[0] is not null;
     public bool EffectorPoint2Active => _effectorNodes[1] is not null;
