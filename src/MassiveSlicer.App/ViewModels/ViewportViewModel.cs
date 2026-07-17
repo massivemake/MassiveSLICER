@@ -4300,6 +4300,7 @@ public sealed class ViewportViewModel : ViewModelBase
             }
             NotifyEffectorPoints();
             OnModelGeometryChanged?.Invoke();
+            NotifyRenderNeeded();   // repaint now — handles otherwise appear only on next camera move
         });
     private RelayCommand<string>? _toggleEffectorPointCommand;
 
