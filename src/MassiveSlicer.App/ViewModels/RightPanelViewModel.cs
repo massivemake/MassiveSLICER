@@ -69,6 +69,9 @@ public sealed class RightPanelViewModel : ViewModelBase
 
     public bool ShowToolpathTabButton => true;
 
+    /// <summary>Presets library — search/sort/filter, apply-to-Additive, favorites, import/export.</summary>
+    public PresetsCardViewModel Presets { get; }
+
     public ICommand ShowAdditiveCommand     { get; }
     public ICommand ShowScanCommand         { get; }
     public ICommand ShowSubtractiveCommand  { get; }
@@ -82,6 +85,18 @@ public sealed class RightPanelViewModel : ViewModelBase
         ShowSubtractiveCommand = new RelayCommand(() => ActiveTab = RightPanelTab.Subtractive);
         ShowSettingsCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Settings);
         ShowToolpathCommand    = new RelayCommand(() => ActiveTab = RightPanelTab.Toolpath);
+
+        // Additive's field initializer has already run by this point (all field/property
+        // initializers complete before any constructor body), so it's safe to hand to Presets here.
+        Presets = new PresetsCardViewModel(Additive);
+    }
+
+    private bool _stepPresetsExpanded = true;
+    /// <summary>PRESETS card expansion (sits above step 1 MODEL). Comp/prototype scaffold — not yet backed by real persistence.</summary>
+    public bool StepPresetsExpanded
+    {
+        get => _stepPresetsExpanded;
+        set => SetField(ref _stepPresetsExpanded, value);
     }
 
     private bool _stepModelExpanded;
@@ -140,6 +155,7 @@ public sealed class RightPanelViewModel : ViewModelBase
     {
         if (editOpen)
         {
+            StepPresetsExpanded = false;
             StepModelExpanded = false;
             StepSliceExpanded = false;
             StepPatternExpanded = false;
