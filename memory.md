@@ -2,7 +2,7 @@
 
 Last updated: 2026-07-16 (Windows launch crash fix + `.mass` drag-and-drop; large-STL import crash diagnosed, not yet fixed)
 
-> **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files (`CLAUDE.md`, etc.).
+> **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
 > **Living doc.** Update after bug fixes, features, test results, and priority shifts so every session starts with shared context.
 
