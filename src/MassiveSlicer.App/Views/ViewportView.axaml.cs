@@ -5908,7 +5908,8 @@ public partial class ViewportView : UserControl
         if (IsLfamProductionCell(vm) && !vm.IsDevMode)
         {
             var userHit = Picker.PickWhere(
-                ray, _renderer.SceneRoot, n => vm.IsUserModelSceneNode(n), out _);
+                ray, _renderer.SceneRoot,
+                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n), out _);
             if (userHit is not null)
                 return Picker.FindSelectableRoot(userHit, _renderer.SceneRoot);
         }
@@ -5922,7 +5923,7 @@ public partial class ViewportView : UserControl
         if (node is not null && vm.FindUserMeshOutlinerItem(node)?.Node is { } userRoot)
             node = userRoot;
 
-        bool isUserContent = node is not null && vm.IsUserModelSceneNode(node);
+        bool isUserContent = node is not null && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node));
 
         // Dev mode: registered environment props (print bed, stands, docks) are pickable —
         // resolve the mesh-leaf hit to its dev root so the gizmo transforms the whole prop.

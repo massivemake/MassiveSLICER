@@ -4223,6 +4223,16 @@ public sealed class ViewportViewModel : ViewModelBase
     private readonly OutlinerItemViewModel?[] _effectorItems = new OutlinerItemViewModel?[3];
     private readonly bool[] _effectorEyeBeforeDisable = [true, true, true];
 
+    /// <summary>True when the node is (or is inside) a spawned effector handle.</summary>
+    public bool IsEffectorNode(SceneNode? node)
+    {
+        if (node is null) return false;
+        foreach (var en in _effectorNodes)
+            if (en is not null && (en == node || en.SelfAndDescendants().Any(n => n == node)))
+                return true;
+        return false;
+    }
+
     /// <summary>
     /// Master-toggle sync: while "Live effector" is off, spawned handles are hidden
     /// (they have no effect on the slice, so showing them was misleading). Re-enabling
