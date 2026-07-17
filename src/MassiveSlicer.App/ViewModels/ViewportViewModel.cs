@@ -4264,6 +4264,15 @@ public sealed class ViewportViewModel : ViewModelBase
             }
             else
             {
+                // Purge stale rows with this effector's name (restored from an old
+                // workspace; not registered in the slots) so we never show duplicates.
+                foreach (var stale in OutlinerItems
+                             .Where(it => it.Node.Name == $"Effector {n}").ToList())
+                {
+                    OutlinerItems.Remove(stale);
+                    PendingRemoveNodes.Enqueue(stale.Node);
+                }
+
                 var node = BuildEffectorNode(n);
                 PendingNodes.Enqueue(node);
                 var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
@@ -4354,7 +4363,9 @@ public sealed class ViewportViewModel : ViewModelBase
         // Spawn at the model's bounding-box centre (even when the body is hidden by a
         // line view), else above the print bed's centre, else a bed-ish default.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
-        var model = ResolveActivePrintObjectItem() ?? EnumerateUserModelItems().FirstOrDefault();
+        var model = ResolveActivePrintObjectItem()
+                    ?? EnumerateUserModelItems().FirstOrDefault(i => i.Visible)
+                    ?? EnumerateUserModelItems().FirstOrDefault();
         if (model is not null && ComputeWorldCenter(model.Node) is { } centre)
             spawn = centre;
         else if (ComputeBedCenter() is { } bedCentre)
