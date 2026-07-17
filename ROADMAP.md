@@ -58,10 +58,17 @@ The current frontier, in plain terms:
 4. **Clean starts and stops** — travel moves sequenced nearest-neighbor and
    as short as possible, so the head isn't dragging ooze ("poop") across the
    part between segments.
-5. **Big parts as managed assemblies** — cut a large model into printable
-   sections (adding structural bracing — one Bracing system with types:
-   X today, vertical/bulkhead next), keep the master file as the source of truth, and
-   export a per-section SRC with one click.
+5. **Big parts as managed assemblies** — the bed is 10'×10' (or 10'×20'), the
+   art is bigger. One master model in the slicer; cutting planes act as
+   cuts/masks producing **compositions** (sections) that live beside the
+   master in the same file. Effects (sine wave) and bracing are set on the
+   master so every printed section lines up when assembled. Each composition
+   slices and exports its own SRC with one click. Bracing is a **stackable
+   modifier system** (X / lattice for stiffness, vertical braces — including
+   a beam-sleeve end for mounting), and **assembly joint modifiers** at cut
+   points (flanges, lips, brackets — e.g., a taper that seats one section
+   inside the next, with insertion depth height-compensated so the assembled
+   stack matches the master's height).
 6. **Every print teaches the next one** — exported programs carry provenance
    metadata that ties each print to its Massive Lab (ERP) job, so logs, notes,
    and outcomes attach to real records instead of "print #1920". That dataset
@@ -81,7 +88,7 @@ Real failures and costs that drove this work (see memory.md for histories):
 | Bead width variation without speed/flow adaptation | Bumpy surfaces where the bead is squeezed, holes where it's starved | Per-move geometry-adaptive speed & flow (planned, P2) |
 | Overhangs printed planar (always from the top) | Drips, sagging, failed sections on steep geometry | Non-planar slicing using the articulating head (planned, P2) |
 | Travel moves not sequenced nearest-neighbor | The head sometimes crosses the **entire print** between segments, oozing ("pooping") the whole way; wasted time | Travel-move optimizer — shortest possible travels (planned, P2) |
-| Large parts printed monolithically | No structural bracing options; unwieldy programs | Model sectioning + bracing (X built; vertical/bulkhead planned) with per-section SRC export (planned, P3) |
+| Parts bigger than the bed (10'×10' / 10'×20') | Ad-hoc cutting forks the design file; sections drift out of alignment; pieces don't register or join cleanly | Cut compositions + stackable bracing modifiers + assembly joint modifiers with height compensation (planned, P3) |
 | Prints are anonymous ("print #1920") | Logs/notes/outcomes can't be tied to a print; no dataset to learn from, so failures repeat | KRL provenance metadata + Massive Lab job linkage → learning/recommendation engine (planned, P4) |
 | Truncated program transfer | The Jefre curtain died at layer 718/1047 | Transfer verification (planned, P1) |
 | Wrong starting RPM per material | Bottom third of a print smeared while dialing live | Purge-and-weigh calibration (built) |
@@ -154,8 +161,9 @@ Key facts:
 - Per-move geometry-adaptive speed & flow (width variation → bumps/holes)
 - Non-planar slicing using the articulating head (overhang from the side)
 - Travel-move optimizer (nearest-neighbor sequencing, shortest travels)
-- Model sectioning: cut a master model into printable parts, per-section SRC export
-- Bracing system with types: X (built) + vertical/bulkhead (planned), extensible
+- Cut compositions: cutting planes on a master model → per-section slicing + SRC
+- Bracing as stackable modifiers: X (built) + lattice + vertical + beam-sleeve ends
+- Assembly joint modifiers at cut points: flange/lip/bracket, height-compensated
 - Print provenance metadata in exported KRL + Massive Lab job linkage
 - Preset / settings recommendation engine (project description + geometry)
 - Transfer verification on Export / Send to Robot
@@ -228,26 +236,51 @@ behavior. Combine with wipes/resume ramps for clean starts.
 
 ## P3 — Structure & big-part workflow
 
-### 6. Model sectioning with per-section SRC export
-**Why:** parts bigger than one print need to be cut into sections — but the
-cutting should not fork the design file into untracked copies.
-**What:** cut a model inside the workspace (planes/boxes), keep the master
-model + all sections in one `.mass`, slice sections individually, and export
-"just this section" to SRC with one click.
-**Size:** large.
+### 6. Cut compositions (master model → per-section SRC)
+**Why:** the bed caps prints at 10'×10' / 10'×20'; larger work must be cut.
+Today that means forking the model into separate files — losing the single
+source of truth, and losing continuity of effects across pieces (a sine wave
+or bracing set per-piece won't line up after assembly).
+**What:** cutting planes on the master act as cuts/masks, each producing a
+**composition** — a section of the model that lives beside the master in the
+same `.mass`. Effects and bracing are defined once on the master and carry
+through every composition, so printed sections align at the joints. Each
+composition slices independently and exports its own SRC with one click.
+**Size:** large (in progress — cutting methodology being designed now).
 
-### 7. Bracing system (generalize X-bracing into types)
-**Why:** sectioned and thin-walled parts need internal structure. X-bracing
-is built (dual-wall X notches, `XBracingEnabled`), but it's a one-off — the
-feature should be "Bracing" with selectable types.
-**What:** refactor into a bracing system with a type selector: **X** (existing)
-and **Vertical / bulkhead** ribs first, extensible for future types;
-placeable per region, sliced integrally with the part.
-**Size:** medium.
+### 7. Bracing as stackable modifiers
+**Why:** X-bracing is built (`XBracingEnabled`) but is a single on/off — real
+parts need combinable structure: stiffening against warp/bend AND mounting.
+**What:** bracing becomes a **modifier stack** — multiple braces on one model:
+- **X / lattice** — structural, keeps the model from warping or bending;
+- **Vertical** — bulkhead-style ribs;
+- **Beam sleeve** — a vertical brace terminating in a square/rectangular
+  collar that wraps around a beam, for structural support and for mounting
+  the finished print.
+Placeable per region, sliced integrally with the part, stacking freely
+(e.g., lattice for stiffness + a sleeved vertical for mounting).
+**Size:** medium–large.
+
+### 8. Assembly joint modifiers (flanges, lips, brackets)
+**Why:** cut sections must register and join cleanly when stacked — right
+now nothing shapes the mating surfaces, so fit-up is manual.
+**What:** functional toolpath modifiers applied at cut points, by type:
+**flange / lip / bracket** — e.g., a taper flange that narrows the bottom of
+the upper section so it seats down inside the lower one. Critically,
+**insertion depth is height-compensated**: how far a section sinks into its
+neighbor is fed back into the composition heights so the assembled stack
+still matches the master model's overall height.
+**Size:** medium–large.
+
+### Design coupling note (6 + 7 + 8)
+These three are one workflow: cut the master into compositions → braces and
+effects flow through from the master → joints shape the cut faces → per-
+section SRC. The Dynamic wave phase method matters here: wave continuity
+across section boundaries is what makes assembled surfaces read as one.
 
 ## P4 — Traceability & learning (Massive Lab)
 
-### 8. Print provenance metadata in exported KRL
+### 9. Print provenance metadata in exported KRL
 **Why:** a print today is anonymous — "print #1920" — so machine logs, operator
 notes, and outcomes have nothing to attach to, and every failure's lessons
 evaporate. The ERP link already exists (`docs/ERP-SlicerAPI.md`,
@@ -260,8 +293,8 @@ before the print starts; logs and notes then attach to it.
 **Size:** medium (format + export hook are small; the ERP-side job record is
 the coordination work).
 
-### 9. Preset & settings recommendation engine
-**Why:** with prints linked to outcomes (item 8), the data can start working:
+### 10. Preset & settings recommendation engine
+**Why:** with prints linked to outcomes (item 9), the data can start working:
 minimize repeat failures and stop settings knowledge living in heads.
 **What:** staged — (a) collect: settings + geometry features (size, wall
 widths, overhang stats) + outcome per job; (b) recall: "similar past prints
@@ -273,7 +306,7 @@ outcome).
 
 ## P5 — Calibration & flow
 
-### 10. HV/HF head selector in the calibration section
+### 11. HV/HF head selector in the calibration section
 **Why:** presets carry two flow rates (HV / HF — one per extruder head); the
 purge-and-weigh calculator writes only one, and the operator shouldn't have
 to know which field by folklore.
@@ -281,7 +314,7 @@ to know which field by folklore.
 recorded in the provenance note.
 **Size:** small.
 
-### 11. Per-height flow ramp / calibration print mode
+### 12. Per-height flow ramp / calibration print mode
 **Why:** purge-and-weigh sets steady-state flow, but first layers behave
 differently (heat-up, adhesion) — the curtain's bottom-third smear was flow
 drift corrected live.
@@ -291,21 +324,21 @@ slice for empirical verification.
 
 ## P6 — Visualization & verification
 
-### 12. Finished-print preview (bead material shading)
+### 13. Finished-print preview (bead material shading)
 **Why:** Show Bead exists to judge how the print will look — "Clear" should
 preview translucent/glossy, not flat gray.
 **What:** bead rendering honors viewport lighting/shader settings and the
 material preset's appearance.
 **Size:** medium.
 
-### 13. In-app wave diagnostics
+### 14. In-app wave diagnostics
 **Why:** `tools/wave_analysis.py` caught the Fixed-method drift and validated
 Dynamic, but lives outside the app.
 **What:** a "check wave coherence" pass after slicing (phase-drift overlay or
 per-height table).
 **Size:** medium.
 
-### 14. Dynamic wave — last mile
+### 15. Dynamic wave — last mile
 **Why:** Dynamic halves worst-height phase error vs Fixed; deep folds still
 show residual wobble.
 **What:** interpolated parent-point matching + loop-wrapped smoothing; verify
@@ -314,14 +347,14 @@ on a physical test section.
 
 ## P7 — Comfort & performance
 
-### 15. Workspace load-time optimization
+### 16. Workspace load-time optimization
 **Why:** multi-million-move projects take 20–30 s to open; the .mass format
 is verbose JSON.
 **What:** profile the parse; likely wins: compact toolpath encoding, lazy GPU
 upload.
 **Size:** medium–large.
 
-### 16. Smaller carry-overs
+### 17. Smaller carry-overs
 - Spindle RPM display (KUKA `$ANOUT` polling or ATV340 Modbus).
 - PBR polish (prefiltered-env IBL, alpha blend ordering, UV panel).
 - Obsolete build-folder cleanup.
