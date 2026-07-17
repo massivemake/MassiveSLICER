@@ -3051,8 +3051,15 @@ public partial class ViewportView : UserControl
                 {
                     float vpW2 = (float)GlCanvas.Bounds.Width;
                     float vpH2 = (float)GlCanvas.Bounds.Height;
-                    var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
-                    var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
+                    // Effector handles get pick priority: they float inside the toolpath
+                    // cloud, and the toolpath's screen-distance pick would otherwise
+                    // claim every click near a handle (made them unclickable).
+                    var effectorHit = Picker.PickWhere(
+                        ray, _renderer.SceneRoot, n => pickVm.IsEffectorNode(n), out _);
+                    var picked = effectorHit is not null
+                        ? Picker.FindSelectableRoot(effectorHit, _renderer.SceneRoot)
+                        : (_renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2)
+                           ?? PickForSceneSelection(pickVm, ray));
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
                     if (shiftHeld && picked is not null
                         && ResolveSequenceToolpath(pickVm, picked) is not null)
