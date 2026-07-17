@@ -22,7 +22,7 @@ the Electron/JS prototype (`MassiveSlice`).
 
 - **Slice** meshes into robot toolpaths: planar, angled, geodesic, and curved
   (sweep) strategies; adaptive layer heights; infill patterns; seam control
-  with a visual seam editor; supports (TreeSupport / Formbound).
+  with a visual seam editor; supports (TreeSupport / Formbound); X-bracing.
 - **Decorate** toolpaths with surface effects: sine/sawtooth/triangle waves
   (Fixed and Dynamic phase methods), relief patterns with twist/fade, and
   live effector points that locally shape amplitude.
@@ -44,24 +44,39 @@ the Electron/JS prototype (`MassiveSlice`).
 
 The north star: **an operator should be able to go from model to a successful
 large-format print without folklore** — the app carries the knowledge.
-Concretely, that means closing the gaps where prints still fail or need
-babysitting:
+The current frontier, in plain terms:
 
 1. **No print dies from a preventable cause** — transfer verification,
    placement-accurate validation, calibrated flow from layer one.
-2. **What you see is what you get** — the preview is trustworthy enough to
-   sign off surface quality (bead material shading, wave-coherence checks)
-   before committing material and machine-days.
-3. **Machine knowledge lives in presets** — materials, heads, cells, and their
+2. **The bead is right everywhere, not just on average** — when the geometry
+   demands wide and narrow beads in the same layer, speed and flow must adapt
+   move-by-move so the surface doesn't come out bumpy or full of holes.
+3. **Overhangs stop being the enemy** — use the robot's articulating head for
+   **non-planar printing**: approach steep geometry from the side instead of
+   always from the top, adapting the slicing strategy to the shape, so
+   overhangs stop causing drips and failures.
+4. **Clean starts and stops** — travel moves sequenced nearest-neighbor and
+   as short as possible, so the head isn't dragging ooze ("poop") across the
+   part between segments.
+5. **Big parts as managed assemblies** — cut a large model into printable
+   sections (adding structural bracing: X-bracing today, vertical
+   bulkhead-style next), keep the master file as the source of truth, and
+   export a per-section SRC with one click.
+6. **What you see is what you get** — previews trustworthy enough to sign off
+   surface quality before committing material and machine-days.
+7. **Machine knowledge lives in presets** — materials, heads, cells, and their
    calibrations are data, not tribal memory.
 
 ## What problems are we trying to solve?
 
-Real failures and costs that drove this work (see memory.md for the full
-histories):
+Real failures and costs that drove this work (see memory.md for histories):
 
 | Problem | Cost when it happens | Countermeasure |
 |---|---|---|
+| Bead width variation without speed/flow adaptation | Bumpy surfaces where the bead is squeezed, holes where it's starved | Per-move geometry-adaptive speed & flow (planned, P2) |
+| Overhangs printed planar (always from the top) | Drips, sagging, failed sections on steep geometry | Non-planar slicing using the articulating head (planned, P2) |
+| Travel moves not sequenced nearest-neighbor | Start/stop drips ("poop") dragged across the part; wasted time | Travel-move optimizer — shortest possible travels (planned, P2) |
+| Large parts printed monolithically | No structural bracing options; unwieldy programs | Model sectioning + bracing (X built; vertical/bulkhead planned) with per-section SRC export (planned, P3) |
 | Truncated program transfer | The Jefre curtain died at layer 718/1047 | Transfer verification (planned, P1) |
 | Wrong starting RPM per material | Bottom third of a print smeared while dialing live | Purge-and-weigh calibration (built) |
 | Wrist singularity / unreachable poses | Mid-print robot fault | IK validation + TCP auto-rotation (built); placement-accurate validation (planned) |
@@ -106,7 +121,8 @@ Key facts:
 - Slicing: Planar / Angled / Geodesic / Curved; adaptive layer height; infill;
   Normal + Surface modes; contour-offset control; simplification
 - Seams: direction control, guides, visual seam editor, zig-zag
-- Supports: TreeSupport / Target Support Selections, Formbound
+- Supports & structure: TreeSupport / Target Support Selections, Formbound,
+  X-bracing
 - Wave effects: sine/sawtooth/triangle; **Fixed + Dynamic** phase methods;
   gradient; stagger; pattern effects (relief, twist, fade); live effectors
 - KRL export: temps + RPM via `$ANOUT`, per-layer adaptive speed & flow,
@@ -129,6 +145,11 @@ Key facts:
 - Diagnostics: SliceLogger, `tools/wave_analysis.py` phase-coherence measurement
 
 ### Planned 🔲 (prioritized backlog below)
+- Per-move geometry-adaptive speed & flow (width variation → bumps/holes)
+- Non-planar slicing using the articulating head (overhang from the side)
+- Travel-move optimizer (nearest-neighbor sequencing, shortest travels)
+- Model sectioning: cut a master model into printable parts, per-section SRC export
+- Vertical / bulkhead bracing (X-bracing exists)
 - Transfer verification on Export / Send to Robot
 - Placement-accurate reachability validation workflow
 - HV/HF head selector in the calibration section
@@ -137,8 +158,7 @@ Key facts:
 - In-app wave-coherence diagnostics
 - Dynamic wave last-mile (interpolated matching, loop-wrapped smoothing)
 - Workspace load-time optimization (compact toolpath encoding)
-- Spindle RPM display (KUKA `$ANOUT` or ATV340 Modbus)
-- PBR polish leftovers (prefiltered-env IBL, alpha blend ordering, UV panel)
+- Spindle RPM display; PBR polish leftovers
 
 ---
 
@@ -161,68 +181,111 @@ toolpath the robot physically printed through — because the model's in-app
 position didn't match its real position on the bed. A validator that cries
 wolf gets ignored.
 **What:** make placement-for-validation explicit: verify cell + model
-placement matches production before validating (e.g., a "validate at this
-placement" confirmation, or placement capture from the real cell), so
-red/purple markers are predictions, not noise.
+placement matches production before validating, so red/purple markers are
+predictions, not noise.
 **Size:** medium (workflow design more than code).
 
-## P2 — Calibration & flow
+## P2 — Print quality & motion
 
-### 3. HV/HF head selector in the calibration section
-**Why:** presets carry two flow rates (Flow rate HV / Flow rate HF — one per
-extruder head). The purge-and-weigh calculator writes only one; the operator
-must not have to know which field by folklore.
-**What:** a head selector in the CALIBRATION section that routes the computed
-flow rate to the right field and records which head was calibrated in the
-provenance note.
+### 3. Per-move geometry-adaptive speed & flow
+**Why:** prints with serious bead-width variation come out bumpy where the
+bead is over-fed and holey where it's starved — today's Adaptive Speed and
+Flow only adapts per layer, not within a layer.
+**What:** compute demanded bead cross-section per move (from local wall
+width / geometry) and modulate robot speed and RPM move-by-move, within the
+extruder's response limits; expose min/max clamps; visualize the speed/flow
+field on the toolpath before printing.
+**Size:** large (touches slicer, export, and preview).
+
+### 4. Non-planar slicing (articulating head)
+**Why:** we mostly print planar — always approaching from the top — so steep
+overhangs sag and drip and are our main failure mode. The robot has an
+articulating head we're barely using.
+**What:** grow the existing angled/curved/geodesic foundations into a true
+non-planar strategy: approach overhung geometry from the side, adapt layer
+orientation to the local surface, with IK/collision validation along the way
+(the validation + TCP-rotation infrastructure already exists). Goal:
+eliminate overhang failures without support material.
+**Size:** large (the flagship slicing investment).
+
+### 5. Travel-move optimizer (nearest neighbor)
+**Why:** when a layer has multiple segments/edges, the current sequencing
+doesn't pick the closest next segment — long travels drag ooze ("poop")
+across the part at every start/stop and waste time.
+**What:** order segments per layer by nearest-neighbor (with seam and
+direction constraints); invariant: the travel between two printed segments
+is always as short as possible. Combine with wipes/resume ramps for clean
+starts.
+**Size:** medium.
+
+## P3 — Structure & big-part workflow
+
+### 6. Model sectioning with per-section SRC export
+**Why:** parts bigger than one print need to be cut into sections — but the
+cutting should not fork the design file into untracked copies.
+**What:** cut a model inside the workspace (planes/boxes), keep the master
+model + all sections in one `.mass`, slice sections individually, and export
+"just this section" to SRC with one click.
+**Size:** large.
+
+### 7. Vertical / bulkhead bracing
+**Why:** sectioned and thin-walled parts need internal structure; today only
+X-bracing exists.
+**What:** additional bracing generators — vertical walls / bulkhead-style
+ribs — placeable per region, sliced integrally with the part.
+**Size:** medium.
+
+## P4 — Calibration & flow
+
+### 8. HV/HF head selector in the calibration section
+**Why:** presets carry two flow rates (HV / HF — one per extruder head); the
+purge-and-weigh calculator writes only one, and the operator shouldn't have
+to know which field by folklore.
+**What:** head selector routing the computed flow rate to the right field,
+recorded in the provenance note.
 **Size:** small.
 
-### 4. Per-height flow ramp / calibration print mode
-**Why:** purge-and-weigh sets the correct steady-state flow, but the first
-layers behave differently (heat-up, bed adhesion). The curtain's bottom-third
-smear was flow drift the operator corrected live.
-**What:** optional flow ramp by height (start %, reach 100% by Z), and/or an
-RPM step-tower calibration slice (bands labeled in KRL comments) for
-empirical verification of the purge-derived constant.
+### 9. Per-height flow ramp / calibration print mode
+**Why:** purge-and-weigh sets steady-state flow, but first layers behave
+differently (heat-up, adhesion) — the curtain's bottom-third smear was flow
+drift corrected live.
+**What:** optional flow ramp by height and/or an RPM step-tower calibration
+slice for empirical verification.
 **Size:** medium.
 
-## P3 — Visualization & verification
+## P5 — Visualization & verification
 
-### 5. Finished-print preview (bead material shading)
-**Why:** the whole point of Show Bead is judging how the physical print will
-look — a "Clear" material should preview translucent/glossy like the real
-part, not flat gray.
-**What:** bead rendering honors the Viewport lighting/shader settings
-(exposure, IBL, backdrop) and the material preset's appearance.
+### 10. Finished-print preview (bead material shading)
+**Why:** Show Bead exists to judge how the print will look — "Clear" should
+preview translucent/glossy, not flat gray.
+**What:** bead rendering honors viewport lighting/shader settings and the
+material preset's appearance.
 **Size:** medium.
 
-### 6. In-app wave diagnostics
-**Why:** `tools/wave_analysis.py` (phase-coherence measurement) caught the
-Fixed-method drift and validated Dynamic — but it lives outside the app and
-requires exporting + running Python.
-**What:** a "check wave coherence" pass in-app after slicing (phase-drift
-overlay or per-height table), so texture problems are visible before printing.
+### 11. In-app wave diagnostics
+**Why:** `tools/wave_analysis.py` caught the Fixed-method drift and validated
+Dynamic, but lives outside the app.
+**What:** a "check wave coherence" pass after slicing (phase-drift overlay or
+per-height table).
 **Size:** medium.
 
-### 7. Dynamic wave — last mile
-**Why:** Dynamic roughly halves worst-height phase error vs Fixed, but deep
-folds still show residual wobble above the measurement noise floor.
-**What:** two known levers not yet pulled: interpolated parent-point matching
-(vs nearest-sample snapping) and loop-wrapped smoothing. Gate: verify on a
-physical test section before/after.
+### 12. Dynamic wave — last mile
+**Why:** Dynamic halves worst-height phase error vs Fixed; deep folds still
+show residual wobble.
+**What:** interpolated parent-point matching + loop-wrapped smoothing; verify
+on a physical test section.
 **Size:** small–medium.
 
-## P4 — Comfort & performance
+## P6 — Comfort & performance
 
-### 8. Workspace load-time optimization
-**Why:** large projects (multi-million-move toolpaths) take 20–30 s to open.
-Progress reporting made it honest; it's still slow. The .mass format is
-verbose JSON.
-**What:** profile the parse; likely wins: binary/compact toolpath encoding in
-the workspace, lazy toolpath GPU upload.
+### 13. Workspace load-time optimization
+**Why:** multi-million-move projects take 20–30 s to open; the .mass format
+is verbose JSON.
+**What:** profile the parse; likely wins: compact toolpath encoding, lazy GPU
+upload.
 **Size:** medium–large.
 
-### 9. Smaller carry-overs
-- Spindle RPM display (needs KUKA `$ANOUT` polling or ATV340 Modbus).
+### 14. Smaller carry-overs
+- Spindle RPM display (KUKA `$ANOUT` polling or ATV340 Modbus).
 - PBR polish (prefiltered-env IBL, alpha blend ordering, UV panel).
 - Obsolete build-folder cleanup.
