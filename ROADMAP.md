@@ -62,9 +62,14 @@ The current frontier, in plain terms:
    sections (adding structural bracing — one Bracing system with types:
    X today, vertical/bulkhead next), keep the master file as the source of truth, and
    export a per-section SRC with one click.
-6. **What you see is what you get** — previews trustworthy enough to sign off
+6. **Every print teaches the next one** — exported programs carry provenance
+   metadata that ties each print to its Massive Lab (ERP) job, so logs, notes,
+   and outcomes attach to real records instead of "print #1920". That dataset
+   feeds failure analysis and, over time, a recommendation engine: suggested
+   presets and settings from the project description and the part's geometry.
+7. **What you see is what you get** — previews trustworthy enough to sign off
    surface quality before committing material and machine-days.
-7. **Machine knowledge lives in presets** — materials, heads, cells, and their
+8. **Machine knowledge lives in presets** — materials, heads, cells, and their
    calibrations are data, not tribal memory.
 
 ## What problems are we trying to solve?
@@ -77,6 +82,7 @@ Real failures and costs that drove this work (see memory.md for histories):
 | Overhangs printed planar (always from the top) | Drips, sagging, failed sections on steep geometry | Non-planar slicing using the articulating head (planned, P2) |
 | Travel moves not sequenced nearest-neighbor | The head sometimes crosses the **entire print** between segments, oozing ("pooping") the whole way; wasted time | Travel-move optimizer — shortest possible travels (planned, P2) |
 | Large parts printed monolithically | No structural bracing options; unwieldy programs | Model sectioning + bracing (X built; vertical/bulkhead planned) with per-section SRC export (planned, P3) |
+| Prints are anonymous ("print #1920") | Logs/notes/outcomes can't be tied to a print; no dataset to learn from, so failures repeat | KRL provenance metadata + Massive Lab job linkage → learning/recommendation engine (planned, P4) |
 | Truncated program transfer | The Jefre curtain died at layer 718/1047 | Transfer verification (planned, P1) |
 | Wrong starting RPM per material | Bottom third of a print smeared while dialing live | Purge-and-weigh calibration (built) |
 | Wrist singularity / unreachable poses | Mid-print robot fault | IK validation + TCP auto-rotation (built); placement-accurate validation (planned) |
@@ -150,6 +156,8 @@ Key facts:
 - Travel-move optimizer (nearest-neighbor sequencing, shortest travels)
 - Model sectioning: cut a master model into printable parts, per-section SRC export
 - Bracing system with types: X (built) + vertical/bulkhead (planned), extensible
+- Print provenance metadata in exported KRL + Massive Lab job linkage
+- Preset / settings recommendation engine (project description + geometry)
 - Transfer verification on Export / Send to Robot
 - Placement-accurate reachability validation workflow
 - HV/HF head selector in the calibration section
@@ -237,9 +245,35 @@ and **Vertical / bulkhead** ribs first, extensible for future types;
 placeable per region, sliced integrally with the part.
 **Size:** medium.
 
-## P4 — Calibration & flow
+## P4 — Traceability & learning (Massive Lab)
 
-### 8. HV/HF head selector in the calibration section
+### 8. Print provenance metadata in exported KRL
+**Why:** a print today is anonymous — "print #1920" — so machine logs, operator
+notes, and outcomes have nothing to attach to, and every failure's lessons
+evaporate. The ERP link already exists (`docs/ERP-SlicerAPI.md`,
+lab.massivemake.com project/element search is live in the slicer).
+**What:** a provenance header in every exported .src (KRL comments): Massive
+Lab project/element/job ID, workspace file, build `N · sha`, material preset +
+calibration provenance, key slice settings (method, bead, layer, wave, flow).
+Register the export with Massive Lab at export time so the job record exists
+before the print starts; logs and notes then attach to it.
+**Size:** medium (format + export hook are small; the ERP-side job record is
+the coordination work).
+
+### 9. Preset & settings recommendation engine
+**Why:** with prints linked to outcomes (item 8), the data can start working:
+minimize repeat failures and stop settings knowledge living in heads.
+**What:** staged — (a) collect: settings + geometry features (size, wall
+widths, overhang stats) + outcome per job; (b) recall: "similar past prints
+and what worked" surfaced when slicing; (c) recommend: suggested preset/
+settings from the project description and part geometry. Reinforcement-
+learning-ready dataset from day one (state = settings+geometry, reward =
+outcome).
+**Size:** large (multi-stage, ERP-coupled; stage (a) is the near-term win).
+
+## P5 — Calibration & flow
+
+### 10. HV/HF head selector in the calibration section
 **Why:** presets carry two flow rates (HV / HF — one per extruder head); the
 purge-and-weigh calculator writes only one, and the operator shouldn't have
 to know which field by folklore.
@@ -247,7 +281,7 @@ to know which field by folklore.
 recorded in the provenance note.
 **Size:** small.
 
-### 9. Per-height flow ramp / calibration print mode
+### 11. Per-height flow ramp / calibration print mode
 **Why:** purge-and-weigh sets steady-state flow, but first layers behave
 differently (heat-up, adhesion) — the curtain's bottom-third smear was flow
 drift corrected live.
@@ -255,39 +289,39 @@ drift corrected live.
 slice for empirical verification.
 **Size:** medium.
 
-## P5 — Visualization & verification
+## P6 — Visualization & verification
 
-### 10. Finished-print preview (bead material shading)
+### 12. Finished-print preview (bead material shading)
 **Why:** Show Bead exists to judge how the print will look — "Clear" should
 preview translucent/glossy, not flat gray.
 **What:** bead rendering honors viewport lighting/shader settings and the
 material preset's appearance.
 **Size:** medium.
 
-### 11. In-app wave diagnostics
+### 13. In-app wave diagnostics
 **Why:** `tools/wave_analysis.py` caught the Fixed-method drift and validated
 Dynamic, but lives outside the app.
 **What:** a "check wave coherence" pass after slicing (phase-drift overlay or
 per-height table).
 **Size:** medium.
 
-### 12. Dynamic wave — last mile
+### 14. Dynamic wave — last mile
 **Why:** Dynamic halves worst-height phase error vs Fixed; deep folds still
 show residual wobble.
 **What:** interpolated parent-point matching + loop-wrapped smoothing; verify
 on a physical test section.
 **Size:** small–medium.
 
-## P6 — Comfort & performance
+## P7 — Comfort & performance
 
-### 13. Workspace load-time optimization
+### 15. Workspace load-time optimization
 **Why:** multi-million-move projects take 20–30 s to open; the .mass format
 is verbose JSON.
 **What:** profile the parse; likely wins: compact toolpath encoding, lazy GPU
 upload.
 **Size:** medium–large.
 
-### 14. Smaller carry-overs
+### 16. Smaller carry-overs
 - Spindle RPM display (KUKA `$ANOUT` polling or ATV340 Modbus).
 - PBR polish (prefiltered-env IBL, alpha blend ordering, UV panel).
 - Obsolete build-folder cleanup.
