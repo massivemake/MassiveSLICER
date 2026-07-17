@@ -59,8 +59,8 @@ The current frontier, in plain terms:
    as short as possible, so the head isn't dragging ooze ("poop") across the
    part between segments.
 5. **Big parts as managed assemblies** — cut a large model into printable
-   sections (adding structural bracing: X-bracing today, vertical
-   bulkhead-style next), keep the master file as the source of truth, and
+   sections (adding structural bracing — one Bracing system with types:
+   X today, vertical/bulkhead next), keep the master file as the source of truth, and
    export a per-section SRC with one click.
 6. **What you see is what you get** — previews trustworthy enough to sign off
    surface quality before committing material and machine-days.
@@ -75,7 +75,7 @@ Real failures and costs that drove this work (see memory.md for histories):
 |---|---|---|
 | Bead width variation without speed/flow adaptation | Bumpy surfaces where the bead is squeezed, holes where it's starved | Per-move geometry-adaptive speed & flow (planned, P2) |
 | Overhangs printed planar (always from the top) | Drips, sagging, failed sections on steep geometry | Non-planar slicing using the articulating head (planned, P2) |
-| Travel moves not sequenced nearest-neighbor | Start/stop drips ("poop") dragged across the part; wasted time | Travel-move optimizer — shortest possible travels (planned, P2) |
+| Travel moves not sequenced nearest-neighbor | The head sometimes crosses the **entire print** between segments, oozing ("pooping") the whole way; wasted time | Travel-move optimizer — shortest possible travels (planned, P2) |
 | Large parts printed monolithically | No structural bracing options; unwieldy programs | Model sectioning + bracing (X built; vertical/bulkhead planned) with per-section SRC export (planned, P3) |
 | Truncated program transfer | The Jefre curtain died at layer 718/1047 | Transfer verification (planned, P1) |
 | Wrong starting RPM per material | Bottom third of a print smeared while dialing live | Purge-and-weigh calibration (built) |
@@ -149,7 +149,7 @@ Key facts:
 - Non-planar slicing using the articulating head (overhang from the side)
 - Travel-move optimizer (nearest-neighbor sequencing, shortest travels)
 - Model sectioning: cut a master model into printable parts, per-section SRC export
-- Vertical / bulkhead bracing (X-bracing exists)
+- Bracing system with types: X (built) + vertical/bulkhead (planned), extensible
 - Transfer verification on Export / Send to Robot
 - Placement-accurate reachability validation workflow
 - HV/HF head selector in the calibration section
@@ -209,13 +209,13 @@ eliminate overhang failures without support material.
 **Size:** large (the flagship slicing investment).
 
 ### 5. Travel-move optimizer (nearest neighbor)
-**Why:** when a layer has multiple segments/edges, the current sequencing
-doesn't pick the closest next segment — long travels drag ooze ("poop")
-across the part at every start/stop and waste time.
-**What:** order segments per layer by nearest-neighbor (with seam and
-direction constraints); invariant: the travel between two printed segments
-is always as short as possible. Combine with wipes/resume ramps for clean
-starts.
+**Why:** today's sequencing does NOT pick the closest next segment — the head
+sometimes travels across the entire print between an edge and the next,
+oozing ("pooping") over finished work the whole way, at every start/stop.
+**What:** order segments per layer nearest-neighbor (with seam and direction
+constraints). Target state: the travel between two printed segments is always
+the shortest possible — this is the acceptance test, not the current
+behavior. Combine with wipes/resume ramps for clean starts.
 **Size:** medium.
 
 ## P3 — Structure & big-part workflow
@@ -228,11 +228,13 @@ model + all sections in one `.mass`, slice sections individually, and export
 "just this section" to SRC with one click.
 **Size:** large.
 
-### 7. Vertical / bulkhead bracing
-**Why:** sectioned and thin-walled parts need internal structure; today only
-X-bracing exists.
-**What:** additional bracing generators — vertical walls / bulkhead-style
-ribs — placeable per region, sliced integrally with the part.
+### 7. Bracing system (generalize X-bracing into types)
+**Why:** sectioned and thin-walled parts need internal structure. X-bracing
+is built (dual-wall X notches, `XBracingEnabled`), but it's a one-off — the
+feature should be "Bracing" with selectable types.
+**What:** refactor into a bracing system with a type selector: **X** (existing)
+and **Vertical / bulkhead** ribs first, extensible for future types;
+placeable per region, sliced integrally with the part.
 **Size:** medium.
 
 ## P4 — Calibration & flow
