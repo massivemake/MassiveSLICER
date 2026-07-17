@@ -278,6 +278,18 @@ effects flow through from the master → joints shape the cut faces → per-
 section SRC. The Dynamic wave phase method matters here: wave continuity
 across section boundaries is what makes assembled surfaces read as one.
 
+### 8b. Effector UX redesign (spec agreed 2026-07-16)
+**Why:** the ●1/2/3 slot system desyncs from the outliner (stale rows, wrong-slot
+respawns, spawn at hidden-model positions) and caps effectors at 3. Click-to-move
+is still broken on production cells despite pick-filter fixes — needs instrumented
+debugging of the pick path, not more guesses.
+**Spec:** one **"Add effector"** button — each click appends Effector N (unlimited)
+to the outliner. Clicking the handle in the scene OR the outliner row highlights
+both and enables gizmo drag; dragging re-slices in realtime so the effect is live.
+Selecting an effector in the outliner opens its parameters (range/strength/mode)
+in the right panel. Delete via outliner. Master toggle hides all (rows persist).
+**Size:** medium. First step: instrument why sphere clicks don't select/move.
+
 ## P4 — Traceability & learning (Massive Lab)
 
 ### 9. Print provenance metadata in exported KRL
