@@ -13214,6 +13214,10 @@ public partial class ViewportView : UserControl
         {
             mvm?.Console.LogError(
                 $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+            SetSliceStatus(vm,
+                $"⚠ Send to Robot: {cell.Name} has no robot-network credentials. " +
+                "Set IP/username/password under ROBOT NETWORK in the cell panel, or export the .src manually.",
+                isError: true);
             return;
         }
 
@@ -13239,14 +13243,31 @@ public partial class ViewportView : UserControl
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
 
+        // Pre-flight: a KRL program must end with END — a truncated file is exactly
+        // how the Jefre curtain print died. Never send an incomplete program.
+        string tail = System.Text.Encoding.ASCII.GetString(
+            content, Math.Max(0, content.Length - 512), Math.Min(512, content.Length)).TrimEnd();
+        if (content.Length == 0 || !tail.EndsWith("END", StringComparison.OrdinalIgnoreCase))
+        {
+            mvm?.Console.LogError($"[robot] REFUSED: {fileName} is incomplete (no trailing END, {content.Length:N0} bytes).");
+            SetSliceStatus(vm,
+                $"⚠ Send to Robot refused: {fileName} is incomplete (no trailing END) — re-export before sending.",
+                isError: true);
+            return;
+        }
+
         mvm?.Console.Log($"[robot] Uploading {fileName} to \\\\{cfg.Host}\\{cfg.Share} ({cell.Name})…");
         var (ok, message) = await Task.Run(() => RobotSmbUploader.Upload(cfg, fileName, content));
         if (!ok)
         {
             mvm?.Console.LogError($"[robot] Upload failed — {message}");
+            SetSliceStatus(vm, $"⚠ Send to Robot failed: {message}", isError: true);
             return;
         }
         mvm?.Console.Log($"[robot] Sent to {cell.Name}: {message}");
+        if (mvm is not null)
+            mvm.StatusBar.OperationFeedback =
+                $"✓ Sent {fileName} to {cell.Name} — {content.Length:N0} bytes, verified END";
 
         if (mvm is not null)
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
