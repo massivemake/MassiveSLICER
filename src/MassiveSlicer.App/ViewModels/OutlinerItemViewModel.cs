@@ -18,7 +18,7 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     // -- Type badge -----------------------------------------------------------
     public string TypeIcon =>
         IsEffector ? "mdi-white-balance-sunny"
-        : IsToolpath ? "mdi-vector-polyline"
+        : IsToolpath ? "mdi-reorder-horizontal"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "mdi-cube-scan"
         : Name is "Robot Root" or "Robot Arm" ? "mdi-robot-industrial"
         : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "mdi-view-grid-outline"
