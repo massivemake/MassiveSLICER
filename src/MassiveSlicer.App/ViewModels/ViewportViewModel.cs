@@ -5755,6 +5755,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
         SetActiveToolheadOutliner(null);
         item.IsOutlinerSelected = true;
+
+        // Selecting an effector arms the move gizmo immediately (same convention as
+        // the cut tool) — placing it is the whole point of selecting it.
+        if (item.IsEffector
+            && (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale))
+            ActiveGizmoModeInternal = GizmoMode.Translate;
     }
 
     internal void OnOutlinerScanClicked(OutlinerItemViewModel item, bool shiftHeld, bool ctrlHeld)
