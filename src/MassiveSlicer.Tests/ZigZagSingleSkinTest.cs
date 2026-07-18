@@ -111,10 +111,11 @@ public sealed class ZigZagSingleSkinTest
     }
 
     [Fact]
-    public void FirstOpenPathLayerBirthUsesFullDepthEvenWhenZIsElevated()
+    public void FirstOpenPathLayerBirthIsMaxStepStubEvenWhenZIsElevated()
     {
         // Part bottom may sit far above world Z=0 (print bed offset). Birth depth
-        // must still be full wantDepth on the first open-path / bed layer.
+        // is always a MaxStep stub (never full wantDepth) so dual-wall free edges
+        // grow within the overhang budget instead of spawning large overhangs.
         var settings = new SliceSettings
         {
             LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
@@ -125,6 +126,10 @@ public sealed class ZigZagSingleSkinTest
             XBracingExtendEdges = true,
             LightningOverhangDeg = 30f,
         };
+        // maxStep = min(lh·tan(30°), bead/2) floored by lh·0.25
+        float maxStep = MathF.Min(3f * MathF.Tan(30f * MathF.PI / 180f), 0.5f * Bead);
+        maxStep = MathF.Max(maxStep, 3f * 0.25f);
+
         var path = new List<Vector2>();
         for (int i = 0; i <= 20; i++)
             path.Add(new Vector2(i * 15f, 0f));
@@ -140,16 +145,67 @@ public sealed class ZigZagSingleSkinTest
         Assert.True(state.FirstOpenPathZ is float fz && MathF.Abs(fz - zElevated) < 0.1f,
             "FirstOpenPathZ should record the elevated first open layer");
         Assert.True(state.PrevList.Count > 0, "expected hairpins on first elevated layer");
-        float maxDepth = state.PrevList.Max(h => h.Depth);
-        Assert.True(maxDepth >= 49f,
-            $"bed-layer birth should be full depth (~50), got max={maxDepth:0.##}");
+        float maxDepth0 = state.PrevList.Max(h => h.Depth);
+        Assert.True(maxDepth0 <= maxStep * 1.35f + 0.5f,
+            $"bed-layer birth must be a MaxStep stub (≤~{maxStep:0.##}), got max={maxDepth0:0.##}");
+        Assert.True(maxDepth0 >= maxStep * 0.3f,
+            $"bed-layer birth should not be zero, got max={maxDepth0:0.##}");
 
-        // Second elevated layer without isBedLayer: new births stay short; stacked grow from prev.
+        // Second layer: stacked pins grow ≤ maxStep from parent (still far from wantDepth).
         var contours2 = new List<List<Vector2>> { new(path) };
         XBracingPlanner.ApplyOpenPathDetours(
             contours2, closed, zElevated + 3f, 3f, settings, state, isBedLayer: false);
-        // Any brand-new key at mid-height should not force full wantDepth solely from absolute Z.
         Assert.True(state.FirstOpenPathZ is float fz2 && MathF.Abs(fz2 - zElevated) < 0.1f);
+        float maxDepth1 = state.PrevList.Max(h => h.Depth);
+        Assert.True(maxDepth1 <= maxDepth0 + maxStep * 1.35f + 0.5f,
+            $"layer-1 growth must stay ≤ maxStep (d0={maxDepth0:0.##} d1={maxDepth1:0.##} step={maxStep:0.##})");
+        Assert.True(maxDepth1 < 49f,
+            $"must not jump to full wantDepth on layer 1, got max={maxDepth1:0.##}");
+    }
+
+    [Fact]
+    public void OpenPathHairpinsGrowGraduallyToWantDepth()
+    {
+        // Many layers: depth climbs by ≤ maxStep until it saturates near wantDepth.
+        var settings = new SliceSettings
+        {
+            LayerHeight = 3f, FirstLayerHeight = 3f, BeadWidth = Bead,
+            XBracingEnabled = true,
+            XBracingDepthMm = 30f,
+            XBracingSpanMm = 80f,
+            XBracingAngleDeg = 30f,
+            XBracingExtendEdges = true,
+            LightningOverhangDeg = 45f,
+        };
+        float maxStep = MathF.Min(3f * MathF.Tan(45f * MathF.PI / 180f), 0.5f * Bead);
+        maxStep = MathF.Max(maxStep, 3f * 0.25f);
+
+        var path = new List<Vector2>();
+        for (int i = 0; i <= 20; i++)
+            path.Add(new Vector2(i * 15f, 0f));
+        var state = new XBracingPlanner.OpenPathDetourState();
+        var closed = new List<bool> { false };
+
+        float prevMax = 0f;
+        float lastMax = 0f;
+        const int layers = 24;
+        for (int li = 0; li < layers; li++)
+        {
+            var contours = new List<List<Vector2>> { new(path) };
+            XBracingPlanner.ApplyOpenPathDetours(
+                contours, closed, 100f + li * 3f, 3f, settings, state, isBedLayer: li == 0);
+            Assert.True(state.PrevList.Count > 0, $"layer {li}: expected hairpins");
+            lastMax = state.PrevList.Max(h => h.Depth);
+            if (li > 0)
+            {
+                float grew = lastMax - prevMax;
+                Assert.True(grew <= maxStep * 1.35f + 0.5f,
+                    $"layer {li}: grew {grew:0.##} > maxStep {maxStep:0.##} (prev={prevMax:0.##} now={lastMax:0.##})");
+            }
+            prevMax = lastMax;
+        }
+        Assert.True(lastMax >= 30f * 0.85f,
+            $"after {layers} layers depth should near wantDepth 30, got {lastMax:0.##}");
     }
 
     [Fact]

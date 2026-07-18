@@ -96,7 +96,8 @@ public static class XBracingPlanner
         public List<Hairpin> PrevList { get; } = new();
         /// <summary>
         /// World Z of the first layer that had open single-skin paths (part bottom / bed).
-        /// Used so bed-supported births get full depth even when the mesh sits far above Z=0.
+        /// Identifies the bed layer when the mesh sits far above world Z=0 so logging and
+        /// bed-band detection stay correct; births are always MaxStep stubs (not full depth).
         /// </summary>
         public float? FirstOpenPathZ { get; set; }
         /// <summary>Part AABB Z range (world), set once by the slicer. Enables depth
@@ -292,8 +293,11 @@ public static class XBracingPlanner
         float bedBand = MathF.Max(lh, MathF.Max(settings.FirstLayerHeight, settings.LayerHeight)) * 0.75f + 0.5f;
         bool onPrintBed = isBedLayer
             || (state.FirstOpenPathZ is float bedZ && MathF.Abs(z - bedZ) <= bedBand);
-        // Birth on free air: short stub. Birth on the bed: full depth (bed supports the whole pin).
-        float birthDepth = onPrintBed ? wantDepth : MathF.Min(wantDepth, maxStep);
+        // Always birth a short stub (≤ maxStep). Full-depth first-layer hairpins create
+        // their own dual-wall free edges that print as unsupported overhangs. The bed
+        // only supports the stub footprint; depth grows ≤ maxStep per layer up the stack
+        // until wantDepth (same MaxStep rule as Formbound / Lightning retract).
+        float birthDepth = MathF.Min(wantDepth, maxStep);
 
         // Linear phase in each X cell: two diagonals CROSS to form a true X.
         //   cellT=0: A at left, B at right
@@ -334,7 +338,8 @@ public static class XBracingPlanner
                     solidCap = MathF.Min(wantDepth, MathF.Max(bead * 1.25f, measured - bead * 0.35f));
             }
             float contourWant = solidCap;
-            float contourBirth = onPrintBed ? contourWant : MathF.Min(contourWant, maxStep);
+            // Same MaxStep stub birth whether on bed or mid-air (see birthDepth above).
+            float contourBirth = MathF.Min(contourWant, maxStep);
 
             // World-anchored cell grid: cells sit at absolute multiples of span in the
             // LOCKED frame. On scalloped/slanted panels each layer covers a moving
@@ -368,11 +373,11 @@ public static class XBracingPlanner
                 {
                     float uMid = 0.5f * (uA + uB);
                     if (!InCoverage(uMid)) continue; // rib exits through the edge
-                    float meetBirth = MathF.Max(contourBirth, contourWant);
+                    // X-meet is still a birth-or-grow pin — never force full wantDepth.
                     if (PlaceSupportedHairpin(
                             path, totalLen, baseline, keyA, keyB,
                             uMid, contourWant, bead, maxStep, maxDs, maxLateral,
-                            meetBirth, supportR, settings, state,
+                            contourBirth, supportR, settings, state,
                             out var site, wallRing))
                         sites.Add((site.U, site.IdealMouth, site.PathMouth, site.Tip, keyA, keyB));
                 }
@@ -516,7 +521,10 @@ public static class XBracingPlanner
         // Depth is always |tip−mouth| (never a tip planned off-path that draws long rays).
         Vector2 pathMouth = default, growDir = default, tip = default;
 
-        float minDepth = MathF.Max(bead * 0.35f, maxStep * 0.35f);
+        // Never force a stub longer than maxStep (bead*0.35 used to exceed MaxStep
+        // on shallow overhang angles and re-introduce free-edge overhangs).
+        float minDepth = MathF.Max(1e-3f,
+            MathF.Min(maxStep, MathF.Max(bead * 0.15f, maxStep * 0.35f)));
         float depth;
         if (hasPrev)
         {
@@ -529,7 +537,7 @@ public static class XBracingPlanner
         }
         else
         {
-            depth = Math.Clamp(MathF.Max(birthDepth, minDepth), minDepth, wantDepth);
+            depth = Math.Clamp(MathF.Max(birthDepth, minDepth), minDepth, MathF.Min(wantDepth, maxStep));
         }
 
         void PlaceTip()
@@ -560,8 +568,11 @@ public static class XBracingPlanner
                         }
                     }
                 }
+                // No usable solid ring: keep the planned (maxStep-capped) depth —
+                // never fall back to full wantDepth (that re-creates large free-edge
+                // hairpins the growth rule exists to prevent).
                 if (dCap < bead * 0.5f)
-                    dCap = wantDepth; // no solid ring usable — keep planned depth
+                    dCap = depth;
             }
             depth = Math.Clamp(MathF.Min(depth, dCap), minDepth, wantDepth);
             tip = pathMouth + growDir * depth;

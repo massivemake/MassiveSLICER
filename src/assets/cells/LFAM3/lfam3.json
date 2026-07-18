@@ -135,7 +135,7 @@
       ],
       "rotation": [
         -1.5707964,
-        -0,
+        0,
         0
       ]
     },
@@ -150,7 +150,7 @@
       ],
       "rotation": [
         1.5707964,
-        -8.742278E-08,
+        -8.742278e-08,
         -3.1415925
       ]
     },
@@ -165,7 +165,7 @@
       ],
       "rotation": [
         -1.5707964,
-        -0,
+        0,
         0
       ]
     }
@@ -180,7 +180,7 @@
     ],
     "baseAbc": [
       0,
-      -0,
+      0,
       -90
     ],
     "e1Sign": 1
@@ -189,10 +189,10 @@
     {
       "name": "HV Extruder",
       "modelPath": "assets/cells/LFAM3/Toolheads/hv_extruder.glb",
-      "tcpX": 694.76,
-      "tcpY": 17.74,
-      "tcpZ": 312.44,
-      "tcpA": 15,
+      "tcpX": 677.94,
+      "tcpY": -163.2,
+      "tcpZ": 314.32,
+      "tcpA": 0,
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
