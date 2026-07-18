@@ -191,3 +191,34 @@ public partial class OutlinerItemView : UserControl
         }
     }
 }
+
+public partial class OutlinerItemView
+{
+    private void StartRename()
+    {
+        if (DataContext is not OutlinerItemViewModel item) return;
+        item.BeginRename();
+        Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+        {
+            RenameBox.Focus();
+            RenameBox.SelectAll();
+        });
+    }
+
+    private void OnRenameClick(object? sender, Avalonia.Interactivity.RoutedEventArgs e) => StartRename();
+
+    private void OnNameDoubleTapped(object? sender, Avalonia.Input.TappedEventArgs e) => StartRename();
+
+    private void OnRenameKeyDown(object? sender, Avalonia.Input.KeyEventArgs e)
+    {
+        if (DataContext is not OutlinerItemViewModel item) return;
+        if (e.Key == Avalonia.Input.Key.Enter)  { item.CommitRename(); e.Handled = true; }
+        if (e.Key == Avalonia.Input.Key.Escape) { item.CancelRename(); e.Handled = true; }
+    }
+
+    private void OnRenameLostFocus(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+    {
+        if (DataContext is OutlinerItemViewModel { IsRenaming: true } item)
+            item.CommitRename();
+    }
+}
