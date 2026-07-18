@@ -4268,7 +4268,8 @@ public sealed class ViewportViewModel : ViewModelBase
             int i = n - 1;
             if (_effectorNodes[i] is { } existing)
             {
-                RequestDeleteNode(existing);
+                if (_effectorItems[i] is { } it) OutlinerItems.Remove(it);
+                PendingRemoveNodes.Enqueue(existing);
                 _effectorNodes[i] = null;
                 _effectorItems[i] = null;
             }
@@ -4374,13 +4375,12 @@ public sealed class ViewportViewModel : ViewModelBase
         // Spawn at the model's bounding-box centre (even when the body is hidden by a
         // line view), else above the print bed's centre, else a bed-ish default.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
-        var model = ResolveActivePrintObjectItem()
-                    ?? EnumerateUserModelItems().FirstOrDefault(i => i.Visible)
-                    ?? EnumerateUserModelItems().FirstOrDefault();
-        if (model is not null && ComputeWorldCenter(model.Node) is { } centre)
-            spawn = centre;
-        else if (ComputeBedCenter() is { } bedCentre)
+        if (ComputeBedCenter() is { } bedCentre)
             spawn = bedCentre;
+        else if ((ResolveActivePrintObjectItem()
+                  ?? EnumerateUserModelItems().FirstOrDefault(i => i.Visible)) is { } model
+                 && ComputeWorldCenter(model.Node) is { } centre)
+            spawn = centre;
 
         var node = new SceneNode
         {
