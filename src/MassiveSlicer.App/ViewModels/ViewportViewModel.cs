@@ -3450,6 +3450,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private bool[] _scrubReachable = [];
     private bool[] _scrubSingular  = [];
+    private bool[] _scrubCollision = [];
 
     private IReadOnlyList<double> _scrubUnreachableMarkers = [];
     public IReadOnlyList<double> ScrubUnreachableMarkers
@@ -3465,10 +3466,25 @@ public sealed class ViewportViewModel : ViewModelBase
         private set => SetField(ref _scrubSingularityMarkers, value);
     }
 
-    internal void SetScrubMarkers(bool[] reachable, bool[] singular)
+    private IReadOnlyList<double> _scrubCollisionMarkers = [];
+    /// <summary>Digital-twin collision ticks (orange) — robot body vs env/self/material.</summary>
+    public IReadOnlyList<double> ScrubCollisionMarkers
+    {
+        get => _scrubCollisionMarkers;
+        private set => SetField(ref _scrubCollisionMarkers, value);
+    }
+
+    /// <summary>Timeline tick legend visibility (any validation markers present).</summary>
+    public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers || HasCollisionMarkers;
+    public bool HasUnreachableMarkers => _scrubUnreachableMarkers.Count > 0;
+    public bool HasSingularityMarkers => _scrubSingularityMarkers.Count > 0;
+    public bool HasCollisionMarkers   => _scrubCollisionMarkers.Count > 0;
+
+    internal void SetScrubMarkers(bool[] reachable, bool[] singular, bool[]? collision = null)
     {
         _scrubReachable = reachable;
         _scrubSingular  = singular;
+        _scrubCollision = collision ?? [];
         RecomputeScrubMarkers();
     }
 
@@ -3505,6 +3521,19 @@ public sealed class ViewportViewModel : ViewModelBase
         return (int)Math.Round(Math.Clamp((x - ScrubThumbWidth / 2.0) / denom, 0.0, 1.0) * _toolpathScrubMax);
     }
 
+    /// <summary>Wired by the viewport code-behind: frame the camera on a flat move index
+    /// (timeline validation-tick click).</summary>
+    internal Action<int>? OnFrameMoveRequested { get; set; }
+
+    /// <summary>Validation-tick click on the timeline: snap the scrubber to the marker's
+    /// move and ask the viewport to frame the camera there.</summary>
+    internal void JumpToScrubPixel(double px)
+    {
+        if (_toolpathScrubMax <= 0) return;
+        ToolpathScrubIndex = ScrubIndexAtPixel(px);
+        OnFrameMoveRequested?.Invoke(ToolpathScrubIndex);
+    }
+
     private void RecomputeScrubMarkers()
     {
         int    max = _toolpathScrubMax;
@@ -3521,8 +3550,19 @@ public sealed class ViewportViewModel : ViewModelBase
             double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
             if (_scrubSingular[i]) sin.Add(x);
         }
+        var col = new List<double>();
+        for (int i = 0; i < _scrubCollision.Length; i++)
+        {
+            double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+            if (_scrubCollision[i]) col.Add(x);
+        }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
+        ScrubCollisionMarkers   = col;
+        OnPropertyChanged(nameof(ShowScrubLegend));
+        OnPropertyChanged(nameof(HasUnreachableMarkers));
+        OnPropertyChanged(nameof(HasSingularityMarkers));
+        OnPropertyChanged(nameof(HasCollisionMarkers));
 
         var kf   = new List<double>();
         var lane = new List<MassiveSlicer.Controls.KeyframeLaneItem>();

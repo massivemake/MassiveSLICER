@@ -18,6 +18,8 @@ using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
+using MassiveSlicer.Core.Collision;
+using MassiveSlicer.Viewport.Collision;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.FK;
@@ -170,6 +172,11 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
     /// <summary>Per-move planned rail E1 (mm), parallel to IK solutions / move list.</summary>
     private readonly ConcurrentDictionary<SceneNode, float[]>    _e1MmByNode          = new();
+
+    // Digital-twin collision: model built lazily on the UI thread (scene reads),
+    // then shared immutably with the background validation sweep.
+    private CollisionWorld? _collisionWorld;
+    private readonly ConcurrentDictionary<SceneNode, bool[]> _collisionByNode = new();
 
     // Playback timing state.
     private double           _playbackStartElapsedMs;
@@ -383,6 +390,7 @@ public partial class ViewportView : UserControl
                 }
             };
             vm.OnFocusRequested       = FocusSelected;
+            vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnRecenterRequested    = RecenterSelected;
             vm.OnUngroupRequested     = UngroupSelected;
@@ -492,6 +500,11 @@ public partial class ViewportView : UserControl
 
                 if (hasData)
                 {
+                    // Data may have arrived while the stopwatch was paused in the
+                    // wait-for-validation branch below — resume the clock.
+                    if (!_playbackStopwatch.IsRunning)
+                        _playbackStopwatch.Start();
+
                     double elapsed = _playbackStartElapsedMs
                         + _playbackStopwatch.Elapsed.TotalMilliseconds * (pvm.PlaybackSpeed / 100.0);
 
@@ -549,6 +562,11 @@ public partial class ViewportView : UserControl
                     // The play button is disabled while IsValidating, so this branch
                     // only fires in the rare window between button enable and first tick.
                     _playbackStopwatch.Stop();
+                    // Self-heal: a toolpath replace clears playback IK data without a
+                    // re-validate. If no validation is running, kick one so play can
+                    // resume instead of waiting forever (ValidateToolpathAsync dedups).
+                    if (!pvm.IsValidating && _toolpathByNode.TryGetValue(node, out var healTp))
+                        ValidateToolpathAsync(node, healTp);
                 }
             };
 
@@ -743,6 +761,10 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm)
                                     or nameof(AdditiveSettingsViewModel.OrientationFollowPercent)
+                                    or nameof(AdditiveSettingsViewModel.OrientationMaxTiltDeg)
+                                    or nameof(AdditiveSettingsViewModel.FirstLayerZeroTilt)
+                                    or nameof(AdditiveSettingsViewModel.LayerLeanPercent)
+                                    or nameof(AdditiveSettingsViewModel.LayerLeanMaxTiltDeg)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedAdaptEnabled)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedBasisDisplay)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedMinMmS)
@@ -1178,6 +1200,7 @@ public partial class ViewportView : UserControl
                 _scrubCacheByNode.TryRemove(removing, out _);
                 _ikSolutionsByNode.TryRemove(removing, out _);
                 _moveTimesMsByNode.TryRemove(removing, out _);
+                _collisionByNode.TryRemove(removing, out _);
                 _singularityByNode.TryRemove(removing, out _);
                 _e1MmByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
@@ -1368,9 +1391,18 @@ public partial class ViewportView : UserControl
             {
                 _ikSolutionsByNode.TryRemove(entry.Node, out _);
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
+                _collisionByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
                 _e1MmByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
+                // The playback data above is gone — reset the validation dedup key so a
+                // re-validate of this node isn't skipped as "already done" (stale guard
+                // left the play button enabled but permanently starved of IK data).
+                if (ReferenceEquals(_validationNode, entry.Node))
+                {
+                    _validationDone = false;
+                    _validationNode = null;
+                }
                 UploadToolpathEntry(entry, addToScene: false);
                 var replacedNode = entry.Node;
                 Dispatcher.UIThread.Post(() =>
@@ -1380,7 +1412,12 @@ public partial class ViewportView : UserControl
                     if (DataContext is ViewportViewModel vRep
                         && ReferenceEquals(_activeScrubNode, replacedNode)
                         && vRep.IsScrubSessionActive)
+                    {
                         ScrubIkForNode(replacedNode, vRep.ToolpathScrubIndex);
+                        // Repopulate playback IK data so the timeline can play again.
+                        if (_toolpathByNode.TryGetValue(replacedNode, out var freshTp))
+                            ValidateToolpathAsync(replacedNode, freshTp);
+                    }
                 });
             }
 
@@ -1705,6 +1742,7 @@ public partial class ViewportView : UserControl
             new Vector3( sr, 0f, -cr),
             new Vector3( 0f, 1f,  0f));
         _toolMeshMatrix = _toolCorrectionMatrix * Matrix4.CreateRotationY(-_flangeDisplayRoll);
+        _collisionWorld = null;   // tool geometry/mount changed — re-extract
     }
 
     private Vector3 GetLiveRobrootWorldPos()
@@ -1877,6 +1915,7 @@ public partial class ViewportView : UserControl
         _scrubCacheByNode.Clear();
         _ikSolutionsByNode.Clear();
         _moveTimesMsByNode.Clear();
+        _collisionByNode.Clear();
         _singularityByNode.Clear();
         _e1MmByNode.Clear();
         _activeScrubNode = null;
@@ -2022,6 +2061,7 @@ public partial class ViewportView : UserControl
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
         _robotBaseNode              = null;
+        _collisionWorld             = null;
         _robotRail                  = null;
         _multiToolFlangeParented    = false;
         _lfamInfrastructureNodes.Clear();
@@ -3675,6 +3715,10 @@ public partial class ViewportView : UserControl
             CurvedAutoDetectBandMm      = (float)s.CurvedAutoDetectBandMm,
             CurvedEnableRegionSplit     = s.CurvedEnableRegionSplit,
             OrientationFollowStrength   = s.OrientationFollowStrength,
+            OrientationMaxTiltDeg       = (float)s.OrientationMaxTiltDeg,
+            FirstLayerZeroTilt          = s.FirstLayerZeroTilt,
+            LayerLeanStrength           = (float)(s.LayerLeanPercent / 100.0),
+            LayerLeanMaxTiltDeg         = (float)s.LayerLeanMaxTiltDeg,
         };
     }
 
@@ -3742,7 +3786,7 @@ public partial class ViewportView : UserControl
                 }
                 flatMeshes.Add(flat);
             }
-            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}");
+            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}  tris={flatMeshes.Sum(m => m.Length) / 3:N0}");
             ThrowIfCancel();
 
             Report(method switch
@@ -3766,7 +3810,7 @@ public partial class ViewportView : UserControl
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.MultiPlanar) tp = AngledPlanarSlicer.SliceMultiPlanar(flatMeshes, settings);
-            else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings, SlicePct);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
             else                                     tp = PlanarSlicer.Slice(flatMeshes, settings, SlicePct);
             ThrowIfCancel();
@@ -3824,7 +3868,8 @@ public partial class ViewportView : UserControl
             SliceLogger.Step("ToolpathClone.Copy(toSmooth) done");
             Pct(96);
 
-            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength, settings.OrientationMaxTiltDeg, settings.FirstLayerZeroTilt);
+            LayerLeanOrienter.ApplyInPlace(toSmooth, settings.LayerLeanStrength, settings.LayerLeanMaxTiltDeg, settings.BeadWidth);
             SliceLogger.Step("OrientationBlender done");
             ThrowIfCancel();
 
@@ -3849,7 +3894,8 @@ public partial class ViewportView : UserControl
         var settings = BuildSliceSettings(s);
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
-        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength, settings.OrientationMaxTiltDeg, settings.FirstLayerZeroTilt);
+            LayerLeanOrienter.ApplyInPlace(toSmooth, settings.LayerLeanStrength, settings.LayerLeanMaxTiltDeg, settings.BeadWidth);
         var smoothed = OrientationSmoother.Apply(toSmooth, settings);
         ThermalSimulator.StampLayerTemps(smoothed, settings);
         return smoothed;
@@ -10558,6 +10604,60 @@ public partial class ViewportView : UserControl
     /// a reachability bool[] into <see cref="_pendingReachability"/> for the GL thread to apply.
     /// Any previous validation for a different toolpath is cancelled first.
     /// </summary>
+    /// <summary>
+    /// Builds (or reuses) the digital-twin collision world: robot link hulls +
+    /// environment triangle BVH. UI thread only — reads the live scene graph.
+    /// Returns null (collision checking disabled) when the robot model can't be
+    /// extracted; never throws.
+    /// </summary>
+    private CollisionWorld? BuildOrGetCollisionWorld()
+    {
+        if (_collisionWorld is not null) return _collisionWorld;
+        var vm = _vm;
+        var robotRoot = _robotBaseNode;
+        var fk = _fkController;
+        if (vm is null || robotRoot is null || fk is null) return null;
+
+        try
+        {
+            var joints = vm.ActiveCell?.Robot.Joints ?? [];
+            if (joints.Count < 6) return null;
+            Action<string> log = s => vm.OnDevLog?.Invoke(s);
+
+            var robot = CollisionModelExtractor.ExtractRobot(
+                robotRoot, joints, fk.RestPoses, log, _currentToolNode, _toolMeshMatrix);
+            if (robot is null) return null;
+
+            var env = CollisionModelExtractor.ExtractEnvironment(
+                _renderer.SceneRoot, robotRoot,
+                _currentToolNode is null ? null : [_currentToolNode], log);
+
+            var world = new CollisionWorld(robot, env, new CollisionSettings());
+
+            // Baseline: exclude self pairs already within margin at the cell home pose
+            // (conservative-hull overlap at rest must not flood the results).
+            var home = vm.ActiveCell?.Robot.HomePosition;
+            if (home is { Length: >= 6 })
+            {
+                var chainRoot = CollisionModelExtractor.ToNumericsMatrix(fk.LiveChainRootTransform());
+                Span<float> homeKrl = [home[0], home[1], home[2], home[3], home[4], home[5]];
+                var excluded = robot.ApplySelfBaseline(homeKrl, chainRoot,
+                    MathF.Max(world.Settings.SelfClearanceMm, 1f));
+                foreach (var (a, b, d) in excluded)
+                    log($"[collision] baseline-excluded {RobotCollisionModel.LinkNames[a]} ↔ " +
+                        $"{RobotCollisionModel.LinkNames[b]} ({d:F1} at home)");
+            }
+
+            _collisionWorld = world;
+            return world;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[collision] extraction failed: {ex.Message}");
+            return null;
+        }
+    }
+
     private void ValidateToolpathAsync(SceneNode node, Toolpath toolpath)
     {
         var currentTransform = node.WorldTransform;
@@ -10603,6 +10703,15 @@ public partial class ViewportView : UserControl
         var homeWorld = cellForE1 is not null
             ? new NVec3(cellForE1.Robot.WorldPosition.X, cellForE1.Robot.WorldPosition.Y, cellForE1.Robot.WorldPosition.Z)
             : new NVec3(robroot.X, robroot.Y, robroot.Z);
+
+        // Digital-twin collision captures (UI thread; immutable afterward).
+        var collisionWorld = BuildOrGetCollisionWorld();
+        var chainRootColl = _fkController is { } fkColl
+            ? CollisionModelExtractor.ToNumericsMatrix(fkColl.LiveChainRootTransform())
+            : System.Numerics.Matrix4x4.Identity;
+        var wtColl = CollisionModelExtractor.ToNumericsMatrix(wt);
+        var originColl = new NVec3(origin.X, origin.Y, origin.Z);
+        float beadWidthColl = addSettings is not null ? (float)addSettings.BeadWidth : 6f;
 
         Task.Run(() =>
         {
@@ -10837,10 +10946,73 @@ public partial class ViewportView : UserControl
                 }
             }
 
+            // ── Digital-twin collision sweep (environment + self + material) ────
+            bool[]? collision = null;
+            CollisionHit? firstCollHit = null;
+            int collCount = 0, collStride = 1;
+            if (collisionWorld is not null && total > 0)
+            {
+                try
+                {
+                    collisionWorld.Beads = collisionWorld.Settings.CheckMaterial
+                        ? new BeadObstacleGrid(toolpath, beadWidthColl, wtColl, originColl)
+                        : null;
+
+                    var chainRoots = new System.Numerics.Matrix4x4[total];
+                    var tcpWorlds = new NVec3[total];
+                    var railColl = cellForE1?.RobotRail;
+                    for (int i = 0; i < total; i++)
+                    {
+                        if (e1Motion && railColl is { } rc)
+                        {
+                            var bw = RailE1Planner.BaseWorld(homeWorld, rc, e1PerMove[i]);
+                            var bh = RailE1Planner.BaseWorld(homeWorld, rc, homeE1);
+                            chainRoots[i] = chainRootColl *
+                                System.Numerics.Matrix4x4.CreateTranslation(
+                                    bw.X - bh.X, bw.Y - bh.Y, bw.Z - bh.Z);
+                            tcpWorlds[i] = new NVec3(
+                                targets[i].X + bw.X, targets[i].Y + bw.Y, targets[i].Z + bw.Z);
+                        }
+                        else
+                        {
+                            chainRoots[i] = chainRootColl;
+                            tcpWorlds[i] = new NVec3(
+                                targets[i].X + robroot.X, targets[i].Y + robroot.Y, targets[i].Z + robroot.Z);
+                        }
+                    }
+
+                    var solved = new float[total][];
+                    for (int i = 0; i < total; i++) solved[i] = solutions[i] ?? seed;
+
+                    var collResult = ToolpathCollisionChecker.Check(
+                        collisionWorld, solved, chainRoots, tcpWorlds, cts.Token);
+                    collision = collResult.Colliding;
+                    collStride = collResult.SampleStride;
+                    for (int i = 0; i < total; i++)
+                        if (collision[i])
+                        {
+                            collCount++;
+                            firstCollHit ??= collResult.Hits[i];
+                        }
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[collision] sweep failed: {ex.Message}");
+                    collision = null;
+                }
+                finally
+                {
+                    collisionWorld.Beads = null;   // free the per-toolpath grid
+                }
+            }
+
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
             _e1MmByNode[node]         = e1PerMove;
+            if (collision is not null) _collisionByNode[node] = collision;
+            else _collisionByNode.TryRemove(node, out _);
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
@@ -10870,6 +11042,10 @@ public partial class ViewportView : UserControl
             string reachLabel = failCount == 0
                 ? $"All {result.Length} reachable"
                 : $"{failCount} / {result.Length} unreachable";
+            if (collCount > 0)
+                reachLabel += collStride > 1
+                    ? $" · {collCount:N0} collision (sampled 1/{collStride})"
+                    : $" · {collCount:N0} collision";
             Dispatcher.UIThread.Post(() =>
             {
                 _validationDone = true;
@@ -10877,18 +11053,27 @@ public partial class ViewportView : UserControl
                 {
                     vm.StatsReachability = reachLabel;
                     vm.IsValidating = false;
-                    vm.SetScrubMarkers(result, singularity);
+                    vm.SetScrubMarkers(result, singularity, collision);
                     int firstBad = -1;
                     for (int i = 0; i < total; i++)
-                        if (!result[i] || singularity[i]) { firstBad = i; break; }
+                        if (!result[i] || singularity[i] || (collision is not null && collision[i]))
+                        { firstBad = i; break; }
                     vm.FirstValidationIssueIndex = firstBad;
                     // Loud warning: a fault mid-print wastes material and hours.
-                    if (failCount + singCount > 0)
+                    if (failCount + singCount + collCount > 0)
+                    {
+                        string collPart = collCount > 0
+                            ? $" and {collCount:N0} predicted collision moves" +
+                              (firstCollHit is { } fh
+                                  ? $" (first: {RobotCollisionModel.LinkNames[fh.Link]} ↔ {fh.Other})"
+                                  : "")
+                            : "";
                         SetSliceStatus(vm,
-                            $"⚠ Robot validation: {singCount:N0} singularity-risk and {failCount:N0} unreachable moves" +
+                            $"⚠ Robot validation: {singCount:N0} singularity-risk, {failCount:N0} unreachable{collPart}" +
                             (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
-                            " — the robot may fault mid-print.",
+                            " — the robot may fault or crash mid-print.",
                             isError: true);
+                    }
                 }
                 GlCanvas.RequestNextFrameRendering();
             });
@@ -11779,6 +11964,29 @@ public partial class ViewportView : UserControl
         _renderer.Camera.Target = worldPoint;
         _renderer.Camera.Radius = Math.Max(radiusMm, FrameMinRadiusMm);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Frames the camera on the world position of a flat move index of the
+    /// active scrub toolpath (timeline validation-tick click). Applies the same
+    /// origin + world-transform mapping as ScrubIkForNode.</summary>
+    private void FrameCameraToScrubIndex(int index)
+    {
+        var node = _activeScrubNode;
+        if (node is null) return;
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+
+        var (pos, _) = cache[Math.Clamp(index, 0, cache.Length - 1)];
+        var world = new TkVector3(pos.X, pos.Y, pos.Z);
+        if (_toolpathOriginByNode.TryGetValue(node, out var origin))
+        {
+            var wt = node.WorldTransform;
+            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+            world = new TkVector3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+        }
+        FrameCameraToPoint(world, 300f);
     }
 
     /// <summary>Frames an arbitrary set of world points (selection polylines, layer beads…).</summary>

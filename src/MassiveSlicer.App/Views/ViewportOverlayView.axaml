@@ -1582,6 +1582,11 @@
                                              MarkerBrush="#9955DD"
                                              Height="6" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
+                        <!-- Digital-twin collision markers — orange ticks -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubCollisionMarkers}"
+                                             MarkerBrush="#E8901A"
+                                             Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
                         <!-- TCP keyframe markers — lime ticks -->
                         <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
                                              MarkerBrush="#7ed87e"
@@ -1622,6 +1627,28 @@
                     </StackPanel>
 
                 </Grid>
+
+                <!-- Validation-tick legend — appears when the timeline carries markers -->
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="4,2,0,0"
+                            IsVisible="{Binding ShowScrubLegend}">
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasUnreachableMarkers}">
+                        <Border Width="3" Height="10" Background="#CC3030" VerticalAlignment="Center"/>
+                        <TextBlock Text="Unreachable" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasSingularityMarkers}">
+                        <Border Width="3" Height="10" Background="#9955DD" VerticalAlignment="Center"/>
+                        <TextBlock Text="Singularity risk" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasCollisionMarkers}">
+                        <Border Width="3" Height="10" Background="#E8901A" VerticalAlignment="Center"/>
+                        <TextBlock Text="Collision" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock Text="Alt-click or double-click a tick to inspect"
+                               FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                </StackPanel>
 
                 <!-- Keyframe lane — slides open once the first TCP keyframe exists.
                      Diamonds are clickable (jump + select); the small side ticks drag

@@ -483,6 +483,63 @@
                     <ComboBox HorizontalAlignment="Stretch"
                               ItemsSource="{Binding Additive.AvailableMethodNames}"
                               SelectedItem="{Binding Additive.MethodDisplayName, Mode=TwoWay}"/>
+
+                    <!-- Geodesic / Curved (Sweep) TCP orientation: vertical ↔ stacking-normal tween + tilt cap -->
+                    <StackPanel Spacing="4" IsVisible="{Binding Additive.ShowOrientationFollow}" Margin="0,2,0,0">
+                        <Grid ColumnDefinitions="*,*,56">
+                            <TextBlock Grid.Column="0" Text="Surface follow (%)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Tweens the TCP between upright (0 = vertical, like Planar) and the full surface-following orientation (100). E.g. 10 keeps the tool nearly upright with 10% of the geodesic tilt."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*,56">
+                            <TextBlock Grid.Column="0" Text="Max tilt (°)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Hard cap on TCP tilt from vertical, applied after the surface-follow blend. Never exceeded regardless of the percentage — guards flange clearance on steep shells. 90 = no cap."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="90"
+                                    Value="{Binding Additive.OrientationMaxTiltDeg, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.OrientationMaxTiltDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                        <CheckBox Content="First layer zero tilt"
+                                  IsChecked="{Binding Additive.FirstLayerZeroTilt, Mode=TwoWay}"
+                                  Margin="0,2,0,0"
+                                  ToolTip.Tip="Force the first layer's TCP fully vertical regardless of the surface-follow blend — flat-bed adhesion and no flange dig-in on layer 1."/>
+                    </StackPanel>
+
+                    <!-- Layer lean: planar "poor man's non-planar" — tilt toward the previous layer -->
+                    <StackPanel Spacing="4" IsVisible="{Binding Additive.ShowLayerLean}" Margin="0,2,0,0">
+                        <Grid ColumnDefinitions="*,*,56">
+                            <TextBlock Grid.Column="0" Text="Layer lean (%)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Poor man's non-planar: leans the extruder toward the nearest deposited material on the PREVIOUS layer, so stepped walls print with the TCP following the local wall lean. 0 = off (vertical), 100 = full lean toward the layer below. First layer always stays vertical."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
+                                    Value="{Binding Additive.LayerLeanPercent, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.LayerLeanPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,*,56">
+                            <TextBlock Grid.Column="0" Text="Max lean (°)"
+                                       VerticalAlignment="Center" Classes="LabelMuted"
+                                       ToolTip.Tip="Hard cap on the lean tilt from vertical — never exceeded regardless of the percentage. Keeps the flange clear of the part on tall stepped walls."/>
+                            <Slider Grid.Column="1" Minimum="0" Maximum="90"
+                                    Value="{Binding Additive.LayerLeanMaxTiltDeg, Mode=TwoWay}"
+                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
+                            <TextBox Grid.Column="2" Classes="PanelTextBox"
+                                     Text="{Binding Additive.LayerLeanMaxTiltDeg, Mode=TwoWay, StringFormat={}{0:F0}}"
+                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
+
                     <Grid ColumnDefinitions="*,Auto"
                           IsVisible="{Binding Additive.ShowSlicingMode}">
                         <TextBlock Grid.Column="0" Text="Slicing mode" VerticalAlignment="Center" Classes="LabelMuted"/>
@@ -525,17 +582,6 @@
                         <CheckBox Content="Region split for branching (Y-shapes)"
                                   IsChecked="{Binding Additive.CurvedEnableRegionSplit, Mode=TwoWay}"
                                   Margin="0,2,0,0"/>
-                        <Grid ColumnDefinitions="*,*,56" Margin="0,4,0,0">
-                            <TextBlock Grid.Column="0" Text="Surface follow (%)"
-                                       VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="0 = vertical toolhead. 100 = full stacking normal."/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
-                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
-                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
-                            <TextBox Grid.Column="2" Classes="PanelTextBox"
-                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
-                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                        </Grid>
                     </StackPanel>
                 </StackPanel>
                         </StackPanel>
@@ -2056,32 +2102,6 @@
                                        ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
                             <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
                         </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                        <TextBlock Text="SURFACE FOLLOW" Classes="SectionHeader"
-                                   ToolTip.Tip="Blend tool approach between vertical (+Z) and surface-following normals. Lower on steep curves to avoid flange collisions."/>
-
-                        <Grid Margin="8,2,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="56"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="Strength (%)"
-                                       Classes="LabelMuted" VerticalAlignment="Center"
-                                       ToolTip.Tip="0 = vertical toolhead. 100 = full path/surface follow."/>
-                            <Slider Grid.Column="1" Minimum="0" Maximum="100"
-                                    Value="{Binding Additive.OrientationFollowPercent, Mode=TwoWay}"
-                                    VerticalAlignment="Center" Margin="8,0,4,0"/>
-                            <TextBox Grid.Column="2" Classes="PanelTextBox"
-                                     Text="{Binding Additive.OrientationFollowPercent, Mode=TwoWay, StringFormat={}{0:F0}}"
-                                     TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
-                        </Grid>
-
-                        <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                   Margin="8,0,8,8"
-                                   Text="Adjust while scrubbing to preview robot clearance. Re-slice to bake into exported KRL."/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

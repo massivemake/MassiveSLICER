@@ -141,7 +141,8 @@ public static class MeshGraph
         Func<float, float[]> scalarAtParameter,
         IReadOnlyList<float> layerParameters,
         SliceSettings settings,
-        Func<float, float>? targetAtParameter = null)
+        Func<float, float>? targetAtParameter = null,
+        Action<float>? progress = null)
     {
         targetAtParameter ??= _ => 0f;
         var (seamOrigin, seamDir) = ComputeSeamFrame(mesh.Vertices, settings.SeamDirection);
@@ -149,9 +150,11 @@ public static class MeshGraph
         int   layerIdx   = 0;
         var   prevTracks = new List<ContourTrack>();
         bool  zigZag     = settings.ZigZagSeam;
+        int   paramIdx   = 0;
 
         foreach (float param in layerParameters)
         {
+            progress?.Invoke(paramIdx++ / (float)layerParameters.Count);
             var scalar = scalarAtParameter(param);
             float targetValue = targetAtParameter(param);
             var segments = new List<(Vector3 A, Vector3 B, Vector3 GradDir)>(64);

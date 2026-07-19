@@ -406,6 +406,19 @@ public sealed class AppPreferences
     /// <summary>Surface follow strength percent (0 = vertical, 100 = full follow).</summary>
     public double OrientationFollowPercent { get; set; } = 100.0;
 
+    /// <summary>Hard cap on TCP tilt from vertical in degrees, applied after the
+    /// surface-follow blend (90 = uncapped).</summary>
+    public double OrientationMaxTiltDeg { get; set; } = 90.0;
+
+    /// <summary>Force the first layer's tool orientation to vertical (flat-bed adhesion).</summary>
+    public bool FirstLayerZeroTilt { get; set; }
+
+    /// <summary>Layer lean strength percent (planar; 0 = off).</summary>
+    public double LayerLeanPercent { get; set; }
+
+    /// <summary>Layer lean max tilt from vertical (degrees).</summary>
+    public double LayerLeanMaxTiltDeg { get; set; } = 20.0;
+
     /// <summary>Forward-biased Gaussian look-ahead for KRL ABC smoothing (mm). 0 = off.</summary>
     public double OrientationLookAheadMm { get; set; }
 

@@ -3029,6 +3029,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.E1YMinusMm             = copy.E1YMinusMm;
         live.ToolheadC              = copy.ToolheadC;
         live.OrientationFollowPercent = copy.OrientationFollowPercent;
+        live.OrientationMaxTiltDeg    = copy.OrientationMaxTiltDeg;
+        live.FirstLayerZeroTilt       = copy.FirstLayerZeroTilt;
+        live.LayerLeanPercent         = copy.LayerLeanPercent;
+        live.LayerLeanMaxTiltDeg      = copy.LayerLeanMaxTiltDeg;
         live.OrientationLookAheadMm   = copy.OrientationLookAheadMm;
         live.OrientationSigmaMm       = copy.OrientationSigmaMm;
         live.ApoCvel                = copy.ApoCvel;
@@ -3311,6 +3315,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.E1YPlusMm     = p.E1YPlusMm;
         add.E1YMinusMm    = p.E1YMinusMm;
         add.OrientationFollowPercent = p.OrientationFollowPercent;
+        add.OrientationMaxTiltDeg    = p.OrientationMaxTiltDeg;
+        add.FirstLayerZeroTilt       = p.FirstLayerZeroTilt;
+        add.LayerLeanPercent         = p.LayerLeanPercent;
+        add.LayerLeanMaxTiltDeg      = p.LayerLeanMaxTiltDeg;
         add.OrientationLookAheadMm   = p.OrientationLookAheadMm;
         add.OrientationSigmaMm       = p.OrientationSigmaMm;
         add.ApoCvel                = p.ApoCvel;
@@ -3588,6 +3596,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.E1YPlusMm        = add.E1YPlusMm;
         p.E1YMinusMm       = add.E1YMinusMm;
         p.OrientationFollowPercent = add.OrientationFollowPercent;
+        p.OrientationMaxTiltDeg    = add.OrientationMaxTiltDeg;
+        p.FirstLayerZeroTilt       = add.FirstLayerZeroTilt;
+        p.LayerLeanPercent         = add.LayerLeanPercent;
+        p.LayerLeanMaxTiltDeg      = add.LayerLeanMaxTiltDeg;
         p.OrientationLookAheadMm   = add.OrientationLookAheadMm;
         p.OrientationSigmaMm       = add.OrientationSigmaMm;
         p.ApoCvel                = add.ApoCvel;

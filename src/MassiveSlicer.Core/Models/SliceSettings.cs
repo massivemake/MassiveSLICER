@@ -507,6 +507,23 @@ public sealed class SliceSettings
     /// Lower values keep the toolhead more vertical for body clearance on curved paths.
     /// </summary>
     public float OrientationFollowStrength { get; init; } = 1f;
+
+    /// <summary>Hard cap on TCP tilt from vertical in degrees, applied after the
+    /// surface-follow blend (90 = uncapped). Guards flange clearance on steep shells.</summary>
+    public float OrientationMaxTiltDeg { get; init; } = 90f;
+
+    /// <summary>Force the first layer's tool orientation to vertical (world +Z) regardless
+    /// of the surface-follow blend — flat-bed adhesion for Geodesic/Curved slicing.</summary>
+    public bool FirstLayerZeroTilt { get; init; } = false;
+
+    // -- Layer lean ("poor man's non-planar" for planar slicing) -------------------
+
+    /// <summary>0..1: how strongly planar moves lean toward the nearest deposited
+    /// material on the previous layer. 0 = off (vertical tool).</summary>
+    public float LayerLeanStrength { get; init; } = 0f;
+
+    /// <summary>Hard cap on layer-lean tilt from vertical, in degrees.</summary>
+    public float LayerLeanMaxTiltDeg { get; init; } = 20f;
 }
 
 /// <summary>Live effector behaviour inside the influence radius.</summary>

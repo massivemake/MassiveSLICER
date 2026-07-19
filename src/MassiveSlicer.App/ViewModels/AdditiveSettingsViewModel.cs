@@ -190,6 +190,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowSlicingMode));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));
+                OnPropertyChanged(nameof(ShowOrientationFollow));
+                OnPropertyChanged(nameof(ShowLayerLean));
             }
         }
     }
@@ -274,6 +276,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public bool IsCurvedMethod          => Method == SliceMethod.Curved;
     public bool ShowCurvedControls      => Method == SliceMethod.Curved;
+    /// <summary>Surface-follow (vertical ↔ stacking-normal tween) applies to methods that
+    /// emit per-move surface normals: Geodesic and Curved (Sweep).</summary>
+    public bool ShowOrientationFollow   => Method is SliceMethod.Geodesic or SliceMethod.Curved;
+    /// <summary>Layer-lean (previous-layer tilt) applies to plane-stacked methods.</summary>
+    public bool ShowLayerLean           => Method is SliceMethod.Planar or SliceMethod.Angled;
     public bool ShowTiltAngle           => Method == SliceMethod.Angled;
     public bool ShowMultiPlanarControls => Method == SliceMethod.MultiPlanar;
     /// <summary>Bead-width contour inset — planar / angled / multi-planar only.</summary>
@@ -1379,6 +1386,45 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public float OrientationFollowStrength => (float)(OrientationFollowPercent / 100.0);
+
+    private double _orientationMaxTiltDeg = 90.0;
+
+    /// <summary>Hard cap on TCP tilt from vertical in degrees, applied after the
+    /// surface-follow blend (90 = uncapped).</summary>
+    public double OrientationMaxTiltDeg
+    {
+        get => _orientationMaxTiltDeg;
+        set => SetField(ref _orientationMaxTiltDeg, Math.Clamp(value, 0.0, 90.0));
+    }
+
+    private bool _firstLayerZeroTilt;
+
+    /// <summary>Force the first layer's tool orientation to vertical (flat-bed adhesion).</summary>
+    public bool FirstLayerZeroTilt
+    {
+        get => _firstLayerZeroTilt;
+        set => SetField(ref _firstLayerZeroTilt, value);
+    }
+
+    // -- Layer lean ("poor man's non-planar" for planar slicing) ----------------
+
+    private double _layerLeanPercent;
+
+    /// <summary>0–100: how strongly planar moves lean toward the previous layer. 0 = off.</summary>
+    public double LayerLeanPercent
+    {
+        get => _layerLeanPercent;
+        set => SetField(ref _layerLeanPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    private double _layerLeanMaxTiltDeg = 20.0;
+
+    /// <summary>Hard cap on layer-lean tilt from vertical (degrees).</summary>
+    public double LayerLeanMaxTiltDeg
+    {
+        get => _layerLeanMaxTiltDeg;
+        set => SetField(ref _layerLeanMaxTiltDeg, Math.Clamp(value, 0.0, 90.0));
+    }
 
     // -- Orientation smoothing ------------------------------------------------
 
