@@ -175,7 +175,8 @@
     "radius": 3018.7478,
     "targetX": 2399.967,
     "targetY": 350.15335,
-    "targetZ": 1198.2921
+    "targetZ": 1198.2921,
+    "isOrthographic": false
   },
   "waypoints": []
 }

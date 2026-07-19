@@ -78,6 +78,10 @@ public partial class ViewportView : UserControl
     private float    _gizmoDragStartScreenX;
     private float    _gizmoDragCurrScreenX;
 
+    // Set while dragging a modifier's own gizmo (not the mesh) — see ResolveActiveModifier.
+    private ModifierRowViewModel? _gizmoDragModifierRow;
+    private SceneNode?            _gizmoDragModifierOwner;
+
     // Keyboard-initiated transform state (Blender-style G/R/S)
     private bool      _kbTransformActive;
     private GizmoMode _kbTransformOp;
@@ -1158,7 +1162,7 @@ public partial class ViewportView : UserControl
             {
                 _toolpathByNode.TryRemove(removing, out _);
                 _rawToolpathByNode.TryRemove(removing, out _);
-                if (ReferenceEquals(removing, _activeScrubNode) && DataContext is ViewportViewModel vmRm)
+                if (ReferenceEquals(removing, _activeScrubNode) && _vm is { } vmRm)
                 {
                     _activeScrubNode = null;
                     Dispatcher.UIThread.Post(() =>
@@ -1388,6 +1392,7 @@ public partial class ViewportView : UserControl
                 UpdateCutToolOverlay(vm);
             else
                 UpdateAnglePlanePreview(vm);
+            UpdateModifierPreviewOverlay(vm);
             UpdatePaintOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
@@ -2952,7 +2957,8 @@ public partial class ViewportView : UserControl
             if (_gizmoDragAxis != GizmoAxis.None)
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
-                if (!cutDragging
+                bool modifierDragging = _gizmoDragModifierRow is not null;
+                if (!cutDragging && !modifierDragging
                     && _renderer.SelectedNode is { } gzNode
                     && DataContext is ViewportViewModel vmGz)
                 {
@@ -2962,10 +2968,12 @@ public partial class ViewportView : UserControl
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                _gizmoDragModifierRow    = null;
+                _gizmoDragModifierOwner  = null;
                 EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (!cutDragging && DataContext is ViewportViewModel vmGz2)
+                if (!cutDragging && !modifierDragging && DataContext is ViewportViewModel vmGz2)
                 {
                     SyncSelectionTransformDisplay(vmGz2);
                     if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
@@ -5680,6 +5688,74 @@ public partial class ViewportView : UserControl
         _renderer.GizmoEnabled = true;
     }
 
+    /// <summary>
+    /// Ghosted plane for the modifier panel's currently-selected Cut modifier. Runs after
+    /// <see cref="UpdateAnglePlanePreview"/> in the render loop, so an explicitly-selected
+    /// modifier's plane wins over whatever that set — the angled/multi-planar/X-bracing
+    /// previews are ambient (X-bracing's helper is even on by default), while selecting a
+    /// modifier is a deliberate user action and should actually show. Only the interactive
+    /// Cut Tool is treated as truly exclusive, since it's a real modal editing session.
+    ///
+    /// The gizmo targets the modifier's own dedicated SceneNode (see ResolveActiveModifier),
+    /// never the mesh — dragging it runs through the exact same ProcessTranslateDrag/
+    /// ProcessRotateDrag used for every other object, so a modifier is a genuinely independent
+    /// object with its own transform, not a special-cased reinterpretation of the mesh's gizmo.
+    /// </summary>
+    private void UpdateModifierPreviewOverlay(ViewportViewModel vm)
+    {
+        if (vm.IsCutToolActive) return;
+
+        if (ResolveActiveModifier(vm) is not { } active)
+        {
+            _renderer.SetPlanePreview(null, null);
+            return;
+        }
+        var (row, ownerNode, gizmoNode) = active;
+        var cut = row.Cut!;
+
+        var world = gizmoNode.WorldTransform;
+        var point = world.Row3.Xyz;
+
+        // Horizontal's gizmo node is a pure translation (see BuildHorizontalLocalTransform) —
+        // its local X row is never rotated to mean anything, so its face-normal is the local Z
+        // axis instead (transformed by the owner's world rotation, since it's parented to it).
+        // Vertical's node has no parent and encodes its normal directly in the X row (see
+        // BuildVerticalTransform) — using Row0 for both, as before, made Horizontal render
+        // face-on to X instead of Z, i.e. upright instead of flat.
+        var normal = cut.Orientation == CutOrientation.Horizontal
+            ? TkVector3.Normalize(world.Row2.Xyz)
+            : TkVector3.Normalize(world.Row0.Xyz);
+
+        // Restricted extent isn't rectangular in the renderer yet (square quad only) — use
+        // whichever side is larger as a stand-in until PlanePreviewRenderer supports Size X/Y.
+        // Infinite mode used to draw a 30m quad, which at bed scale reads as an undifferentiated
+        // wall of color — too big to see the plane actually move. Bed-sized reads as "the plane"
+        // while still clearly extending past the model.
+        float size = cut.Infinite ? Math.Max(_bedWidth, _bedDepth) : Math.Max(cut.SizeX, cut.SizeY);
+        _renderer.SetPlanePreview(point, normal, size);
+
+        _renderer.GizmoPivotWorld = point;
+        if (vm.ActiveGizmoModeInternal == GizmoMode.None)
+            SetGizmoMode(GizmoMode.Translate);
+        else
+            _renderer.GizmoMode = vm.ActiveGizmoModeInternal;
+        _renderer.GizmoEnabled = true;
+    }
+
+    /// <summary>The modifier row currently driving the panel's settings + the viewport gizmo,
+    /// the SceneNode it's attached to, and its own dedicated gizmo node — null if nothing
+    /// qualifies (no selection, disabled, preview hidden, or not a Cut modifier). Centralizes
+    /// the same resolution used by the preview overlay and the gizmo-drag handlers so they can
+    /// never disagree about what's currently active.</summary>
+    private static (ModifierRowViewModel Row, SceneNode Owner, SceneNode GizmoNode)? ResolveActiveModifier(ViewportViewModel vm)
+    {
+        if (vm.ModifiersPanel?.SelectedModifier is not { } row) return null;
+        if (row.Cut is not { } cut || !cut.Enabled || !cut.PreviewVisible) return null;
+        if (vm.SelectedModifierOwner?.Node is not { } owner) return null;
+        var gizmoNode = vm.GetOrCreateModifierGizmoNode(cut, owner);
+        return (row, owner, gizmoNode);
+    }
+
     private async Task MeshCleanupSelectedAsync()
     {
         if (_renderer.SelectedNode is not { } root) return;
@@ -6058,7 +6134,7 @@ public partial class ViewportView : UserControl
     {
         if (IsToolNodeSelected() && mode == GizmoMode.Scale) return;
         _renderer.GizmoMode = mode;
-        if (DataContext is ViewportViewModel vm)
+        if (_vm is { } vm)
             vm.ActiveGizmoModeInternal = mode;
         GlCanvas.RequestNextFrameRendering();
     }
@@ -6540,7 +6616,7 @@ public partial class ViewportView : UserControl
     /// </summary>
     private int GetPaintScrubMoveLimit()
     {
-        if (DataContext is not ViewportViewModel vm) return int.MaxValue;
+        if (_vm is not { } vm) return int.MaxValue;
         if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return int.MaxValue;
         if (vm.ToolpathScrubMax <= 0) return int.MaxValue;
         // ScrubCount uses cumulative[scrubIndex]: vertices for moves [0, scrubIndex).
@@ -6562,7 +6638,7 @@ public partial class ViewportView : UserControl
     /// remain visible for context but are not hoverable/selectable.</summary>
     private int GetPaintScrubMoveStart()
     {
-        if (DataContext is not ViewportViewModel vm) return 0;
+        if (_vm is not { } vm) return 0;
         if (!(vm.IsToolpathSelected || vm.IsScrubSessionActive)) return 0;
 
         if (vm.IsSlicePlaneViewerActive && vm.IsPaintEditOpen
@@ -9883,7 +9959,7 @@ public partial class ViewportView : UserControl
 
     private void UpdateFocusOverlay()
     {
-        if (DataContext is not ViewportViewModel vm) return;
+        if (_vm is not { } vm) return;
 
         var selected = _renderer.SelectedNode;
         if (!ReferenceEquals(selected, _lastOutlinerSyncedNode) && vm.SelectedScanCount < 2)
@@ -12093,7 +12169,7 @@ public partial class ViewportView : UserControl
                     }
                 }
             }
-            if (DataContext is ViewportViewModel vmHide)
+            if (_vm is { } vmHide)
                 vmHide.RefreshRobotOutlinerVisibilityFromScene();
         }
         else if (_sliceViewerHidScene)
@@ -12102,7 +12178,7 @@ public partial class ViewportView : UserControl
                 node.Visible = wasVisible;
             _sliceViewerHiddenNodes.Clear();
             _sliceViewerHidScene = false;
-            if (DataContext is ViewportViewModel vmShow)
+            if (_vm is { } vmShow)
                 vmShow.RefreshRobotOutlinerVisibilityFromScene();
         }
     }
@@ -12323,6 +12399,23 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Modifier gizmo: a real, independent SceneNode (see ResolveActiveModifier) — dragging
+        // it is handled by the exact same translate/rotate code as any other object, just
+        // targeting this node instead of the mesh, so it can never touch the mesh's transform.
+        if (DataContext is ViewportViewModel vmMod && ResolveActiveModifier(vmMod) is { } activeMod)
+        {
+            _gizmoDragModifierRow   = activeMod.Row;
+            _gizmoDragModifierOwner = activeMod.Owner;
+            _gizmoDragInitialLocal  = activeMod.GizmoNode.LocalTransform;
+            _gizmoDragPlanePoint    = activeMod.GizmoNode.WorldTransform.Row3.Xyz;
+            _toolIsDragging = false;
+            _transformLinkFollowers = null;
+            SetupCutPlaneGizmoDrag(mx, my, vpW, vpH);
+            return;
+        }
+        _gizmoDragModifierRow = null;
+        _gizmoDragModifierOwner = null;
+
         if (_renderer.SelectedNode is not { } node) return;
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal = node.LocalTransform;
@@ -12406,6 +12499,12 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (_gizmoDragModifierRow is { } dragRow && _gizmoDragModifierOwner is { } dragOwner)
+        {
+            ProcessModifierGizmoDrag(dragRow, dragOwner, mx, my);
+            return;
+        }
+
         if (_renderer.SelectedNode is not { } node) return;
 
         _gizmoDragCurrScreenX = mx;
@@ -12427,6 +12526,48 @@ public partial class ViewportView : UserControl
             case GizmoMode.Rotate:    ProcessRotateDrag(node, hitWorld);    break;
         }
         ApplyTransformLink(node);
+    }
+
+    /// <summary>
+    /// Drives a modifier's own gizmo node through the exact same ProcessTranslateDrag/
+    /// ProcessRotateDrag used for any other object — it's a real, independent SceneNode (see
+    /// ResolveActiveModifier/GetOrCreateModifierGizmoNode), so no special-cased math is needed
+    /// here at all. Afterward, pulls the resulting Offset/RotationDegrees back out of the node
+    /// (see ViewportViewModel.SyncModifierAfterGizmoEdit) so the settings panel and the actual
+    /// stored modifier data stay exactly in sync with wherever the gizmo left it.
+    /// </summary>
+    private void ProcessModifierGizmoDrag(ModifierRowViewModel row, SceneNode ownerNode, float mx, float my)
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        if (row.Cut is not { } cut) return;
+        var node = vm.GetOrCreateModifierGizmoNode(cut, ownerNode);
+
+        _gizmoDragCurrScreenX = mx;
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        float denom = Vector3.Dot(ray.Direction, _gizmoDragPlaneNormal);
+        if (MathF.Abs(denom) < 1e-5f) return;
+        float t = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
+        var hitWorld = ray.At(t);
+
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        switch (dragOp)
+        {
+            case GizmoMode.Translate:
+                ProcessTranslateDrag(node, hitWorld);
+                break;
+            case GizmoMode.Rotate when cut.Orientation == CutOrientation.Vertical && _gizmoDragAxis == GizmoAxis.Z:
+                // Only the Z ring means anything for a vertical plane (it only ever rotates
+                // around the vertical axis) — X/Y rotate rings are ignored rather than
+                // producing a tilt the data model (and CutModifierNodeSync's extraction) can't
+                // actually represent.
+                ProcessRotateDrag(node, hitWorld);
+                break;
+            // Scale doesn't mean anything for a plane modifier — no case for it.
+        }
+
+        vm.SyncModifierAfterGizmoEdit(cut, node, ownerNode);
     }
 
     private void ProcessCutPlaneGizmoDrag(CutToolDialogViewModel session, float mx, float my)

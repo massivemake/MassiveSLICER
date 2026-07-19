@@ -123,6 +123,14 @@ public sealed class RightPanelViewModel : ViewModelBase
         set => SetField(ref _stepToolpathExpanded, value);
     }
 
+    private bool _stepModifiersExpanded;
+    /// <summary>Step 5 MODIFIERS card expansion.</summary>
+    public bool StepModifiersExpanded
+    {
+        get => _stepModifiersExpanded;
+        set => SetField(ref _stepModifiersExpanded, value);
+    }
+
     private bool _stepPatternExpanded;
     /// <summary>Step 3 PATTERN AND TEXTURE card expansion.</summary>
     public bool StepPatternExpanded
@@ -217,6 +225,9 @@ public sealed class RightPanelViewModel : ViewModelBase
     /// Activated via the gear icon.
     /// </summary>
     public SettingsViewModel Settings { get; } = new();
+
+    /// <summary>Modifier stack (Cut today) for whatever model is currently selected — step 5.</summary>
+    public ModifierPanelViewModel Modifiers { get; } = new();
 
     /// <summary>
     /// LFAM 3 workflow: show only the sidebar tab(s) for the active phase and select it.

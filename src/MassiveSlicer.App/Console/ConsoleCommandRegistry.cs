@@ -1004,6 +1004,101 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "modifier-add",
+            Aliases = ["addmodifier", "add-cut"],
+            Description = "Add a Cut modifier to the currently-selected model (step 5 MODIFIERS)",
+            Execute = (ctx, _) =>
+            {
+                var panel = ctx.Main.RightPanel.Modifiers;
+                if (!panel.HasOwner) { ctx.LogError("[modifier] select a model first."); return; }
+                panel.AddCutModifierCommand.Execute(null);
+                ctx.Log($"[modifier] added \"{panel.SelectedModifier?.Name}\" ({panel.Rows.Count} in stack).");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-debug",
+            Description = "Diagnostic: dump the modifier-preview chain (temporary, for tracking down the preview-not-rendering issue)",
+            Execute = (ctx, _) =>
+            {
+                var panelViaRightPanel = ctx.Main.RightPanel.Modifiers;
+                var panelViaViewport = ctx.Main.Viewport.ModifiersPanel;
+                ctx.Log($"[debug] RightPanel.Modifiers == Viewport.ModifiersPanel: {ReferenceEquals(panelViaRightPanel, panelViaViewport)}");
+                ctx.Log($"[debug] RightPanel.Modifiers.HasOwner: {panelViaRightPanel.HasOwner}");
+                ctx.Log($"[debug] RightPanel.Modifiers.SelectedModifier: {panelViaRightPanel.SelectedModifier?.Name ?? "null"}");
+                ctx.Log($"[debug] Viewport.ModifiersPanel?.SelectedModifier: {panelViaViewport?.SelectedModifier?.Name ?? "null"}");
+                var cut = panelViaViewport?.SelectedModifier?.Cut;
+                ctx.Log($"[debug] SelectedModifier.Cut is CutModifier: {cut is not null}");
+                if (cut is not null)
+                    ctx.Log($"[debug] Cut: Enabled={cut.Enabled} PreviewVisible={cut.PreviewVisible} Orientation={cut.Orientation} Offset={cut.Offset}");
+                ctx.Log($"[debug] Viewport.SelectedModifierOwner: {ctx.Main.Viewport.SelectedModifierOwner?.Name ?? "null"}");
+                ctx.Log($"[debug] IsCutToolActive={ctx.Main.Viewport.IsCutToolActive} AdditiveMethod={ctx.Main.Viewport.AdditiveSettings?.Method}");
+                ctx.Log($"[debug] XBracingEnabled={ctx.Main.Viewport.AdditiveSettings?.XBracingEnabled} XBracingShowHelper={ctx.Main.Viewport.AdditiveSettings?.XBracingShowHelper}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-set-offset",
+            Description = "Diagnostic: set the selected modifier's Offset directly (verifies the preview reacts, without needing a mouse drag)",
+            Usage = "modifier-set-offset <value>",
+            Execute = (ctx, args) =>
+            {
+                var row = ctx.Main.RightPanel.Modifiers.SelectedModifier;
+                if (row is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                if (!float.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-offset <value>"); return; }
+                row.Offset = value;
+                ctx.Log($"[modifier] {row.Name} Offset -> {row.Offset}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-set-rotation",
+            Description = "Diagnostic: set the selected Vertical modifier's RotationDegrees directly",
+            Usage = "modifier-set-rotation <degrees>",
+            Execute = (ctx, args) =>
+            {
+                var row = ctx.Main.RightPanel.Modifiers.SelectedModifier;
+                if (row is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                if (!float.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-rotation <degrees>"); return; }
+                row.IsVertical = true;
+                row.RotationDegrees = value;
+                ctx.Log($"[modifier] {row.Name} RotationDegrees -> {row.RotationDegrees}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-node-debug",
+            Description = "Diagnostic: dump the selected modifier's gizmo node transform vs. the mesh node's transform (confirms they're genuinely independent)",
+            Execute = (ctx, _) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var row = vp.ModifiersPanel?.SelectedModifier;
+                if (row?.Cut is not { } cut) { ctx.LogError("[modifier] nothing selected."); return; }
+                var owner = vp.SelectedModifierOwner?.Node;
+                if (owner is null) { ctx.LogError("[modifier] no owning model."); return; }
+
+                var gizmoNode = vp.GetOrCreateModifierGizmoNode(cut, owner);
+                var gw = gizmoNode.WorldTransform;
+                var ow = owner.WorldTransform;
+                ctx.Log($"[debug] gizmo node parent == mesh node: {ReferenceEquals(gizmoNode.Parent, owner)}");
+                ctx.Log($"[debug] gizmo world pos: ({gw.Row3.X:0.##}, {gw.Row3.Y:0.##}, {gw.Row3.Z:0.##})");
+                ctx.Log($"[debug] gizmo world Row0 (local X): ({gw.Row0.X:0.###}, {gw.Row0.Y:0.###}, {gw.Row0.Z:0.###})");
+                ctx.Log($"[debug] gizmo world Row2 (local Z): ({gw.Row2.X:0.###}, {gw.Row2.Y:0.###}, {gw.Row2.Z:0.###})");
+                var plane = cut.Orientation == MassiveSlicer.Core.Models.CutOrientation.Horizontal
+                    ? System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(gw.Row2.X, gw.Row2.Y, gw.Row2.Z))
+                    : System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(gw.Row0.X, gw.Row0.Y, gw.Row0.Z));
+                ctx.Log($"[debug] plane preview normal (what the overlay draws): ({plane.X:0.###}, {plane.Y:0.###}, {plane.Z:0.###})");
+                ctx.Log($"[debug] mesh world pos: ({ow.Row3.X:0.##}, {ow.Row3.Y:0.##}, {ow.Row3.Z:0.##})");
+                ctx.Log($"[debug] Cut fields: Orientation={cut.Orientation} Offset={cut.Offset} RotationDegrees={cut.RotationDegrees}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "move-joints",
             Aliases = ["movejoints", "jmove"],
             Description = "PTP to a joint target via MS_AXIS (use when move-pose hits soft limits)",

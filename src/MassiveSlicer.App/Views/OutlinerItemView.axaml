@@ -84,6 +84,7 @@
                                VerticalAlignment="Center"
                                Padding="4,4"
                                Opacity="{Binding NameOpacity}"
+                               TextTrimming="CharacterEllipsis"
                                DoubleTapped="OnNameDoubleTapped"
                                Background="Transparent"
                                Foreground="{Binding IsRowHighlighted, Converter={StaticResource OutlinerRowText}}"/>

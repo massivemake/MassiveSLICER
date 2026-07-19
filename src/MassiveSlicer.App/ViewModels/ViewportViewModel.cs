@@ -12,6 +12,7 @@ using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Scanning;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Scene;
+using MassiveSlicer.Viewport.Scene.Modifiers;
 using MassiveSlicer.ViewModels.Base;
 using OpenTK.Mathematics;
 using ToolSwapRequest = (MassiveSlicer.Core.Models.ToolCellConfig Config, MassiveSlicer.Viewport.Scene.SceneNode Node);
@@ -5729,6 +5730,7 @@ public sealed class ViewportViewModel : ViewModelBase
             _selectedOutlinerItem.IsOutlinerSelected = false;
 
         _selectedOutlinerItem = item;
+        OnPropertyChanged(nameof(SelectedModifierOwner));
         if (item is null) return;
 
         if (OutlinerModelOps.IsScanItem(item))
@@ -6009,6 +6011,13 @@ public sealed class ViewportViewModel : ViewModelBase
         if (!item.IsToolpath) return item;
         return EnumerateUserModelItems().FirstOrDefault(m => m.Children.Contains(item));
     }
+
+    /// <summary>
+    /// The model that owns whatever's currently selected (itself, or via its toolpath) —
+    /// null if nothing selected or the selection isn't part of any model. Drives the
+    /// Modifiers panel, which shows/edits that model's modifier stack.
+    /// </summary>
+    public OutlinerItemViewModel? SelectedModifierOwner => OwningModelItem(_selectedOutlinerItem);
 
     /// <summary>True when the outliner row backing <paramref name="node"/> is locked.</summary>
     internal bool IsNodeLockedInOutliner(SceneNode node)
@@ -6437,6 +6446,165 @@ public sealed class ViewportViewModel : ViewModelBase
             OutlinerItems.Add(item);
 
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Cross-wired by MainWindowViewModel (mirrors how AdditiveSettings/SubtractiveSettings are
+    /// wired the other way) so the GL-thread render loop can read which modifier is selected,
+    /// to draw its plane preview. Only ever read from the cached <c>_vm</c> on the GL thread,
+    /// never written there.
+    /// </summary>
+    public ModifierPanelViewModel? ModifiersPanel { get; set; }
+
+    // -- Modifier stack ----------------------------------------------------------
+    // The modifier stack (Cut today; more types planned) is per-mesh, UI-thread-only
+    // state — edited by the user, never touched by the GL thread, and lives ONLY in
+    // the modifier panel + a viewport gizmo until Apply runs. A pending modifier is
+    // not mirrored into the object outliner: it doesn't yet know its relationship to
+    // any resulting pieces, so it has nothing meaningful to show there. Apply is what
+    // creates that relationship (and, at that point, the outliner mirror + the
+    // Toolpaths group of resulting pieces).
+
+    private readonly Dictionary<SceneNode, List<IModifier>> _modifiersByNode = new();
+
+    /// <summary>The modifier stack for a model's root node, in application order. Empty if none.</summary>
+    internal IReadOnlyList<IModifier> GetModifiers(SceneNode modelRoot)
+        => _modifiersByNode.TryGetValue(modelRoot, out var list) ? list : [];
+
+    /// <summary>
+    /// Gets (or creates) a non-deletable, geometry-less child row under <paramref name="parent"/>
+    /// used purely to organize related rows (e.g. "Modifiers", "Toolpaths") — never a modifier
+    /// or toolpath itself, so it never shows a kind icon. Used by Apply (not by modifier creation).
+    /// </summary>
+    internal OutlinerItemViewModel GetOrCreateOutlinerGroup(OutlinerItemViewModel parent, string groupName)
+    {
+        foreach (var child in parent.Children)
+            if (!child.CanDelete && child.Node.Name == groupName)
+                return child;
+
+        var groupNode = new SceneNode { Name = groupName, Selectable = false, PickIgnore = true };
+        parent.Node.AddChild(groupNode);
+
+        var groupItem = CreateOutlinerItem(groupNode, _ => { }, canDelete: false);
+        parent.AddChild(groupItem);
+        return groupItem;
+    }
+
+    /// <summary>
+    /// Adds a new Cut modifier to <paramref name="modelRoot"/>'s stack, positioned at the
+    /// model's local origin (offset 0), infinite by default. Purely in-memory — no outliner
+    /// row, no mesh/toolpath change — until Apply runs. Must be called on the UI thread.
+    /// </summary>
+    internal CutModifier AddCutModifier(SceneNode modelRoot)
+    {
+        var modifier = new CutModifier();
+        if (!_modifiersByNode.TryGetValue(modelRoot, out var list))
+            _modifiersByNode[modelRoot] = list = [];
+        list.Add(modifier);
+        return modifier;
+    }
+
+    /// <summary>Removes a pending (not-yet-applied) modifier from a model's stack.</summary>
+    internal void RemoveModifier(SceneNode modelRoot, IModifier modifier)
+    {
+        if (_modifiersByNode.TryGetValue(modelRoot, out var list))
+            list.Remove(modifier);
+        if (modifier is CutModifier cut) RemoveModifierGizmoNode(cut);
+    }
+
+    /// <summary>Reorders a model's modifier stack to match a reordered outliner-row list.</summary>
+    internal void MoveModifier(SceneNode modelRoot, int fromIndex, int toIndex)
+    {
+        if (!_modifiersByNode.TryGetValue(modelRoot, out var list)) return;
+        if (fromIndex < 0 || fromIndex >= list.Count || toIndex < 0 || toIndex >= list.Count) return;
+        var modifier = list[fromIndex];
+        list.RemoveAt(fromIndex);
+        list.Insert(toIndex, modifier);
+    }
+
+    // -- Modifier gizmo node -------------------------------------------------------
+    // Each Cut modifier gets its own dedicated, independent SceneNode — a real transform-only
+    // object (never rendered, never pickable, not in the outliner) that the EXISTING, unmodified
+    // translate/rotate drag code operates on directly. Moving/rotating a modifier can therefore
+    // never touch the mesh it's attached to, and rotation support falls out for free instead of
+    // needing its own hand-written math. The node is kept in sync with the modifier's plain
+    // Offset/RotationDegrees fields (the real, persisted source of truth) in both directions:
+    // settings-panel edits push into the node; gizmo drags pull back out of it afterward.
+
+    private readonly Dictionary<CutModifier, SceneNode> _modifierGizmoNodes = new();
+
+    /// <summary>Bed center in world space (X/Y/Z) — the pivot Vertical modifiers rotate/measure around.</summary>
+    internal Vector3 ResolveBedCenterXYZ()
+    {
+        if (ActiveCell?.Bed is not { } bed) return Vector3.Zero;
+        var c = bed.ImportSurfaceCenter(ActiveCell.Robot.WorldPosition);
+        return new Vector3(c.X, c.Y, c.Z);
+    }
+
+    /// <summary>Gets (or lazily creates) a modifier's dedicated gizmo node, correctly parented
+    /// and positioned for its current Orientation.</summary>
+    internal SceneNode GetOrCreateModifierGizmoNode(CutModifier cut, SceneNode ownerNode)
+    {
+        if (!_modifierGizmoNodes.TryGetValue(cut, out var node))
+        {
+            node = new SceneNode { Name = $"{cut.Name} (gizmo)", Selectable = false, PickIgnore = true, Visible = false };
+            _modifierGizmoNodes[cut] = node;
+        }
+        SyncModifierGizmoNodeFromFields(cut, ownerNode);
+        return node;
+    }
+
+    internal SceneNode? GetModifierGizmoNode(CutModifier cut)
+        => _modifierGizmoNodes.TryGetValue(cut, out var node) ? node : null;
+
+    internal void RemoveModifierGizmoNode(CutModifier cut)
+    {
+        if (_modifierGizmoNodes.Remove(cut, out var node))
+            node.Parent?.RemoveChild(node);
+    }
+
+    /// <summary>Pushes Offset/RotationDegrees/Orientation into the modifier's gizmo node
+    /// (creating it if needed) — call after any settings-panel edit.</summary>
+    internal void SyncModifierGizmoNodeFromFields(CutModifier cut, SceneNode ownerNode)
+    {
+        if (!_modifierGizmoNodes.TryGetValue(cut, out var node)) return;
+
+        bool shouldBeChild = cut.Orientation == CutOrientation.Horizontal;
+        if (shouldBeChild && !ReferenceEquals(node.Parent, ownerNode))
+        {
+            node.Parent?.RemoveChild(node);
+            ownerNode.AddChild(node);
+        }
+        else if (!shouldBeChild && node.Parent is not null)
+        {
+            node.Parent.RemoveChild(node);
+        }
+
+        node.LocalTransform = shouldBeChild
+            ? CutModifierNodeSync.BuildHorizontalLocalTransform(cut.Offset)
+            : CutModifierNodeSync.BuildVerticalTransform(cut.RotationDegrees, cut.Offset, ResolveBedCenterXYZ());
+    }
+
+    /// <summary>
+    /// After a gizmo drag has changed a modifier's node transform: pulls Offset/RotationDegrees
+    /// back out of it, then rebuilds the node from those extracted values — this snaps away any
+    /// drag component that doesn't correspond to a real field (e.g. dragging a Horizontal
+    /// modifier's X/Y handle has no meaning; only its local-Z position is Offset), so the visual
+    /// result always matches exactly what's stored, never silent untracked drift.
+    /// </summary>
+    internal void SyncModifierAfterGizmoEdit(CutModifier cut, SceneNode node, SceneNode ownerNode)
+    {
+        if (cut.Orientation == CutOrientation.Horizontal)
+        {
+            cut.Offset = CutModifierNodeSync.ExtractHorizontalOffset(node.LocalTransform);
+        }
+        else
+        {
+            var (offset, rotation) = CutModifierNodeSync.ExtractVertical(node.LocalTransform, ResolveBedCenterXYZ());
+            cut.Offset = offset;
+            cut.RotationDegrees = rotation;
+        }
+        SyncModifierGizmoNodeFromFields(cut, ownerNode);
     }
 
     /// <summary>

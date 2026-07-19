@@ -147,6 +147,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.AdditiveSettings = RightPanel.Additive;
         Viewport.SubtractiveSettings = RightPanel.Subtractive;
 
+        // Modifiers panel reads the current selection back from the viewport, and the
+        // viewport reads back which modifier is selected, to draw its plane preview.
+        RightPanel.Modifiers.Viewport = Viewport;
+        Viewport.ModifiersPanel = RightPanel.Modifiers;
+
         // X-bracing cylinder is placed on the print-bed centre (ImportSurfaceCenter),
         // not the robot / world origin.
         RightPanel.Additive.ResolvePrintBedCenterXY = () =>

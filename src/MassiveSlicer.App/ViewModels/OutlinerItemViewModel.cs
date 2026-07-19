@@ -17,7 +17,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     // -- Type badge -----------------------------------------------------------
     public string TypeIcon =>
-        IsEffector ? "mdi-white-balance-sunny"
+        IsModifier ? "mdi-crop"
+        : IsEffector ? "mdi-white-balance-sunny"
         : IsToolpath ? "mdi-reorder-horizontal"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "mdi-cube-scan"
         : Name is "Robot Root" or "Robot Arm" ? "mdi-robot-industrial"
@@ -25,7 +26,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : "mdi-cube-outline";
 
     public string TypeColor =>
-        IsEffector ? "#A6DE38"
+        IsModifier ? "#E8A33D"
+        : IsEffector ? "#A6DE38"
         : IsToolpath ? "#37C871"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "#B07BF7"
         : Name is "Robot Root" or "Robot Arm" ? "#8B93A1"
@@ -33,7 +35,8 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : "#4AA3FF";
 
     public string TypeTip =>
-        IsEffector ? "Effector" : IsToolpath ? "Toolpath"
+        IsModifier ? "Cut modifier"
+        : IsEffector ? "Effector" : IsToolpath ? "Toolpath"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "Scan"
         : Name is "Robot Root" or "Robot Arm" ? "Robot"
         : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "Print bed"
@@ -87,6 +90,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
     public bool IsEffector { get; set; }
+
+    /// <summary>True for modifier entries mirrored under a model's "Modifiers" outliner group.</summary>
+    public bool IsModifier { get; set; }
 
     private bool _isLocked;
     /// <summary>Locked rows can't be selected (outliner or viewport); toggled via the padlock.</summary>
