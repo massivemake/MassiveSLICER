@@ -102,6 +102,66 @@ public sealed class CurvedSlicerTest
         Assert.True(tList[^1] > 0.99f && tList[^1] < 1f);
     }
 
+    [Fact]
+    public void CurvedZigZag_OpenFacesReverseEachLayer()
+    {
+        // Tall thin wall: LOW/HIGH auto-detect on bottom/top → closed isocurves become
+        // single-skin open faces under zig-zag, reversing each layer.
+        var mesh = BuildThinWallBox(len: 200f, thick: 18f, h: 80f);
+        var settings = new SliceSettings
+        {
+            LayerHeight = 5f,
+            BeadWidth = 6f,
+            CurvedBoundarySource = CurvedBoundarySource.AutoDetect,
+            CurvedAutoDetectBandMm = 3f,
+            CurvedEnableRegionSplit = false,
+            ZigZagSeam = true,
+            ZigZagAllowSameLayerTravel = true,
+        };
+
+        var tp = CurvedSlicer.Slice([mesh], settings);
+        Assert.True(tp.Layers.Count >= 4, $"expected several layers, got {tp.Layers.Count}");
+
+        static Vector2 Dir(ToolpathLayer lyr)
+        {
+            foreach (var m in lyr.Moves)
+            {
+                if (m.Kind != MoveKind.Extrude || m.IsLayerChange || m.IsLayerStitch) continue;
+                var d = new Vector2(m.To.X - m.From.X, m.To.Y - m.From.Y);
+                if (d.LengthSquared() > 1e-4f) return Vector2.Normalize(d);
+            }
+            return Vector2.Zero;
+        }
+
+        var d0 = Dir(tp.Layers[0]);
+        var d1 = Dir(tp.Layers[1]);
+        Assert.True(d0.LengthSquared() > 0.5f && d1.LengthSquared() > 0.5f,
+            $"missing extrude dirs d0={d0} d1={d1}");
+        float dot = Vector2.Dot(d0, d1);
+        Assert.True(dot < -0.25f,
+            $"expected zig-zag reverse on curved isocurves, d0={d0} d1={d1} dot={dot:0.###}");
+    }
+
+    private static Vector3[] BuildThinWallBox(float len, float thick, float h)
+    {
+        float hx = len * 0.5f, hy = thick * 0.5f;
+        var v = new Vector3[]
+        {
+            new(-hx, -hy, 0), new(hx, -hy, 0), new(hx, hy, 0), new(-hx, hy, 0),
+            new(-hx, -hy, h), new(hx, -hy, h), new(hx, hy, h), new(-hx, hy, h),
+        };
+        int[][] faces =
+        [
+            [0,1,2],[0,2,3], [4,6,5],[4,7,6],
+            [0,4,5],[0,5,1], [1,5,6],[1,6,2],
+            [2,6,7],[2,7,3], [3,7,4],[3,4,0],
+        ];
+        var tris = new List<Vector3>();
+        foreach (var f in faces)
+            tris.AddRange([v[f[0]], v[f[1]], v[f[2]]]);
+        return [.. tris];
+    }
+
     private static Vector3[] BuildHemisphere(int slices, int stacks, float radius)
     {
         var verts = new List<Vector3>();

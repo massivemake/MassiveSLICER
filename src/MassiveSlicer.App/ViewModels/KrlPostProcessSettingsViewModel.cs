@@ -61,9 +61,16 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
         ShowRulesTabCommand  = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Rules);
         ShowHeaderTabCommand = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Header);
         ShowFooterTabCommand = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Footer);
+        // Reset to LFAM defaults; URM mode re-applies Caracol templates from AdditiveSettings.
         ResetHeaderCommand   = new RelayCommand(() => HeaderText = KrlExporter.DefaultHeaderTemplate);
         ResetFooterCommand   = new RelayCommand(() => FooterText = KrlExporter.DefaultFooterTemplate);
     }
+
+    /// <summary>True when the current header is the LFAM <c>$ANOUT</c> MAT style.</summary>
+    public bool HeaderLooksLikeLfamAnout =>
+        HeaderText.Contains("$ANOUT[1]", StringComparison.Ordinal)
+        || (HeaderText.Contains(";FOLD MAT", StringComparison.Ordinal)
+            && !HeaderText.Contains("MAT out of INI", StringComparison.Ordinal));
 
     public void LoadFrom(KrlPostProcessSettings s)
     {

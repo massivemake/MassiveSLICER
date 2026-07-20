@@ -707,12 +707,14 @@ public static class LightningPlanner
                             rankedInt, tipBudgetInt, samples, rawSamples,
                             region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                             settings, bead, supportRadius, spacing, exteriorDomain: false,
-                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1],
+                            maxStep: stepAbove);
                         meshVetoes += PlaceBridgeDomainTips(
                             rankedExt, tipBudgetExt, samples, rawSamples,
                             region, envelope, core, anchorPaths, anchorInterior, anchorExterior,
                             settings, bead, supportRadius, spacing, exteriorDomain: true,
-                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                            layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1],
+                            maxStep: stepAboveExternal);
                     }
                 }
             }
@@ -739,7 +741,8 @@ public static class LightningPlanner
                     meshVetoes += PlaceBridgeTipsSeverityFirst(
                         residual, region, envelope, core, anchorPaths,
                         settings, bead, supportRadius, spacing,
-                        layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1]);
+                        layerPlan, ref nextTreeId, solidAt, i + 1, regions[i + 1],
+                        maxStep: stepAbove);
                 }
             }
 
@@ -802,6 +805,7 @@ public static class LightningPlanner
                     float freeArc = freeRanked.Count * freeStep;
                     int freeBudget = Math.Max(1, (int)MathF.Ceiling(freeArc / freeTipSep));
                     int freePlaced = 0;
+                    float freeMouthCatch = MathF.Max(freeTipSep * 1.15f, bead * 2.5f);
                     foreach (var cand in freeRanked)
                     {
                         if (freePlaced >= freeBudget) break;
@@ -811,6 +815,20 @@ public static class LightningPlanner
                         if (!PassesMeshVetoAt(solidAt, i + 1, regions[i + 1], raw, si, bead))
                         {
                             meshVetoes++;
+                            continue;
+                        }
+
+                                        // Prefer MaxStep-extend / mouth-deepen of an inherited exterior
+                        // fin over a brand-new full-length hairpin (full re-birth
+                        // mid-stack creates floating rectangular free-edge islands).
+                        if (TryExtendExistingBridge(
+                                layerPlan.Trees, tip, region, core, bead,
+                                stepAboveExternal, freeMouthCatch, wantExternal: true)
+                            || TryDeepenNearbyBridgeMouth(
+                                layerPlan.Trees, tip, region, core, bead,
+                                stepAboveExternal, freeMouthCatch, wantExternal: true))
+                        {
+                            freePlaced++;
                             continue;
                         }
 
@@ -2020,6 +2038,188 @@ public static class LightningPlanner
                 best = MathF.Min(best, Vector2.Distance(pt, line[0]));
         }
         return best;
+    }
+
+    /// <summary>
+    /// Grow an existing Bridge finger toward demand by ≤ <paramref name="maxStep"/>.
+    /// Prefer this over re-birthing a full-length dual-wall hairpin on every layer of a
+    /// continuous overhang — full re-birth mid-stack creates floating rectangular
+    /// free-edge islands with no MaxStep support column underneath.
+    /// Returns true when a matching column was found (even if already at target length),
+    /// so callers skip a full-depth re-seed on that mouth.
+    /// </summary>
+    private static bool TryExtendExistingBridge(
+        List<LightningTree> trees, Vector2 demandPt,
+        PathsD region, PathsD core,
+        float bead, float maxStep, float mouthCatchR,
+        bool wantExternal)
+    {
+        if (trees.Count == 0 || maxStep <= 1e-6f) return false;
+        var home = ClosestOnRegionBoundary(region, demandPt);
+
+        // Only claim RESIDUAL demand of an inherited column (tip already near demand
+        // after RetractLeafTips). Distant demand is a new founding → full birth.
+        // Matching solely by mouth claimed neighbour columns and starved coverage.
+        float residualR = maxStep * 2.5f + bead * 0.5f;
+
+        LightningTree? best = null;
+        float bestScore = float.MaxValue;
+        foreach (var t in trees)
+        {
+            if (t.External != wantExternal) continue;
+            if (t.Cavity) continue;
+            if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+            float dMouth = Vector2.Distance(t.Anchor, home);
+            float dGeom = MinDistToTree(t, demandPt);
+            var tip0 = t.Branches[0].Centerline[^1];
+            float dTip = Vector2.Distance(tip0, demandPt);
+            // Residual of this column after retract: tip/geometry still near demand,
+            // and mouth still on the same local wall run.
+            if (dGeom > residualR && dTip > residualR) continue;
+            if (dMouth > mouthCatchR * 1.35f) continue;
+            float score = MathF.Min(dGeom, dTip);
+            if (score < bestScore) { bestScore = score; best = t; }
+        }
+        if (best is null) return false;
+
+        var line = best.Branches[0].Centerline;
+        var anchor = best.Anchor;
+        line[0] = anchor;
+        var tip = line[^1];
+        float curLen = Vector2.Distance(anchor, tip);
+
+        Vector2 targetTip = demandPt;
+        if (!wantExternal)
+        {
+            if (!InsideRegion(core, targetTip))
+                targetTip = ClosestOnRegionBoundary(core, targetTip);
+        }
+
+        // Prefer restore along the existing trunk (undo retract) before aiming at a
+        // new sample — keeps the free-edge stack within MaxStep of the layer above.
+        var trunkDir = tip - anchor;
+        float trunkLen = trunkDir.Length();
+        Vector2 aim;
+        if (trunkLen > bead * 0.2f)
+        {
+            trunkDir /= trunkLen;
+            var toDemand = targetTip - anchor;
+            float td = toDemand.Length();
+            var demandDir = td > 1e-4f ? toDemand / td : trunkDir;
+            // Blend: mostly keep trunk direction, slight pull toward demand.
+            aim = Vector2.Normalize(trunkDir * 0.75f + demandDir * 0.25f);
+        }
+        else
+        {
+            var toDemand = targetTip - anchor;
+            float td = toDemand.Length();
+            if (td < bead * 0.25f) return true;
+            aim = toDemand / td;
+        }
+
+        // Deepen by at most maxStep; never shorten (RetractLeafTips already did).
+        float targetLen = Vector2.Distance(anchor, targetTip);
+        float newLen = MathF.Min(targetLen, curLen + maxStep);
+        newLen = MathF.Max(newLen, curLen);
+        var newTip = anchor + aim * newLen;
+
+        // Hard MaxStep ball around the post-retract tip (retraction invariant).
+        float tipMove = Vector2.Distance(newTip, tip);
+        if (tipMove > maxStep + 1e-3f)
+            newTip = tip + (newTip - tip) * (maxStep / tipMove);
+
+        if (!wantExternal)
+        {
+            if (!InsideRegion(core, newTip))
+                newTip = ClosestOnRegionBoundary(core, newTip);
+            if (!SegmentInsideRegion(region, anchor, newTip, bead))
+                return true; // claim column, keep prior tip
+        }
+
+        best.Branches[0].Centerline.Clear();
+        best.Branches[0].Centerline.Add(anchor);
+        best.Branches[0].Centerline.Add(newTip);
+        for (int bi = best.Branches.Count - 1; bi >= 1; bi--)
+            best.Branches.RemoveAt(bi);
+
+        return true;
+    }
+
+    /// <summary>
+    /// Same-mouth MaxStep deepen when residual tip-match failed (column fully
+    /// retracted past residualR, or demand jumped). Still refuses a full-depth
+    /// re-seed: grows at most one MaxStep toward demand so the free-edge stack
+    /// stays printable bottom-up.
+    /// </summary>
+    private static bool TryDeepenNearbyBridgeMouth(
+        List<LightningTree> trees, Vector2 demandPt,
+        PathsD region, PathsD core,
+        float bead, float maxStep, float mouthCatchR,
+        bool wantExternal)
+    {
+        if (trees.Count == 0 || maxStep <= 1e-6f) return false;
+        var home = ClosestOnRegionBoundary(region, demandPt);
+
+        LightningTree? best = null;
+        float bestMouth = float.MaxValue;
+        foreach (var t in trees)
+        {
+            if (t.External != wantExternal || t.Cavity) continue;
+            if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+            float dMouth = Vector2.Distance(t.Anchor, home);
+            if (dMouth > mouthCatchR) continue;
+            if (dMouth < bestMouth) { bestMouth = dMouth; best = t; }
+        }
+        if (best is null) return false;
+
+        var anchor = best.Anchor;
+        var tip = best.Branches[0].Centerline[^1];
+        float curLen = Vector2.Distance(anchor, tip);
+
+        Vector2 targetTip = demandPt;
+        if (!wantExternal && !InsideRegion(core, targetTip))
+            targetTip = ClosestOnRegionBoundary(core, targetTip);
+
+        var aim = targetTip - anchor;
+        float aimLen = aim.Length();
+        if (aimLen < bead * 0.25f) return true;
+        aim /= aimLen;
+
+        // Prefer keep trunk direction for stack continuity.
+        var trunk = tip - anchor;
+        float tLen = trunk.Length();
+        if (tLen > bead * 0.2f)
+        {
+            trunk /= tLen;
+            aim = Vector2.Normalize(trunk * 0.7f + aim * 0.3f);
+        }
+
+        float targetLen = Vector2.Distance(anchor, targetTip);
+        float newLen = MathF.Min(targetLen, curLen + maxStep);
+        newLen = MathF.Max(newLen, curLen);
+        // Brand-new residual after full retract: allow at least a MaxStep stub.
+        if (curLen < bead * 0.5f)
+            newLen = MathF.Min(targetLen, MathF.Max(newLen, maxStep));
+
+        var newTip = anchor + aim * newLen;
+        float tipMove = Vector2.Distance(newTip, tip);
+        if (curLen >= bead * 0.5f && tipMove > maxStep + 1e-3f)
+            newTip = tip + (newTip - tip) * (maxStep / tipMove);
+
+        if (!wantExternal)
+        {
+            if (!InsideRegion(core, newTip))
+                newTip = ClosestOnRegionBoundary(core, newTip);
+            if (!SegmentInsideRegion(region, anchor, newTip, bead))
+                return true;
+        }
+
+        best.Branches[0].Centerline.Clear();
+        best.Branches[0].Centerline.Add(anchor);
+        best.Branches[0].Centerline.Add(newTip);
+        for (int bi = best.Branches.Count - 1; bi >= 1; bi--)
+            best.Branches.RemoveAt(bi);
+        return true;
     }
 
     /// <summary>Try to place one Formbound Buttress T at sample <paramref name="si"/>.
@@ -3278,12 +3478,15 @@ public static class LightningPlanner
         bool exteriorDomain,
         LightningLayerPlan layerPlan, ref int nextTreeId,
         Func<int, Vector2, bool>? solidAt, int upperLayerIdx,
-        PathsD regionAbove)
+        PathsD regionAbove,
+        float maxStep)
     {
         if (tipBudget <= 0 || ranked.Count == 0) return 0;
         int meshVetoes = 0;
         int placed = 0;
         float tipSpacing = spacing * 0.5f;
+        // Tight mouth catch: only claim the same column, not a neighbour a spacing away.
+        float mouthCatch = MathF.Max(spacing * 0.55f, bead * 2.25f);
 
         foreach (var (si, sev) in ranked)
         {
@@ -3310,6 +3513,18 @@ public static class LightningPlanner
 
             if (TooCloseToExisting(layerPlan.Trees, tip, tipSpacing))
                 continue;
+
+            // MaxStep-extend / deepen inherited columns before birthing a full-depth
+            // hairpin. Same-mouth columns must never re-seed full-length dual-wall
+            // islands mid-stack (those float without a MaxStep foundation).
+            if (!cavity && (TryExtendExistingBridge(
+                    layerPlan.Trees, tip, region, core, bead, maxStep, mouthCatch, external)
+                || TryDeepenNearbyBridgeMouth(
+                    layerPlan.Trees, tip, region, core, bead, maxStep, mouthCatch, external)))
+            {
+                placed++;
+                continue;
+            }
 
             // Domain-matched mouths: interior demand prefers interior anchors;
             // exterior demand prefers outer perimeter (falls back to any allowed).
@@ -3356,13 +3571,15 @@ public static class LightningPlanner
         SliceSettings settings, float bead, float supportRadius, float spacing,
         LightningLayerPlan layerPlan, ref int nextTreeId,
         Func<int, Vector2, bool>? solidAt, int upperLayerIdx,
-        PathsD regionAbove)
+        PathsD regionAbove,
+        float maxStep)
     {
         if (demand.Count == 0) return 0;
         demand.Sort((a, b) => b.Severity.CompareTo(a.Severity));
 
         int meshVetoes = 0;
         float tipSpacing = MathF.Max(bead * 1.25f, spacing * 0.85f);
+        float mouthCatch = MathF.Max(spacing * 0.55f, bead * 2.25f);
 
         foreach (var s in demand)
         {
@@ -3389,6 +3606,12 @@ public static class LightningPlanner
                 : pt;
 
             if (TooCloseToExisting(layerPlan.Trees, tip, tipSpacing))
+                continue;
+
+            if (!cavity && (TryExtendExistingBridge(
+                    layerPlan.Trees, tip, region, core, bead, maxStep, mouthCatch, external)
+                || TryDeepenNearbyBridgeMouth(
+                    layerPlan.Trees, tip, region, core, bead, maxStep, mouthCatch, external)))
                 continue;
 
             var anchor = tipSpace == DemandSpace.Interior

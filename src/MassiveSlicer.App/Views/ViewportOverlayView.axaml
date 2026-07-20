@@ -48,10 +48,11 @@
             </StackPanel>
         </Border>
 
-        <!-- 2D Slice Plane Viewer — per-layer statistics (left side of viewport) -->
+        <!-- 2D Slice Plane Viewer — per-layer statistics (left side of viewport,
+             below the frame/focus buttons so it never covers them) -->
         <Border IsVisible="{Binding ShowSlicePlaneStatsOverlay}"
                 HorizontalAlignment="Left" VerticalAlignment="Top"
-                Margin="56,8,0,0" ZIndex="16"
+                Margin="8,52,0,0" ZIndex="16"
                 Background="#CC1A1A1A" CornerRadius="6"
                 BorderBrush="{DynamicResource Border1}" BorderThickness="1"
                 Padding="10,8" MinWidth="228" MaxWidth="290"
@@ -1448,6 +1449,26 @@
                                               FontSize="11"
                                               IsChecked="{Binding PaintShowBeads, Mode=TwoWay}"
                                               ToolTip.Tip="Solid extruded-bead preview"/>
+
+                                    <!-- 2D slice ghost layers — separated from the on/off toggles -->
+                                    <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                                    <TextBlock Text="2D SLICE GHOST LAYERS"
+                                               Classes="LabelMuted" FontSize="10"
+                                               LetterSpacing="1" Margin="2,0,0,0"/>
+                                    <Grid ColumnDefinitions="*,26">
+                                        <Slider Grid.Column="0" Minimum="0" Maximum="10"
+                                                TickFrequency="1" IsSnapToTickEnabled="True"
+                                                Value="{Binding SlicePlaneGhostLayers, Mode=TwoWay}"
+                                                Margin="0,0,6,0" VerticalAlignment="Center"
+                                                ToolTip.Tip="How many layers below the current slice fade in as ghosts (default 3)"/>
+                                        <TextBlock Grid.Column="1" VerticalAlignment="Center"
+                                                   FontSize="11" TextAlignment="Right"
+                                                   Text="{Binding SlicePlaneGhostLayers}"/>
+                                    </Grid>
+                                    <CheckBox Content="All layer lines"
+                                              FontSize="11"
+                                              IsChecked="{Binding SlicePlaneShowAllGhosts, Mode=TwoWay}"
+                                              ToolTip.Tip="Additionally draw EVERY layer below, very faint — the whole part's line history under the ghost band"/>
                                 </StackPanel>
                             </Border>
                         </Flyout>
@@ -1582,6 +1603,11 @@
                                              MarkerBrush="#9955DD"
                                              Height="6" VerticalAlignment="Center"
                                              IsHitTestVisible="False"/>
+                        <!-- Digital-twin collision markers — orange ticks -->
+                        <ctrl:ScrubMarkerBar Markers="{Binding ScrubCollisionMarkers}"
+                                             MarkerBrush="#E8901A"
+                                             Height="6" VerticalAlignment="Center"
+                                             IsHitTestVisible="False"/>
                         <!-- TCP keyframe markers — lime ticks -->
                         <ctrl:ScrubMarkerBar Markers="{Binding ScrubKeyframeMarkers}"
                                              MarkerBrush="#7ed87e"
@@ -1622,6 +1648,28 @@
                     </StackPanel>
 
                 </Grid>
+
+                <!-- Validation-tick legend — appears when the timeline carries markers -->
+                <StackPanel Orientation="Horizontal" Spacing="12" Margin="4,2,0,0"
+                            IsVisible="{Binding ShowScrubLegend}">
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasUnreachableMarkers}">
+                        <Border Width="3" Height="10" Background="#CC3030" VerticalAlignment="Center"/>
+                        <TextBlock Text="Unreachable" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasSingularityMarkers}">
+                        <Border Width="3" Height="10" Background="#9955DD" VerticalAlignment="Center"/>
+                        <TextBlock Text="Singularity risk" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Spacing="4"
+                                IsVisible="{Binding HasCollisionMarkers}">
+                        <Border Width="3" Height="10" Background="#E8901A" VerticalAlignment="Center"/>
+                        <TextBlock Text="Collision" FontSize="10" Classes="LabelMuted" VerticalAlignment="Center"/>
+                    </StackPanel>
+                    <TextBlock Text="Alt-click or double-click a tick to inspect"
+                               FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                </StackPanel>
 
                 <!-- Keyframe lane — slides open once the first TCP keyframe exists.
                      Diamonds are clickable (jump + select); the small side ticks drag

@@ -1917,6 +1917,72 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
+    // ── Quick-add modifier (autocomplete in the MODIFICATIONS panel) ─────────
+
+    /// <summary>Type-to-find modifier names — replaces the CREATE MODIFICATION card.</summary>
+    public string[] ModifierQuickAddCatalog { get; } =
+    [
+        Core.Models.PaintSupportStyleUtil.LabelStructural,
+        Core.Models.PaintSupportStyleUtil.LabelButtress,
+        Core.Models.PaintSupportStyleUtil.LabelBridge,
+        Core.Models.PaintSupportStyleUtil.LabelTree,
+        "Remove selection",
+        "Offset path",
+    ];
+
+    private string _modifierQuickAddText = "";
+    public string ModifierQuickAddText
+    {
+        get => _modifierQuickAddText;
+        set => SetField(ref _modifierQuickAddText, value ?? "");
+    }
+
+    private string? _modifierQuickAddPick;
+    public string? ModifierQuickAddPick
+    {
+        get => _modifierQuickAddPick;
+        set
+        {
+            if (!SetField(ref _modifierQuickAddPick, value)) return;
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var pick = value;
+            // Clear the box after commit so the next search starts fresh.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _modifierQuickAddPick = null;
+                OnPropertyChanged(nameof(ModifierQuickAddPick));
+                ModifierQuickAddText = "";
+                ApplyNamedModifier(pick);
+            });
+        }
+    }
+
+    /// <summary>Applies a modifier by catalog name to the current edit selection.</summary>
+    internal void ApplyNamedModifier(string label)
+    {
+        if (string.Equals(label, "Offset path", StringComparison.OrdinalIgnoreCase))
+        {
+            // Show the Offset path settings inline (Apply lives on that block).
+            SelectedCreateModificationId = "offset";
+            return;
+        }
+        if (string.Equals(label, "Remove selection", StringComparison.OrdinalIgnoreCase))
+        {
+            OnPaintApplyRequested?.Invoke(false);
+            return;
+        }
+        var style = Core.Models.PaintSupportStyleUtil.FromLabel(label);
+        if (style == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            OnAddStructuralSupportRequested?.Invoke();
+            return;
+        }
+        PaintModificationMode = "Support";
+        PaintSupportType = Core.Models.PaintSupportStyleUtil.ToLabel(style);
+        ApplyPaintSupportTypeToSettings();
+        OnPaintApplyRequested?.Invoke(true);
+    }
+
     /// <summary>Row data for one applied modification (viewport → panel).</summary>
     internal readonly record struct PaintModRow(
         Guid Id,
@@ -1950,7 +2016,11 @@ public sealed class ViewportViewModel : ViewModelBase
                 Id = id,
                 IsSupport = r.IsSupport,
                 IsOffset = r.IsOffset,
-                KindLabel = r.IsOffset ? "Offset" : r.IsSupport ? "Support" : "Remove",
+                KindLabel = r.IsOffset ? "Offset"
+                    : !r.IsSupport ? "Remove"
+                    : Core.Models.PaintSupportStyleUtil.FromLabel(r.SupportType)
+                        == Core.Models.PaintSupportStyle.StructuralSupport
+                        ? "Structural" : "Support",
                 Title = r.Title,
                 Detail = r.Detail,
                 AnchorSummary = r.AnchorSummary,
@@ -2266,6 +2336,14 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ApplyPaintModificationCommand => _applyPaintMod ??= new RelayCommand(() =>
     {
         bool support = !string.Equals(PaintModificationMode, "Remove", StringComparison.OrdinalIgnoreCase);
+        // Structural Support is a toolpath modifier, not a paint mark: Apply creates
+        // a 2×4 pocket / cylinder wrap spec anchored at the selection instead.
+        if (support && Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType)
+                == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            OnAddStructuralSupportRequested?.Invoke();
+            return;
+        }
         if (support)
             ApplyPaintSupportTypeToSettings();
         OnPaintApplyRequested?.Invoke(support);
@@ -3455,6 +3533,7 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private bool[] _scrubReachable = [];
     private bool[] _scrubSingular  = [];
+    private bool[] _scrubCollision = [];
 
     private IReadOnlyList<double> _scrubUnreachableMarkers = [];
     public IReadOnlyList<double> ScrubUnreachableMarkers
@@ -3470,10 +3549,25 @@ public sealed class ViewportViewModel : ViewModelBase
         private set => SetField(ref _scrubSingularityMarkers, value);
     }
 
-    internal void SetScrubMarkers(bool[] reachable, bool[] singular)
+    private IReadOnlyList<double> _scrubCollisionMarkers = [];
+    /// <summary>Digital-twin collision ticks (orange) — robot body vs env/self/material.</summary>
+    public IReadOnlyList<double> ScrubCollisionMarkers
+    {
+        get => _scrubCollisionMarkers;
+        private set => SetField(ref _scrubCollisionMarkers, value);
+    }
+
+    /// <summary>Timeline tick legend visibility (any validation markers present).</summary>
+    public bool ShowScrubLegend => HasUnreachableMarkers || HasSingularityMarkers || HasCollisionMarkers;
+    public bool HasUnreachableMarkers => _scrubUnreachableMarkers.Count > 0;
+    public bool HasSingularityMarkers => _scrubSingularityMarkers.Count > 0;
+    public bool HasCollisionMarkers   => _scrubCollisionMarkers.Count > 0;
+
+    internal void SetScrubMarkers(bool[] reachable, bool[] singular, bool[]? collision = null)
     {
         _scrubReachable = reachable;
         _scrubSingular  = singular;
+        _scrubCollision = collision ?? [];
         RecomputeScrubMarkers();
     }
 
@@ -3497,6 +3591,43 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     /// <summary>Wired by the viewport code-behind: keyframe diamond clicked (jump + select).</summary>
+    /// <summary>Edit-mode toolbar: create a Structural Support anchored at the
+    /// current point selection (handled by the viewport code-behind).</summary>
+    // ── 2D slice viewer ghost layers ─────────────────────────────────────────
+    private int _slicePlaneGhostLayers = 3;
+    /// <summary>How many below-layers fade in under the active slice line (default 3).</summary>
+    public int SlicePlaneGhostLayers
+    {
+        get => _slicePlaneGhostLayers;
+        set
+        {
+            if (!SetField(ref _slicePlaneGhostLayers, Math.Clamp(value, 0, 10))) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _slicePlaneShowAllGhosts;
+    /// <summary>Draw every layer below faintly (single pass) under the ghost band.</summary>
+    public bool SlicePlaneShowAllGhosts
+    {
+        get => _slicePlaneShowAllGhosts;
+        set
+        {
+            if (!SetField(ref _slicePlaneShowAllGhosts, value)) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    internal Action? OnAddStructuralSupportRequested { get; set; }
+
+    /// <summary>Debug: run the viewport click-selection path at fractional coords
+    /// (0-1) and return a gate-by-gate trace. Backs the `pick` console command.</summary>
+    internal Func<double, double, string>? DebugPickAtViewport { get; set; }
+
+    private RelayCommand? _addStructSupportCmd;
+    public RelayCommand AddStructuralSupportCommand => _addStructSupportCmd ??=
+        new RelayCommand(() => OnAddStructuralSupportRequested?.Invoke());
+
     internal Action<int>? OnKeyframeLaneClicked { get; set; }
 
     /// <summary>Wired by the viewport code-behind: influence tick dragged
@@ -3508,6 +3639,19 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         double denom = Math.Max(_scrubTrackPixelWidth - ScrubThumbWidth, 1.0);
         return (int)Math.Round(Math.Clamp((x - ScrubThumbWidth / 2.0) / denom, 0.0, 1.0) * _toolpathScrubMax);
+    }
+
+    /// <summary>Wired by the viewport code-behind: frame the camera on a flat move index
+    /// (timeline validation-tick click).</summary>
+    internal Action<int>? OnFrameMoveRequested { get; set; }
+
+    /// <summary>Validation-tick click on the timeline: snap the scrubber to the marker's
+    /// move and ask the viewport to frame the camera there.</summary>
+    internal void JumpToScrubPixel(double px)
+    {
+        if (_toolpathScrubMax <= 0) return;
+        ToolpathScrubIndex = ScrubIndexAtPixel(px);
+        OnFrameMoveRequested?.Invoke(ToolpathScrubIndex);
     }
 
     private void RecomputeScrubMarkers()
@@ -3526,8 +3670,19 @@ public sealed class ViewportViewModel : ViewModelBase
             double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
             if (_scrubSingular[i]) sin.Add(x);
         }
+        var col = new List<double>();
+        for (int i = 0; i < _scrubCollision.Length; i++)
+        {
+            double x = max > 0 ? ScrubThumbWidth / 2.0 + (double)i / max * (w - ScrubThumbWidth) - 0.5 : 0;
+            if (_scrubCollision[i]) col.Add(x);
+        }
         ScrubUnreachableMarkers = unr;
         ScrubSingularityMarkers = sin;
+        ScrubCollisionMarkers   = col;
+        OnPropertyChanged(nameof(ShowScrubLegend));
+        OnPropertyChanged(nameof(HasUnreachableMarkers));
+        OnPropertyChanged(nameof(HasSingularityMarkers));
+        OnPropertyChanged(nameof(HasCollisionMarkers));
 
         var kf   = new List<double>();
         var lane = new List<MassiveSlicer.Controls.KeyframeLaneItem>();
@@ -5143,6 +5298,11 @@ public sealed class ViewportViewModel : ViewModelBase
         // (null = older .mass → keep default on).
         if (session.ShowMultiPlanarPlanes is bool showPlanes)
             ShowMultiPlanarPlanes = showPlanes;
+
+        // X-bracing helper visibility (plane / cylinder guide). Prefer UiSession when
+        // present so it always round-trips with the .mass even if Settings lagged.
+        if (session.XBracingShowHelper is bool showXHelper && AdditiveSettings is { } add)
+            add.XBracingShowHelper = showXHelper;
 
         if (!string.IsNullOrWhiteSpace(session.PaintSelectGranularity))
             PaintSelectGranularity = session.PaintSelectGranularity;

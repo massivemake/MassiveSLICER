@@ -187,7 +187,14 @@ public static class SliceLayerAnalyzer
                    && !moves[i].IsLayerStitch && !moves[i].IsLayerChange)
                 i++;
             int count = i - start;
-            if (count < 1) continue;
+            if (count < 1)
+            {
+                // A cut move flagged IsLayerStitch/IsLayerChange stops the run scan
+                // without consuming the move — advance past it or this loop spins
+                // forever (UI-thread hang on edit-mode open).
+                i++;
+                continue;
+            }
             bool closed = false;
             if (count >= 2)
             {

@@ -56,6 +56,16 @@ public sealed class WorkspaceUiSession
     /// </summary>
     public bool? ShowMultiPlanarPlanes { get; set; }
 
+    /// <summary>
+    /// X-bracing plane/cylinder helper visibility. Nullable so older workspaces keep
+    /// the app default (on). Prefer this when present over Settings alone so the
+    /// helper state always round-trips with the .mass file.
+    /// Always serialized when non-null (bool? false is not "default" so it is written
+    /// even under <c>WhenWritingDefault</c>).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public bool? XBracingShowHelper { get; set; }
+
     public bool PaintHandActive { get; set; }
     public bool PaintBoxSelectActive { get; set; }
     public bool PaintBridgeActive { get; set; }
@@ -121,6 +131,12 @@ public sealed class WorkspaceUiSession
 
     /// <summary>Outliner / node name of the scrubbed toolpath.</summary>
     public string? ScrubToolpathName { get; set; }
+
+    /// <summary>
+    /// When true, pause realtime re-slice after open (e.g. baked Start/Stop calibration).
+    /// Null = leave the current pause state alone (older workspaces).
+    /// </summary>
+    public bool? RealtimeSlicingPaused { get; set; }
 }
 
 /// <summary>
@@ -164,8 +180,13 @@ public sealed class WorkspacePaintModification
     public string Detail { get; set; } = "";
     public bool IsExpanded { get; set; }
 
-    /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+    /// <summary>"Formbound Buttress", "Formbound Bridge", "Tree Support",
+    /// or "Structural Support".</summary>
     public string SupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>Structural Support cards: index into the saved StructuralSupports
+    /// list this card edits. -1 = not a structural card.</summary>
+    public int StructuralIndex { get; set; } = -1;
 
     /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
     public string SupportSide { get; set; } = "Inside";
@@ -298,4 +319,6 @@ public sealed class WorkspaceToolpathMoveData
     public float ResumeRpmScale { get; set; } = 1f;
     public bool IsZHop { get; set; }
     public float PrintSpeedScale { get; set; } = 1f;
+    /// <summary>Optional per-travel resume wait (seconds). Null/0 omitted when serializing default.</summary>
+    public float? ResumeWaitSec { get; set; }
 }

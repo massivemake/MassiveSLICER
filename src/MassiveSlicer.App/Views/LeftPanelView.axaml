@@ -180,46 +180,6 @@
                 </ItemsControl>
             </ScrollViewer>
 
-            <!-- ADD FILTER -->
-            <TextBlock Text="ADD FILTER" FontSize="10" FontWeight="SemiBold"
-                       Opacity="0.65" LetterSpacing="0.5" Margin="0,4,0,0"/>
-            <TextBlock Text="Tool path type" FontSize="10" Opacity="0.55" Margin="0,2,0,2"/>
-            <ComboBox HorizontalAlignment="Stretch"
-                      ItemsSource="{Binding DataContext.Viewport.PaintPickFilterOptions,
-                                    RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                      SelectedItem="{Binding DataContext.Viewport.PaintPickFilter,
-                                     RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                     Mode=TwoWay}"
-                      ToolTip.Tip="What hover / click / box may pick"/>
-
-            <!-- OPTIONS -->
-            <TextBlock Text="OPTIONS" FontSize="10" FontWeight="SemiBold"
-                       Opacity="0.65" LetterSpacing="0.5" Margin="0,6,0,0"/>
-            <Grid ColumnDefinitions="Auto,*" Margin="0,2,0,0">
-                <TextBlock Grid.Column="0" Text="Mode" FontSize="11" VerticalAlignment="Center"
-                           Opacity="0.75" Margin="0,0,10,0"/>
-                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
-                          ItemsSource="{Binding DataContext.Viewport.PaintModificationModeOptions,
-                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                          SelectedItem="{Binding DataContext.Viewport.PaintModificationMode,
-                                         RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                         Mode=TwoWay}"
-                          ToolTip.Tip="Support = Formbound marks · Remove = delete selected paths"/>
-            </Grid>
-            <Grid ColumnDefinitions="Auto,*" Margin="0,6,0,0"
-                  IsVisible="{Binding DataContext.Viewport.ShowPaintSupportTypePicker,
-                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}">
-                <TextBlock Grid.Column="0" Text="Support type" FontSize="11" VerticalAlignment="Center"
-                           Opacity="0.75" Margin="0,0,10,0"/>
-                <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
-                          ItemsSource="{Binding DataContext.Viewport.PaintSupportTypeOptions,
-                                        RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                          SelectedItem="{Binding DataContext.Viewport.PaintSupportType,
-                                         RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                         Mode=TwoWay}"
-                          ToolTip.Tip="Stored per applied area. Formbound Buttress = wall T-column. Formbound Bridge = radial fingers. Tree Support = bed-rooted branching columns."/>
-            </Grid>
-
             <!-- Support bridge proximity helper (Mode = Support + selection) -->
             <Border Margin="0,8,0,0" Padding="10,8" CornerRadius="6"
                     Background="{DynamicResource Bg3}"
@@ -266,7 +226,7 @@
             </Border>
 
             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.5" Margin="0,4,0,0"
-                       Text="Select paths (Shift adds to a group), set Support type, Apply. One group → one MODIFICATIONS card so type/side/delete apply to all members. Reslice force-enables support from marks."/>
+                       Text="Select points or lines (Shift adds to the group), then Apply the selection. Each applied group becomes a MODIFICATIONS card on the right — choose the modifier (support type, side, Structural Support…) there."/>
 
             <!-- Actions -->
             <Grid ColumnDefinitions="*,*" Margin="0,8,0,0" ColumnSpacing="8">
@@ -278,10 +238,10 @@
                         ToolTip.Tip="Clear the current selection"/>
                 <Button Grid.Column="1" Classes="ToolbarButton" Padding="10,6"
                         HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                        Content="Apply"
+                        Content="Apply selection"
                         Command="{Binding DataContext.Viewport.ApplyPaintModificationCommand,
                                   RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                        ToolTip.Tip="Apply Support or Remove marks to the selection"/>
+                        ToolTip.Tip="Turn the current selection into a modification group — pick its modifier on the right sidebar (MODIFICATIONS)"/>
             </Grid>
         </StackPanel>
     </Expander>

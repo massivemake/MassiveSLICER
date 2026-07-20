@@ -142,6 +142,12 @@ public sealed class AppPreferences
     /// <summary>Seam mode display: Normal or Zig-zag.</summary>
     public string SeamMode { get; set; } = "Normal";
 
+    /// <summary>
+    /// Zig-zag: when multiple open faces exist on one layer, keep them and Travel
+    /// (start/stop) between faces. When false, only the longest face is printed.
+    /// </summary>
+    public bool ZigZagAllowSameLayerTravel { get; set; } = true;
+
     /// <summary>When true, tool tilts toward mesh surface on overhangs.</summary>
     public bool OverhangOrientation { get; set; }
 
@@ -197,11 +203,26 @@ public sealed class AppPreferences
     /// <summary>Multi-Planar: tilt about X instead of Y.</summary>
     public bool MultiPlanarAxisX { get; set; }
 
+    /// <summary>Brim: outward offset loops around the first layer for bed adhesion.</summary>
+    public bool BrimEnabled { get; set; }
+
+    /// <summary>Number of brim offset loops.</summary>
+    public int BrimLoops { get; set; } = 3;
+
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }
 
-    /// <summary>Brace depth into the wall from the perimeter (mm).</summary>
+    /// <summary>Brace depth into the wall at the TOP of the part (mm).</summary>
     public double XBracingDepthMm { get; set; } = 50.0;
+
+    /// <summary>X-bracing depth taper ease at the bottom (Linear / Ease-In / Ease-Out / Smooth).</summary>
+    public string XBracingDepthEaseBottom { get; set; } = "Linear";
+
+    /// <summary>X-bracing depth taper ease at the top (Linear / Ease-In / Ease-Out / Smooth).</summary>
+    public string XBracingDepthEaseTop { get; set; } = "Linear";
+
+    /// <summary>Brace depth at the BOTTOM of the part (mm); 0 = constant (same as top).</summary>
+    public double XBracingDepthBottomMm { get; set; }
 
     /// <summary>Horizontal span of one X cell (mm).</summary>
     public double XBracingSpanMm { get; set; } = 120.0;
@@ -212,7 +233,13 @@ public sealed class AppPreferences
     /// <summary>Partial X cells on left/right wall ends (not top/bottom).</summary>
     public bool XBracingExtendEdges { get; set; } = true;
 
-    /// <summary>Show the brace plane / cylinder helper in the viewport.</summary>
+    /// <summary>
+    /// Show the brace plane / cylinder helper in the viewport.
+    /// Must always be written to .mass JSON: SaveOptions use
+    /// <c>WhenWritingDefault</c>, and <c>default(bool)</c> is false — so an omitted
+    /// field would leave the initializer <c>true</c> on load and "off" would never stick.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool XBracingShowHelper { get; set; } = true;
 
     /// <summary>X-bracing direction plane tilt about Y (deg).</summary>
@@ -316,6 +343,17 @@ public sealed class AppPreferences
     public double ExtrusionStartWaitSec { get; set; }
     public double ExtrusionResumeWaitSec { get; set; }
 
+    /// <summary>Digital S&S: dwell after screw-stop before the travel move (seconds).</summary>
+    public double SsPreTravelWaitSec { get; set; } = 0.5;
+
+    /// <summary>
+    /// When true, KRL export pulses digital Start/Stop around travels:
+    /// <c>$OUT[9]</c> (URM / MIO) on before stop, <c>$OUT[7]</c> (print enable / screw) off for travel,
+    /// then screw on + wait + URM off on resume. When false, <c>$OUT[9]</c> stays on for the whole job
+    /// (legacy MassiveSLICER behaviour).
+    /// </summary>
+    public bool DigitalStartStopEnabled { get; set; }
+
     public bool ResumeRampEnabled { get; set; }
     public double ResumeRampStartSpeed { get; set; } = 0.5;
     public double ResumeRampStartRpmPercent { get; set; } = 1.0;
@@ -335,6 +373,11 @@ public sealed class AppPreferences
     /// (SupportBar / ColumnFoot). Bridge marks grow Formbound under painted beads;
     /// Remove marks delete them.</summary>
     public List<float[]> PaintMarks { get; set; } = [];
+
+    /// <summary>Structural Support specs, encoded as float[12]:
+    /// [shape, anchorX, anchorY, anchorLayer, layersUp, layersDown,
+    ///  centerX, centerY, width, depth, rotationDeg, enabled].</summary>
+    public List<float[]> StructuralSupports { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";
@@ -359,8 +402,30 @@ public sealed class AppPreferences
     /// <summary>Toolhead C angle in degrees.</summary>
     public double ToolheadC { get; set; } = 0.0;
 
+    /// <summary>LFAM rail: allow E1 to track the path within Y+/Y− of home.</summary>
+    public bool E1MotionEnabled { get; set; }
+
+    /// <summary>Max positive E1 travel from home (mm) when motion is enabled.</summary>
+    public double E1YPlusMm { get; set; } = 500.0;
+
+    /// <summary>Max negative E1 travel from home (mm) when motion is enabled.</summary>
+    public double E1YMinusMm { get; set; } = 500.0;
+
     /// <summary>Surface follow strength percent (0 = vertical, 100 = full follow).</summary>
     public double OrientationFollowPercent { get; set; } = 100.0;
+
+    /// <summary>Hard cap on TCP tilt from vertical in degrees, applied after the
+    /// surface-follow blend (90 = uncapped).</summary>
+    public double OrientationMaxTiltDeg { get; set; } = 90.0;
+
+    /// <summary>Force the first layer's tool orientation to vertical (flat-bed adhesion).</summary>
+    public bool FirstLayerZeroTilt { get; set; }
+
+    /// <summary>Layer lean strength percent (planar; 0 = off).</summary>
+    public double LayerLeanPercent { get; set; }
+
+    /// <summary>Layer lean max tilt from vertical (degrees).</summary>
+    public double LayerLeanMaxTiltDeg { get; set; } = 20.0;
 
     /// <summary>Forward-biased Gaussian look-ahead for KRL ABC smoothing (mm). 0 = off.</summary>
     public double OrientationLookAheadMm { get; set; }

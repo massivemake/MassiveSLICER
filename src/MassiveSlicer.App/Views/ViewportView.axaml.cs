@@ -19,6 +19,8 @@ using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
 using MassiveSlicer.Core.Slicing.Modifiers;
+using MassiveSlicer.Core.Collision;
+using MassiveSlicer.Viewport.Collision;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.FK;
@@ -173,6 +175,13 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, float[][]>  _ikSolutionsByNode  = new();
     private readonly ConcurrentDictionary<SceneNode, float[]>    _moveTimesMsByNode   = new(); // ms per move
     private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
+    /// <summary>Per-move planned rail E1 (mm), parallel to IK solutions / move list.</summary>
+    private readonly ConcurrentDictionary<SceneNode, float[]>    _e1MmByNode          = new();
+
+    // Digital-twin collision: model built lazily on the UI thread (scene reads),
+    // then shared immutably with the background validation sweep.
+    private CollisionWorld? _collisionWorld;
+    private readonly ConcurrentDictionary<SceneNode, bool[]> _collisionByNode = new();
 
     // Playback timing state.
     private double           _playbackStartElapsedMs;
@@ -387,6 +396,7 @@ public partial class ViewportView : UserControl
                 }
             };
             vm.OnFocusRequested       = FocusSelected;
+            vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnRecenterRequested    = RecenterSelected;
             vm.OnUngroupRequested     = UngroupSelected;
@@ -496,6 +506,11 @@ public partial class ViewportView : UserControl
 
                 if (hasData)
                 {
+                    // Data may have arrived while the stopwatch was paused in the
+                    // wait-for-validation branch below — resume the clock.
+                    if (!_playbackStopwatch.IsRunning)
+                        _playbackStopwatch.Start();
+
                     double elapsed = _playbackStartElapsedMs
                         + _playbackStopwatch.Elapsed.TotalMilliseconds * (pvm.PlaybackSpeed / 100.0);
 
@@ -537,7 +552,14 @@ public partial class ViewportView : UserControl
                         var interp = new float[6];
                         for (int j = 0; j < 6; j++)
                             interp[j] = a[j] + (b[j] - a[j]) * t;
-                        SetRobotAnglesDirectly(interp);
+                        float? e1 = null;
+                        if (_e1MmByNode.TryGetValue(node, out var e1s) && e1s.Length > 0)
+                        {
+                            float e0 = e1s[Math.Clamp(prevIdx, 0, e1s.Length - 1)];
+                            float e1b = e1s[Math.Clamp(moveIdx, 0, e1s.Length - 1)];
+                            e1 = e0 + (e1b - e0) * t;
+                        }
+                        SetRobotAnglesDirectly(interp, e1);
                     }
                 }
                 else
@@ -546,6 +568,11 @@ public partial class ViewportView : UserControl
                     // The play button is disabled while IsValidating, so this branch
                     // only fires in the rare window between button enable and first tick.
                     _playbackStopwatch.Stop();
+                    // Self-heal: a toolpath replace clears playback IK data without a
+                    // re-validate. If no validation is running, kick one so play can
+                    // resume instead of waiting forever (ValidateToolpathAsync dedups).
+                    if (!pvm.IsValidating && _toolpathByNode.TryGetValue(node, out var healTp))
+                        ValidateToolpathAsync(node, healTp);
                 }
             };
 
@@ -553,7 +580,18 @@ public partial class ViewportView : UserControl
             UpdateFocusOverlay();
         }
 
+        vm.OnAddStructuralSupportRequested = () => AddStructuralSupportFromSelection(vm);
+        if (vm.AdditiveSettings is { } addHook)
+            addHook.OnStructuralSupportsChanged = () => GlCanvas.RequestNextFrameRendering();
         vm.OnDevModeChanged = ApplyDevModeSelectability;
+        // Hard policy: cell fixtures (print bed, stands, docks, rotary) are only
+        // selectable in dev mode — enforced at the renderer so no path around the
+        // Selectable flag (e.g. manually unlocking the outliner padlock) can select them.
+        // User imports/scans are exempt: they live UNDER the bed node (to ride E1).
+        _renderer.SelectionFilter = n => vm.IsDevMode
+            || vm.IsUserModelSceneNode(n)
+            || FindDevNodeRoot(n) is null;
+        vm.DebugPickAtViewport = (fx, fy) => DebugPickAtViewport(vm, fx, fy);
         vm.OnSaveDevTransformRequested     = () => SaveDevTransform(vm);
         vm.OnSaveAllDevTransformsRequested = () => SaveAllDevTransforms(vm);
 
@@ -710,12 +748,15 @@ public partial class ViewportView : UserControl
                     GlCanvas.RequestNextFrameRendering();
                 }
 
-                // Re-solve IK live when the toolhead orientation offset changes so the
-                // user can see the effect in the viewport without moving the scrubber.
-                // Also re-run full validation so reachability and singularity markers update.
+                // Re-solve IK + re-validate when toolhead orientation or E1 rail settings change.
+                // E1 planning is O(n) envelope samples (not × multi full DLS per point), so it is
+                // safe to re-run; planned E1 is used for both reachability and simulation.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ToolheadA)
                                     or nameof(AdditiveSettingsViewModel.ToolheadB)
-                                    or nameof(AdditiveSettingsViewModel.ToolheadC))
+                                    or nameof(AdditiveSettingsViewModel.ToolheadC)
+                                    or nameof(AdditiveSettingsViewModel.E1MotionEnabled)
+                                    or nameof(AdditiveSettingsViewModel.E1YPlusMm)
+                                    or nameof(AdditiveSettingsViewModel.E1YMinusMm))
                 {
                     if (vm.IsToolpathSelected)
                         ScrubIk(vm.ToolpathScrubIndex);
@@ -725,6 +766,7 @@ public partial class ViewportView : UserControl
                     {
                         _validationCts?.Cancel();
                         _validationDone = false;
+                        _validationNode = null; // force re-key so E1 plan is not skipped
                         ValidateToolpathAsync(nd, tp);
                     }
                 }
@@ -744,6 +786,10 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationRadius)
                                     or nameof(AdditiveSettingsViewModel.SmoothRotationMaxRateDegPerMm)
                                     or nameof(AdditiveSettingsViewModel.OrientationFollowPercent)
+                                    or nameof(AdditiveSettingsViewModel.OrientationMaxTiltDeg)
+                                    or nameof(AdditiveSettingsViewModel.FirstLayerZeroTilt)
+                                    or nameof(AdditiveSettingsViewModel.LayerLeanPercent)
+                                    or nameof(AdditiveSettingsViewModel.LayerLeanMaxTiltDeg)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedAdaptEnabled)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedBasisDisplay)
                                     or nameof(AdditiveSettingsViewModel.LayerSpeedMinMmS)
@@ -1054,6 +1100,8 @@ public partial class ViewportView : UserControl
 
             _renderer.SlicePlaneViewerActive = slicePlane;
             _renderer.SlicePlaneLayerIndex = vm.CurrentScrubLayerIndex;
+            _renderer.SlicePlaneBelowLayerCount = vm.SlicePlaneGhostLayers;
+            _renderer.SlicePlaneShowAllBelow = vm.SlicePlaneShowAllGhosts;
             // Prefer live ends from ActiveScrubToolpath so multi-pass always has data.
             int[]? sliceEnds = null;
             if (slicePlane && vm.ActiveScrubToolpath is { Layers.Count: > 0 } scrubTp)
@@ -1179,7 +1227,9 @@ public partial class ViewportView : UserControl
                 _scrubCacheByNode.TryRemove(removing, out _);
                 _ikSolutionsByNode.TryRemove(removing, out _);
                 _moveTimesMsByNode.TryRemove(removing, out _);
+                _collisionByNode.TryRemove(removing, out _);
                 _singularityByNode.TryRemove(removing, out _);
+                _e1MmByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 GpuMeshCache.ReleaseSubtree(removing);
                 // Detach from the node's actual parent — scans live under the rotary pivot, not SceneRoot.
@@ -1368,8 +1418,18 @@ public partial class ViewportView : UserControl
             {
                 _ikSolutionsByNode.TryRemove(entry.Node, out _);
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
+                _collisionByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
+                _e1MmByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
+                // The playback data above is gone — reset the validation dedup key so a
+                // re-validate of this node isn't skipped as "already done" (stale guard
+                // left the play button enabled but permanently starved of IK data).
+                if (ReferenceEquals(_validationNode, entry.Node))
+                {
+                    _validationDone = false;
+                    _validationNode = null;
+                }
                 UploadToolpathEntry(entry, addToScene: false);
                 var replacedNode = entry.Node;
                 Dispatcher.UIThread.Post(() =>
@@ -1379,7 +1439,12 @@ public partial class ViewportView : UserControl
                     if (DataContext is ViewportViewModel vRep
                         && ReferenceEquals(_activeScrubNode, replacedNode)
                         && vRep.IsScrubSessionActive)
+                    {
                         ScrubIkForNode(replacedNode, vRep.ToolpathScrubIndex);
+                        // Repopulate playback IK data so the timeline can play again.
+                        if (_toolpathByNode.TryGetValue(replacedNode, out var freshTp))
+                            ValidateToolpathAsync(replacedNode, freshTp);
+                    }
                 });
             }
 
@@ -1704,6 +1769,7 @@ public partial class ViewportView : UserControl
             new Vector3( sr, 0f, -cr),
             new Vector3( 0f, 1f,  0f));
         _toolMeshMatrix = _toolCorrectionMatrix * Matrix4.CreateRotationY(-_flangeDisplayRoll);
+        _collisionWorld = null;   // tool geometry/mount changed — re-extract
     }
 
     private Vector3 GetLiveRobrootWorldPos()
@@ -1780,6 +1846,19 @@ public partial class ViewportView : UserControl
         }
 
         vm.ApplyUiSessionViewState(session);
+
+        // Restore realtime-slice pause *after* toolpaths exist so BAKED matrices stay intact.
+        // When pause is requested, also drop any pending realtime work from prefs load.
+        if (session.RealtimeSlicingPaused == true || HasProtectedBakedToolpath(vm))
+        {
+            _realtimeSlicePending = false;
+            vm.RealtimeSlicingPaused = true;
+        }
+        else if (session.RealtimeSlicingPaused == false)
+        {
+            vm.RealtimeSlicingPaused = false;
+        }
+
         // Re-bind MODIFICATIONS after scrub/toolpath is armed (layers available).
         if (session.PaintModifications is { Count: > 0 } mods)
             RestorePaintModificationsState(mods);
@@ -1863,7 +1942,9 @@ public partial class ViewportView : UserControl
         _scrubCacheByNode.Clear();
         _ikSolutionsByNode.Clear();
         _moveTimesMsByNode.Clear();
+        _collisionByNode.Clear();
         _singularityByNode.Clear();
+        _e1MmByNode.Clear();
         _activeScrubNode = null;
     }
 
@@ -2007,6 +2088,7 @@ public partial class ViewportView : UserControl
         _rotaryBedPivot             = null;
         _rotaryBedRoot              = null;
         _robotBaseNode              = null;
+        _collisionWorld             = null;
         _robotRail                  = null;
         _multiToolFlangeParented    = false;
         _lfamInfrastructureNodes.Clear();
@@ -3591,9 +3673,15 @@ public partial class ViewportView : UserControl
             TiltAngleX       = (float)s.TiltAngleX,
             DisableContourOffset   = s.DisableContourOffset,
             ZigZagSeam             = s.SeamMode == "Zig-zag",
+            ZigZagAllowSameLayerTravel = s.ZigZagAllowSameLayerTravel,
             Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
+            BrimEnabled         = s.BrimEnabled,
+            BrimLoops           = s.BrimLoops,
             XBracingEnabled     = s.XBracingEnabled,
             XBracingDepthMm     = (float)s.XBracingDepthMm,
+            XBracingDepthBottomMm = (float)s.XBracingDepthBottomMm,
+            XBracingDepthEaseBottom = s.XBracingDepthEaseBottom,
+            XBracingDepthEaseTop    = s.XBracingDepthEaseTop,
             XBracingSpanMm      = (float)s.XBracingSpanMm,
             XBracingAngleDeg    = (float)s.XBracingAngleDeg,
             XBracingExtendEdges = s.XBracingExtendEdges,
@@ -3685,12 +3773,17 @@ public partial class ViewportView : UserControl
             ThermalSagMarginC          = ResolveThermalSagMarginC(s.SelectedPreset),
             SeamGuidePoints = s.BuildSeamGuideList(),
             PaintMarks      = s.BuildPaintMarkList(),
+            StructuralSupports = s.BuildStructuralSupportList(),
             CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
             CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
             CurvedBoundarySource        = s.CurvedBoundarySource,
             CurvedAutoDetectBandMm      = (float)s.CurvedAutoDetectBandMm,
             CurvedEnableRegionSplit     = s.CurvedEnableRegionSplit,
             OrientationFollowStrength   = s.OrientationFollowStrength,
+            OrientationMaxTiltDeg       = (float)s.OrientationMaxTiltDeg,
+            FirstLayerZeroTilt          = s.FirstLayerZeroTilt,
+            LayerLeanStrength           = (float)(s.LayerLeanPercent / 100.0),
+            LayerLeanMaxTiltDeg         = (float)s.LayerLeanMaxTiltDeg,
         };
     }
 
@@ -3758,7 +3851,7 @@ public partial class ViewportView : UserControl
                 }
                 flatMeshes.Add(flat);
             }
-            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}");
+            SliceLogger.Step($"mesh prepared  snapshots={meshSnapshots.Count}  tris={flatMeshes.Sum(m => m.Length) / 3:N0}");
             ThrowIfCancel();
 
             Report(method switch
@@ -3782,7 +3875,7 @@ public partial class ViewportView : UserControl
             Toolpath tp;
             if (method == SliceMethod.Angled)        tp = AngledPlanarSlicer.Slice(flatMeshes, settings);
             else if (method == SliceMethod.MultiPlanar) tp = AngledPlanarSlicer.SliceMultiPlanar(flatMeshes, settings);
-            else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings);
+            else if (method == SliceMethod.Geodesic) tp = GeodesicSlicer.Slice(flatMeshes, settings, SlicePct);
             else if (method == SliceMethod.Curved)   tp = CurvedSlicer.Slice(flatMeshes, settings);
             else                                     tp = PlanarSlicer.Slice(flatMeshes, settings, SlicePct);
             ThrowIfCancel();
@@ -3840,7 +3933,8 @@ public partial class ViewportView : UserControl
             SliceLogger.Step("ToolpathClone.Copy(toSmooth) done");
             Pct(96);
 
-            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+            OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength, settings.OrientationMaxTiltDeg, settings.FirstLayerZeroTilt);
+            LayerLeanOrienter.ApplyInPlace(toSmooth, settings.LayerLeanStrength, settings.LayerLeanMaxTiltDeg, settings.BeadWidth);
             SliceLogger.Step("OrientationBlender done");
             ThrowIfCancel();
 
@@ -3865,7 +3959,8 @@ public partial class ViewportView : UserControl
         var settings = BuildSliceSettings(s);
         var withLayerSpeed = LayerSpeedPostProcessor.Apply(ToolpathClone.Copy(raw), settings);
         var toSmooth       = ToolpathClone.Copy(withLayerSpeed);
-        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength);
+        OrientationBlender.ApplyInPlace(toSmooth, settings.OrientationFollowStrength, settings.OrientationMaxTiltDeg, settings.FirstLayerZeroTilt);
+            LayerLeanOrienter.ApplyInPlace(toSmooth, settings.LayerLeanStrength, settings.LayerLeanMaxTiltDeg, settings.BeadWidth);
         var smoothed = OrientationSmoother.Apply(toSmooth, settings);
         ThermalSimulator.StampLayerTemps(smoothed, settings);
         return smoothed;
@@ -4705,6 +4800,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
+        nameof(AdditiveSettingsViewModel.ZigZagAllowSameLayerTravel),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
         nameof(AdditiveSettingsViewModel.PatternAmplitude),
@@ -4728,10 +4824,17 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.LightningButtressBarMm),
         nameof(AdditiveSettingsViewModel.LightningPreferInteriorMouths),
         nameof(AdditiveSettingsViewModel.LightningTargetSupportSelections),
+        nameof(AdditiveSettingsViewModel.OverhangOrientation),
+        nameof(AdditiveSettingsViewModel.MaxOverhangTiltDeg),
         nameof(AdditiveSettingsViewModel.MultiPlanarStamp),
         nameof(AdditiveSettingsViewModel.PaintStamp),
+        nameof(AdditiveSettingsViewModel.BrimEnabled),
+        nameof(AdditiveSettingsViewModel.BrimLoops),
         nameof(AdditiveSettingsViewModel.XBracingEnabled),
         nameof(AdditiveSettingsViewModel.XBracingDepthMm),
+        nameof(AdditiveSettingsViewModel.XBracingDepthBottomMm),
+        nameof(AdditiveSettingsViewModel.XBracingDepthEaseBottom),
+        nameof(AdditiveSettingsViewModel.XBracingDepthEaseTop),
         nameof(AdditiveSettingsViewModel.XBracingSpanMm),
         nameof(AdditiveSettingsViewModel.XBracingAngleDeg),
         nameof(AdditiveSettingsViewModel.XBracingExtendEdges),
@@ -4780,6 +4883,13 @@ public partial class ViewportView : UserControl
             if (e.PropertyName == nameof(ViewportViewModel.RealtimeSlicingPaused)
                 && !vm.RealtimeSlicingPaused && _realtimeSlicePending)
             {
+                // Never auto-fire a deferred re-slice over a protected baked toolpath.
+                if (HasProtectedBakedToolpath(vm))
+                {
+                    _realtimeSlicePending = false;
+                    return;
+                }
+
                 _realtimeSlicePending = false;
                 ScheduleRealtimeSlice(vm);
             }
@@ -4903,8 +5013,32 @@ public partial class ViewportView : UserControl
             LogPaintConsole($"[edit] reslice: support paint formbound={formN} tree={treeN}");
     }
 
+    /// <summary>
+    /// Start/Stop calibration (and similar) workspaces ship a pre-baked multi-recipe toolpath.
+    /// Realtime re-slice would replace it with one global wipe/z-hop and destroy the matrix.
+    /// </summary>
+    private static bool HasProtectedBakedToolpath(ViewportViewModel vm)
+    {
+        foreach (var model in vm.EnumerateUserModelItems())
+        {
+            foreach (var child in model.Children)
+            {
+                if (child.IsToolpath
+                    && child.Name.Contains("BAKED", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private void ScheduleRealtimeSlice(ViewportViewModel vm)
     {
+        if (HasProtectedBakedToolpath(vm))
+        {
+            _realtimeSlicePending = false;
+            return;
+        }
+
         // Always mark pending so a mid-slice change forces a follow-up with latest state.
         _realtimeSlicePending = true;
 
@@ -4949,6 +5083,9 @@ public partial class ViewportView : UserControl
 
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
+        if (HasProtectedBakedToolpath(vm))
+            return;
+
         var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
                    ?? vm.EnumerateUserModelItems().FirstOrDefault();
         if (item is null) return;
@@ -6123,6 +6260,37 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    /// <summary>Debug: run the full viewport-click selection path at fractional
+    /// viewport coords (0-1) and trace every gate. Backs the `pick` console command.</summary>
+    private string DebugPickAtViewport(ViewportViewModel vm, double fx, double fy)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return "[pick] viewport not ready";
+        var ray = _renderer.Camera.GetPickRay(
+            (float)(fx * vpW), (float)(fy * vpH), vpW, vpH);
+
+        var sb = new System.Text.StringBuilder();
+        var raw = _renderer.PickToolpath((float)(fx * vpW), (float)(fy * vpH), vpW, vpH);
+        if (raw is not null)
+            sb.AppendLine($"[pick] toolpath hit: \"{raw.Name}\"");
+        var picked = raw ?? PickForSceneSelection(vm, ray);
+        sb.AppendLine($"[pick] PickForSceneSelection -> {(picked is null ? "null" : $"\"{picked.Name}\" tier={picked.PickTier} selectable={picked.Selectable}")}");
+        if (picked is not null)
+        {
+            var userItem = vm.FindUserMeshOutlinerItem(picked);
+            sb.AppendLine($"[pick] userItem={(userItem?.Name ?? "null")} isUserContent={vm.IsUserModelSceneNode(picked)}");
+            var devRoot = FindDevNodeRoot(picked);
+            sb.AppendLine($"[pick] devRoot={(devRoot is null ? "null" : DevLabel(devRoot))} infra={IsLfamInfrastructureNode(picked)} lockedRow={vm.IsNodeLockedInOutliner(picked)}");
+            var chain = new List<string>();
+            for (var c = picked; c is not null; c = c.Parent) chain.Add(c.Name);
+            sb.AppendLine($"[pick] ancestry: {string.Join(" < ", chain)}");
+        }
+        RequestSceneSelection(vm, picked);
+        sb.Append($"[pick] final selection: {(_renderer.SelectedNode is { } s ? $"\"{s.Name}\"" : "null")}");
+        return sb.ToString();
+    }
+
     SceneNode? PickForSceneSelection(ViewportViewModel vm, Ray ray)
     {
         // On LFAM cells the mounted tool often occludes the print volume — prefer user imports/scans.
@@ -6186,6 +6354,19 @@ public partial class ViewportView : UserControl
         {
             node = _currentToolNode;
         }
+
+        // Cell fixtures (print bed, stands, docks, rotary) are dev-mode-only —
+        // regardless of outliner padlock state. This must null the node BEFORE the
+        // outliner sync below, or the outliner still shows the fixture as selected
+        // even when the renderer vetoes it. User imports/scans are exempt: they are
+        // parented UNDER the bed node (to ride E1), so the dev-root walk would
+        // otherwise swallow every model click.
+        if (!isUserContent && node is not null && !vm.IsDevMode && FindDevNodeRoot(node) is not null)
+            node = null;
+
+        // The scene root itself is never a meaningful selection.
+        if (node == _renderer.SceneRoot)
+            node = null;
 
         // Locked outliner rows (robot, bed, locked toolheads) can't be selected —
         // except dev-editable props while dev mode is on.
@@ -6455,8 +6636,13 @@ public partial class ViewportView : UserControl
         public bool IsExpanded { get; set; }
         public bool HasBridgeTarget => TargetLayer is not null;
 
-        /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+        /// <summary>"Formbound Buttress", "Formbound Bridge", "Tree Support",
+        /// or "Structural Support".</summary>
         public string SupportType { get; set; } = "Formbound Buttress";
+
+        /// <summary>Index into AdditiveSettings.StructuralSupports when this card is
+        /// a Structural Support (its pocket settings render inline). -1 = not linked.</summary>
+        public int StructuralIndex { get; set; } = -1;
 
         /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
         public string SupportSide { get; set; } = "Inside";
@@ -6501,6 +6687,115 @@ public partial class ViewportView : UserControl
     /// <summary>Hover feedback while the Edit menu is open (or a paint tool is armed)
     /// and no stroke is active: yellow contour under the pointer for line-select, or
     /// the brush circle under a brush tool. Throttled — full-path pick is expensive.</summary>
+    /// <summary>Converts an existing modification group (card) into a Structural
+    /// Support: spec anchored at the group's anchor move, default 2×4 rectangle
+    /// one bead inboard. The card stays in MODIFICATIONS with the pocket settings
+    /// inline. Returns the new spec's index, or -1.</summary>
+    private int ConvertModificationToStructuralSupport(
+        ViewportViewModel vm, PaintModificationRecord rec)
+    {
+        var add = vm.AdditiveSettings;
+        if (add is null) return -1;
+
+        int mi = Math.Clamp(rec.Span.Start, 0, rec.Layer.Moves.Count - 1);
+        var mv = rec.Layer.Moves[mi];
+        var mid = (mv.From + mv.To) * 0.5f;
+
+        int layerIdx = 0;
+        if (vm.ActiveScrubToolpath is { } tp)
+        {
+            int found = tp.Layers.IndexOf(rec.Layer);
+            if (found >= 0) layerIdx = found;
+        }
+
+        var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
+        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+        dir = System.Numerics.Vector2.Normalize(dir);
+        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+        float beadW = (float)add.BeadWidth;
+        const float depth = 42f;
+        var center = new System.Numerics.Vector2(mid.X, mid.Y) + left * (depth * 0.5f + beadW * 2f);
+
+        add.AddStructuralSupport(new Core.Models.StructuralSupportSpec
+        {
+            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+            CenterX = center.X, CenterY = center.Y,
+            WidthMm = 92f, DepthMm = depth,
+            LayersUp = 9999, LayersDown = 0,
+        });
+        LogPaintConsole($"[support] group converted to Structural Support @ L{layerIdx} " +
+            $"({mid.X:F0}, {mid.Y:F0}) — tune it on its MODIFICATIONS card, then Update Slice.");
+        vm.UpdateSliceCommand?.Execute(null);
+        return add.StructuralSupports.Count - 1;
+    }
+
+    /// <summary>Creates a Structural Support spec anchored at the last point/section
+    /// selected in edit mode. The helper shape starts one bead inboard (left of travel
+    /// — into the wall for zig-zag panels); adjust in the right panel, then Update Slice.</summary>
+    private void AddStructuralSupportFromSelection(ViewportViewModel vm)
+    {
+        var add = vm.AdditiveSettings;
+        if (add is null) return;
+        if (_paintSelection.Count == 0)
+        {
+            LogPaintConsole("[support] select a point on the wall first (edit mode → click)");
+            return;
+        }
+
+        var sel = _paintSelection[^1];
+        int mi = Math.Clamp(sel.Span.Start, 0, sel.Layer.Moves.Count - 1);
+        var mv = sel.Layer.Moves[mi];
+        var mid = (mv.From + mv.To) * 0.5f;
+
+        int layerIdx = 0;
+        if (vm.ActiveScrubToolpath is { } tp)
+        {
+            int found = tp.Layers.IndexOf(sel.Layer);
+            if (found >= 0) layerIdx = found;
+        }
+
+        var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
+        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+        dir = System.Numerics.Vector2.Normalize(dir);
+        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+        float beadW = (float)add.BeadWidth;
+        const float depth = 42f;
+        var center = new System.Numerics.Vector2(mid.X, mid.Y) + left * (depth * 0.5f + beadW * 2f);
+
+        add.AddStructuralSupport(new Core.Models.StructuralSupportSpec
+        {
+            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+            CenterX = center.X, CenterY = center.Y,
+            WidthMm = 92f, DepthMm = depth,
+            LayersUp = 9999, LayersDown = 0,
+        });
+
+        // The applied group stays in MODIFICATIONS as a Structural card — the
+        // pocket helper settings live on the card itself.
+        _paintModifications.Add(new PaintModificationRecord
+        {
+            Id = Guid.NewGuid(),
+            Kind = Core.Models.PaintMarkKind.Bridge,
+            Layer = sel.Layer,
+            Span = sel.Span,
+            Origin = sel.Origin,
+            Wt = sel.Wt,
+            World = sel.World,
+            MarkCenters = [],
+            Title = $"Structural Support · layer {layerIdx + 1}",
+            Detail = $"anchor ({mid.X:F0}, {mid.Y:F0}) · Update Slice to bake",
+            SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural,
+            StructuralIndex = add.StructuralSupports.Count - 1,
+            IsExpanded = true,
+        });
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+
+        LogPaintConsole($"[support] structural support @ L{layerIdx} anchor ({mid.X:F0}, {mid.Y:F0}) — " +
+            "tune the shape on its MODIFICATIONS card, then Update Slice.");
+        vm.UpdateSliceCommand?.Execute(null);
+    }
+
     private void UpdatePaintHover(ViewportViewModel vm, Avalonia.Point pos)
     {
         // ~12 Hz hover: path pick walks every move; higher rates freeze 50k+ move paths.
@@ -6652,6 +6947,55 @@ public partial class ViewportView : UserControl
         }
         if (!lineHover && _paintHoverWorld is { } hw && vm.PaintBrushActive)
             AddMarkSphere(segs, hw, (float)vm.PaintBrushRadiusMm, cHover);
+
+        // Structural Support helpers: shape outline + anchor tick + neck preview,
+        // visible while edit mode is open (cyan = selected support, dim = others).
+        if (vm.IsPaintEditOpen && add.StructuralSupports.Count > 0)
+        {
+            var cSel = new TkVector3(0.2f, 0.95f, 1f);
+            var cDim = new TkVector3(0.25f, 0.55f, 0.6f);
+            for (int si = 0; si < add.StructuralSupports.Count; si++)
+            {
+                var spec = add.StructuralSupports[si];
+                if (!spec.Enabled) continue;
+                var col = si == add.SelectedSupportIndex ? cSel : cDim;
+                var outline = spec.BuildOutline();
+                if (outline.Length < 3) continue;
+
+                float helperZ = 0f;
+                if (_activeScrubNode is { } hn && _toolpathByNode.TryGetValue(hn, out var htp)
+                    && htp.Layers.Count > 0)
+                {
+                    int li = Math.Clamp(vm.CurrentScrubLayerIndex, 0, htp.Layers.Count - 1);
+                    helperZ = htp.Layers[li].Z;
+                }
+
+                TkVector3 W(float x, float y)
+                {
+                    var w = TransformPoint(new TkVector3(
+                        x - origin.X, y - origin.Y, helperZ - origin.Z), wt);
+                    return new TkVector3(w.X, w.Y, w.Z);
+                }
+
+                var poly = new List<TkVector3>(outline.Length + 1);
+                foreach (var v in outline) poly.Add(W(v.X, v.Y));
+                poly.Add(W(outline[0].X, outline[0].Y));
+                AddThickPolyline(segs, poly, col, radiusMm: 0.9f, fat: si == add.SelectedSupportIndex);
+
+                // Anchor tick + neck preview to nearest outline vertex.
+                var anchorW = W(spec.AnchorX, spec.AnchorY);
+                AddMarkSphere(segs, anchorW, 2.2f, col);
+                int near = 0; float nd = float.MaxValue;
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    float dx = outline[i].X - spec.AnchorX, dy = outline[i].Y - spec.AnchorY;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < nd) { nd = d2; near = i; }
+                }
+                AddThickPolyline(segs,
+                    [anchorW, W(outline[near].X, outline[near].Y)], col, radiusMm: 0.6f, fat: false);
+            }
+        }
 
         _renderer.SetPaintOverlay(segs, hlPts.Count > 0 ? hlPts : null);
     }
@@ -7487,8 +7831,43 @@ public partial class ViewportView : UserControl
         var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
         if (rec is null || rec.Kind != Core.Models.PaintMarkKind.Bridge) return;
         var style = Core.Models.PaintSupportStyleUtil.FromLabel(type);
+
+        // Structural Support is a toolpath modifier, not a mark style: convert the
+        // group — spec anchored at the group's anchor point. The card STAYS in
+        // MODIFICATIONS (its marks are retired; the pocket settings render inline).
+        if (style == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            if (rec.StructuralIndex >= 0) return; // already converted
+            int specIdx = ConvertModificationToStructuralSupport(vm, rec);
+            if (specIdx < 0) return;
+            if (vm.AdditiveSettings is { } addS)
+            {
+                int stripped = RemoveMarksNearCenters(addS, rec.Kind, rec.MarkCenters);
+                stripped += RemoveMarksNearCenters(addS, rec.Kind, rec.TargetMarkCenters);
+                stripped += RemoveMarksNearCenters(addS, rec.Kind, rec.ScaffoldMarkCenters);
+                if (stripped > 0) addS.BumpPaintStamp();
+            }
+            rec.SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural;
+            rec.StructuralIndex = specIdx;
+            rec.Detail = "pocket settings below · Update Slice to bake";
+            rec.IsExpanded = true;
+            vm.MarkWorkspaceDirty?.Invoke();
+            SyncPaintModificationsUi(vm);
+            return;
+        }
         var v = Core.Models.PaintSupportStyleUtil.ToLabel(style);
         if (string.Equals(rec.SupportType, v, StringComparison.Ordinal)) return;
+
+        // Leaving Structural: retire the spec; the card reverts to a mark-style
+        // support (re-Apply the selection to stamp fresh marks).
+        if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } addOld)
+        {
+            RemoveStructuralSpec(vm, addOld, rec.StructuralIndex);
+            rec.StructuralIndex = -1;
+            LogPaintConsole("[support] structural spec removed — re-Apply the selection to stamp "
+                + $"{v} marks, then Update Slice.");
+            vm.UpdateSliceCommand?.Execute(null);
+        }
         rec.SupportType = v;
 
         // Re-stamp SupportStyle on this mod's marks (match by center).
@@ -7591,6 +7970,7 @@ public partial class ViewportView : UserControl
                 IsExpanded = m.IsExpanded,
                 SupportType = m.SupportType,
                 SupportSide = m.SupportSide,
+                StructuralIndex = m.StructuralIndex,
                 WorldPoints = WorldPts(m.World),
                 ScaffoldLayerCount = m.ScaffoldLayerCount,
                 ScaffoldMarkCenters = Pts(m.ScaffoldMarkCenters),
@@ -7738,6 +8118,7 @@ public partial class ViewportView : UserControl
                 SupportSide = string.IsNullOrWhiteSpace(s.SupportSide)
                     ? Core.Models.PaintSupportSideUtil.LabelInside
                     : s.SupportSide,
+                StructuralIndex = s.StructuralIndex,
             };
             rec.ScaffoldMarkCenters.AddRange(ReadPts(s.ScaffoldMarkCenters));
 
@@ -7909,6 +8290,9 @@ public partial class ViewportView : UserControl
         {
             foreach (var other in _paintModifications)
                 if (other.Id != id) other.IsExpanded = false;
+            // Structural card: point the inline settings at this card's spec.
+            if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } add)
+                add.SelectedSupportIndex = rec.StructuralIndex;
         }
         ReselectPaintModification(vm, id);
         SyncPaintModificationsUi(vm);
@@ -8235,6 +8619,20 @@ public partial class ViewportView : UserControl
             && centers.Any(c => System.Numerics.Vector3.Distance(m.Center, c) < tol));
     }
 
+    /// <summary>Removes a structural spec and re-links every card pointing past it.</summary>
+    private void RemoveStructuralSpec(
+        ViewportViewModel vm,
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        int specIndex)
+    {
+        add.RemoveStructuralSupportAt(specIndex);
+        foreach (var m in _paintModifications)
+        {
+            if (m.StructuralIndex > specIndex) m.StructuralIndex--;
+            else if (m.StructuralIndex == specIndex) m.StructuralIndex = -1;
+        }
+    }
+
     /// <summary>Removes one modification and its paint-mark dabs (anchor + target + scaffold).</summary>
     private void DeletePaintModification(ViewportViewModel vm, Guid id)
     {
@@ -8245,6 +8643,13 @@ public partial class ViewportView : UserControl
 
         if (vm.PaintBridgePickModificationId == id)
             vm.PaintBridgePickModificationId = null;
+
+        // Structural card: retire its pocket spec too and reslice it away.
+        if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } addStruct)
+        {
+            RemoveStructuralSpec(vm, addStruct, rec.StructuralIndex);
+            vm.UpdateSliceCommand?.Execute(null);
+        }
 
         if (vm.AdditiveSettings is { } add)
         {
@@ -8264,6 +8669,20 @@ public partial class ViewportView : UserControl
 
     private void ClearAllPaintModifications(ViewportViewModel vm)
     {
+        // Retire structural specs linked to cards (highest index first).
+        var specIdxs = _paintModifications
+            .Where(m => m.StructuralIndex >= 0)
+            .Select(m => m.StructuralIndex)
+            .Distinct()
+            .OrderByDescending(i => i)
+            .ToList();
+        if (specIdxs.Count > 0 && vm.AdditiveSettings is { } addStruct)
+        {
+            foreach (var si in specIdxs)
+                addStruct.RemoveStructuralSupportAt(si);
+            vm.UpdateSliceCommand?.Execute(null);
+        }
+
         _paintModifications.Clear();
         vm.PaintBridgePickModificationId = null;
         if (vm.AdditiveSettings is { } add && add.PaintMarks.Count > 0)
@@ -9008,10 +9427,36 @@ public partial class ViewportView : UserControl
         (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick,
         bool pointMode)
     {
-        if (pointMode || pick.Span.Count <= 1)
+        if (pointMode)
+            return SpanWorldMidpoints(pick);
+
+        // A single MOVE can be a metre-long wall segment (straight panel sides are
+        // one move each) — Lines mode must highlight it as the actual line, not a
+        // midpoint dot. Only genuinely short beads render as points.
+        if (pick.Span.Count == 1
+            && pick.Span.Start >= 0 && pick.Span.Start < pick.Layer.Moves.Count)
+        {
+            var mv = pick.Layer.Moves[pick.Span.Start];
+            float beadW = (float)(_vm?.AdditiveSettings?.BeadWidth ?? 6.0);
+            if (mv.Kind == MoveKind.Extrude && SingleMoveRendersAsLine(mv, beadW))
+            {
+                var a = TransformPoint(new TkVector3(
+                    mv.From.X - pick.Origin.X, mv.From.Y - pick.Origin.Y, mv.From.Z - pick.Origin.Z), pick.Wt);
+                var b = TransformPoint(new TkVector3(
+                    mv.To.X - pick.Origin.X, mv.To.Y - pick.Origin.Y, mv.To.Z - pick.Origin.Z), pick.Wt);
+                return [new TkVector3(a.X, a.Y, a.Z), new TkVector3(b.X, b.Y, b.Z)];
+            }
+        }
+
+        if (pick.Span.Count <= 1)
             return SpanWorldMidpoints(pick);
         return SpanWorldPolyline(pick);
     }
+
+    /// <summary>Line-mode policy: a lone move longer than ~1.5 beads is a wall line,
+    /// not a bead — highlight it as a segment. (Testable split of the visual rule.)</summary>
+    internal static bool SingleMoveRendersAsLine(ToolpathMove mv, float beadWidthMm) =>
+        (mv.To - mv.From).Length() > MathF.Max(beadWidthMm, 1f) * 1.5f;
 
     /// <summary>One world-space midpoint per extrude bead in the span (point picks).</summary>
     private List<TkVector3> SpanWorldMidpoints(
@@ -10653,10 +11098,56 @@ public partial class ViewportView : UserControl
             worldNormal = new TkVector3(planeNormal.X, planeNormal.Y, planeNormal.Z);
         }
 
-        // IK expects the target in ROBROOT frame (world − live ROBROOT origin).
+        // Prefer pre-solved joints + planned E1 from validation (instant, matches reachability).
+        int moveIdx = Math.Clamp(index > 0 ? index - 1 : 0, 0, int.MaxValue);
+        if (_ikSolutionsByNode.TryGetValue(scrubNode, out var sols)
+            && sols is { Length: > 0 })
+        {
+            moveIdx = Math.Clamp(moveIdx, 0, sols.Length - 1);
+            var angles = sols[moveIdx];
+            float? e1 = null;
+            if (_e1MmByNode.TryGetValue(scrubNode, out var e1s) && e1s.Length > 0)
+                e1 = e1s[Math.Clamp(moveIdx, 0, e1s.Length - 1)];
+            SetRobotAnglesDirectly(angles, e1);
+            return;
+        }
+
+        // Fallback live IK: target relative to planned (or live) rail pose.
+        float scrubE1 = (float)robot.E1;
+        if (_e1MmByNode.TryGetValue(scrubNode, out var e1Arr) && e1Arr.Length > 0)
+            scrubE1 = e1Arr[Math.Clamp(moveIdx, 0, e1Arr.Length - 1)];
+        else if (_toolpathByNode.TryGetValue(scrubNode, out var tpScrub))
+        {
+            int mi = 0, want = Math.Max(0, moveIdx);
+            foreach (var layer in tpScrub.Layers)
+            foreach (var mv in layer.Moves)
+            {
+                if (mi == want && !float.IsNaN(mv.E1Mm))
+                {
+                    scrubE1 = mv.E1Mm;
+                    break;
+                }
+                mi++;
+            }
+        }
+
         RefreshIkSceneKinematics();
-        var robrootPos    = GetLiveRobrootWorldPos();
-        var targetRobroot = worldPos - robrootPos;
+        var cell = vm.ActiveCell;
+        TkVector3 targetRobroot;
+        if (robot.IsRobotRail && cell?.RobotRail is { } rail
+            && vm.AdditiveSettings is { E1MotionEnabled: true })
+        {
+            var homeWorld = new NVec3(
+                cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z);
+            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, scrubE1);
+            targetRobroot = new TkVector3(
+                worldPos.X - baseW.X, worldPos.Y - baseW.Y, worldPos.Z - baseW.Z);
+        }
+        else
+        {
+            var robrootPos = GetLiveRobrootWorldPos();
+            targetRobroot = worldPos - robrootPos;
+        }
 
         // Tool orientation: approach along -normal, forward fixed to world +X.
         // Fixing the forward eliminates azimuthal spin when tilt axis changes.
@@ -10678,6 +11169,8 @@ public partial class ViewportView : UserControl
         _scrubIkCts?.Cancel();
         _scrubIkCts = new CancellationTokenSource();
         var cts = _scrubIkCts;
+        float e1Capture = scrubE1;
+        bool setE1 = robot.IsRobotRail && vm.AdditiveSettings is { E1MotionEnabled: true };
 
         Task.Run(() =>
         {
@@ -10694,6 +11187,8 @@ public partial class ViewportView : UserControl
                 robot.A4 = Math.Round(result[3], 2);
                 robot.A5 = Math.Round(result[4], 2);
                 robot.A6 = Math.Round(result[5], 2);
+                if (setE1)
+                    robot.E1 = Math.Round(e1Capture, 2);
                 GlCanvas.RequestNextFrameRendering();
             });
         }, cts.Token);
@@ -10704,6 +11199,60 @@ public partial class ViewportView : UserControl
     /// a reachability bool[] into <see cref="_pendingReachability"/> for the GL thread to apply.
     /// Any previous validation for a different toolpath is cancelled first.
     /// </summary>
+    /// <summary>
+    /// Builds (or reuses) the digital-twin collision world: robot link hulls +
+    /// environment triangle BVH. UI thread only — reads the live scene graph.
+    /// Returns null (collision checking disabled) when the robot model can't be
+    /// extracted; never throws.
+    /// </summary>
+    private CollisionWorld? BuildOrGetCollisionWorld()
+    {
+        if (_collisionWorld is not null) return _collisionWorld;
+        var vm = _vm;
+        var robotRoot = _robotBaseNode;
+        var fk = _fkController;
+        if (vm is null || robotRoot is null || fk is null) return null;
+
+        try
+        {
+            var joints = vm.ActiveCell?.Robot.Joints ?? [];
+            if (joints.Count < 6) return null;
+            Action<string> log = s => vm.OnDevLog?.Invoke(s);
+
+            var robot = CollisionModelExtractor.ExtractRobot(
+                robotRoot, joints, fk.RestPoses, log, _currentToolNode, _toolMeshMatrix);
+            if (robot is null) return null;
+
+            var env = CollisionModelExtractor.ExtractEnvironment(
+                _renderer.SceneRoot, robotRoot,
+                _currentToolNode is null ? null : [_currentToolNode], log);
+
+            var world = new CollisionWorld(robot, env, new CollisionSettings());
+
+            // Baseline: exclude self pairs already within margin at the cell home pose
+            // (conservative-hull overlap at rest must not flood the results).
+            var home = vm.ActiveCell?.Robot.HomePosition;
+            if (home is { Length: >= 6 })
+            {
+                var chainRoot = CollisionModelExtractor.ToNumericsMatrix(fk.LiveChainRootTransform());
+                Span<float> homeKrl = [home[0], home[1], home[2], home[3], home[4], home[5]];
+                var excluded = robot.ApplySelfBaseline(homeKrl, chainRoot,
+                    MathF.Max(world.Settings.SelfClearanceMm, 1f));
+                foreach (var (a, b, d) in excluded)
+                    log($"[collision] baseline-excluded {RobotCollisionModel.LinkNames[a]} ↔ " +
+                        $"{RobotCollisionModel.LinkNames[b]} ({d:F1} at home)");
+            }
+
+            _collisionWorld = world;
+            return world;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[collision] extraction failed: {ex.Message}");
+            return null;
+        }
+    }
+
     private void ValidateToolpathAsync(SceneNode node, Toolpath toolpath)
     {
         var currentTransform = node.WorldTransform;
@@ -10741,26 +11290,71 @@ public partial class ViewportView : UserControl
             (float)robot.A1, (float)robot.A2, (float)robot.A3,
             (float)robot.A4, (float)robot.A5, (float)robot.A6,
         };
+        // Plan E1 (reachability-aware) before IK when rail motion is enabled.
+        bool e1Motion = addSettings is { E1MotionEnabled: true }
+                        && vm?.ActiveCell?.RobotRail is not null;
+        float homeE1 = (float)robot.E1;
+        var cellForE1 = vm?.ActiveCell;
+        var homeWorld = cellForE1 is not null
+            ? new NVec3(cellForE1.Robot.WorldPosition.X, cellForE1.Robot.WorldPosition.Y, cellForE1.Robot.WorldPosition.Z)
+            : new NVec3(robroot.X, robroot.Y, robroot.Z);
+
+        // Digital-twin collision captures (UI thread; immutable afterward).
+        var collisionWorld = BuildOrGetCollisionWorld();
+        var chainRootColl = _fkController is { } fkColl
+            ? CollisionModelExtractor.ToNumericsMatrix(fkColl.LiveChainRootTransform())
+            : System.Numerics.Matrix4x4.Identity;
+        var wtColl = CollisionModelExtractor.ToNumericsMatrix(wt);
+        var originColl = new NVec3(origin.X, origin.Y, origin.Z);
+        float beadWidthColl = addSettings is not null ? (float)addSettings.BeadWidth : 6f;
 
         Task.Run(() =>
         {
             int total = 0;
             foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
+            if (total == 0) return;
 
+            // Bake planned E1 onto moves (workspace envelope + mid-reach scoring).
+            if (e1Motion && cellForE1?.RobotRail is { } railPlan && addSettings is not null)
+            {
+                PlanRailE1ForExport(toolpath, cellForE1, addSettings, origin, wt, homeE1);
+            }
+            else
+            {
+                foreach (var layer in toolpath.Layers)
+                foreach (var m in layer.Moves)
+                    m.E1Mm = float.NaN;
+            }
+
+            var e1PerMove = new float[total];
             var targets    = new TkVector3[total];
             var normals    = new TkVector3[total];
             int mi         = 0;
             var lastNormN  = NVec3.UnitZ; // last valid extrude normal; held through transitions
+            var railCfg    = cellForE1?.RobotRail;
             foreach (var layer in toolpath.Layers)
             {
                 foreach (var move in layer.Moves)
                 {
                     var (pos, _) = cache[Math.Min(mi + 1, cache.Length - 1)];
                     float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
-                    targets[mi] = new TkVector3(
+                    var world = new TkVector3(
                         lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
                         lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
-                        lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43) - robroot;
+                        lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+
+                    float e1 = !float.IsNaN(move.E1Mm) ? move.E1Mm : homeE1;
+                    e1PerMove[mi] = e1;
+
+                    // Target in ROBROOT of the carriage at planned E1 (pure translation rail).
+                    if (e1Motion && railCfg is { } rail)
+                    {
+                        var baseW = RailE1Planner.BaseWorld(homeWorld, rail, e1);
+                        targets[mi] = new TkVector3(
+                            world.X - baseW.X, world.Y - baseW.Y, world.Z - baseW.Z);
+                    }
+                    else
+                        targets[mi] = world - robroot;
 
                     // Travel and layer-stitch moves carry no orientation — hold the last
                     // extrude normal to prevent a sudden IK jump at layer transitions.
@@ -10947,9 +11541,73 @@ public partial class ViewportView : UserControl
                 }
             }
 
+            // ── Digital-twin collision sweep (environment + self + material) ────
+            bool[]? collision = null;
+            CollisionHit? firstCollHit = null;
+            int collCount = 0, collStride = 1;
+            if (collisionWorld is not null && total > 0)
+            {
+                try
+                {
+                    collisionWorld.Beads = collisionWorld.Settings.CheckMaterial
+                        ? new BeadObstacleGrid(toolpath, beadWidthColl, wtColl, originColl)
+                        : null;
+
+                    var chainRoots = new System.Numerics.Matrix4x4[total];
+                    var tcpWorlds = new NVec3[total];
+                    var railColl = cellForE1?.RobotRail;
+                    for (int i = 0; i < total; i++)
+                    {
+                        if (e1Motion && railColl is { } rc)
+                        {
+                            var bw = RailE1Planner.BaseWorld(homeWorld, rc, e1PerMove[i]);
+                            var bh = RailE1Planner.BaseWorld(homeWorld, rc, homeE1);
+                            chainRoots[i] = chainRootColl *
+                                System.Numerics.Matrix4x4.CreateTranslation(
+                                    bw.X - bh.X, bw.Y - bh.Y, bw.Z - bh.Z);
+                            tcpWorlds[i] = new NVec3(
+                                targets[i].X + bw.X, targets[i].Y + bw.Y, targets[i].Z + bw.Z);
+                        }
+                        else
+                        {
+                            chainRoots[i] = chainRootColl;
+                            tcpWorlds[i] = new NVec3(
+                                targets[i].X + robroot.X, targets[i].Y + robroot.Y, targets[i].Z + robroot.Z);
+                        }
+                    }
+
+                    var solved = new float[total][];
+                    for (int i = 0; i < total; i++) solved[i] = solutions[i] ?? seed;
+
+                    var collResult = ToolpathCollisionChecker.Check(
+                        collisionWorld, solved, chainRoots, tcpWorlds, cts.Token);
+                    collision = collResult.Colliding;
+                    collStride = collResult.SampleStride;
+                    for (int i = 0; i < total; i++)
+                        if (collision[i])
+                        {
+                            collCount++;
+                            firstCollHit ??= collResult.Hits[i];
+                        }
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[collision] sweep failed: {ex.Message}");
+                    collision = null;
+                }
+                finally
+                {
+                    collisionWorld.Beads = null;   // free the per-toolpath grid
+                }
+            }
+
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
+            _e1MmByNode[node]         = e1PerMove;
+            if (collision is not null) _collisionByNode[node] = collision;
+            else _collisionByNode.TryRemove(node, out _);
 
             int failCount = 0;
             foreach (var r in result) if (!r) failCount++;
@@ -10979,6 +11637,10 @@ public partial class ViewportView : UserControl
             string reachLabel = failCount == 0
                 ? $"All {result.Length} reachable"
                 : $"{failCount} / {result.Length} unreachable";
+            if (collCount > 0)
+                reachLabel += collStride > 1
+                    ? $" · {collCount:N0} collision (sampled 1/{collStride})"
+                    : $" · {collCount:N0} collision";
             Dispatcher.UIThread.Post(() =>
             {
                 _validationDone = true;
@@ -10986,18 +11648,27 @@ public partial class ViewportView : UserControl
                 {
                     vm.StatsReachability = reachLabel;
                     vm.IsValidating = false;
-                    vm.SetScrubMarkers(result, singularity);
+                    vm.SetScrubMarkers(result, singularity, collision);
                     int firstBad = -1;
                     for (int i = 0; i < total; i++)
-                        if (!result[i] || singularity[i]) { firstBad = i; break; }
+                        if (!result[i] || singularity[i] || (collision is not null && collision[i]))
+                        { firstBad = i; break; }
                     vm.FirstValidationIssueIndex = firstBad;
                     // Loud warning: a fault mid-print wastes material and hours.
-                    if (failCount + singCount > 0)
+                    if (failCount + singCount + collCount > 0)
+                    {
+                        string collPart = collCount > 0
+                            ? $" and {collCount:N0} predicted collision moves" +
+                              (firstCollHit is { } fh
+                                  ? $" (first: {RobotCollisionModel.LinkNames[fh.Link]} ↔ {fh.Other})"
+                                  : "")
+                            : "";
                         SetSliceStatus(vm,
-                            $"⚠ Robot validation: {singCount:N0} singularity-risk and {failCount:N0} unreachable moves" +
+                            $"⚠ Robot validation: {singCount:N0} singularity-risk, {failCount:N0} unreachable{collPart}" +
                             (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
-                            " — the robot may fault mid-print.",
+                            " — the robot may fault or crash mid-print.",
                             isError: true);
+                    }
                 }
                 GlCanvas.RequestNextFrameRendering();
             });
@@ -11203,8 +11874,9 @@ public partial class ViewportView : UserControl
     /// <summary>
     /// Drives the robot joints directly from pre-solved angles without launching an IK task.
     /// Used by the playback timer to animate Cartesian motion in real time.
+    /// When <paramref name="e1Mm"/> is set, also slides the linear rail for simulation.
     /// </summary>
-    private void SetRobotAnglesDirectly(float[] angles)
+    private void SetRobotAnglesDirectly(float[] angles, float? e1Mm = null)
     {
         var robot = _vm?.Robot;
         if (robot is null) return;
@@ -11215,6 +11887,8 @@ public partial class ViewportView : UserControl
         robot.A4 = Math.Round(angles[3], 2);
         robot.A5 = Math.Round(angles[4], 2);
         robot.A6 = Math.Round(angles[5], 2);
+        if (e1Mm is { } e && robot.IsRobotRail)
+            robot.E1 = Math.Round(e, 2);
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -11885,6 +12559,29 @@ public partial class ViewportView : UserControl
         _renderer.Camera.Target = worldPoint;
         _renderer.Camera.Radius = Math.Max(radiusMm, FrameMinRadiusMm);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Frames the camera on the world position of a flat move index of the
+    /// active scrub toolpath (timeline validation-tick click). Applies the same
+    /// origin + world-transform mapping as ScrubIkForNode.</summary>
+    private void FrameCameraToScrubIndex(int index)
+    {
+        var node = _activeScrubNode;
+        if (node is null) return;
+        if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
+
+        var (pos, _) = cache[Math.Clamp(index, 0, cache.Length - 1)];
+        var world = new TkVector3(pos.X, pos.Y, pos.Z);
+        if (_toolpathOriginByNode.TryGetValue(node, out var origin))
+        {
+            var wt = node.WorldTransform;
+            float lx = pos.X - origin.X, ly = pos.Y - origin.Y, lz = pos.Z - origin.Z;
+            world = new TkVector3(
+                lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+        }
+        FrameCameraToPoint(world, 300f);
     }
 
     /// <summary>Frames an arbitrary set of world points (selection polylines, layer beads…).</summary>
@@ -13451,7 +14148,14 @@ public partial class ViewportView : UserControl
         var path = file.TryGetLocalPath();
         if (path is null) return;
 
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, SavePathUtil.Normalize(path, "src"));
+        // Enforce PointLoader-safe stem even if the user typed special characters in the dialog.
+        path = SavePathUtil.Normalize(path, "src");
+        var dir = Path.GetDirectoryName(path) ?? ".";
+        var stem = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(path));
+        if (string.IsNullOrWhiteSpace(stem)) stem = "PrintJob";
+        path = Path.Combine(dir, stem + ".src");
+
+        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
     }
 
     /// <summary>Writes the active toolpath's KRL into <paramref name="dir"/> named after
@@ -13465,8 +14169,9 @@ public partial class ViewportView : UserControl
         if (toolpath is null || node is null || cell is null || settings is null) return null;
 
         // Rev in the filename (and therefore the KRL program name) so the operator
-        // can tell revisions apart on the controller, e.g. "… Rev04.src".
-        string path = Path.Combine(dir, $"{RobotKrlPaths.SuggestedFileName(node.Name)} Rev{rev:00}.src");
+        // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
+        // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
+        string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
         await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
         return path;
     }
@@ -13506,11 +14211,14 @@ public partial class ViewportView : UserControl
         if (nasSrc is { } n)
         {
             srcPath  = n.Path;
-            fileName = Path.GetFileName(n.Path);
+            // Sanitize upload name (PointLoader rejects odd punctuation in the module filename).
+            fileName = RobotKrlPaths.SanitizeStem(Path.GetFileNameWithoutExtension(n.Path));
+            if (string.IsNullOrWhiteSpace(fileName)) fileName = "PrintJob";
+            fileName += ".src";
         }
         else
         {
-            fileName = RobotKrlPaths.SuggestedFileName(node.Name) + ".src";
+            fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
             await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
@@ -13547,6 +14255,184 @@ public partial class ViewportView : UserControl
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
     }
 
+    /// <summary>
+    /// Home PTP E1: first planned move E1 when motion is on, else live rail pose.
+    /// </summary>
+    private static float ResolveHomeE1Mm(
+        CellConfig cell, ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel settings)
+    {
+        if (cell.RobotRail is null) return float.NaN;
+        if (settings.E1MotionEnabled)
+        {
+            foreach (var layer in toolpath.Layers)
+            foreach (var m in layer.Moves)
+                if (!float.IsNaN(m.E1Mm))
+                    return m.E1Mm;
+        }
+        return vm.Robot is { } r ? (float)r.E1 : 0f;
+    }
+
+    /// <summary>
+    /// For each move endpoint, sample E1 across the Y+/Y− allowance and pick the
+    /// carriage position that keeps the TCP in the arm workspace (prefer mid-reach).
+    /// Bakes <see cref="ToolpathMove.E1Mm"/> for the KRL exporter.
+    /// </summary>
+    private void PlanRailE1ForExport(
+        Toolpath toolpath,
+        CellConfig cell,
+        AdditiveSettingsViewModel settings,
+        NVec3 origin,
+        Matrix4 wt,
+        float homeE1)
+    {
+        var rail = cell.RobotRail;
+        if (rail is null) return;
+
+        float yPlus  = (float)settings.E1YPlusMm;
+        float yMinus = (float)settings.E1YMinusMm;
+        var homeWorld = new NVec3(
+            cell.Robot.WorldPosition.X,
+            cell.Robot.WorldPosition.Y,
+            cell.Robot.WorldPosition.Z);
+
+        // Collect world-space move endpoints in export order.
+        var worlds = new List<NVec3>(4096);
+        var moves  = new List<ToolpathMove>(4096);
+        foreach (var layer in toolpath.Layers)
+        {
+            foreach (var move in layer.Moves)
+            {
+                float lx = move.To.X - origin.X, ly = move.To.Y - origin.Y, lz = move.To.Z - origin.Z;
+                var world = new NVec3(
+                    lx * wt.M11 + ly * wt.M21 + lz * wt.M31 + wt.M41,
+                    lx * wt.M12 + ly * wt.M22 + lz * wt.M32 + wt.M42,
+                    lx * wt.M13 + ly * wt.M23 + lz * wt.M33 + wt.M43);
+                worlds.Add(world);
+                moves.Add(move);
+            }
+        }
+        if (worlds.Count == 0) return;
+
+        // Prefer mid-reach from the live IK envelope when available; else ~900 mm.
+        float prefReach = 900f;
+        Func<NVec3, bool>? inWs = null;
+        var solver = _ikSolver;
+        if (solver is not null)
+        {
+            prefReach = solver.PreferredHorizontalReachMm;
+            // Envelope is translation-invariant for pure rail travel — evaluate TCP
+            // relative to a virtual base at candidate E1 (no UpdateSceneBase needed).
+            inWs = rel => solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z));
+        }
+
+        // Subsample dense paths for speed: plan every keyframe, interpolate between.
+        const float KeyMm = 40f;
+        var keyIdx = new List<int> { 0 };
+        float acc = 0f;
+        for (int i = 1; i < worlds.Count; i++)
+        {
+            acc += NVec3.Distance(worlds[i - 1], worlds[i]);
+            if (acc >= KeyMm)
+            {
+                keyIdx.Add(i);
+                acc = 0f;
+            }
+        }
+        if (keyIdx[^1] != worlds.Count - 1)
+            keyIdx.Add(worlds.Count - 1);
+
+        var keyWorlds = new List<NVec3>(keyIdx.Count);
+        foreach (int i in keyIdx)
+            keyWorlds.Add(worlds[i]);
+
+        float[] keyE1 = RailE1Planner.PlanPath(
+            keyWorlds, homeWorld, rail, homeE1, yPlus, yMinus,
+            prefReach, inWs, gridCount: 11, smoothBlend: 0.45f);
+
+        // Interpolate key E1 → every move; sparse full-IK refinement on unreachable keys.
+        if (solver is not null)
+            RefineKeyE1WithIk(keyWorlds, keyE1, homeWorld, rail, homeE1, yPlus, yMinus, solver, settings);
+
+        // Paint onto moves
+        int k = 0;
+        for (int i = 0; i < moves.Count; i++)
+        {
+            while (k + 1 < keyIdx.Count && i > keyIdx[k + 1]) k++;
+            float e1;
+            if (k + 1 < keyIdx.Count && keyIdx[k + 1] != keyIdx[k])
+            {
+                float t = (i - keyIdx[k]) / (float)(keyIdx[k + 1] - keyIdx[k]);
+                e1 = keyE1[k] * (1f - t) + keyE1[k + 1] * t;
+            }
+            else
+                e1 = keyE1[Math.Min(k, keyE1.Length - 1)];
+
+            e1 = RailE1Planner.ClampToAllowance(e1, homeE1, yPlus, yMinus, rail.MinMm, rail.MaxMm);
+            moves[i].E1Mm = e1;
+        }
+    }
+
+    /// <summary>
+    /// For keyframes still outside the workspace envelope at their planned E1, try a few
+    /// more E1 samples with a cheap position-only IK solve (serial — no Parallel.For).
+    /// </summary>
+    private static void RefineKeyE1WithIk(
+        List<NVec3> keyWorlds,
+        float[] keyE1,
+        NVec3 homeWorld,
+        RobotRailCellConfig rail,
+        float homeE1,
+        float yPlus,
+        float yMinus,
+        GltfNumericalIkSolver solver,
+        AdditiveSettingsViewModel settings)
+    {
+        float offA = (float)settings.ToolheadA;
+        float offB = (float)settings.ToolheadB;
+        float offC = (float)settings.ToolheadC;
+        var seed = new float[6]; // home-ish zeros; Solve will iterate
+
+        for (int i = 0; i < keyWorlds.Count; i++)
+        {
+            var w = keyWorlds[i];
+            var baseW = RailE1Planner.BaseWorld(homeWorld, rail, keyE1[i]);
+            var rel = w - baseW;
+            if (solver.IsInWorkspace(new TkVector3(rel.X, rel.Y, rel.Z)))
+                continue;
+
+            // Failed envelope at planned E1 — re-pick using full sample set + quick Solve.
+            var candidates = RailE1Planner.BuildCandidates(
+                w, homeWorld, rail, homeE1, yPlus, yMinus, gridCount: 11);
+            float best = keyE1[i];
+            float bestScore = float.MaxValue;
+            var normal = TkVector3.UnitZ;
+            var rot = solver.TargetRotFromGlobalOrientation(normal, offA, offB, offC);
+
+            foreach (float e1 in candidates)
+            {
+                var b = RailE1Planner.BaseWorld(homeWorld, rail, e1);
+                var r = w - b;
+                var tgt = new TkVector3(r.X, r.Y, r.Z);
+                bool env = solver.IsInWorkspace(tgt);
+                // Position-only solve (faster) as quality check when in envelope
+                float[]? sol = env
+                    ? solver.Solve(tgt, seed, maxIterations: 25, finalTolerance: 15f)
+                    : null;
+                float dxy = MathF.Sqrt(r.X * r.X + r.Y * r.Y);
+                float score = (sol is not null ? 0f : env ? 50_000f : 1_000_000f)
+                    + MathF.Abs(dxy - solver.PreferredHorizontalReachMm)
+                    + 0.1f * MathF.Abs(e1 - homeE1);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    best = e1;
+                    if (sol is not null) Array.Copy(sol, seed, 6);
+                }
+            }
+            keyE1[i] = best;
+        }
+    }
+
     private async Task WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
@@ -13563,6 +14449,33 @@ public partial class ViewportView : UserControl
             wt.M41, wt.M42, wt.M43, wt.M44);
 
         _toolpathOriginByNode.TryGetValue(node, out var origin);
+
+        // Reachability-aware E1 plan: sample +/− allowance, pick carriage pose that
+        // keeps the TCP in the arm workspace, bake onto each move before export.
+        if (settings.E1MotionEnabled && cell.RobotRail is not null)
+        {
+            float homeE1 = vm.Robot is { } rr ? (float)rr.E1 : 0f;
+            RefreshIkSceneKinematics();
+            await Task.Run(() => PlanRailE1ForExport(
+                toolpath, cell, settings, origin, wt, homeE1));
+            float eMin = float.MaxValue, eMax = float.MinValue;
+            int nSet = 0;
+            foreach (var layer in toolpath.Layers)
+            foreach (var m in layer.Moves)
+            {
+                if (float.IsNaN(m.E1Mm)) continue;
+                eMin = MathF.Min(eMin, m.E1Mm);
+                eMax = MathF.Max(eMax, m.E1Mm);
+                nSet++;
+            }
+            if (nSet > 0)
+            {
+                var mvm = TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel;
+                mvm?.Console.Log(
+                    $"[E1] Reachability plan: {nSet} points, E1 range [{eMin:0.#} … {eMax:0.#}] mm " +
+                    $"(home ± Y+={settings.E1YPlusMm:0}/Y−={settings.E1YMinusMm:0})");
+            }
+        }
 
         // Relief-milling toolpath: export a spindle program (LIN cuts + rapids), not extrusion.
         bool isMill = toolpath.Layers.Any(l => l.Moves.Any(m => m.Kind == MoveKind.Mill));
@@ -13586,6 +14499,13 @@ public partial class ViewportView : UserControl
                 HomeE1Mm         = cell.RobotRail is not null && vm.Robot is { } millRobot
                                        ? (float)millRobot.E1
                                        : float.NaN,
+                E1MotionEnabled  = cell.RobotRail is not null && settings.E1MotionEnabled,
+                E1YPlusMm        = (float)settings.E1YPlusMm,
+                E1YMinusMm       = (float)settings.E1YMinusMm,
+                RailMinMm        = cell.RobotRail?.MinMm ?? -4650f,
+                RailMaxMm        = cell.RobotRail?.MaxMm ?? 150f,
+                RailAxis         = cell.RobotRail?.Axis ?? "Y",
+                RailE1Sign       = cell.RobotRail?.E1Sign ?? 1f,
                 ApoCvel          = (int)settings.ApoCvel,
                 NodeWorldTransform = sysWt,
                 NodeOrigin       = new System.Numerics.Vector3(origin.X, origin.Y, origin.Z),
@@ -13627,9 +14547,14 @@ public partial class ViewportView : UserControl
             LayerHeightMm       = (float)settings.LayerHeight,
             FlowRate            = flow,
             HomePosition              = settings.SelectedHomeAngles,
-            HomeE1Mm                  = cell.RobotRail is not null && vm.Robot is { } railRobot
-                                            ? (float)railRobot.E1
-                                            : float.NaN,
+            HomeE1Mm                  = ResolveHomeE1Mm(cell, vm, toolpath, settings),
+            E1MotionEnabled           = cell.RobotRail is not null && settings.E1MotionEnabled,
+            E1YPlusMm                 = (float)settings.E1YPlusMm,
+            E1YMinusMm                = (float)settings.E1YMinusMm,
+            RailMinMm                 = cell.RobotRail?.MinMm ?? -4650f,
+            RailMaxMm                 = cell.RobotRail?.MaxMm ?? 150f,
+            RailAxis                  = cell.RobotRail?.Axis ?? "Y",
+            RailE1Sign                = cell.RobotRail?.E1Sign ?? 1f,
             ApoCvel                   = (int)settings.ApoCvel,
             OrientationLookAheadMm    = (float)settings.OrientationLookAheadMm,
             OrientationSigmaMm        = (float)settings.OrientationSigmaMm,
@@ -13645,11 +14570,16 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.Z),
             SliceBedWorldZ     = _renderer.BedZ,
             TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
-            HeaderTemplate      = postProcess.HeaderText,
-            FooterTemplate      = postProcess.FooterText,
+            // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
+            // The exporter renders placeholders and, in URM mode, keeps the edited header
+            // only if it is still URM-shaped (else falls back to the Caracol URM default).
+            HeaderTemplate = postProcess.HeaderText,
+            FooterTemplate = postProcess.FooterText,
             ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
+            SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
+            DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
 
         var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));

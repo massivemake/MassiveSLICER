@@ -2691,6 +2691,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
+            if (RightPanel.Additive.SelectedPreset is { } mp)
+                Console.Log($"[workspace] Material preset '{mp.Name}' saved with the workspace.");
         }
         catch (Exception ex)
         {
@@ -2735,9 +2737,22 @@ public sealed class MainWindowViewModel : ViewModelBase
 
     private void ApplyWorkspaceStateCore(WorkspaceDocument doc, string workspacePath)
     {
+        // Pause realtime slice *before* prefs hit AdditiveSettings PropertyChanged, so
+        // baked calibration toolpaths are not immediately re-sliced away on open.
+        if (ShouldPauseRealtimeSlicingOnOpen(doc))
+        {
+            Viewport.RealtimeSlicingPaused = true;
+            Console.Log("[workspace] Real-time slicing paused (baked toolpath / workspace flag).");
+        }
+
         CopyPreferences(doc.Settings);
         SyncViewportFromPrefs();
-        RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName);
+        // UiSession can override Settings for helper visibility (saved after prefs snapshot
+        // quirks; older mass files leave this null and keep the Settings value).
+        if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
+            RightPanel.Additive.XBracingShowHelper = showXHelper;
+        RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName,
+            keepCurrentWhenMissing: true);
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
             RightPanel.ActiveTab = tab;
@@ -2776,6 +2791,28 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log(restoredCount == doc.Models.Count
             ? $"[workspace] Restored {restoredCount} model(s) from {workspacePath}"
             : $"[workspace] Restored {restoredCount} of {doc.Models.Count} model(s) from {workspacePath} (some meshes missing).");
+    }
+
+    /// <summary>
+    /// True when the workspace asks for pause, or any saved toolpath is marked BAKED
+    /// (Start/Stop calibration matrix — re-slice would destroy per-cell settings).
+    /// </summary>
+    private static bool ShouldPauseRealtimeSlicingOnOpen(WorkspaceDocument doc)
+    {
+        if (doc.UiSession?.RealtimeSlicingPaused == true)
+            return true;
+
+        foreach (var model in doc.Models)
+        {
+            foreach (var tp in model.Toolpaths)
+            {
+                if (!string.IsNullOrEmpty(tp.Name)
+                    && tp.Name.Contains("BAKED", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnSettingsChanged()
@@ -2894,6 +2931,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WipeSkipShortTravels    = copy.WipeSkipShortTravels;
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
+        live.SsPreTravelWaitSec      = copy.SsPreTravelWaitSec;
+        live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
         live.ResumeRampStartRpmPercent = copy.ResumeRampStartRpmPercent;
@@ -2905,6 +2944,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.PaintMarks              = copy.PaintMarks;
+        live.StructuralSupports      = copy.StructuralSupports;
         live.CurvedBoundarySource       = copy.CurvedBoundarySource;
         live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
         live.CurvedEnableRegionSplit    = copy.CurvedEnableRegionSplit;
@@ -2918,6 +2958,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.MinLayerHeight         = copy.MinLayerHeight;
         live.DisableContourOffset   = copy.DisableContourOffset;
         live.SeamMode               = copy.SeamMode;
+        live.ZigZagAllowSameLayerTravel = copy.ZigZagAllowSameLayerTravel;
         live.OverhangOrientation    = copy.OverhangOrientation;
         live.MaxOverhangTiltDeg     = copy.MaxOverhangTiltDeg;
         live.SmoothRotation                = copy.SmoothRotation;
@@ -2937,8 +2978,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LightningTargetSupportSelections = copy.LightningTargetSupportSelections;
         live.MultiPlanarPlanes = copy.MultiPlanarPlanes.Select(a => (double[])a.Clone()).ToList();
         live.MultiPlanarAxisX  = copy.MultiPlanarAxisX;
+        live.BrimEnabled            = copy.BrimEnabled;
+        live.BrimLoops              = copy.BrimLoops;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
+        live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
+        live.XBracingDepthEaseBottom = copy.XBracingDepthEaseBottom;
+        live.XBracingDepthEaseTop   = copy.XBracingDepthEaseTop;
         live.XBracingSpanMm         = copy.XBracingSpanMm;
         live.XBracingAngleDeg       = copy.XBracingAngleDeg;
         live.XBracingExtendEdges    = copy.XBracingExtendEdges;
@@ -2989,8 +3035,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.BaseDataIndex          = copy.BaseDataIndex;
         live.ToolheadA              = copy.ToolheadA;
         live.ToolheadB              = copy.ToolheadB;
+        live.E1MotionEnabled        = copy.E1MotionEnabled;
+        live.E1YPlusMm              = copy.E1YPlusMm;
+        live.E1YMinusMm             = copy.E1YMinusMm;
         live.ToolheadC              = copy.ToolheadC;
         live.OrientationFollowPercent = copy.OrientationFollowPercent;
+        live.OrientationMaxTiltDeg    = copy.OrientationMaxTiltDeg;
+        live.FirstLayerZeroTilt       = copy.FirstLayerZeroTilt;
+        live.LayerLeanPercent         = copy.LayerLeanPercent;
+        live.LayerLeanMaxTiltDeg      = copy.LayerLeanMaxTiltDeg;
         live.OrientationLookAheadMm   = copy.OrientationLookAheadMm;
         live.OrientationSigmaMm       = copy.OrientationSigmaMm;
         live.ApoCvel                = copy.ApoCvel;
@@ -3000,11 +3053,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ScanBaseDataIndex      = copy.ScanBaseDataIndex;
     }
 
-    private void RestoreMaterialPresetSelection(string? presetName)
+    private void RestoreMaterialPresetSelection(
+        string? presetName, bool keepCurrentWhenMissing = false)
     {
-        if (presetName is null)
+        if (string.IsNullOrEmpty(presetName))
         {
-            RightPanel.Additive.SelectedPresetIndex = -1;
+            // Older .mass files never recorded the preset — clearing here would also
+            // wipe the global selection (the change handler persists prefs). Keep it.
+            if (!keepCurrentWhenMissing)
+                RightPanel.Additive.SelectedPresetIndex = -1;
             return;
         }
 
@@ -3013,6 +3070,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             .FirstOrDefault(t => t.p.Name == presetName, (null!, -1)).i;
         if (idx >= 0)
             RightPanel.Additive.SelectedPresetIndex = idx;
+        else
+            Console.Log($"[workspace] Material preset '{presetName}' from the file "
+                + "is not in the local preset library — selection left unchanged.");
     }
 
     /// <summary>
@@ -3126,6 +3186,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.MinLayerHeight      = p.MinLayerHeight;
         add.DisableContourOffset = p.DisableContourOffset;
         add.SeamMode = add.SeamModeOptions.Contains(p.SeamMode) ? p.SeamMode : "Normal";
+        add.ZigZagAllowSameLayerTravel = p.ZigZagAllowSameLayerTravel;
         add.OverhangOrientation = p.OverhangOrientation;
         add.MaxOverhangTiltDeg  = p.MaxOverhangTiltDeg;
         add.SmoothRotation                = p.SmoothRotation;
@@ -3153,8 +3214,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         add.MultiPlanarAxisX = p.MultiPlanarAxisX;
         add.BumpMultiPlanarStamp();
+        add.BrimEnabled         = p.BrimEnabled;
+        add.BrimLoops           = p.BrimLoops;
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
+        add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
+        add.XBracingDepthEaseBottom = add.XBracingDepthEaseOptions.Contains(p.XBracingDepthEaseBottom)
+            ? p.XBracingDepthEaseBottom : "Linear";
+        add.XBracingDepthEaseTop = add.XBracingDepthEaseOptions.Contains(p.XBracingDepthEaseTop)
+            ? p.XBracingDepthEaseTop : "Linear";
         add.XBracingSpanMm      = p.XBracingSpanMm;
         add.XBracingAngleDeg    = p.XBracingAngleDeg;
         add.XBracingExtendEdges = p.XBracingExtendEdges;
@@ -3223,6 +3291,11 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WipeSkipShortTravels    = p.WipeSkipShortTravels;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
+        add.SsPreTravelWaitSec      = p.SsPreTravelWaitSec;
+        add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
+        // Ensure post-process header is Caracol URM (not LFAM $ANOUT MAT) when flag is on.
+        // SetField no-ops if value already matched, so always re-apply templates after load.
+        add.ApplyUrmPostProcessTemplates(p.DigitalStartStopEnabled);
         add.ResumeRampEnabled         = p.ResumeRampEnabled;
         add.ResumeRampStartSpeed      = p.ResumeRampStartSpeed;
         add.ResumeRampStartRpmPercent = p.ResumeRampStartRpmPercent;
@@ -3235,6 +3308,19 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
+        add.StructuralSupports.Clear();
+        add.StructuralSupports.AddRange(p.StructuralSupports
+            .Where(a => a is { Length: >= 12 })
+            .Select(a => new StructuralSupportSpec
+            {
+                Shape = a[0] >= 1f ? SupportShapeKind.Circle : SupportShapeKind.Rectangle,
+                AnchorX = a[1], AnchorY = a[2], AnchorLayer = (int)a[3],
+                LayersUp = (int)a[4], LayersDown = (int)a[5],
+                CenterX = a[6], CenterY = a[7],
+                WidthMm = a[8], DepthMm = a[9], RotationDeg = a[10],
+                Enabled = a[11] >= 0.5f,
+            }));
+        add.SelectedSupportIndex = add.StructuralSupports.Count > 0 ? 0 : -1;
         add.SetPaintMarks(p.PaintMarks
             .Where(a => a is { Length: >= 5 })
             .Select(a => new PaintMark(
@@ -3257,7 +3343,14 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ToolheadA     = p.ToolheadA;
         add.ToolheadB     = p.ToolheadB;
         add.ToolheadC     = p.ToolheadC;
+        add.E1MotionEnabled = p.E1MotionEnabled;
+        add.E1YPlusMm     = p.E1YPlusMm;
+        add.E1YMinusMm    = p.E1YMinusMm;
         add.OrientationFollowPercent = p.OrientationFollowPercent;
+        add.OrientationMaxTiltDeg    = p.OrientationMaxTiltDeg;
+        add.FirstLayerZeroTilt       = p.FirstLayerZeroTilt;
+        add.LayerLeanPercent         = p.LayerLeanPercent;
+        add.LayerLeanMaxTiltDeg      = p.LayerLeanMaxTiltDeg;
         add.OrientationLookAheadMm   = p.OrientationLookAheadMm;
         add.OrientationSigmaMm       = p.OrientationSigmaMm;
         add.ApoCvel                = p.ApoCvel;
@@ -3412,6 +3505,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ShowEdges   = view.ShowEdges;
 
         // Additive slicing settings
+        // Material preset: capture from the live VM, not the change-event mirror —
+        // the .mass snapshot must always match what the MATERIAL dropdown shows.
+        p.SelectedMaterialPresetName = add.SelectedPreset?.Name;
         p.LayerHeight      = add.LayerHeight;
         p.BeadWidth        = add.BeadWidth;
         p.FirstLayerHeight = add.FirstLayerHeight;
@@ -3420,6 +3516,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MinLayerHeight      = add.MinLayerHeight;
         p.DisableContourOffset = add.DisableContourOffset;
         p.SeamMode            = add.SeamMode;
+        p.ZigZagAllowSameLayerTravel = add.ZigZagAllowSameLayerTravel;
         p.OverhangOrientation = add.OverhangOrientation;
         p.MaxOverhangTiltDeg  = add.MaxOverhangTiltDeg;
         p.SmoothRotation                = add.SmoothRotation;
@@ -3440,8 +3537,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.MultiPlanarPlanes = add.MultiPlanarPlanes
             .Select(r => new[] { r.HeightPct, r.AngleDeg }).ToList();
         p.MultiPlanarAxisX = add.MultiPlanarAxisX;
+        p.BrimEnabled          = add.BrimEnabled;
+        p.BrimLoops            = add.BrimLoops;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
+        p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;
+        p.XBracingDepthEaseBottom = add.XBracingDepthEaseBottom;
+        p.XBracingDepthEaseTop = add.XBracingDepthEaseTop;
         p.XBracingSpanMm       = add.XBracingSpanMm;
         p.XBracingAngleDeg     = add.XBracingAngleDeg;
         p.XBracingExtendEdges  = add.XBracingExtendEdges;
@@ -3496,6 +3598,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeSkipShortTravels    = add.WipeSkipShortTravels;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
+        p.SsPreTravelWaitSec      = add.SsPreTravelWaitSec;
+        p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
         p.ResumeRampStartRpmPercent = add.ResumeRampStartRpmPercent;
@@ -3514,6 +3618,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                 (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
                 (float)m.SupportSide })
             .ToList();
+        p.StructuralSupports = add.StructuralSupports
+            .Select(s => new[] {
+                s.Shape == SupportShapeKind.Circle ? 1f : 0f,
+                s.AnchorX, s.AnchorY, s.AnchorLayer,
+                s.LayersUp, s.LayersDown,
+                s.CenterX, s.CenterY, s.WidthMm, s.DepthMm, s.RotationDeg,
+                s.Enabled ? 1f : 0f })
+            .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
         p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;
@@ -3524,7 +3636,14 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ToolheadA        = add.ToolheadA;
         p.ToolheadB        = add.ToolheadB;
         p.ToolheadC        = add.ToolheadC;
+        p.E1MotionEnabled  = add.E1MotionEnabled;
+        p.E1YPlusMm        = add.E1YPlusMm;
+        p.E1YMinusMm       = add.E1YMinusMm;
         p.OrientationFollowPercent = add.OrientationFollowPercent;
+        p.OrientationMaxTiltDeg    = add.OrientationMaxTiltDeg;
+        p.FirstLayerZeroTilt       = add.FirstLayerZeroTilt;
+        p.LayerLeanPercent         = add.LayerLeanPercent;
+        p.LayerLeanMaxTiltDeg      = add.LayerLeanMaxTiltDeg;
         p.OrientationLookAheadMm   = add.OrientationLookAheadMm;
         p.OrientationSigmaMm       = add.OrientationSigmaMm;
         p.ApoCvel                = add.ApoCvel;

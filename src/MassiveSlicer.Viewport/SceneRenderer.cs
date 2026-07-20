@@ -329,7 +329,9 @@ public sealed class SceneRenderer : IDisposable
     public OrbitCamera Camera { get; } = new();
 
     /// <summary>Root of the scene graph. Add child nodes to populate the scene.</summary>
-    public SceneNode SceneRoot { get; } = new() { Name = "Root" };
+    // Root is never a valid selection target: picks on non-selectable geometry
+    // (cell fixtures with dev mode off) must resolve to null, not climb to Root.
+    public SceneNode SceneRoot { get; } = new() { Name = "Root", Selectable = false };
 
     /// <summary>Currently selected node (direct child of <see cref="SceneRoot"/>), or <c>null</c>.</summary>
     public SceneNode? SelectedNode { get; private set; }
@@ -364,10 +366,16 @@ public sealed class SceneRenderer : IDisposable
     ///   <item>current−2 @ 30% opacity</item>
     ///   <item>current−1 @ 60% opacity</item>
     ///   <item>current+1 dashed @ 40% opacity</item>
-    ///   <item>current solid @ 100%, 2× line weight</item>
+    ///   <item>current solid @ 100%, 3× line weight</item>
     /// </list>
     /// Nothing older than current−3 is drawn. Depth test off so fade composites top-down.
     /// </summary>
+    /// <summary>Below-layer ghost band size in the 2D slice viewer (default 3).</summary>
+    public int SlicePlaneBelowLayerCount { get; set; } = 3;
+
+    /// <summary>Draw ALL layers below the ghost band faintly (single draw call).</summary>
+    public bool SlicePlaneShowAllBelow { get; set; }
+
     private void DrawSlicePlaneLayers(
         ToolpathRenderer renderer, Matrix4 toolpathMvp, Vector3 eyeLocal,
         bool selected, int[] ends)
@@ -384,7 +392,7 @@ public sealed class SceneRenderer : IDisposable
         }
 
         const float ctxWidth = 2.2f;
-        const float activeWidth = ctxWidth * 2f;
+        const float activeWidth = ctxWidth * 3f;
 
         // Always enable alpha blending for fade; ignore mesh depth.
         GL.Enable(EnableCap.Blend);
@@ -392,18 +400,41 @@ public sealed class SceneRenderer : IDisposable
         GL.Disable(EnableCap.DepthTest);
         GL.DepthMask(false);
 
+        int belowCount = Math.Clamp(SlicePlaneBelowLayerCount, 0, 64);
+
+        // Optional: everything older than the fade band in ONE faint pass — a full
+        // per-layer loop over hundreds of layers would be hundreds of draw calls.
+        if (SlicePlaneShowAllBelow && cur - belowCount - 1 >= 0)
+        {
+            int allEnd = ends[cur - belowCount - 1];
+            if (allEnd > 0)
+            {
+                renderer.Draw(toolpathMvp, selected: selected,
+                    showExtrusion: true, showTravel: false,
+                    showLightning: true, showWipe: false,
+                    showSeam: false, showBead: false, showBeadOverhang: false,
+                    showOrientationPreview: false,
+                    scrubIndex: allEnd, scrubStart: 0,
+                    eyeLocal: eyeLocal, lineOpacity: 0.12f,
+                    showAllPathPoints: false, showDepthLines: false,
+                    viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
+                    dashPeriodPx: 0f, lineWidth: ctxWidth);
+            }
+        }
+
         // Farther-below first so nearer below-layers and the active line paint on top.
-        // depth 3 → 17%, depth 2 → 30%, depth 1 → 60%.
-        ReadOnlySpan<float> belowOpacity = [0.17f, 0.30f, 0.60f];
-        for (int depth = 3; depth >= 1; depth--)
+        // Opacity falls off from 60% (nearest) toward ~8% at the band edge; the
+        // default band of 3 reproduces the original 60/30/17% look.
+        for (int depth = belowCount; depth >= 1; depth--)
         {
             int li = cur - depth;
             if (li < 0) continue;
-            float opacity = belowOpacity[3 - depth];
+            float opacity = MathF.Max(0.08f, 0.60f * MathF.Pow(0.53f, depth - 1));
             var (lo, hi) = Range(ends, li);
             if (hi <= lo) continue;
-            // selected:false so override colour stays uniform; opacity carries the fade.
-            renderer.Draw(toolpathMvp, selected: false,
+            // Use the caller's palette (selected = bright extrude colours) — the old
+            // unselected gray at 17-60% opacity was invisible on the dark backdrop.
+            renderer.Draw(toolpathMvp, selected: selected,
                 showExtrusion: true, showTravel: false,
                 showLightning: true, showWipe: false,
                 showSeam: false, showBead: false, showBeadOverhang: false,
@@ -421,20 +452,20 @@ public sealed class SceneRenderer : IDisposable
             var (lo, hi) = Range(ends, cur + 1);
             if (hi > lo)
             {
-                renderer.Draw(toolpathMvp, selected: false,
+                renderer.Draw(toolpathMvp, selected: selected,
                     showExtrusion: true, showTravel: false,
                     showLightning: true, showWipe: false,
                     showSeam: false, showBead: false, showBeadOverhang: false,
                     showOrientationPreview: false,
                     scrubIndex: hi, scrubStart: lo,
-                    eyeLocal: eyeLocal, lineOpacity: 0.40f,
+                    eyeLocal: eyeLocal, lineOpacity: 0.45f,
                     showAllPathPoints: false, showDepthLines: false,
                     viewportW: _viewportWidthPx, viewportH: _viewportHeightPx,
                     dashPeriodPx: 12f, lineWidth: ctxWidth);
             }
         }
 
-        // Active current layer — full opacity, double weight, on top.
+        // Active current layer — full opacity, 3× weight, on top.
         {
             var (lo, hi) = Range(ends, cur);
             if (hi > lo)
@@ -1676,9 +1707,20 @@ public sealed class SceneRenderer : IDisposable
 
     // -- Selection -------------------------------------------------------------
 
+    /// <summary>
+    /// Optional selection policy: return false to veto selecting a node. Applied to
+    /// EVERY selection path (viewport pick, outliner, programmatic) — used by the app
+    /// to make cell fixtures (print bed, stands, docks) selectable only in dev mode,
+    /// regardless of per-node Selectable flags or outliner padlock state.
+    /// </summary>
+    public Func<SceneNode, bool>? SelectionFilter { get; set; }
+
     /// <summary>Selects <paramref name="node"/> exclusively, or clears selection if <c>null</c>.</summary>
     public void Select(SceneNode? node)
     {
+        if (node is not null && SelectionFilter is { } filter && !filter(node))
+            return; // vetoed by policy — keep the current selection
+
         SelectedNode = node;
         _selectedToolpaths.Clear();
         _selectedToolpathOrder.Clear();

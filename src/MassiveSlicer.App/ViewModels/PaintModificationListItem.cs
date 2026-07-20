@@ -75,9 +75,15 @@ public sealed class PaintModificationListItem : ViewModelBase
             if (!SetField(ref _supportType, v)) return;
             OnPropertyChanged(nameof(ShowBridgeTargetUi));
             OnPropertyChanged(nameof(ShowSupportSideUi));
+            OnPropertyChanged(nameof(IsStructural));
             SupportTypeChanged?.Invoke(Id, v);
         }
     }
+
+    /// <summary>Structural Support card — pocket helper settings render inline.</summary>
+    public bool IsStructural =>
+        Core.Models.PaintSupportStyleUtil.FromLabel(SupportType)
+            == Core.Models.PaintSupportStyle.StructuralSupport;
 
     /// <summary>Bridge target only applies to Formbound (Tree roots to bed).</summary>
     public bool ShowBridgeTargetUi =>
