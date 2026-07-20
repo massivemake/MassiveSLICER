@@ -171,10 +171,12 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     // -- Purge-and-weigh calibration -----------------------------------------
     //
-    // Run the extruder into the air at a fixed motor % for a fixed time, weigh
-    // the cooled purge.  Flow rate falls out directly — no true RPM needed,
-    // because the machine's $ANOUT[4] channel is a percentage:
+    // Run the extruder into the air at a fixed screw RPM for a fixed time, weigh
+    // the cooled purge.  The operator enters true RPM (read off the drive); the
+    // machine's $ANOUT[4] channel is a percentage, so RPM converts via the drive
+    // scale (RPM at 100 % output):
     //
+    //   motor% = rpm ÷ maxRpm × 100
     //   flowRate (rev/cm³-equivalent) = motor% × (seconds/60) ÷ (grams ÷ density)
 
     private string _calibratedOn = "";
@@ -196,12 +198,26 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
             ? "Not calibrated — flow rate is the default/manual value."
             : $"Calibrated {_calibratedOn}   ({_calibrationNote})";
 
-    private double _calibMotorPercent = 50.0;
-    public double CalibMotorPercent
+    private double _calibMotorRpm = 50.0;
+
+    /// <summary>Screw speed during the purge test, in true RPM (read off the drive).</summary>
+    public double CalibMotorRpm
     {
-        get => _calibMotorPercent;
-        set { if (SetField(ref _calibMotorPercent, Math.Clamp(value, 0.1, 100))) OnPropertyChanged(nameof(CalibComputedText)); }
+        get => _calibMotorRpm;
+        set { if (SetField(ref _calibMotorRpm, Math.Max(0.1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
     }
+
+    private double _calibMaxRpm = 100.0;
+
+    /// <summary>Drive scale: screw RPM at 100 % ($ANOUT[4] = 1.0). Machine property.</summary>
+    public double CalibMaxRpm
+    {
+        get => _calibMaxRpm;
+        set { if (SetField(ref _calibMaxRpm, Math.Max(1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+    }
+
+    /// <summary>Motor % equivalent of <see cref="CalibMotorRpm"/> — the $ANOUT[4] signal value × 100.</summary>
+    public double CalibMotorPercent => _calibMotorRpm / _calibMaxRpm * 100.0;
 
     private double _calibTimeSec = 60.0;
     public double CalibTimeSec
@@ -222,9 +238,10 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     {
         get
         {
-            if (_calibWeightG <= 0 || _materialDensity <= 0) return null;
-            double volumeCm3 = _calibWeightG / _materialDensity;
-            return _calibMotorPercent * (_calibTimeSec / 60.0) / volumeCm3;
+            if (_calibWeightG <= 0 || _materialDensity <= 0 || _calibMaxRpm <= 0) return null;
+            double motorPercent = _calibMotorRpm / _calibMaxRpm * 100.0;
+            double volumeCm3    = _calibWeightG / _materialDensity;
+            return motorPercent * (_calibTimeSec / 60.0) / volumeCm3;
         }
     }
 
@@ -238,7 +255,8 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         if (CalibComputedFlowRate is not double f) return;
         FlowRate        = f;
         CalibratedOn    = DateTime.Now.ToString("yyyy-MM-dd");
-        CalibrationNote = $"{_calibMotorPercent:0.#}% × {_calibTimeSec:0}s → {_calibWeightG:0.#}g @ {Temperature1:0}/{Temperature2:0}/{Temperature3:0}°C";
+        CalibrationNote = $"{_calibMotorRpm:0.#} RPM × {_calibTimeSec:0}s → {_calibWeightG:0.#}g" +
+                          $" (max {_calibMaxRpm:0} RPM) @ {Temperature1:0}/{Temperature2:0}/{Temperature3:0}°C";
     }
 
     // -- Auto-name logic ---------------------------------------------------

@@ -413,6 +413,397 @@
                         </StackPanel>
                     </Expander>
 
+                    <!-- 0 PRESETS (comp/prototype — sample data only, not wired to real save/load) -->
+                    <Expander Classes="StepCard PresetsCard"
+                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
+                              IsExpanded="{Binding StepPresetsExpanded, Mode=TwoWay}">
+                        <Expander.Header>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource ColorSuccess}">
+                                    <TextBlock Text="0" FontSize="10" FontWeight="Bold"
+                                               Foreground="#0A0E14"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <TextBlock Text="PRESETS" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Expander.Header>
+                        <StackPanel Margin="8,0,8,8" Spacing="8">
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                       Text="Apply pushes a preset's settings onto the panel below for real. The library itself is still in-memory only — not yet saved to disk between sessions."/>
+
+                            <!-- Search + filter toggle -->
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBox Grid.Column="0" Classes="PanelTextBox"
+                                         Text="{Binding Presets.SearchText, Mode=TwoWay}"
+                                         Watermark="Search name or value… Enter to pin as a tag"
+                                         KeyDown="OnSearchTextKeyDown"/>
+                                <ToggleButton Grid.Column="1" Margin="6,0,0,0"
+                                              IsChecked="{Binding Presets.IsFilterDrawerOpen, Mode=TwoWay}"
+                                              ToolTip.Tip="Filters">
+                                    <ia:Icon Value="mdi-filter-variant" FontSize="13"/>
+                                </ToggleButton>
+                            </Grid>
+
+                            <!-- Active search tags — every tag AND's together (typing "zigzag"
+                                 then "7200" narrows to presets matching BOTH). Wraps into new
+                                 rows as it fills; each tag removable with its own X. -->
+                            <ItemsControl ItemsSource="{Binding Presets.SearchTags}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Background="{DynamicResource AccentMuted}" CornerRadius="10"
+                                                Padding="8,3" Margin="0,0,4,4">
+                                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                                <TextBlock Text="{Binding}" FontSize="10" Foreground="{DynamicResource AccentHover}"/>
+                                                <Button Content="✕" FontSize="9" Padding="0" Width="14" Height="14"
+                                                        Background="Transparent" BorderThickness="0"
+                                                        Foreground="{DynamicResource AccentHover}"
+                                                        Command="{Binding $parent[Window].DataContext.RightPanel.Presets.RemoveSearchTagCommand}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Filter drawer: dropdown revealing a list of per-field filters.
+                                 Layout: Low and High fields in line, side by side, above the
+                                 track. (A third "converge to one value" field was tried and
+                                 dropped — separate dev later, not part of this control.) The
+                                 Low/High inversion bug is fixed in the ViewModel's own clamp only
+                                 — an earlier attempt ALSO bound each field's Minimum/Maximum to
+                                 the other's live value, which caused NumericUpDown to auto-correct
+                                 its own Value whenever the bound Minimum/Maximum changed, silently
+                                 dragging one bound to chase the other. Removed; the ViewModel
+                                 clamp alone already prevents inversion with no such side effect.
+
+                                 The two handles render directly ON the track (same Y) as plain
+                                 non-hit-testable Ellipses — a shared parent Canvas owns ALL
+                                 pointer interaction (OnRangeTrack* in the code-behind) instead of
+                                 two independent Thumbs. Two prior attempts both used per-handle
+                                 hit-testing (two overlapping Sliders, then two Avalonia Thumbs)
+                                 and both had the same failure mode once the handles touched:
+                                 whichever element is topmost in z-order wins EVERY subsequent
+                                 hit-test permanently, and that element is itself clamped against
+                                 the other, so neither can ever move again — "stuck together
+                                 forever". The fix is to stop hit-testing the handles at all: the
+                                 Canvas picks which bound (Lower/Upper) a gesture controls by
+                                 PROXIMITY to the press point when the handles are separated, or —
+                                 when they're exactly coincident and proximity is a tie — by the
+                                 DIRECTION of the first subsequent move (right = Upper, left =
+                                 Lower), locked for that one gesture. See
+                                 NumericRangeFilterViewModel.DecideActiveLowerBound's doc comment
+                                 for why a fixed tie-break can't work here. Verified against the
+                                 exact reported scenario with a real unit test:
+                                 NumericRangeFilterViewModelTest in MassiveSlicer.Tests, both
+                                 escape directions from a dead tie.
+
+                                 Non-numeric fields get a choice dropdown. Bounds/options recompute
+                                 as presets are added. -->
+                            <Border IsVisible="{Binding Presets.IsFilterDrawerOpen}"
+                                    Background="#1a1a1a" CornerRadius="6" Padding="8"
+                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                <StackPanel Spacing="10">
+                                    <Grid ColumnDefinitions="*,Auto,Auto">
+                                        <TextBlock Grid.Column="0" Text="FILTERS" Classes="LabelMuted" FontSize="9" LetterSpacing="1" VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1" Content="Clear Seed Data" FontSize="9" Padding="6,2" Margin="0,0,4,0"
+                                                Command="{Binding Presets.ClearSeedDataCommand}"
+                                                ToolTip.Tip="Removes every seeded sample preset in one go (never touches anything you actually saved or imported) — for once real presets replace these"/>
+                                        <Button Grid.Column="2" Content="Reset" FontSize="9" Padding="6,2"
+                                                Command="{Binding Presets.ResetFiltersCommand}"/>
+                                    </Grid>
+
+                                    <ItemsControl ItemsSource="{Binding Presets.NumericFilters}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Spacing="4" Margin="0,0,0,10">
+                                                    <TextBlock Text="{Binding FieldName}" FontSize="10" Opacity="0.8"/>
+                                                    <Grid ColumnDefinitions="*,6,*">
+                                                        <NumericUpDown Grid.Column="0" FontSize="10"
+                                                                       Value="{Binding LowerValue, Mode=TwoWay}"
+                                                                       Minimum="{Binding DatasetMin}" Maximum="{Binding DatasetMax}"
+                                                                       Increment="0.5" FormatString="F2"
+                                                                       ToolTip.Tip="Low"/>
+                                                        <NumericUpDown Grid.Column="2" FontSize="10"
+                                                                       Value="{Binding UpperValue, Mode=TwoWay}"
+                                                                       Minimum="{Binding DatasetMin}" Maximum="{Binding DatasetMax}"
+                                                                       Increment="0.5" FormatString="F2"
+                                                                       ToolTip.Tip="High"/>
+                                                    </Grid>
+                                                    <Canvas Height="16" Width="220" HorizontalAlignment="Left"
+                                                            Background="Transparent"
+                                                            PointerPressed="OnRangeTrackPointerPressed"
+                                                            PointerMoved="OnRangeTrackPointerMoved"
+                                                            PointerReleased="OnRangeTrackPointerReleased">
+                                                        <Border Canvas.Top="6" Height="4" Width="220" CornerRadius="2"
+                                                                Background="#5a5a5a" IsHitTestVisible="False"/>
+                                                        <Border Canvas.Top="6" Height="4" CornerRadius="2"
+                                                                Background="{DynamicResource ColorSuccess}"
+                                                                Canvas.Left="{Binding FillX}" Width="{Binding FillWidth}"
+                                                                IsHitTestVisible="False"/>
+                                                        <Ellipse Width="14" Height="14" Canvas.Top="1"
+                                                                 Canvas.Left="{Binding LowerThumbX}"
+                                                                 Fill="{DynamicResource ColorSuccess}"
+                                                                 Stroke="#0A0E14" StrokeThickness="1.5"
+                                                                 IsHitTestVisible="False"
+                                                                 ToolTip.Tip="Low"/>
+                                                        <Ellipse Width="14" Height="14" Canvas.Top="1"
+                                                                 Canvas.Left="{Binding UpperThumbX}"
+                                                                 Fill="{DynamicResource ColorSuccess}"
+                                                                 Stroke="#0A0E14" StrokeThickness="1.5"
+                                                                 IsHitTestVisible="False"
+                                                                 ToolTip.Tip="High"/>
+                                                    </Canvas>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <ItemsControl ItemsSource="{Binding Presets.ChoiceFilters}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid ColumnDefinitions="Auto,*" Margin="0,0,0,6">
+                                                    <TextBlock Grid.Column="0" Text="{Binding FieldName}" FontSize="10" Opacity="0.8"
+                                                               VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" FontSize="10"
+                                                              ItemsSource="{Binding Options}"
+                                                              SelectedItem="{Binding SelectedOption, Mode=TwoWay}"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Sort -->
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="Sort" Classes="LabelMuted" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <Button Content="Name" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsSortName}"
+                                            Command="{Binding Presets.SetSortNameCommand}"/>
+                                    <Button Content="Last Printed" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsSortLastPrinted}"
+                                            Command="{Binding Presets.SetSortLastPrintedCommand}"
+                                            ToolTip.Tip="When a preset actually drove a real print — not when it was merely loaded/previewed. Local-only for now (this comp has no print pipeline to hook), so only the seeded sample data shows here."/>
+                                    <Button Content="Date Created" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsSortDateCreated}"
+                                            Command="{Binding Presets.SetSortDateCreatedCommand}"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Group -->
+                            <Grid ColumnDefinitions="Auto,*">
+                                <TextBlock Grid.Column="0" Text="Group" Classes="LabelMuted" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2">
+                                    <Button Content="List" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsGroupByNone}"
+                                            Command="{Binding Presets.SetGroupByNoneCommand}"
+                                            ToolTip.Tip="No grouping — every preset in one flat list"/>
+                                    <Button Content="By Method" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsGroupByMethod}"
+                                            Command="{Binding Presets.SetGroupByMethodCommand}"
+                                            ToolTip.Tip="Groups by the preset's slicing Method (Planar/Angled/Multi-Planar/Geodesic/Curved)"/>
+                                    <Button Content="By Folder" Classes="TabButton" FontSize="10" Padding="8,3"
+                                            Classes.active="{Binding Presets.IsGroupByFolder}"
+                                            Command="{Binding Presets.SetGroupByFolderCommand}"
+                                            ToolTip.Tip="Groups by Folder — a category tag on each preset (e.g. HHN, Production, Experiments), independent of its name. Comp placeholder: not yet a real user-assignable field."/>
+                                    <ToggleButton Content="★ Favorites" FontSize="10" Padding="8,3"
+                                                  IsChecked="{Binding Presets.FavoritesOnly, Mode=TwoWay}"
+                                                  ToolTip.Tip="Show only presets you've starred"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Flat list — capped height so ~12 rows show comfortably with an
+                                 internal scrollbar for the rest, instead of stretching the whole
+                                 right panel when there are dozens of presets. -->
+                            <ListBox ItemsSource="{Binding Presets.FilteredPresets}"
+                                     SelectedItem="{Binding Presets.SelectedPreset, Mode=TwoWay}"
+                                     IsVisible="{Binding !Presets.IsGroupedView}"
+                                     Background="Transparent" BorderThickness="0" Padding="0"
+                                     MaxHeight="300"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     DoubleTapped="OnPresetDoubleTapped">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="0,3">
+                                            <Border Grid.Column="0" Background="{DynamicResource AccentMuted}"
+                                                    CornerRadius="4" Padding="4,1" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding SummaryBadge}" FontSize="9" FontWeight="SemiBold"
+                                                           Foreground="{DynamicResource AccentHover}"/>
+                                            </Border>
+                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="11" Margin="8,0"
+                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                       ToolTip.Tip="{Binding Name}"/>
+                                            <Button Grid.Column="2" Width="18" Height="18" Padding="0" Margin="2,0"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.ToggleFavoriteCommand}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip.Tip="Favorite">
+                                                <Panel>
+                                                    <TextBlock Text="★" FontSize="12" Foreground="{DynamicResource ColorSuccess}" IsVisible="{Binding IsFavorite}" HorizontalAlignment="Center"/>
+                                                    <TextBlock Text="☆" FontSize="12" Foreground="{DynamicResource TextMuted}" IsVisible="{Binding !IsFavorite}" HorizontalAlignment="Center"/>
+                                                </Panel>
+                                            </Button>
+                                            <Button Grid.Column="3" Width="18" Height="18" Padding="0" Margin="0,0,2,0"
+                                                    Background="Transparent" BorderThickness="0"
+                                                    Foreground="{DynamicResource TextMuted}" Content="ⓘ" FontSize="11"
+                                                    ToolTip.Tip="View every setting in this preset">
+                                                <Button.Flyout>
+                                                    <Flyout>
+                                                        <StackPanel Width="230" Spacing="3">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="11" TextWrapping="Wrap"/>
+                                                            <Separator Margin="0,2"/>
+                                                            <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                        </StackPanel>
+                                                    </Flyout>
+                                                </Button.Flyout>
+                                            </Button>
+                                            <Border Grid.Column="4" Width="16" Height="16" CornerRadius="8" Margin="0,0,4,0"
+                                                    Background="{DynamicResource ColorSuccess}"
+                                                    IsVisible="{Binding HasSiblings}"
+                                                    ToolTip.Tip="{Binding SiblingTooltip}" ToolTip.ShowDelay="600"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding SiblingCount}" FontSize="9" FontWeight="Bold"
+                                                           Foreground="#0A0E14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                            <TextBlock Grid.Column="5" Text="{Binding LastPrintedDisplay}" FontSize="9"
+                                                       Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <!-- Grouped list — each group's own list is capped/scrollable too. -->
+                            <ItemsControl ItemsSource="{Binding Presets.GroupedPresets}"
+                                          IsVisible="{Binding Presets.IsGroupedView}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Spacing="2" Margin="0,4,0,0">
+                                            <TextBlock Text="{Binding GroupName}" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                            <ListBox ItemsSource="{Binding Items}"
+                                                     SelectedItem="{Binding $parent[Window].DataContext.RightPanel.Presets.SelectedPreset, Mode=TwoWay}"
+                                                     Background="Transparent" BorderThickness="0" Padding="0"
+                                                     MaxHeight="180"
+                                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                                     DoubleTapped="OnPresetDoubleTapped">
+                                                <ListBox.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" Margin="10,3,0,3">
+                                                            <Border Grid.Column="0" Background="{DynamicResource AccentMuted}"
+                                                                    CornerRadius="4" Padding="4,1" VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding SummaryBadge}" FontSize="9" FontWeight="SemiBold"
+                                                                           Foreground="{DynamicResource AccentHover}"/>
+                                                            </Border>
+                                                            <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="11" Margin="8,0"
+                                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                                       ToolTip.Tip="{Binding Name}"/>
+                                                            <Button Grid.Column="2" Width="18" Height="18" Padding="0" Margin="2,0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Command="{Binding $parent[Window].DataContext.RightPanel.Presets.ToggleFavoriteCommand}"
+                                                                    CommandParameter="{Binding}"
+                                                                    ToolTip.Tip="Favorite">
+                                                                <Panel>
+                                                                    <TextBlock Text="★" FontSize="12" Foreground="{DynamicResource ColorSuccess}" IsVisible="{Binding IsFavorite}" HorizontalAlignment="Center"/>
+                                                                    <TextBlock Text="☆" FontSize="12" Foreground="{DynamicResource TextMuted}" IsVisible="{Binding !IsFavorite}" HorizontalAlignment="Center"/>
+                                                                </Panel>
+                                                            </Button>
+                                                            <Button Grid.Column="3" Width="18" Height="18" Padding="0" Margin="0,0,2,0"
+                                                                    Background="Transparent" BorderThickness="0"
+                                                                    Foreground="{DynamicResource TextMuted}" Content="ⓘ" FontSize="11"
+                                                                    ToolTip.Tip="View every setting in this preset">
+                                                                <Button.Flyout>
+                                                                    <Flyout>
+                                                                        <StackPanel Width="230" Spacing="3">
+                                                                            <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="11" TextWrapping="Wrap"/>
+                                                                            <Separator Margin="0,2"/>
+                                                                            <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                                        </StackPanel>
+                                                                    </Flyout>
+                                                                </Button.Flyout>
+                                                            </Button>
+                                                            <Border Grid.Column="4" Width="16" Height="16" CornerRadius="8" Margin="0,0,4,0"
+                                                                    Background="{DynamicResource ColorSuccess}"
+                                                                    IsVisible="{Binding HasSiblings}"
+                                                                    ToolTip.Tip="{Binding SiblingTooltip}" ToolTip.ShowDelay="600"
+                                                                    VerticalAlignment="Center">
+                                                                <TextBlock Text="{Binding SiblingCount}" FontSize="9" FontWeight="Bold"
+                                                                           Foreground="#0A0E14" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            </Border>
+                                                            <TextBlock Grid.Column="5" Text="{Binding LastPrintedDisplay}" FontSize="9"
+                                                                       Foreground="{DynamicResource TextMuted}" VerticalAlignment="Center"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ListBox.ItemTemplate>
+                                            </ListBox>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+
+                            <!-- Select + apply + share -->
+                            <Grid ColumnDefinitions="*,6,*,6,*">
+                                <Button Grid.Column="0" Content="Apply" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        IsEnabled="{Binding Presets.CanLoadSelected}"
+                                        Command="{Binding Presets.LoadSelectedCommand}"
+                                        ToolTip.Tip="Click a preset above, then Apply (or just double-click it) — pushes its settings onto the panel below for real"/>
+                                <Button Grid.Column="2" Content="Export…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        IsEnabled="{Binding Presets.CanLoadSelected}"
+                                        Click="OnExportPresetClicked"
+                                        ToolTip.Tip="Share the selected preset as a standalone file (comp-only format)"/>
+                                <Button Grid.Column="4" Content="Import…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                        Click="OnImportPresetClicked"
+                                        ToolTip.Tip="Comp-only: reads an ad-hoc JSON shape, not the real preset file format yet"/>
+                            </Grid>
+                            <TextBlock Text="{Binding Presets.StatusMessage}" FontSize="9" Opacity="0.7"
+                                       TextWrapping="Wrap"
+                                       IsVisible="{Binding Presets.StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"/>
+
+                            <!-- Save as preset -->
+                            <Button Content="+ Save as Preset…" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    Command="{Binding Presets.ToggleSaveDialogCommand}"/>
+
+                            <Border IsVisible="{Binding Presets.IsSaveDialogOpen}"
+                                    Background="#1a1a1a" CornerRadius="6" Padding="8"
+                                    BorderBrush="{DynamicResource ColorSuccess}" BorderThickness="1">
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="SAVE AS PRESET" Classes="LabelMuted" FontSize="9" LetterSpacing="1"/>
+                                    <TextBox Classes="PanelTextBox" Text="{Binding Presets.SaveNameText, Mode=TwoWay}"
+                                             Watermark="Preset name…"/>
+                                    <Grid ColumnDefinitions="*,Auto,Auto">
+                                        <TextBlock Grid.Column="0" Text="Include:" Classes="LabelMuted" FontSize="9" VerticalAlignment="Center" Margin="0,4,0,0"/>
+                                        <Button Grid.Column="1" Content="All" FontSize="9" Padding="6,2" Margin="0,0,4,0"
+                                                Command="{Binding Presets.SelectAllFieldGroupsCommand}"
+                                                ToolTip.Tip="Check every group (only affects these checkboxes, never the underlying values)"/>
+                                        <Button Grid.Column="2" Content="Clear" FontSize="9" Padding="6,2"
+                                                Command="{Binding Presets.ClearFieldGroupsCommand}"
+                                                ToolTip.Tip="Uncheck every group (only affects these checkboxes, never the underlying values)"/>
+                                    </Grid>
+                                    <ItemsControl ItemsSource="{Binding Presets.SaveFieldGroups}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsIncluded, Mode=TwoWay}"
+                                                          FontSize="10" Margin="0,1"/>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Grid ColumnDefinitions="*,6,*">
+                                        <Button Grid.Column="0" Content="Cancel" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                Command="{Binding Presets.ToggleSaveDialogCommand}"/>
+                                        <Button Grid.Column="2" Content="Save" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                                Command="{Binding Presets.SaveNewPresetCommand}"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </Expander>
+
                     <!-- 1 MODEL -->
                     <Expander Classes="StepCard"
                               IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"

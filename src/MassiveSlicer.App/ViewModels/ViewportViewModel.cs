@@ -4376,6 +4376,41 @@ public sealed class ViewportViewModel : ViewModelBase
     // ── Live effector handles (glowing draggable points, up to 3) ──────────
     private readonly SceneNode?[] _effectorNodes = new SceneNode?[3];
     private readonly OutlinerItemViewModel?[] _effectorItems = new OutlinerItemViewModel?[3];
+    private readonly bool[] _effectorEyeBeforeDisable = [true, true, true];
+
+    /// <summary>True when the node is (or is inside) a spawned effector handle.</summary>
+    public bool IsEffectorNode(SceneNode? node)
+    {
+        if (node is null) return false;
+        foreach (var en in _effectorNodes)
+            if (en is not null && (en == node || en.SelfAndDescendants().Any(n => n == node)))
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Master-toggle sync: while "Live effector" is off, spawned handles are hidden
+    /// (they have no effect on the slice, so showing them was misleading). Re-enabling
+    /// restores each handle's own outliner eye state.
+    /// </summary>
+    public void SetEffectorHandlesEnabled(bool enabled)
+    {
+        for (int i = 0; i < _effectorNodes.Length; i++)
+        {
+            if (_effectorNodes[i] is not { } node) continue;
+            if (!enabled)
+            {
+                _effectorEyeBeforeDisable[i] = node.Visible;
+                node.Visible = false;
+            }
+            else
+            {
+                node.Visible = _effectorEyeBeforeDisable[i];
+            }
+            _effectorItems[i]?.NotifyVisibilityFromScene();
+        }
+        NotifyRenderNeeded();
+    }
 
     public bool EffectorPoint1Active => _effectorNodes[0] is not null;
     public bool EffectorPoint2Active => _effectorNodes[1] is not null;
@@ -4388,12 +4423,22 @@ public sealed class ViewportViewModel : ViewModelBase
             int i = n - 1;
             if (_effectorNodes[i] is { } existing)
             {
-                RequestDeleteNode(existing);
+                if (_effectorItems[i] is { } it) OutlinerItems.Remove(it);
+                PendingRemoveNodes.Enqueue(existing);
                 _effectorNodes[i] = null;
                 _effectorItems[i] = null;
             }
             else
             {
+                // Purge stale rows with this effector's name (restored from an old
+                // workspace; not registered in the slots) so we never show duplicates.
+                foreach (var stale in OutlinerItems
+                             .Where(it => it.Node.Name == $"Effector {n}").ToList())
+                {
+                    OutlinerItems.Remove(stale);
+                    PendingRemoveNodes.Enqueue(stale.Node);
+                }
+
                 var node = BuildEffectorNode(n);
                 PendingNodes.Enqueue(node);
                 var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
@@ -4411,6 +4456,7 @@ public sealed class ViewportViewModel : ViewModelBase
             }
             NotifyEffectorPoints();
             OnModelGeometryChanged?.Invoke();
+            NotifyRenderNeeded();   // repaint now — handles otherwise appear only on next camera move
         });
     private RelayCommand<string>? _toggleEffectorPointCommand;
 
@@ -4484,11 +4530,12 @@ public sealed class ViewportViewModel : ViewModelBase
         // Spawn at the model's bounding-box centre (even when the body is hidden by a
         // line view), else above the print bed's centre, else a bed-ish default.
         var spawn = new OpenTK.Mathematics.Vector3(0f, 0f, 600f);
-        var model = ResolveActivePrintObjectItem() ?? EnumerateUserModelItems().FirstOrDefault();
-        if (model is not null && ComputeWorldCenter(model.Node) is { } centre)
-            spawn = centre;
-        else if (ComputeBedCenter() is { } bedCentre)
+        if (ComputeBedCenter() is { } bedCentre)
             spawn = bedCentre;
+        else if ((ResolveActivePrintObjectItem()
+                  ?? EnumerateUserModelItems().FirstOrDefault(i => i.Visible)) is { } model
+                 && ComputeWorldCenter(model.Node) is { } centre)
+            spawn = centre;
 
         var node = new SceneNode
         {
@@ -5868,6 +5915,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
         SetActiveToolheadOutliner(null);
         item.IsOutlinerSelected = true;
+
+        // Selecting an effector arms the move gizmo immediately (same convention as
+        // the cut tool) — placing it is the whole point of selecting it.
+        if (item.IsEffector
+            && (ActiveGizmoModeInternal == GizmoMode.None || ActiveGizmoModeInternal == GizmoMode.Scale))
+            ActiveGizmoModeInternal = GizmoMode.Translate;
     }
 
     internal void OnOutlinerScanClicked(OutlinerItemViewModel item, bool shiftHeld, bool ctrlHeld)
@@ -6434,6 +6487,13 @@ public sealed class ViewportViewModel : ViewModelBase
     internal OutlinerItemViewModel? FindOutlinerItemForSelection(SceneNode? node)
     {
         if (node is null) return null;
+
+        // Effector handles resolve directly from their registered slots, so clicking
+        // a handle highlights its "Effector N" row (identifies which one is which).
+        for (int i = 0; i < _effectorNodes.Length; i++)
+            if (_effectorNodes[i] is { } en
+                && (en == node || en.SelfAndDescendants().Any(n => n == node)))
+                return _effectorItems[i];
 
         var item = FindToolheadOutlinerItem(node)
                    ?? FindUserMeshOutlinerItem(node)

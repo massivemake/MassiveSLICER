@@ -122,4 +122,45 @@
     <PackageReference Include="SMBLibrary" Version="1.5.7" />
   </ItemGroup>
 
+
+  <!-- Auto-generated build identity: number = git commit count (same on every
+       machine, maps 1:1 to a commit for changelog/support), date = compile day,
+       sha = exact code state. Replaces the old hand-edited BuildInfo.cs. -->
+  <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitCountExit"/>
+    </Exec>
+    <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha"/>
+    </Exec>
+    <PropertyGroup>
+      <GitCommitCount Condition="'$(GitCountExit)' != '0' or '$(GitCommitCount)' == ''">0</GitCommitCount>
+      <GitShortSha Condition="'$(GitShortSha)' == ''">dev</GitShortSha>
+      <BuildDateStamp>$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</BuildDateStamp>
+      <BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
+    </PropertyGroup>
+    <ItemGroup>
+      <BuildInfoLine Include="// &lt;auto-generated /&gt; — GenerateBuildInfo target (MassiveSlicer.App.csproj). Do not edit."/>
+      <BuildInfoLine Include="namespace MassiveSlicer.App%3B"/>
+      <BuildInfoLine Include="public static class BuildInfo"/>
+      <BuildInfoLine Include="{"/>
+      <BuildInfoLine Include="    /// &lt;summary&gt;Git commit count — increments with every commit, identical on all machines.&lt;/summary&gt;"/>
+      <BuildInfoLine Include="    public const int BuildNumber = $(GitCommitCount)%3B"/>
+      <BuildInfoLine Include="    public const string CommitSha = &quot;$(GitShortSha)&quot;%3B"/>
+      <BuildInfoLine Include="    public const string BuildDate = &quot;$(BuildDateStamp)&quot;%3B"/>
+      <BuildInfoLine Include="    public static readonly string Label = &quot;build $(GitCommitCount)  ·  $(BuildDateStamp)  ·  $(GitShortSha)&quot;%3B"/>
+      <BuildInfoLine Include="}"/>
+    </ItemGroup>
+    <WriteLinesToFile File="$(BuildInfoFile)" Lines="@(BuildInfoLine)"
+                      Overwrite="true" WriteOnlyWhenDifferent="true"/>
+    <ItemGroup>
+      <Compile Include="$(BuildInfoFile)" Condition="'@(Compile->AnyHaveMetadataValue('Identity','$(BuildInfoFile)'))' != 'true'"/>
+      <FileWrites Include="$(BuildInfoFile)"/>
+    </ItemGroup>
+  </Target>
+
 </Project>

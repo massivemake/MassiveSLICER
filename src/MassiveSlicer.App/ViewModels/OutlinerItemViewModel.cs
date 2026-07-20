@@ -10,10 +10,68 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 {
     private readonly Action _notifyRender;
     private readonly Action? _onHide;
-    private readonly string? _displayName;
+    private string? _displayName;
 
     public SceneNode Node { get; }
     public string Name => _displayName ?? Node.Name;
+
+    // -- Type badge -----------------------------------------------------------
+    public string TypeIcon =>
+        IsEffector ? "mdi-white-balance-sunny"
+        : IsToolpath ? "mdi-reorder-horizontal"
+        : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "mdi-cube-scan"
+        : Name is "Robot Root" or "Robot Arm" ? "mdi-robot-industrial"
+        : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "mdi-view-grid-outline"
+        : "mdi-cube-outline";
+
+    public string TypeColor =>
+        IsEffector ? "#A6DE38"
+        : IsToolpath ? "#37C871"
+        : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "#B07BF7"
+        : Name is "Robot Root" or "Robot Arm" ? "#8B93A1"
+        : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "#8B93A1"
+        : "#4AA3FF";
+
+    public string TypeTip =>
+        IsEffector ? "Effector" : IsToolpath ? "Toolpath"
+        : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "Scan"
+        : Name is "Robot Root" or "Robot Arm" ? "Robot"
+        : Name.Contains("Bed", StringComparison.OrdinalIgnoreCase) ? "Print bed"
+        : "3D model";
+
+    // -- Rename (double-click or context menu) ---------------------------------
+    private bool _isRenaming;
+    public bool IsRenaming
+    {
+        get => _isRenaming;
+        private set { if (_isRenaming != value) { _isRenaming = value; OnPropertyChanged(); } }
+    }
+
+    private string _editName = "";
+    public string EditName
+    {
+        get => _editName;
+        set { if (_editName != value) { _editName = value; OnPropertyChanged(); } }
+    }
+
+    public void BeginRename() { EditName = Name; IsRenaming = true; }
+
+    public void CommitRename()
+    {
+        var t = _editName?.Trim();
+        if (!string.IsNullOrWhiteSpace(t) && t != Name)
+        {
+            Node.Name    = t;
+            _displayName = null;   // display follows the node name after a rename
+            OnPropertyChanged(nameof(Name));
+            OnPropertyChanged(nameof(TypeIcon));
+            OnPropertyChanged(nameof(TypeColor));
+            OnPropertyChanged(nameof(TypeTip));
+        }
+        IsRenaming = false;
+    }
+
+    public void CancelRename() => IsRenaming = false;
     /// <summary>When false the outliner hides the delete control (robot, beds, stands, etc.).</summary>
     public bool CanDelete { get; }
     /// <summary>Row click controls visibility (LFAM 3 toolheads); hides the eye toggle.</summary>

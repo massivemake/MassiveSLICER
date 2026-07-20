@@ -30,6 +30,8 @@
                   PointerReleased="OnRowReleased">
                 <Grid.ContextMenu>
                     <ContextMenu x:Name="RowContextMenu">
+                        <MenuItem Header="Rename" Click="OnRenameClick"/>
+                        <Separator/>
                         <MenuItem Header="Merge as Point Cloud"
                                   Click="OnMergePointCloudClick"/>
                         <MenuItem Header="Merge as Mesh"
@@ -54,7 +56,9 @@
                     </ContextMenu>
                 </Grid.ContextMenu>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
+                    <!-- Fixed width reserves the expander slot even when hidden, so
+                         child rows indent consistently instead of drifting left. -->
+                    <ColumnDefinition Width="20"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
@@ -70,12 +74,27 @@
                         ToolTip.Tip="Expand / collapse">
                     <ia:Icon Value="{Binding ExpandGlyph}" FontSize="14"/>
                 </Button>
-                <TextBlock Grid.Column="1"
-                           Text="{Binding Name}"
-                           VerticalAlignment="Center"
-                           Padding="4,4"
-                           Opacity="{Binding NameOpacity}"
-                           Foreground="{Binding IsRowHighlighted, Converter={StaticResource OutlinerRowText}}"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ia:Icon Value="{Binding TypeIcon}" FontSize="13"
+                             Margin="4,0,0,0" VerticalAlignment="Center"
+                             Foreground="{Binding TypeColor}"
+                             ToolTip.Tip="{Binding TypeTip}"/>
+                    <TextBlock Text="{Binding Name}"
+                               IsVisible="{Binding !IsRenaming}"
+                               VerticalAlignment="Center"
+                               Padding="4,4"
+                               Opacity="{Binding NameOpacity}"
+                               DoubleTapped="OnNameDoubleTapped"
+                               Background="Transparent"
+                               Foreground="{Binding IsRowHighlighted, Converter={StaticResource OutlinerRowText}}"/>
+                    <TextBox x:Name="RenameBox"
+                             IsVisible="{Binding IsRenaming}"
+                             Text="{Binding EditName, Mode=TwoWay}"
+                             MinWidth="130" Padding="4,2" FontSize="12"
+                             VerticalAlignment="Center"
+                             KeyDown="OnRenameKeyDown"
+                             LostFocus="OnRenameLostFocus"/>
+                </StackPanel>
                 <Button Grid.Column="2"
                         Command="{Binding ToggleLockCommand}"
                         Classes="ToolbarButton"

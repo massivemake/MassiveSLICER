@@ -2352,6 +2352,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(line);
 
         Viewport.AddImportNode(node);
+        StatusBar.FileStatus = System.IO.Path.GetFileName(path);
 
         // Guide the workflow: importing opens MODEL and SLICE.
         RightPanel.StepModelExpanded = true;

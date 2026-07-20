@@ -734,6 +734,14 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.XBracingShowHelper))
                     GlCanvas.RequestNextFrameRendering();
 
+                // Live-effector master toggle: hide inert handles while off, restore
+                // each handle's outliner eye state on re-enable.
+                if (pe.PropertyName is nameof(AdditiveSettingsViewModel.EffectorEnabled))
+                {
+                    vm.SetEffectorHandlesEnabled(additive.EffectorEnabled);
+                    GlCanvas.RequestNextFrameRendering();
+                }
+
                 // Re-solve IK + re-validate when toolhead orientation or E1 rail settings change.
                 // E1 planning is O(n) envelope samples (not × multi full DLS per point), so it is
                 // safe to re-run; planned E1 is used for both reachability and simulation.
@@ -1529,10 +1537,10 @@ public partial class ViewportView : UserControl
         }
 
         if (_fkController is not null && IsToolNodeSelected() && _renderer.TcpFrameMatrix is null
-            && DataContext is ViewportViewModel { Robot: not null } tcpVm)
+            && _vm is ViewportViewModel { Robot: not null } tcpVm)
             SyncTcpReadout(tcpVm);
 
-        if (DataContext is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
+        if (_vm is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
         {
             _renderer.GizmoPivotWorld = new Vector3(
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
@@ -3125,8 +3133,15 @@ public partial class ViewportView : UserControl
                 {
                     float vpW2 = (float)GlCanvas.Bounds.Width;
                     float vpH2 = (float)GlCanvas.Bounds.Height;
-                    var toolpathHit = _renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2);
-                    var picked = toolpathHit ?? PickForSceneSelection(pickVm, ray);
+                    // Effector handles get pick priority: they float inside the toolpath
+                    // cloud, and the toolpath's screen-distance pick would otherwise
+                    // claim every click near a handle (made them unclickable).
+                    var effectorHit = Picker.PickWhere(
+                        ray, _renderer.SceneRoot, n => pickVm.IsEffectorNode(n), out _);
+                    var picked = effectorHit is not null
+                        ? Picker.FindSelectableRoot(effectorHit, _renderer.SceneRoot)
+                        : (_renderer.PickToolpath((float)_leftDownPos.X, (float)_leftDownPos.Y, vpW2, vpH2)
+                           ?? PickForSceneSelection(pickVm, ray));
                     var shiftHeld = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
                     if (shiftHeld && picked is not null
                         && ResolveSequenceToolpath(pickVm, picked) is not null)
@@ -3513,11 +3528,17 @@ public partial class ViewportView : UserControl
         var items = e.DataTransfer.TryGetFiles();
         if (items is null) return;
 
-        var files = items
-            .Select(f => f.TryGetLocalPath())
-            .Where(p => p is not null && ImportHelper.IsSupported(p))
-            .Cast<string>()
-            .ToList();
+        var paths = items.Select(f => f.TryGetLocalPath()).Where(p => p is not null).Cast<string>().ToList();
+
+        // A dropped .mass workspace file opens it outright (same as File -> Open),
+        // replacing the current workspace -- it's not a mesh to import into the scene.
+        if (paths.FirstOrDefault(p => p.EndsWith(".mass", StringComparison.OrdinalIgnoreCase)) is { } massPath)
+        {
+            vm.Erp.OpenWorkspaceFile?.Invoke(massPath);
+            return;
+        }
+
+        var files = paths.Where(ImportHelper.IsSupported).ToList();
 
         if (files.Count == 0) return;
 
@@ -6062,7 +6083,8 @@ public partial class ViewportView : UserControl
         if (IsLfamProductionCell(vm) && !vm.IsDevMode)
         {
             var userHit = Picker.PickWhere(
-                ray, _renderer.SceneRoot, n => vm.IsUserModelSceneNode(n), out _);
+                ray, _renderer.SceneRoot,
+                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n), out _);
             if (userHit is not null)
                 return Picker.FindSelectableRoot(userHit, _renderer.SceneRoot);
         }
@@ -6076,7 +6098,7 @@ public partial class ViewportView : UserControl
         if (node is not null && vm.FindUserMeshOutlinerItem(node)?.Node is { } userRoot)
             node = userRoot;
 
-        bool isUserContent = node is not null && vm.IsUserModelSceneNode(node);
+        bool isUserContent = node is not null && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node));
 
         // Dev mode: registered environment props (print bed, stands, docks) are pickable —
         // resolve the mesh-leaf hit to its dev root so the gizmo transforms the whole prop.
@@ -13897,6 +13919,10 @@ public partial class ViewportView : UserControl
         {
             mvm?.Console.LogError(
                 $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+            SetSliceStatus(vm,
+                $"⚠ Send to Robot: {cell.Name} has no robot-network credentials. " +
+                "Set IP/username/password under ROBOT NETWORK in the cell panel, or export the .src manually.",
+                isError: true);
             return;
         }
 
@@ -13925,14 +13951,31 @@ public partial class ViewportView : UserControl
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
 
+        // Pre-flight: a KRL program must end with END — a truncated file is exactly
+        // how the Jefre curtain print died. Never send an incomplete program.
+        string tail = System.Text.Encoding.ASCII.GetString(
+            content, Math.Max(0, content.Length - 512), Math.Min(512, content.Length)).TrimEnd();
+        if (content.Length == 0 || !tail.EndsWith("END", StringComparison.OrdinalIgnoreCase))
+        {
+            mvm?.Console.LogError($"[robot] REFUSED: {fileName} is incomplete (no trailing END, {content.Length:N0} bytes).");
+            SetSliceStatus(vm,
+                $"⚠ Send to Robot refused: {fileName} is incomplete (no trailing END) — re-export before sending.",
+                isError: true);
+            return;
+        }
+
         mvm?.Console.Log($"[robot] Uploading {fileName} to \\\\{cfg.Host}\\{cfg.Share} ({cell.Name})…");
         var (ok, message) = await Task.Run(() => RobotSmbUploader.Upload(cfg, fileName, content));
         if (!ok)
         {
             mvm?.Console.LogError($"[robot] Upload failed — {message}");
+            SetSliceStatus(vm, $"⚠ Send to Robot failed: {message}", isError: true);
             return;
         }
         mvm?.Console.Log($"[robot] Sent to {cell.Name}: {message}");
+        if (mvm is not null)
+            mvm.StatusBar.OperationFeedback =
+                $"✓ Sent {fileName} to {cell.Name} — {content.Length:N0} bytes, verified END";
 
         if (mvm is not null)
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);

@@ -229,17 +229,28 @@
                     <TextBlock Text="CALIBRATION — PURGE &amp; WEIGH" Classes="SectionHeader" Margin="0,0,0,6"/>
 
                     <TextBlock Classes="LabelMuted" TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.8"
-                               Text="Heat the extruder to the temperatures above. Run it into the air at a fixed motor % for a fixed time. Weigh the cooled purge and enter the numbers — the flow rate is computed from them (uses Density above)."/>
+                               Text="Heat the extruder to the temperatures above. Run it into the air at a fixed screw RPM for a fixed time. Weigh the cooled purge and enter the numbers — the flow rate is computed from them (uses Density above)."/>
 
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="140"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Motor speed (%)" Classes="LabelMuted" VerticalAlignment="Center"
-                                   ToolTip.Tip="The extruder % set on the KUKA during the purge test ($ANOUT[4] × 100)"/>
+                        <TextBlock Grid.Column="0" Text="Motor speed (RPM)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Screw speed during the purge test, in true RPM (read off the extruder drive)"/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                   Text="{Binding CalibMotorPercent, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                                   Text="{Binding CalibMotorRpm, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                    </Grid>
+
+                    <Grid Margin="0,0,0,6">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="RPM at 100% output" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Drive scale: the screw RPM when $ANOUT[4] = 1.0 (machine property — set once). Converts your RPM to the % signal the KUKA speaks."/>
+                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                   Text="{Binding CalibMaxRpm, Mode=TwoWay, StringFormat={}{0:F0}}"/>
                     </Grid>
 
                     <Grid Margin="0,0,0,6">

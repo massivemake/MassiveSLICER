@@ -11,7 +11,9 @@ set -euo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$REPO/MassiveSlicer.app"
 ICON_SRC="$REPO/assets/Icons/macos-app-icon.png"          # Massive logo bug (white on black, rounded)
-DLL="$REPO/src/MassiveSlicer.App/bin/Debug/net8.0-windows/MassiveSlicer.App.dll"
+# On macOS the project targets net8.0 (net8.0-windows on Windows) — pick whichever exists.
+DLL="$REPO/src/MassiveSlicer.App/bin/Debug/net8.0/MassiveSlicer.App.dll"
+[ -f "$DLL" ] || DLL="$REPO/src/MassiveSlicer.App/bin/Debug/net8.0-windows/MassiveSlicer.App.dll"
 
 echo "==> Building .icns from $ICON_SRC"
 ICONSET="$(mktemp -d)/AppIcon.iconset"
