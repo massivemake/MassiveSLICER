@@ -656,10 +656,12 @@
                                                     ToolTip.Tip="View every setting in this preset">
                                                 <Button.Flyout>
                                                     <Flyout>
-                                                        <StackPanel Width="230" Spacing="3">
+                                                        <StackPanel Width="250" Spacing="3">
                                                             <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="11" TextWrapping="Wrap"/>
                                                             <Separator Margin="0,2"/>
-                                                            <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                            <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
+                                                                <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                            </ScrollViewer>
                                                         </StackPanel>
                                                     </Flyout>
                                                 </Button.Flyout>
@@ -720,10 +722,12 @@
                                                                     ToolTip.Tip="View every setting in this preset">
                                                                 <Button.Flyout>
                                                                     <Flyout>
-                                                                        <StackPanel Width="230" Spacing="3">
+                                                                        <StackPanel Width="250" Spacing="3">
                                                                             <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="11" TextWrapping="Wrap"/>
                                                                             <Separator Margin="0,2"/>
-                                                                            <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                                            <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
+                                                                                <TextBlock Text="{Binding InfoLines}" FontSize="10" TextWrapping="Wrap"/>
+                                                                            </ScrollViewer>
                                                                         </StackPanel>
                                                                     </Flyout>
                                                                 </Button.Flyout>

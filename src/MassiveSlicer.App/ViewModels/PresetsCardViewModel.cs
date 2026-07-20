@@ -224,25 +224,228 @@ public sealed class PrintPresetSample
     /// actually carries (a partial preset, saved with some groups unchecked, shows only what
     /// it has rather than padding out with misleading defaults).
     /// </summary>
+    /// <summary>
+    /// Full field-by-field readout for the "What" info popup, organized by the same field-groups
+    /// as the Save-as-Preset checklist — a group only appears here if this preset actually
+    /// captured at least one of its fields, so a partial preset (some groups unchecked at save
+    /// time) visibly shows only what it really carries, not a padded-out full list.
+    /// </summary>
     public string InfoLines
     {
         get
         {
-            var lines = new List<string> { $"Folder: {Folder}", $"Material: {Material}" };
+            var lines = new List<string> { $"Folder: {Folder}" };
+            if (!string.IsNullOrEmpty(Material)) lines.Add($"Material: {Material}");
 
-            void Add(string label, object? value)
+            void D(List<string> s, string label, double? v, string unit = "") { if (v is { } x) s.Add($"{label}: {x:0.##}{unit}"); }
+            void I(List<string> s, string label, int? v) { if (v is { } x) s.Add($"{label}: {x}"); }
+            void B(List<string> s, string label, bool? v) { if (v is { } x) s.Add($"{label}: {(x ? "On" : "Off")}"); }
+            void S(List<string> s, string label, string? v) { if (!string.IsNullOrEmpty(v)) s.Add($"{label}: {v}"); }
+
+            void Section(string title, Action<List<string>> body)
             {
-                if (value is not null) lines.Add($"{label}: {value}");
+                var section = new List<string>();
+                body(section);
+                if (section.Count == 0) return;
+                lines.Add("");
+                lines.Add($"— {title} —");
+                lines.AddRange(section);
             }
 
-            Add("Method", Method);
-            Add("Pattern", PatternType);
-            Add("Seam mode", SeamMode);
-            if (XBracingEnabled is { } xb) lines.Add($"X-Bracing: {(xb ? "On" : "Off")}");
-            if (BeadWidth is { } bw) lines.Add($"Bead width: {bw:0.##} mm");
-            if (LayerHeight is { } lh) lines.Add($"Layer height: {lh:0.##} mm");
-            if (PrintSpeed is { } ps) lines.Add($"Print speed: {ps:0.#} mm/s");
+            Section("Geometry & layers", s =>
+            {
+                D(s, "Bead width", BeadWidth, " mm");
+                D(s, "Layer height", LayerHeight, " mm");
+                D(s, "Tilt angle", TiltAngle, "°");
+                D(s, "Tilt angle X", TiltAngleX, "°");
+                B(s, "Multi-Planar axis X", MultiPlanarAxisX);
+                if (MultiPlanarPlanes is { Count: > 0 } planes)
+                    s.Add($"Multi-Planar planes: {planes.Count} ({string.Join(", ", planes.Select(p => $"{p.HeightPct:0.#}%@{p.AngleDeg:0.#}°"))})");
+            });
 
+            Section("Slicing mode & method", s =>
+            {
+                S(s, "Method", Method);
+                S(s, "Seam mode", SeamMode);
+                S(s, "Slicing mode", SlicingMode);
+                D(s, "Orientation follow", OrientationFollowPercent, "%");
+                D(s, "Orientation max tilt", OrientationMaxTiltDeg, "°");
+                B(s, "First layer zero tilt", FirstLayerZeroTilt);
+                D(s, "Layer lean", LayerLeanPercent, "%");
+                D(s, "Layer lean max tilt", LayerLeanMaxTiltDeg, "°");
+                S(s, "Curved boundary source", CurvedBoundarySourceDisplay);
+                D(s, "Curved auto-detect band", CurvedAutoDetectBandMm, " mm");
+                B(s, "Curved region split", CurvedEnableRegionSplit);
+            });
+
+            Section("Live effector", s =>
+            {
+                B(s, "Effector enabled", EffectorEnabled);
+                S(s, "Effector mode", EffectorMode);
+                D(s, "Effector range", EffectorRange, " mm");
+                D(s, "Effector strength", EffectorStrength);
+            });
+
+            Section("Pattern & texture", s =>
+            {
+                S(s, "Pattern", PatternType);
+                S(s, "Pattern mapping", PatternMapping);
+                D(s, "Pattern wavelength", PatternWavelengthMm, " mm");
+                D(s, "Pattern amplitude", PatternAmplitude);
+                D(s, "Pattern frequency", PatternFrequency);
+                D(s, "Pattern twist", PatternTwist);
+                D(s, "Pattern offset", PatternOffset);
+                D(s, "Pattern fade in", PatternFadeIn);
+                D(s, "Pattern fade out", PatternFadeOut);
+            });
+
+            Section("X-Bracing wall", s =>
+            {
+                B(s, "X-Bracing", XBracingEnabled);
+                S(s, "Projection type", XBracingProjectionType);
+                B(s, "Show helper", XBracingShowHelper);
+                D(s, "Plane tilt Y", XBracingPlaneTiltY, "°");
+                D(s, "Plane tilt X", XBracingPlaneTiltX, "°");
+                D(s, "Cylinder diameter", XBracingCylinderDiameterMm, " mm");
+                B(s, "Cylinder flip direction", XBracingCylinderFlipDirection);
+                D(s, "Depth", XBracingDepthMm, " mm");
+                D(s, "Depth (bottom)", XBracingDepthBottomMm, " mm");
+                S(s, "Depth ease (bottom)", XBracingDepthEaseBottom);
+                S(s, "Depth ease (top)", XBracingDepthEaseTop);
+                D(s, "Span", XBracingSpanMm, " mm");
+                D(s, "Angle", XBracingAngleDeg, "°");
+                B(s, "Extend edges", XBracingExtendEdges);
+            });
+
+            Section("Wave effect", s =>
+            {
+                S(s, "Wave effect", WaveEffect);
+                D(s, "Amplitude", WaveAmplitude);
+                S(s, "Frequency mode", WaveFrequencyMode);
+                D(s, "Wavelength", WaveWavelength);
+                I(s, "Cycles", WaveCycles);
+                D(s, "Shape", WaveShape);
+                D(s, "Stagger", WaveStagger);
+                I(s, "Phase method", WavePhaseMethodIndex);
+                B(s, "Gradient", WaveGradient);
+                D(s, "Amplitude (bottom)", WaveAmplitudeBottom);
+                D(s, "Amplitude (top)", WaveAmplitudeTop);
+                D(s, "Wavelength (bottom)", WaveWavelengthBottom);
+                D(s, "Wavelength (top)", WaveWavelengthTop);
+                D(s, "Gradient center", WaveGradientCenter);
+                S(s, "Gradient curve", WaveGradientCurve);
+            });
+
+            Section("Infill", s =>
+            {
+                S(s, "Infill pattern", InfillPattern);
+                D(s, "Infill spacing", InfillSpacingMm, " mm");
+                D(s, "Infill angle", InfillAngleDeg, "°");
+                D(s, "Lightning overhang", LightningOverhangDeg, "°");
+                D(s, "Lightning branch spacing", LightningBranchSpacingMm, " mm");
+                D(s, "Lightning tip loop radius", LightningTipLoopRadiusMm, " mm");
+                B(s, "Lightning affect interior", LightningAffectInterior);
+                B(s, "Lightning affect exterior", LightningAffectExterior);
+                B(s, "Lightning target supports", LightningTargetSupportSelections);
+                D(s, "Lightning buttress bar", LightningButtressBarMm, " mm");
+            });
+
+            Section("Overhang & orientation", s =>
+            {
+                B(s, "Overhang orientation", OverhangOrientation);
+                D(s, "Max overhang tilt", MaxOverhangTiltDeg, "°");
+                B(s, "Zig-zag same-layer travel", ZigZagAllowSameLayerTravel);
+                B(s, "Disable contour offset", DisableContourOffset);
+            });
+
+            Section("Toolhead orientation", s =>
+            {
+                D(s, "Toolhead A", ToolheadA, "°");
+                D(s, "Toolhead B", ToolheadB, "°");
+                D(s, "Toolhead C", ToolheadC, "°");
+            });
+
+            Section("Motion & KUKA frame", s =>
+            {
+                D(s, "Print speed", PrintSpeed, " mm/s");
+                D(s, "Travel speed", TravelSpeed, " mm/s");
+                D(s, "APO CVEL", ApoCvel);
+                B(s, "E1 motion enabled", E1MotionEnabled);
+                D(s, "E1 Y+", E1YPlusMm, " mm");
+                D(s, "E1 Y-", E1YMinusMm, " mm");
+                B(s, "Smooth rotation", SmoothRotation);
+                I(s, "Smooth rotation radius", SmoothRotationRadius);
+                D(s, "Smooth rotation max rate", SmoothRotationMaxRateDegPerMm, "°/mm");
+                D(s, "Orientation look-ahead", OrientationLookAheadMm, " mm");
+                D(s, "Orientation sigma", OrientationSigmaMm, " mm");
+            });
+
+            Section("Temperatures", s =>
+            {
+                D(s, "Temperature 1", Temperature1, "°C");
+                D(s, "Temperature 2", Temperature2, "°C");
+                D(s, "Temperature 3", Temperature3, "°C");
+            });
+
+            Section("KRL export tuning", s =>
+            {
+                S(s, "Temperature offset", TemperatureOffset);
+                S(s, "Extrusion speed offset", ExtrusionSpeedOffset);
+                B(s, "Digital start/stop", DigitalStartStopEnabled);
+                D(s, "Extrusion start wait", ExtrusionStartWaitSec, " s");
+                D(s, "Extrusion resume wait", ExtrusionResumeWaitSec, " s");
+            });
+
+            Section("Movement (z-hop / wipe / resume)", s =>
+            {
+                D(s, "Z-hop", ZHopMm, " mm");
+                S(s, "Wipe mode", WipeModeDisplay);
+                D(s, "Wipe length", WipeLengthMm, " mm");
+                D(s, "Wipe ramp", WipeRampMm, " mm");
+                D(s, "Wipe speed", WipeSpeed, " mm/s");
+                B(s, "Wipe skip short travels", WipeSkipShortTravels);
+                B(s, "Resume ramp enabled", ResumeRampEnabled);
+                D(s, "Resume ramp start speed", ResumeRampStartSpeed);
+                D(s, "Resume ramp start RPM", ResumeRampStartRpmPercent, "%");
+                D(s, "Resume ramp distance", ResumeRampDistanceMm, " mm");
+                I(s, "Resume ramp steps", ResumeRampSteps);
+            });
+
+            Section("Adaptive layer speed", s =>
+            {
+                B(s, "Layer speed adapt", LayerSpeedAdaptEnabled);
+                S(s, "Layer speed basis", LayerSpeedBasisDisplay);
+                D(s, "Layer speed min", LayerSpeedMinMmS, " mm/s");
+                D(s, "Layer speed max", LayerSpeedMaxMmS, " mm/s");
+            });
+
+            Section("KRL post-process", s =>
+            {
+                B(s, "Travel sets ANOUT to zero", TravelSetAnout4Zero);
+                if (KrlHeaderText is { Length: > 0 } h) s.Add($"Header: custom ({h.Length} chars)");
+                if (KrlFooterText is { Length: > 0 } f) s.Add($"Footer: custom ({f.Length} chars)");
+            });
+
+            Section("Adaptive layer height", s =>
+            {
+                B(s, "Adaptive layer height", AdaptiveLayerHeight);
+                D(s, "Min layer height", MinLayerHeight, " mm");
+                D(s, "Adaptive quality", AdaptiveQuality);
+            });
+
+            Section("Stock from Maps", s =>
+            {
+                B(s, "Use displaced stock", UseDisplacedStock);
+                D(s, "Stock allowance", StockAllowanceMm, " mm");
+            });
+
+            Section("Brim", s =>
+            {
+                B(s, "Brim enabled", BrimEnabled);
+                I(s, "Brim loops", BrimLoops);
+            });
+
+            lines.Add("");
             lines.Add($"Created: {CreatedUtc:MMM d, yyyy}");
             lines.Add($"Last printed: {LastPrintedDisplay}");
             lines.Add(HasSiblings ? $"Also saved as: {string.Join(", ", SiblingNames)}" : "No known duplicates");
