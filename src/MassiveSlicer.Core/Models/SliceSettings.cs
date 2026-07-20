@@ -47,6 +47,16 @@ public sealed class SliceSettings
     /// </summary>
     public bool WipeSkipShortTravels { get; init; }
 
+    /// <summary>
+    /// Brim: outward offset loops around the full first-layer footprint for bed adhesion.
+    /// Applied as the LAST toolpath step so first-layer additions (X-bracing, patterns)
+    /// are enclosed.
+    /// </summary>
+    public bool BrimEnabled { get; init; }
+
+    /// <summary>Number of brim offset loops (spaced one bead width apart).</summary>
+    public int BrimLoops { get; init; } = 3;
+
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
 
@@ -164,8 +174,31 @@ public sealed class SliceSettings
     /// </summary>
     public bool XBracingEnabled { get; init; }
 
-    /// <summary>How far each brace goes into the wall from the perimeter (mm).</summary>
+    /// <summary>How far each brace goes into the wall from the perimeter (mm).
+    /// This is the depth at the TOP of the part; see <see cref="XBracingDepthBottomMm"/>
+    /// to taper it over height.</summary>
     public float XBracingDepthMm { get; init; } = 50f;
+
+    /// <summary>
+    /// Brace depth at the BOTTOM of the part (mm). When &gt; 0 the depth interpolates
+    /// with height from this at the part's lowest slice to
+    /// <see cref="XBracingDepthMm"/> at the top (e.g. a deeper base than tip on a
+    /// cylinder). 0 (default) = constant depth equal to <see cref="XBracingDepthMm"/>.
+    /// Curve shape uses <see cref="XBracingDepthEaseBottom"/> / <see cref="XBracingDepthEaseTop"/>.
+    /// </summary>
+    public float XBracingDepthBottomMm { get; init; }
+
+    /// <summary>
+    /// Easing of the depth taper at the BOTTOM of the part: Linear, Ease-In, Ease-Out, Smooth.
+    /// Controls the start slope of the height→depth curve (how quickly depth leaves the bottom value).
+    /// </summary>
+    public string XBracingDepthEaseBottom { get; init; } = "Linear";
+
+    /// <summary>
+    /// Easing of the depth taper at the TOP of the part: Linear, Ease-In, Ease-Out, Smooth.
+    /// Controls the end slope of the height→depth curve (how depth settles to the top value).
+    /// </summary>
+    public string XBracingDepthEaseTop { get; init; } = "Linear";
 
     /// <summary>Horizontal span of one full X cell along the wall (mm).</summary>
     public float XBracingSpanMm { get; init; } = 120f;
@@ -263,6 +296,14 @@ public sealed class SliceSettings
     /// Has no effect on closed contours.
     /// </summary>
     public bool ZigZagSeam { get; init; } = false;
+
+    /// <summary>
+    /// When <see cref="ZigZagSeam"/> is on and a layer has multiple open faces (islands),
+    /// keep all of them and insert Travel moves (start/stop) between faces.
+    /// When false, only the longest open face on each layer is printed.
+    /// Default true — Multi-Planar organic panels often need multi-island travel.
+    /// </summary>
+    public bool ZigZagAllowSameLayerTravel { get; init; } = true;
 
     /// <summary>Spiral/vase mode: closed contours ramp continuously in Z (no stepped seam).</summary>
     public bool Spiralize { get; init; }
@@ -466,6 +507,23 @@ public sealed class SliceSettings
     /// Lower values keep the toolhead more vertical for body clearance on curved paths.
     /// </summary>
     public float OrientationFollowStrength { get; init; } = 1f;
+
+    /// <summary>Hard cap on TCP tilt from vertical in degrees, applied after the
+    /// surface-follow blend (90 = uncapped). Guards flange clearance on steep shells.</summary>
+    public float OrientationMaxTiltDeg { get; init; } = 90f;
+
+    /// <summary>Force the first layer's tool orientation to vertical (world +Z) regardless
+    /// of the surface-follow blend — flat-bed adhesion for Geodesic/Curved slicing.</summary>
+    public bool FirstLayerZeroTilt { get; init; } = false;
+
+    // -- Layer lean ("poor man's non-planar" for planar slicing) -------------------
+
+    /// <summary>0..1: how strongly planar moves lean toward the nearest deposited
+    /// material on the previous layer. 0 = off (vertical tool).</summary>
+    public float LayerLeanStrength { get; init; } = 0f;
+
+    /// <summary>Hard cap on layer-lean tilt from vertical, in degrees.</summary>
+    public float LayerLeanMaxTiltDeg { get; init; } = 20f;
 }
 
 /// <summary>Live effector behaviour inside the influence radius.</summary>

@@ -1,6 +1,10 @@
 # MassiveSLICER V3 — Project Memory
 
+<<<<<<< HEAD
 Last updated: 2026-07-16 (Windows launch crash fix + `.mass` drag-and-drop; large-STL import crash diagnosed, not yet fixed)
+=======
+Last updated: 2026-07-16 (Brim fix; Header/Footer gear; URM edits honored; ANALOGHANDLER re-latch guard)
+>>>>>>> origin/master
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -511,6 +515,7 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Session changelog (reverse chronological)
 
+<<<<<<< HEAD
 ### 2026-07-16 — Auto build numbers, RPM calibration inputs, launcher TFM fix
 - **Build identity is now auto-generated** (`GenerateBuildInfo` target in MassiveSlicer.App.csproj): build number = git commit count, shown as `build N · date · sha`. Hand-edited `BuildInfo.cs` deleted. Same number on every machine; `git log --oneline` maps builds → commits.
 - **Calibration dialog takes true RPM** (read off the extruder drive) plus a one-time "RPM at 100% output" drive scale (default 100 — on our machine %==RPM, e.g. 60% = 60 RPM). `CalibMotorPercent` remains as a computed property for the calibration-scene generator.
@@ -537,6 +542,113 @@ Key files: `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`, `src/MassiveSlic
 - **Mac side works on and pushes to `main`.** Sync = `git merge origin/master` into `main` (fast-forwards when both sides merge regularly). As of today both branches point at the same commit (`2b6d55b`).
 - Also today: curtain print failure root cause **corrected — truncated program transfer, not singularity.** The production-share .src ends mid-line at Z 2154 (layer 718 of 1047), matching the physical print height and the nozzle-drool blob at the final preview pose. TCP auto-rotation (build 27) remains valuable but the immediate prevention is transfer verification on export/Send-to-Robot (planned).
 =======
+=======
+### 2026-07-16 (later 2) — URM re-latch guard (extruder-stays-cold fix)
+
+**Field:** Rev05 exported fine (header identical to a known-good file) but the extruder never
+heated. Cause was NOT the file — the KUKA ANALOGHANDLER converter had latched at zero: a prior
+program end left $ANOUT=0 while T1/T2/T3 still read the target, so setting the same target
+produced no change and it never re-wrote. Confirmed live: T1=250 but $ANOUT[1]=0; nudging T
+240->250 immediately restored $ANOUT to 0.2912/0.3232.
+
+- **Slicer fix (firmware-independent):** URM header MAT now nudges temps to `target-5C`
+  (floored 150), `WAIT SEC 0.4`, then the target — forcing ANALOGHANDLER to re-latch every
+  print from any stuck state. target-5 stays hot if a print pauses on the nudge line. New
+  placeholders `{{TEMPn_NUDGE_C}}`. Verified this unsticks even the pre-self-heal converter.
+- **KUKA-side complement (staged, needs cold boot):** ANALOGHANDLER.sub self-heal reads the
+  actual $ANOUT each cycle so external zeroing is caught in ~12ms. Belt-and-suspenders with the
+  slicer nudge.
+- Header/footer are identical between the "broken" and "working" files — the export was already
+  correct; the standard is unchanged apart from adding the re-latch guard. Test: DSS test asserts
+  the nudge precedes the target. 410 pass / 13 pre-existing.
+
+
+### 2026-07-16 (later) — Brim over-sampling fix + Header/Footer gear menu
+
+**Field failure:** brim caused robot jitter/over-extrusion (Wall 03 Panel 01). Cause: `BrimPlanner`
+emitted round-join offset loops WITHOUT simplification (the wall contours are simplified, the brim
+wasn't), so the brim was sub-mm point spacing (down to 0.01mm) at constant RPM — the robot stalled
+at every point while the screw kept pumping. A field decimation of the live SRC (Douglas-Peucker
+0.4mm) cut the brim run 4938→529 pts (0 segments below the ~1.4mm robot IPO limit) and fixed it.
+
+- **Root-cause fix:** `BrimPlanner.Apply` now `Clipper.SimplifyPaths(rings, max(SimplificationTolerance, 0.3))`
+  after `InflatePaths`, matching the wall-contour treatment. Regression test asserts no brim segment
+  < 0.25mm. (6 BrimPlannerTest total.)
+
+**Header/Footer gear menu (user request):** the KRL Post-Processing window (Rules/Header/Footer
+tabs, editable raw templates) already existed but its open-handler was orphaned — no button.
+- Added a **⚙ gear** (mdi-cog-outline) on the "KRL EXPORT" header in PRINT TOOLPATH →
+  `OnKrlPostProcessClicked`. Header tab pre-fills the effective template so `$ADVANCE=5`,
+  `$APO.CVEL={{APO_CVEL}}`, `$ACC.CP=5.0`, `$VEL.CP`, the MAT block and CaracolSafety are visible
+  and editable; edits persist via `KrlPostProcessLoader.Save` on close.
+- **URM now honors edited header/footer** (previously hardcoded the Caracol default and ignored
+  edits): `KrlExporter.WriteHeader/WriteFooter` use `s.HeaderTemplate/FooterTemplate` when it is
+  still URM-shaped (contains `CaracolSafety` / `EXTRUDER MOTOR COMMAND`), else fall back to the URM
+  default so URM can never export an ANOUT header by mistake. `ViewportView` stops nulling the
+  template in URM mode. Test: `Urm_honors_edited_header_and_footer_but_falls_back_if_not_urm`.
+- Suite 410 pass / 13 pre-existing failures; app builds clean.
+
+
+### 2026-07-16 (later) — Brim feature (bed adhesion, encloses X-bracing)
+
+**Scope:** New collapsible **BRIM** group under PATTERN AND TEXTURE → EFFECTS (after X-BRACING).
+Outward offset loops around the first layer for bed adhesion; user sets loop count.
+
+- `Core/Slicing/BrimPlanner.cs` (new): footprint = Clipper2 dilate+union of the ACTUAL layer-0
+  extrude segments (bead/2, round joins) → loop k centreline = edge + (k−½)·bead
+  (`InflatePaths`, outer rings only). Emitted outermost→inward, prepended to layer 0 so the
+  brim prints first and the innermost loop fuses to the first bead; final travel reconnects
+  to the original layer start.
+- **Applied as the LAST toolpath step** in `PlanarSlicer.Slice` (after paint removals /
+  X-bracing / patterns) so first-layer additions are enclosed — verified by test with a
+  protruding segment. Planar slicer only (angled planes have no bed-planar layer 0).
+- Settings: `SliceSettings.BrimEnabled/BrimLoops(=3)`; `AppPreferences` +
+  `AdditiveSettingsViewModel` (`BrimEnabled`, `BrimLoops` clamp 1–50, `ShowBrimControls`);
+  wired through MainWindowViewModel copy blocks, ViewportView SliceSettings build, and the
+  re-slice trigger list.
+- Tests: `BrimPlannerTest` ×5 (disabled no-op, prepend+survive, loop count, outside+ordered
+  outermost-first, encloses protrusion). Suite: 408 pass / same 13 pre-existing failures.
+
+### 2026-07-16 — URM output fix (OUT[8]) + calibrated travel defaults (T5)
+
+**Scope:** Field debugging on LFAM 2 found the URM/Digital-Start-Stop export used the **wrong
+output**: the Caracol slide deck says OUT[9]=URM, but on the actual LFAM machines (verified by
+live pendant-toggle tests 2026-07-13/16) **OUT[8] → DI_01_URM (ultra-responsive request)** and
+**OUT[9] → DI_01_MIO_req (robot-mode gate)**. Exported URM files pulsed the *gate* around travels
+and never latched it → CARACOL ignored all temp/RPM setpoints (setpoint 0, deadlock at
+`WAIT FOR $IN[6]`). Fixed at the source.
+
+**Machine-verified extruder signal map (LFAM 1 & 2):**
+
+| Signal | Role |
+|--------|------|
+| `$OUT[7]` | screw strobe / print enable → `DI_05_startPrinting_req` |
+| `$OUT[8]` | **URM request** (pulse TRUE only around travels) → `DI_01_URM` |
+| `$OUT[9]` | **robot-mode gate** (latch TRUE for the whole job in MAT) → `DI_01_MIO_req` |
+| `$IN[5]` | fire alarm (Antincendio) |
+| `$IN[6]` | extruder ready ← `DO_06_extruderReady` |
+| `$IN[7]` | Effecto QS anti-collision breakaway |
+
+**Changes:**
+- `KrlExporter.cs`: `DefaultUrmHeaderTemplate` inits `$OUT[8]=FALSE` and **latches `$OUT[9]=TRUE`
+  in MAT**; `EmitCaracolSsPreTravel`/`EmitCaracolSsPostTravel` pulse `$OUT[8]` (not 9);
+  `DefaultUrmFooterTemplate` clears OUT[8] (URM) then OUT[9] (gate); doc comments updated.
+- **App defaults = T5 winner** from the LFAM 2 8-cell travel calibration (2026-07-16, 15 mm/s
+  print / 3 mm layers): `AdditiveSettingsViewModel` — travel **600 mm/s**, wipe **Same-Direction**,
+  length **12 mm**, ramp **4 mm**, wipe speed **600 mm/s**, z-hop **3 mm**, resume pause **0.5 s**.
+  (T4=250 ms lost narrowly to T5=500 ms; next A/B: 300–400 ms.) Core `SliceSettings` left
+  library-neutral on purpose — recommended values live at the app layer.
+- `KrlExporterTest.cs`: URM assertions now expect OUT[8] pulses + latched OUT[9] gate.
+
+**Tests:** 403 passed; 13 failures are pre-existing WIP/environmental (verified unrelated —
+same set fails with defaults reverted). App builds clean.
+
+**Ops note:** the broken mapping shipped in `SS 8-cell matrix Rev09` — fixed by hand on the
+LFAM 2 D:\ share the same day; controller-side complements: sps.sub URM-latch guard, ANALOGHANDLER
+$OV_PRO speed-scaled RPM + self-heal, ID3 submit re-registration (see LFAM install session notes).
+
+
+>>>>>>> origin/master
 ### 2026-07-12 — 2D Slice Plane Viewer + edit multipass + Target Support Selections
 
 **Scope:** Long iterative session on the **2D Slice Plane Viewer** (edit mode), multipass layer stack, navigation, selection, Formbound “Target Support Selections”, LFAM 1 bed BASE alignment, and ortho zoom clipping. Work tree: `/Users/thomboessel/MassiveSLICER V3`.

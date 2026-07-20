@@ -17,6 +17,7 @@ public sealed class AppPreferencesTest
             MaxOverhangTiltDeg  = 60,
             DisableContourOffset = true,
             SeamMode            = "Zig-zag",
+            ZigZagAllowSameLayerTravel = false,
             InfillPattern       = "Grid",
             WaveEffect          = "Sine",
         };
@@ -32,6 +33,7 @@ public sealed class AppPreferencesTest
         Assert.Equal(60, loaded.MaxOverhangTiltDeg);
         Assert.True(loaded.DisableContourOffset);
         Assert.Equal("Zig-zag", loaded.SeamMode);
+        Assert.False(loaded.ZigZagAllowSameLayerTravel);
         Assert.Equal("Grid", loaded.InfillPattern);
         Assert.Equal("Sine", loaded.WaveEffect);
     }

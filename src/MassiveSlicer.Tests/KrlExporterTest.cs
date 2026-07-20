@@ -196,6 +196,101 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Export_per_move_ResumeWaitSec_overrides_global()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel)
+            { ResumeWaitSec = 0.25f });
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName            = "test_per_move_wait",
+            ExtrusionRpmPercent    = 50f,
+            ExtrusionStartWaitSec  = 0f,
+            ExtrusionResumeWaitSec = 0.5f,
+            TravelSetAnout4Zero    = true,
+        });
+        Assert.Contains("WAIT SEC 0.25", krl);
+        Assert.DoesNotContain("WAIT SEC 0.5", krl);
+    }
+
+    [Fact]
+    public void Export_DigitalStartStop_uses_Caracol_injector_OUT7_OUT9_around_travel()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        // Post-process LFAM header must not win; Caracol S&S injector pattern must.
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName             = "test_dss",
+            ExtrusionRpmPercent     = 50f,
+            Temperature1            = 250f,
+            Temperature2            = 250f,
+            Temperature3            = 250f,
+            ExtrusionStartWaitSec   = 0f,
+            ExtrusionResumeWaitSec  = 0.5f,
+            SsPreTravelWaitSec      = 0.5f,
+            SsApproachSpeedScale    = 0.5f,
+            DigitalStartStopEnabled = true,
+            TravelSetAnout4Zero     = true,
+            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+
+        Assert.Contains(";FOLD CaracolSafety", krl);
+        Assert.Contains(";FOLD MAT out of INI", krl);
+        Assert.Contains("T1 = 250", krl);
+        // Re-latch guard: nudge (target-5) before the target so ANALOGHANDLER always re-writes.
+        Assert.Contains("T1 = 245", krl);
+        Assert.True(krl.IndexOf("T1 = 245", System.StringComparison.Ordinal)
+                    < krl.IndexOf("T1 = 250", System.StringComparison.Ordinal),
+                    "nudge must precede the target temperature");
+        Assert.Contains("MassiveSLICER", krl);
+        Assert.Contains(";ULTRARESPONSIVE MODE", krl); // footer
+        Assert.DoesNotContain("$ANOUT[1]", krl);
+        Assert.DoesNotContain("$ANOUT[4]", krl);
+
+        // Header: URM (OUT[8]) init FALSE; robot-mode gate (OUT[9]) latched TRUE in MAT.
+        Assert.Contains("$OUT[8] = FALSE", krl);
+        Assert.Contains("$OUT[9] = TRUE", krl);
+        // Body: Caracol travel_ss-post injector pattern on the verified URM output OUT[8].
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE", krl);
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE", krl);
+        Assert.Contains("$OUT[7] = TRUE", krl);
+        Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", krl);
+        Assert.Contains(";travel start", krl);
+        Assert.Contains(";travel end", krl);
+        Assert.Contains(";digital start/stop - stop (Caracol URM)", krl);
+        Assert.Contains(";digital start/stop - start (Caracol URM)", krl);
+
+        // Order around first travel: OUT8 TRUE → OUT7 FALSE → wait → travel → OUT7 TRUE → wait → OUT8 FALSE
+        int out8On  = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = TRUE", StringComparison.Ordinal);
+        int out7Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[7] = FALSE", StringComparison.Ordinal);
+        int travel  = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        int endTr   = krl.IndexOf(";travel end", travel, StringComparison.Ordinal);
+        int out7On  = krl.IndexOf("$OUT[7] = TRUE", endTr, StringComparison.Ordinal);
+        int out8Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", endTr, StringComparison.Ordinal);
+        Assert.True(out8On >= 0 && out7Off > out8On && travel > out7Off);
+        Assert.True(endTr > travel && out7On > endTr && out8Off > out7On);
+
+        // Half-speed approach after screw-off (print  default 0.05 → 0.025 if PrintSpeedMps default).
+        Assert.Contains("WAIT SEC 0.5", krl);
+    }
+
+    [Fact]
     public void Export_later_extrusion_resume_does_not_emit_start_wait()
     {
         var tp = new Toolpath();
@@ -392,4 +487,41 @@ public sealed class KrlExporterTest
         Assert.DoesNotContain("wipe)", wipeBlock.Replace("extruder off (wipe)", ""));
         Assert.DoesNotContain("= 0.5 ; wipe", wipeBlock);
     }
+
+    [Fact]
+    public void Urm_honors_edited_header_and_footer_but_falls_back_if_not_urm()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude) { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        // Gear menu edited a URM-shaped header/footer (e.g. tuned $ADVANCE) — must flow through.
+        var editedHeader = KrlExporter.DefaultUrmHeaderTemplate.Replace("$ADVANCE=5", "$ADVANCE=3");
+        var editedFooter = KrlExporter.DefaultUrmFooterTemplate.Replace("WAIT SEC 2", "WAIT SEC 4");
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "test_edit", ExtrusionRpmPercent = 50f,
+            Temperature1 = 250f, Temperature2 = 250f, Temperature3 = 250f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate = editedHeader, FooterTemplate = editedFooter,
+        });
+        Assert.Contains("$ADVANCE=3", krl);
+        Assert.Contains("WAIT SEC 4", krl);
+        Assert.Contains(";FOLD CaracolSafety", krl);
+
+        // A stale LFAM (ANOUT) header while URM is on must fall back to the URM default.
+        var krl2 = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName = "test_fallback", ExtrusionRpmPercent = 50f,
+            Temperature1 = 250f, Temperature2 = 250f, Temperature3 = 250f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate = KrlExporter.DefaultHeaderTemplate,
+        });
+        Assert.DoesNotContain("$ANOUT[1]", krl2);
+        Assert.Contains(";FOLD CaracolSafety", krl2);
+    }
+
 }

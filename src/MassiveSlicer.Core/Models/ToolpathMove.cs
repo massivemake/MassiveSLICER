@@ -58,6 +58,13 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     public float? TravelSpeedMps { get; init; }
 
     /// <summary>
+    /// Optional resume pause (seconds) after this travel (or wipe) before the next extrusion
+    /// re-arms RPM. Used by multi-cell Start/Stop calibration; null = use export global
+    /// <c>ExtrusionResumeWaitSec</c>.
+    /// </summary>
+    public float? ResumeWaitSec { get; init; }
+
+    /// <summary>
     /// Layer-adaptive print speed scale [0, 1+] relative to global print speed.
     /// Also scales extrusion RPM for KRL <c>$ANOUT[4]</c> export.
     /// </summary>
@@ -70,4 +77,11 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// post-slice validation repair pass. 0 = no adjustment.
     /// </summary>
     public float TcpYawDeg { get; set; }
+
+    /// <summary>
+    /// Planned linear-rail E1 (mm) for this move. <see cref="float.NaN"/> = unset
+    /// (exporter holds home E1 or falls back to geometric tracking).
+    /// Filled by reachability-aware rail planning before KRL export.
+    /// </summary>
+    public float E1Mm { get; set; } = float.NaN;
 }

@@ -35,6 +35,7 @@ public static class ToolpathSerializer
                     ResumeRpmScale   = move.ResumeRpmScale,
                     IsZHop           = move.IsZHop,
                     PrintSpeedScale  = move.PrintSpeedScale,
+                    ResumeWaitSec    = move.ResumeWaitSec,
                 });
             }
             foreach (var span in layer.Contours)
@@ -78,6 +79,7 @@ public static class ToolpathSerializer
                     ResumeRpmScale   = moveDto.ResumeRpmScale,
                     IsZHop           = moveDto.IsZHop,
                     PrintSpeedScale  = moveDto.PrintSpeedScale,
+                    ResumeWaitSec    = moveDto.ResumeWaitSec,
                 });
             }
             foreach (var spanDto in layerDto.Contours)

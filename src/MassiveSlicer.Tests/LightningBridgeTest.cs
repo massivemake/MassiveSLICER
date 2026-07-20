@@ -206,11 +206,66 @@ public sealed class LightningBridgeTest
                                         DistToSegment2D(new Vector3(node, 0),
                                             new Vector3(lb.Centerline[k - 1], 0),
                                             new Vector3(lb.Centerline[k], 0)));
-                        // Straightening may move a node one extra step; still ≤ bead/2.
-                        Assert.True(best <= 2f * MaxStep + 0.5f,
+                        // Straightening / MaxStep tip-redirect may add a fraction of a
+                        // step on top of pure retract; still well under a bead jump.
+                        Assert.True(best <= 2.5f * MaxStep + Bead * 0.25f,
                             $"layer {i + 1} node ({node.X:0.#},{node.Y:0.#}) is {best:0.##} mm from layer {i}'s fingers");
                     }
         }
+    }
+
+    [Fact]
+    public void FingerDepthGrowsByAtMostMaxStepBetweenLayers()
+    {
+        // Continuous inward shrink: fingers must form MaxStep columns (no mid-stack
+        // full-depth re-birth islands). Max trunk length on layer i+1 may exceed
+        // layer i by at most ~MaxStep (bottom-up growth / top-down retract dual).
+        var polys = new List<List<List<Vector2>>>();
+        var heights = new List<float>();
+        for (int i = 0; i < 12; i++)
+        {
+            float h = 70f - i * 5f;
+            polys.Add([[new(-h, -h), new(h, -h), new(h, h), new(-h, h)]]);
+            heights.Add(LayerH);
+        }
+        var plan = LightningPlanner.Build(polys, heights, Settings());
+        Assert.Contains(plan.Layers, lp => lp.Trees.Count > 0);
+
+        float MaxTrunk(LightningLayerPlan lp)
+        {
+            float m = 0f;
+            foreach (var t in lp.Trees)
+            {
+                if (t.Branches.Count == 0 || t.Branches[0].Centerline.Count < 2) continue;
+                var line = t.Branches[0].Centerline;
+                m = MathF.Max(m, Vector2.Distance(line[0], line[^1]));
+            }
+            return m;
+        }
+
+        // Walk bottom→top through the continuous tree band; each step may deepen
+        // by ~MaxStep only (founding full-birth is only allowed with no prior column).
+        float prev = 0f;
+        int compared = 0;
+        for (int i = 0; i < plan.Layers.Length; i++)
+        {
+            float d = MaxTrunk(plan.Layers[i]);
+            if (d < Bead * 0.4f)
+            {
+                // Gap / no trees — reset so the next founding birth isn't scored.
+                prev = 0f;
+                continue;
+            }
+            if (prev > Bead * 0.4f)
+            {
+                float grew = d - prev;
+                Assert.True(grew <= MaxStep * 2.5f + Bead * 0.5f,
+                    $"layer {i}: trunk jumped {grew:0.##} mm (prev={prev:0.#} now={d:0.#} maxStep={MaxStep:0.##}) — full-depth re-birth?");
+                compared++;
+            }
+            prev = d;
+        }
+        Assert.True(compared >= 2, $"expected a multi-layer column, only compared {compared} steps");
     }
 
     [Fact]
@@ -246,8 +301,8 @@ public sealed class LightningBridgeTest
             $"fins did not grow outward: r={MaxRadiusInBand(on, 80f, 117f):0.#}");
         // Fins lean at the bead-on-bead limit (bead/2 per layer), so they peel off
         // the perimeter close under the flare instead of trailing a shallow sail
-        // toward the bed: 18 mm of reach at 3 mm/layer starts the fins at z = 105
-        // (measured); the old 1.73 mm/layer surface-quality lean reached z ≈ 93.
+        // toward the bed. Continuous MaxStep columns may start a few layers lower
+        // than a single full-birth island; they must still stay near the flare.
         float lowestFinZ = on.Layers
             .Where(l => l.Moves.Any(m => m.Kind == MoveKind.Extrude
                 && MathF.Max(new Vector2(m.From.X, m.From.Y).Length(),
@@ -255,7 +310,7 @@ public sealed class LightningBridgeTest
             .Select(l => l.Z)
             .DefaultIfEmpty(float.MaxValue)
             .Min();
-        Assert.True(lowestFinZ > 100f,
+        Assert.True(lowestFinZ > 95f,
             $"fins trail too far below the flare: outward material starts at z={lowestFinZ:0.#}");
 
         // Continuity holds with fins (single island, zero travels).

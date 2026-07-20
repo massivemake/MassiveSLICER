@@ -19,6 +19,12 @@ public partial class ViewportOverlayView : UserControl
             if (DataContext is ViewportViewModel vm)
                 vm.ScrubTrackPixelWidth = e.NewSize.Width;
         };
+
+        // Validation ticks (unreachable/singularity) are clickable: a press within a few
+        // pixels of a marker snaps the scrubber + camera to that move. Tunnel routing so
+        // a marker hit wins over the slider; anywhere else falls through to normal drag.
+        ScrubTrackGrid.AddHandler(PointerPressedEvent, OnScrubTrackPointerPressed,
+            Avalonia.Interactivity.RoutingStrategies.Tunnel);
         KeyframeLane.KeyframeClicked = i =>
             (DataContext as ViewportViewModel)?.OnKeyframeLaneClicked?.Invoke(i);
         KeyframeLane.InfluenceDragged = (i, left, x, commit) =>
@@ -39,6 +45,35 @@ public partial class ViewportOverlayView : UserControl
         RegionSelectButton.AddHandler(PointerPressedEvent, OnRegionSelectPointerPressed, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerReleasedEvent, OnRegionSelectPointerReleased, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerCaptureLostEvent, OnRegionSelectCaptureLost, handledEventsToo: true);
+    }
+
+    /// <summary>Snap-to-error: Alt-click or double-click within ±6 px of a validation
+    /// tick (red unreachable / purple singularity / orange collision) jumps the
+    /// scrubber + camera to that move. Plain click/drag always scrubs normally —
+    /// the snap must never steal the slider on tick-dense toolpaths.</summary>
+    private void OnScrubTrackPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (DataContext is not ViewportViewModel vm) return;
+        bool wantsSnap = e.ClickCount >= 2
+                         || e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+        if (!wantsSnap) return;
+        double x = e.GetPosition(ScrubTrackGrid).X;
+
+        double? best = null;
+        double bestDist = 6.0; // px hit tolerance
+        foreach (var list in new[] { vm.ScrubUnreachableMarkers, vm.ScrubSingularityMarkers, vm.ScrubCollisionMarkers })
+        {
+            if (list is null) continue;
+            foreach (var mx in list)
+            {
+                double d = Math.Abs(mx - x);
+                if (d < bestDist) { bestDist = d; best = mx; }
+            }
+        }
+        if (best is null) return;
+
+        vm.JumpToScrubPixel(best.Value);
+        e.Handled = true;
     }
 
     private void OnRegionSelectPointerPressed(object? sender, PointerPressedEventArgs e)

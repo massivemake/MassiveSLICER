@@ -144,6 +144,7 @@ internal static class WorkspaceService
             IsPaintEditOpen          = viewport.IsPaintEditOpen,
             IsSlicePlaneViewerActive = viewport.IsSlicePlaneViewerActive,
             ShowMultiPlanarPlanes    = viewport.ShowMultiPlanarPlanes,
+            XBracingShowHelper       = viewport.AdditiveSettings?.XBracingShowHelper,
             PaintHandActive          = viewport.PaintHandActive,
             PaintBoxSelectActive     = viewport.PaintBoxSelectActive,
             PaintBridgeActive        = viewport.PaintBridgeActive,
@@ -165,6 +166,7 @@ internal static class WorkspaceService
             ToolpathScrubLayerLow    = viewport.ToolpathScrubLayerLow,
             IsScrubSessionActive     = viewport.IsScrubSessionActive,
             SelectToolpath           = viewport.IsToolpathSelected,
+            RealtimeSlicingPaused    = viewport.RealtimeSlicingPaused,
             RobotJoints              = viewport.Robot is { } robot
                 ? [robot.A1, robot.A2, robot.A3, robot.A4, robot.A5, robot.A6, robot.E1]
                 : null,

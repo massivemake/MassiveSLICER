@@ -10,15 +10,20 @@ namespace MassiveSlicer.Core.Slicing;
 /// </summary>
 public static class GeodesicSlicer
 {
-    public static Toolpath Slice(IReadOnlyList<Vector3[]> meshes, SliceSettings settings)
+    /// <param name="progress">Optional 0..1 progress callback: mesh weld ≈ 0.05,
+    /// distance field ≈ 0.25, then contour extraction 0.25 → 1.</param>
+    public static Toolpath Slice(IReadOnlyList<Vector3[]> meshes, SliceSettings settings,
+                                 Action<float>? progress = null)
     {
         var mesh = MeshGraph.Build(meshes);
         if (mesh.VertexCount == 0 || mesh.Triangles.Length == 0) return new Toolpath();
+        progress?.Invoke(0.05f);
 
         float zMin = float.MaxValue;
         foreach (var v in mesh.Vertices) if (v.Z < zMin) zMin = v.Z;
 
         var geodDist = MeshGraph.DijkstraFromZThreshold(mesh, zMin + settings.LayerHeight * 0.1f);
+        progress?.Invoke(0.25f);
 
         float maxDist = 0f;
         foreach (var d in geodDist)
@@ -38,6 +43,7 @@ public static class GeodesicSlicer
             _ => geodDist,
             parameters,
             settings,
-            targetAtParameter: t => t);
+            targetAtParameter: t => t,
+            progress: progress is null ? null : f => progress(0.25f + f * 0.75f));
     }
 }
