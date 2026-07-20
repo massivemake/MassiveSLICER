@@ -7,9 +7,6 @@
 
     <UserControl.Resources>
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
-        <conv:BoolToThemedBrushConverter x:Key="ModifierRowBackground"
-                                         TrueResourceKey="AccentMuted"
-                                         FalseResourceKey="Transparent"/>
     </UserControl.Resources>
 
     <Border Background="Transparent"
@@ -2582,7 +2579,7 @@
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,6" Spacing="6">
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Select a model, then add modifiers to non-destructively cut it into pieces after slicing."/>
+                                       Text="Select a model, then add modifiers to non-destructively cut it into pieces after slicing. Drag a modifier under a mesh in the outliner to link it — order and grouping live there now."/>
 
                             <TextBlock Text="ADD MODIFIER" Classes="SectionHeader"/>
                             <UniformGrid Columns="6" HorizontalAlignment="Left" Margin="8,0,0,4">
@@ -2600,108 +2597,65 @@
                                     </Grid>
                                 </Button>
                             </UniformGrid>
-
-                            <Button Content="▶  APPLY" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
-                                    Margin="0,2,0,6"
-                                    IsEnabled="{Binding Modifiers.HasOwner}"/>
-
-                            <TextBlock Text="STACK" Classes="SectionHeader"/>
                             <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.6" Margin="8,0,8,4"
                                        IsVisible="{Binding !Modifiers.HasOwner}"
-                                       Text="Select a model in the outliner to see its modifiers."/>
-                            <ItemsControl ItemsSource="{Binding Modifiers.Rows}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <StackPanel Margin="0,2">
-                                            <Border Height="2" Margin="6,0" Background="{DynamicResource AccentHover}"
-                                                    IsVisible="{Binding ShowDropLineAbove}"/>
-                                            <Border CornerRadius="6" Padding="6,4"
-                                                    Background="{Binding IsSelected, Converter={StaticResource ModifierRowBackground}}"
-                                                    PointerPressed="OnModifierRowPointerPressed"
-                                                    PointerMoved="OnModifierRowPointerMoved"
-                                                    PointerReleased="OnModifierRowPointerReleased">
-                                                <Grid ColumnDefinitions="Auto,Auto,*,Auto">
-                                                    <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" Margin="0,0,4,0"/>
+                                       Text="Select a model in the outliner first."/>
 
-                                                    <Grid Grid.Column="1" Width="16" Height="16" Margin="0,0,6,0">
-                                                        <ia:Icon Value="mdi-cube-outline" FontSize="14"/>
-                                                        <Line StartPoint="8,1" EndPoint="8,15"
-                                                              Stroke="{DynamicResource ColorError}" StrokeThickness="1"/>
-                                                        <Line StartPoint="1,8" EndPoint="15,8"
-                                                              Stroke="{DynamicResource ColorError}" StrokeThickness="1"/>
-                                                    </Grid>
+                            <!-- Selecting a modifier's own Modifiers group in the outliner shows Apply here instead
+                                 of settings — it's the whole stack, arms the gizmo for all of them at once. -->
+                            <Button Content="▶  APPLY" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center"
+                                    Margin="0,2,0,6"
+                                    IsVisible="{Binding Modifiers.IsGroupSelected}"
+                                    Command="{Binding Modifiers.ApplyCommand}"/>
 
-                                                    <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               IsVisible="{Binding !IsRenaming}"
-                                                               DoubleTapped="OnModifierNameDoubleTapped"/>
-                                                    <TextBox Grid.Column="2" Text="{Binding Name, Mode=TwoWay}"
-                                                             IsVisible="{Binding IsRenaming}"
-                                                             LostFocus="OnModifierRenameLostFocus"
-                                                             KeyDown="OnModifierRenameKeyDown"/>
-
-                                                    <Button Grid.Column="3" Classes="ToolbarButton" FontSize="12"
-                                                            Command="{Binding $parent[Window].DataContext.RightPanel.Modifiers.DeleteCommand}"
-                                                            CommandParameter="{Binding}" ToolTip.Tip="Delete this modifier">
-                                                        <ia:Icon Value="mdi-trash-can-outline" FontSize="13"/>
-                                                    </Button>
-                                                </Grid>
-                                            </Border>
-                                            <Border Height="2" Margin="6,0" Background="{DynamicResource AccentHover}"
-                                                    IsVisible="{Binding ShowDropLineBelow}"/>
-                                        </StackPanel>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-
-                            <!-- Selected modifier's settings, shown underneath the stack -->
-                            <StackPanel IsVisible="{Binding Modifiers.SelectedModifier, Converter={x:Static ObjectConverters.IsNotNull}}"
+                            <!-- Selected modifier's settings -->
+                            <StackPanel IsVisible="{Binding Modifiers.SelectedSettings, Converter={x:Static ObjectConverters.IsNotNull}}"
                                         Spacing="6" Margin="0,6,0,0">
                                 <Border Height="1" Background="{DynamicResource Border1}" Margin="0,0,0,4"/>
-                                <TextBlock Text="{Binding Modifiers.SelectedModifier.Name, StringFormat='SETTINGS — {0}'}" Classes="SectionHeader"/>
+                                <TextBlock Text="{Binding Modifiers.SelectedSettings.Name, StringFormat='SETTINGS — {0}'}" Classes="SectionHeader"/>
 
-                                <StackPanel IsVisible="{Binding Modifiers.SelectedModifier.IsCutModifier}" Spacing="6">
+                                <StackPanel IsVisible="{Binding Modifiers.SelectedSettings.IsCutModifier}" Spacing="6">
                                     <Grid ColumnDefinitions="*,Auto">
                                         <TextBlock Grid.Column="0" Text="Cut (uncheck for reference-only)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <CheckBox Grid.Column="1" IsChecked="{Binding Modifiers.SelectedModifier.WillCut}"/>
+                                        <CheckBox Grid.Column="1" IsChecked="{Binding Modifiers.SelectedSettings.WillCut}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,Auto,Auto">
                                         <TextBlock Grid.Column="0" Text="Orientation" Classes="LabelMuted" VerticalAlignment="Center"/>
                                         <ToggleButton Grid.Column="1" Content="Horizontal" Margin="0,0,4,0"
-                                                      IsChecked="{Binding Modifiers.SelectedModifier.IsHorizontal}"/>
+                                                      IsChecked="{Binding Modifiers.SelectedSettings.IsHorizontal}"/>
                                         <ToggleButton Grid.Column="2" Content="Vertical"
-                                                      IsChecked="{Binding Modifiers.SelectedModifier.IsVertical}"/>
+                                                      IsChecked="{Binding Modifiers.SelectedSettings.IsVertical}"/>
                                     </Grid>
 
                                     <!-- Always shown (per feedback: don't collapse dependent settings, just gray them out
                                          until they're relevant) — enabled only when Orientation is Vertical. A vertical
                                          plane can face any direction, not just axis-aligned, and rotates around bed
                                          center (not the mesh's own origin) so the exact angle stays reproducible. -->
-                                    <Grid ColumnDefinitions="*,70" IsEnabled="{Binding Modifiers.SelectedModifier.IsVertical}">
+                                    <Grid ColumnDefinitions="*,70" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
                                         <TextBlock Grid.Column="0" Text="Rotation (deg, around bed center)" Classes="LabelMuted"
                                                    VerticalAlignment="Center" TextWrapping="Wrap"/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox"
-                                                 Text="{Binding Modifiers.SelectedModifier.RotationDegrees}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.RotationDegrees}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Modifiers.SelectedModifier.Offset}"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Modifiers.SelectedSettings.Offset}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,Auto">
                                         <TextBlock Grid.Column="0" Text="Infinite" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <CheckBox Grid.Column="1" IsChecked="{Binding Modifiers.SelectedModifier.Infinite}"/>
+                                        <CheckBox Grid.Column="1" IsChecked="{Binding Modifiers.SelectedSettings.Infinite}"/>
                                     </Grid>
 
                                     <!-- Always shown — enabled only when Infinite is off (rectangular restricted extent). -->
-                                    <Grid ColumnDefinitions="*,70,70" IsEnabled="{Binding !Modifiers.SelectedModifier.Infinite}">
+                                    <Grid ColumnDefinitions="*,70,70" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
                                         <TextBlock Grid.Column="0" Text="Size X / Y (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox" Margin="0,0,4,0"
-                                                 Text="{Binding Modifiers.SelectedModifier.SizeX}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeX}"/>
                                         <TextBox Grid.Column="2" Classes="PanelTextBox"
-                                                 Text="{Binding Modifiers.SelectedModifier.SizeY}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeY}"/>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>

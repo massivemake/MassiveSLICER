@@ -17,7 +17,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
 
     // -- Type badge -----------------------------------------------------------
     public string TypeIcon =>
-        IsModifier ? "mdi-crop"
+        IsPiecesGroup ? "mdi-source-fork"
+        : IsModifiersGroup ? "mdi-layers-outline"
+        : IsModifier ? "mdi-crop"
         : IsEffector ? "mdi-white-balance-sunny"
         : IsToolpath ? "mdi-reorder-horizontal"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "mdi-cube-scan"
@@ -26,7 +28,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : "mdi-cube-outline";
 
     public string TypeColor =>
-        IsModifier ? "#E8A33D"
+        IsPiecesGroup ? "#4FC3B0"
+        : IsModifiersGroup ? "#E8A33D"
+        : IsModifier ? "#E8A33D"
         : IsEffector ? "#A6DE38"
         : IsToolpath ? "#37C871"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "#B07BF7"
@@ -35,7 +39,9 @@ public sealed class OutlinerItemViewModel : ViewModelBase
         : "#4AA3FF";
 
     public string TypeTip =>
-        IsModifier ? "Cut modifier"
+        IsPiecesGroup ? "Applied pieces — result of running the modifier stack, from an Apply press"
+        : IsModifiersGroup ? "Modifier stack — select to move/rotate all together, or Apply"
+        : IsModifier ? "Cut modifier"
         : IsEffector ? "Effector" : IsToolpath ? "Toolpath"
         : MassiveSlicer.App.OutlinerModelOps.IsScanItem(this) ? "Scan"
         : Name is "Robot Root" or "Robot Arm" ? "Robot"
@@ -91,8 +97,19 @@ public sealed class OutlinerItemViewModel : ViewModelBase
     /// <summary>True for live-effector handles — excluded from slicing/model resolution.</summary>
     public bool IsEffector { get; set; }
 
-    /// <summary>True for modifier entries mirrored under a model's "Modifiers" outliner group.</summary>
+    /// <summary>True for a modifier's own row, nested under its owning mesh's Modifiers group.</summary>
     public bool IsModifier { get; set; }
+
+    /// <summary>True for a mesh's "Modifiers" group row itself — selecting it arms the gizmo for
+    /// the whole stack at once (real SceneNode parent, so children move/rotate together for free)
+    /// and is where the Apply action lives.</summary>
+    public bool IsModifiersGroup { get; set; }
+
+    /// <summary>True for a fresh, top-level sibling group of Apply results — same name as the
+    /// master (auto-numbered on repeat Apply), distinguished only by icon. Purely an outliner
+    /// grouping — pieces inside are NOT real scene children of it, so each stays independently
+    /// movable afterward.</summary>
+    public bool IsPiecesGroup { get; set; }
 
     private bool _isLocked;
     /// <summary>Locked rows can't be selected (outliner or viewport); toggled via the padlock.</summary>

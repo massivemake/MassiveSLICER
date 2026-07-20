@@ -48,14 +48,26 @@ public sealed class CutModifier : IModifier
     public float RotationDegrees { get; set; }
 
     /// <summary>
-    /// Plane position along its active axis (mm). For Horizontal this is Z in the mesh's
-    /// local/design space — repositioning a resulting piece later never touches this value, only
-    /// the piece's own world transform changes. For Vertical this is measured outward from the
-    /// print bed's center along the current <see cref="RotationDegrees"/> direction — rotating
-    /// the plane pivots around bed center, not the mesh's own origin, so the manually-dialed
-    /// angle stays predictable/reproducible for whatever references it later.
+    /// Plane position along its active (cutting) axis (mm), in world space — this modifier is a
+    /// fully independent object, not attached to any mesh. For Horizontal this is height above
+    /// the print bed's Z; <see cref="PositionX"/>/<see cref="PositionY"/> are the free in-plane
+    /// position and don't affect the cut. For Vertical this is measured outward from the print
+    /// bed's center along the current <see cref="RotationDegrees"/> direction — rotating the
+    /// plane pivots around bed center, so the manually-dialed angle stays predictable/
+    /// reproducible for whatever references it later.
     /// </summary>
     public float Offset { get; set; }
+
+    /// <summary>
+    /// Horizontal only: free X/Y position (mm, relative to bed center) — has no effect on the
+    /// cut (only <see cref="Offset"/>'s Z height does), it's purely so the plane can be dragged
+    /// out of the way to isolate/select a piece underneath it. Ignored for Vertical, whose
+    /// in-plane position isn't independently adjustable yet.
+    /// </summary>
+    public float PositionX { get; set; }
+
+    /// <summary>See <see cref="PositionX"/>.</summary>
+    public float PositionY { get; set; }
 
     /// <summary>When false, the plane's extent is limited to <see cref="SizeX"/>/<see cref="SizeY"/> instead of unbounded.</summary>
     public bool Infinite { get; set; } = true;

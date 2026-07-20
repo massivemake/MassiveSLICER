@@ -1,40 +1,27 @@
 using MassiveSlicer.Core.Models;
-using MassiveSlicer.Viewport.Scene;
 using MassiveSlicer.ViewModels.Base;
 
 namespace MassiveSlicer.ViewModels;
 
 /// <summary>
-/// A single row in the modifier panel's stack — wraps one <see cref="IModifier"/>, plus the
-/// selection/rename UI state around it. Select/delete/reorder are panel-level commands
-/// (see <see cref="ModifierPanelViewModel"/>), parameterized by the row. Selecting a row is
-/// local to the panel (see <see cref="ModifierPanelViewModel.SelectedModifier"/>) — it never
-/// changes which object the rest of the app's panels consider selected.
+/// The settings inspector for whichever modifier is currently selected (see
+/// <see cref="ModifierPanelViewModel.SelectedCut"/>) — wraps one <see cref="IModifier"/>.
+/// Stack order/membership/rename all live on the modifier's own outliner row now (nested under
+/// its owning mesh's Modifiers group); this class only owns the numeric/settings fields below
+/// the "SETTINGS" header. The wrapped modifier already has a real, independent plane object by
+/// the time this exists — that's created once, at actual creation time (see
+/// ViewportViewModel.AddCutModifier), never here.
 /// </summary>
-public sealed class ModifierRowViewModel : ViewModelBase
+public sealed class ModifierSettingsViewModel : ViewModelBase
 {
     private readonly ViewportViewModel _viewport;
 
     public IModifier Modifier { get; }
 
-    /// <summary>The mesh this modifier is attached to — needed to keep its gizmo node in sync
-    /// (Horizontal parents to it; Vertical measures against bed center instead).</summary>
-    internal SceneNode Owner { get; }
-
-    /// <summary>Non-null when this row wraps a Cut modifier — exposes its settings for binding.</summary>
+    /// <summary>Non-null when this wraps a Cut modifier — exposes its settings for binding.</summary>
     public CutModifier? Cut => Modifier as CutModifier;
 
-    public string Name
-    {
-        get => Modifier.Name;
-        set
-        {
-            var trimmed = string.IsNullOrWhiteSpace(value) ? Modifier.Name : value.Trim();
-            if (Modifier.Name == trimmed) return;
-            Modifier.Name = trimmed;
-            OnPropertyChanged();
-        }
-    }
+    public string Name => Modifier.Name;
 
     public bool Enabled
     {
@@ -45,21 +32,6 @@ public sealed class ModifierRowViewModel : ViewModelBase
             Modifier.Enabled = value;
             OnPropertyChanged();
         }
-    }
-
-    private bool _isSelected;
-    /// <summary>Whether this row's settings are the ones shown below the stack.</summary>
-    public bool IsSelected
-    {
-        get => _isSelected;
-        internal set => SetField(ref _isSelected, value);
-    }
-
-    private bool _isRenaming;
-    public bool IsRenaming
-    {
-        get => _isRenaming;
-        set => SetField(ref _isRenaming, value);
     }
 
     // -- Cut settings (only meaningful when Cut is not null; UI gates on IsCutModifier) --
@@ -77,7 +49,8 @@ public sealed class ModifierRowViewModel : ViewModelBase
             var orientation = value ? CutOrientation.Horizontal : CutOrientation.Vertical;
             if (Cut.Orientation == orientation) return;
             Cut.Orientation = orientation;
-            _viewport.SyncModifierGizmoNodeFromFields(Cut, Owner);
+            _viewport.SyncModifierGizmoNodeFromFields(Cut);
+            _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsVertical));
         }
@@ -97,7 +70,7 @@ public sealed class ModifierRowViewModel : ViewModelBase
         {
             if (Cut is null || Cut.RotationDegrees == value) return;
             Cut.RotationDegrees = value;
-            _viewport.SyncModifierGizmoNodeFromFields(Cut, Owner);
+            _viewport.SyncModifierGizmoNodeFromFields(Cut);
             OnPropertyChanged();
         }
     }
@@ -121,7 +94,7 @@ public sealed class ModifierRowViewModel : ViewModelBase
         {
             if (Cut is null || Cut.Offset == value) return;
             Cut.Offset = value;
-            _viewport.SyncModifierGizmoNodeFromFields(Cut, Owner);
+            _viewport.SyncModifierGizmoNodeFromFields(Cut);
             OnPropertyChanged();
         }
     }
@@ -133,6 +106,7 @@ public sealed class ModifierRowViewModel : ViewModelBase
         {
             if (Cut is null || Cut.Infinite == value) return;
             Cut.Infinite = value;
+            _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
         }
     }
@@ -144,6 +118,7 @@ public sealed class ModifierRowViewModel : ViewModelBase
         {
             if (Cut is null || Cut.SizeX == value) return;
             Cut.SizeX = value;
+            if (!Cut.Infinite) _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
         }
     }
@@ -155,31 +130,14 @@ public sealed class ModifierRowViewModel : ViewModelBase
         {
             if (Cut is null || Cut.SizeY == value) return;
             Cut.SizeY = value;
+            if (!Cut.Infinite) _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
         }
     }
 
-    // -- Drag-reorder visual state (set by ModifierPanelViewModel while a drag is in progress) --
-
-    private bool _showDropLineAbove;
-    public bool ShowDropLineAbove
-    {
-        get => _showDropLineAbove;
-        internal set => SetField(ref _showDropLineAbove, value);
-    }
-
-    private bool _showDropLineBelow;
-    public bool ShowDropLineBelow
-    {
-        get => _showDropLineBelow;
-        internal set => SetField(ref _showDropLineBelow, value);
-    }
-
-    internal ModifierRowViewModel(IModifier modifier, SceneNode owner, ViewportViewModel viewport)
+    internal ModifierSettingsViewModel(IModifier modifier, ViewportViewModel viewport)
     {
         Modifier  = modifier;
-        Owner     = owner;
         _viewport = viewport;
-        if (Cut is not null) _viewport.GetOrCreateModifierGizmoNode(Cut, Owner);
     }
 }

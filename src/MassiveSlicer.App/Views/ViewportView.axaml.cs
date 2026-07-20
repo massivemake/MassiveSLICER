@@ -18,6 +18,7 @@ using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.Core.Slicing.Curved;
 using MassiveSlicer.Core.Slicing.Effects;
+using MassiveSlicer.Core.Slicing.Modifiers;
 using MassiveSlicer.Viewport;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.FK;
@@ -78,10 +79,6 @@ public partial class ViewportView : UserControl
     private float    _gizmoDragStartScreenX;
     private float    _gizmoDragCurrScreenX;
 
-    // Set while dragging a modifier's own gizmo (not the mesh) — see ResolveActiveModifier.
-    private ModifierRowViewModel? _gizmoDragModifierRow;
-    private SceneNode?            _gizmoDragModifierOwner;
-
     // Keyboard-initiated transform state (Blender-style G/R/S)
     private bool      _kbTransformActive;
     private GizmoMode _kbTransformOp;
@@ -93,6 +90,10 @@ public partial class ViewportView : UserControl
     // Transform undo (panel numeric edits debounced; gizmo commits immediately)
     private SceneNode? _lastCommittedTransformNode;
     private Matrix4    _lastCommittedTransform = Matrix4.Identity;
+    // Baseline for linked nodes (a model's toolpath, or vice versa) carried along by
+    // MirrorTypedTransformDelta/the drag-link — lets RecordTransformUndo bundle their
+    // before/after into the same undo entry so Undo can never desync them from the primary.
+    private readonly Dictionary<SceneNode, Matrix4> _lastCommittedFollowerTransform = new();
     private CancellationTokenSource? _panelTransformDebounce;
     private CancellationTokenSource? _devAutoSaveDebounce;
 
@@ -362,6 +363,7 @@ public partial class ViewportView : UserControl
                 vm.SetOutlinerSelection(node);
                 RequestSceneSelection(vm, node);
             };
+            vm.OnApplyModifiersRequested = ownerItem => ApplyModifierStack(vm, ownerItem);
             vm.OnOutlinerMultiScanViewportSync = _ => SyncScanSelectionToRenderer(vm);
             vm.OnScanSelectionChanged = () => SyncScanSelectionToRenderer(vm);
             vm.OnOutlinerToolheadSelected = toolName => ApplyExclusiveToolheadFromOutliner(toolName, vm);
@@ -1392,7 +1394,6 @@ public partial class ViewportView : UserControl
                 UpdateCutToolOverlay(vm);
             else
                 UpdateAnglePlanePreview(vm);
-            UpdateModifierPreviewOverlay(vm);
             UpdatePaintOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
@@ -2957,23 +2958,22 @@ public partial class ViewportView : UserControl
             if (_gizmoDragAxis != GizmoAxis.None)
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
-                bool modifierDragging = _gizmoDragModifierRow is not null;
-                if (!cutDragging && !modifierDragging
+                bool tilted = false;
+                if (!cutDragging
                     && _renderer.SelectedNode is { } gzNode
                     && DataContext is ViewportViewModel vmGz)
                 {
                     var op = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
+                    tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialLocal, gzNode.LocalTransform);
                 }
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
-                _gizmoDragModifierRow    = null;
-                _gizmoDragModifierOwner  = null;
                 EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
-                if (!cutDragging && !modifierDragging && DataContext is ViewportViewModel vmGz2)
+                if (!cutDragging && DataContext is ViewportViewModel vmGz2)
                 {
                     SyncSelectionTransformDisplay(vmGz2);
                     if (IsToolNodeSelected() && vmGz2.IsScrubSessionActive && _activeScrubNode is not null)
@@ -2982,11 +2982,23 @@ public partial class ViewportView : UserControl
                         // (no re-slice — the adjustment lives on the toolpath timeline).
                         AddTcpKeyframeAtCurrentIndex(vmGz2);
                     }
-                    else
+                    else if (tilted)
                     {
-                        // Moving a model or effector handle invalidates the slice.
+                        // A real tilt (rotation around anything but the node's own up-axis)
+                        // changes what's actually printable — the toolpath's layer-stacking
+                        // direction no longer matches this object's new orientation, so this
+                        // always needs a fresh slice, same as before.
                         vmGz2.OnModelGeometryChanged?.Invoke();
                     }
+                    // A plain move or a pure spin around the object's own up-axis changes
+                    // neither the sliced layer geometry nor anything printability-related
+                    // (confirmed: PlanarSlicer re-derives zMin/zMax from the mesh's own current
+                    // world-transformed vertices every time, never an absolute world-Z grid) —
+                    // so there is nothing here for a re-slice to correct. Skipping it avoids
+                    // both the wasted recompute and, for a Cut-modifier piece specifically,
+                    // resetting any layer-progressive effect's phase (Wave, X-bracing) as if
+                    // this piece were being sliced independently for the first time, which
+                    // would silently break its continuity with sibling pieces from the same cut.
                 }
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
@@ -3043,9 +3055,19 @@ public partial class ViewportView : UserControl
                     var (node, normal, _) = _renderer.PickFace(ray);
                     if (node is not null)
                     {
+                        var oldLocal = node.LocalTransform;
                         ApplyLayFlat(node, normal, _renderer.BedZ);
+                        // Same one-shot-edit gap as DropToPlate (mesh/toolpath are scene-graph
+                        // siblings, nothing carries the toolpath along automatically) — but this
+                        // one is worse if left unfixed: Lay Flat is, by definition, a real tilt,
+                        // so without a fresh re-slice the toolpath isn't just offset, it's for
+                        // the wrong orientation entirely.
+                        MirrorTypedTransformDelta(flatVm2, node, oldLocal);
+                        if (DragClassifier.ChangedUpAxis(oldLocal, node.LocalTransform))
+                            flatVm2.OnModelGeometryChanged?.Invoke();
                         _renderer.Select(node);
                         UpdateFocusOverlay();
+                        RevalidateSelectedToolpath();
                     }
                     flatVm2.IsLayFlatMode = false;
                 }
@@ -3914,15 +3936,20 @@ public partial class ViewportView : UserControl
             var geometryCentroid = new NVec3(
                 centroidLocal.Row3.X, centroidLocal.Row3.Y, centroidLocal.Row3.Z);
 
-            if (entry.PreserveRelativePose
-                && entry.PreservedLocalTransform is Matrix4 preservedLocal
-                && entry.PreservedOrigin is NVec3 preservedOrigin)
+            if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
             {
-                // Re-apply the old node pose relative to the old geometry centroid, then
-                // re-base onto the new centroid so a re-slice keeps user placement.
-                var oldOriginT = Matrix4.CreateTranslation(preservedOrigin.X, preservedOrigin.Y, preservedOrigin.Z);
-                Matrix4.Invert(oldOriginT, out var invOldOrigin);
-                entry.Node.LocalTransform = preservedLocal * invOldOrigin * centroidLocal;
+                // Just keep the node exactly where it already was — do NOT rebase through the
+                // old/new centroids (the previous formula here was preservedLocal * invOldOrigin
+                // * centroidLocal, which double-counts whenever the mesh actually moved: the new
+                // centroid already reflects that move — since ComputeToolpathAsync slices the
+                // mesh's CURRENT world-transformed vertices — so re-adding the delta via the old
+                // origin added it a second time. Worked through algebraically: however the node
+                // got to its current position (drag-link mesh-follow, a direct manual nudge, or
+                // no move at all), preservedLocal already IS the one correct answer once the
+                // mesh's own contribution is accounted for — the old/new centroid terms cancel
+                // out completely. This was the root cause of a toolpath appearing to "move extra"
+                // whenever a drag triggered an auto-reslice.
+                entry.Node.LocalTransform = preservedLocal;
             }
             else if (entry.LocalTransformOverride is Matrix4 lt)
             {
@@ -5241,9 +5268,16 @@ public partial class ViewportView : UserControl
         if (_renderer.SelectedNode is not { } node) return;
         float minZ = LayFlatMinZ(node);
         if (minZ >= float.MaxValue) return;
+        var old = node.LocalTransform;
         node.LocalTransform = node.LocalTransform
             * TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
+        // A one-shot transform edit, same category as a typed coordinate change — mesh and
+        // toolpath are scene-graph siblings, not real parent/child, so nothing carries the
+        // toolpath along unless explicitly told to (same mechanism OnSelectionTranslated
+        // already uses for a typed Move edit).
+        if (DataContext is ViewportViewModel vm) MirrorTypedTransformDelta(vm, node, old);
         GlCanvas.RequestNextFrameRendering();
+        RevalidateSelectedToolpath();
     }
 
     private void RecenterSelected()
@@ -5360,7 +5394,7 @@ public partial class ViewportView : UserControl
         UpdateFocusOverlay();
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
-        RememberCommittedTransform(node);
+        RememberCommittedTransform(vm, node);
     }
 
     private static MeshData CloneMeshData(MeshData mesh) =>
@@ -5664,6 +5698,178 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    /// <summary>One piece in the working set while folding a Modifiers stack over the master —
+    /// its own mesh/toolpath content, plus the world pose it should keep (splitting never moves
+    /// anything, only divides geometry).</summary>
+    private readonly record struct ApplyPiece(MeshData Mesh, Toolpath? Toolpath, TkMatrix4 World, string Name);
+
+    /// <summary>
+    /// Runs a mesh's Modifiers stack: folds an ordered list of Cut modifiers over a working set
+    /// that starts as just the master (mesh + its current toolpath, if any). Each Cut replaces
+    /// every piece it actually crosses with two new pieces; a piece it doesn't cross passes
+    /// through unchanged — this is what makes a later Cut naturally re-cut an earlier one's
+    /// output (e.g. Horizontal then Vertical yields 4 pieces, not 2), with no special-casing.
+    /// The plane itself always lives in world space (the modifier's real, independent gizmo
+    /// node) and gets converted into each current piece's own local space — the same
+    /// world-to-local step the existing (destructive) Cut Tool already does — before handing off
+    /// to the already-built, already-tested splitters (PlanarMeshSplitter for the mesh,
+    /// Horizontal/VerticalCutSplitter for the toolpath). Non-destructive: the master and its
+    /// stack are never touched; results land in a fresh sibling group.
+    /// </summary>
+    private void ApplyModifierStack(ViewportViewModel vm, OutlinerItemViewModel ownerItem)
+    {
+        var groupItem = ownerItem.Children.FirstOrDefault(c => c.IsModifiersGroup);
+        if (groupItem is null) return;
+
+        var cuts = new List<CutModifier>();
+        foreach (var childNode in groupItem.Node.Children)
+            if (vm.FindModifierForNode(childNode) is { } cut && cut.Enabled && cut.Cut)
+                cuts.Add(cut);
+        if (cuts.Count == 0)
+        {
+            LogToConsole("[apply] no enabled Cut modifiers in the stack — nothing to do.");
+            return;
+        }
+
+        if (ownerItem.Node.Mesh?.PickingData is not { } masterMesh)
+        {
+            LogToConsole("[apply] master mesh has no geometry yet.");
+            return;
+        }
+
+        var tpItem = ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
+        var snap = tpItem is not null ? vm.GetToolpathSnapshot?.Invoke(tpItem.Node) : null;
+
+        var pieces = new List<ApplyPiece> { new(masterMesh, snap?.Smoothed, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
+
+        foreach (var cut in cuts)
+        {
+            if (vm.GetModifierGizmoNode(cut) is not { } gizmoNode) continue;
+            var gw = gizmoNode.WorldTransform;
+            var worldPoint = gw.Row3.Xyz;
+            var worldNormal = cut.Orientation == CutOrientation.Horizontal
+                ? TkVector3.Normalize(gw.Row2.Xyz)
+                : TkVector3.Normalize(gw.Row0.Xyz);
+
+            var next = new List<ApplyPiece>();
+            foreach (var piece in pieces)
+            {
+                var inv = piece.World.Inverted();
+                var localPt = TkVector3.TransformPosition(worldPoint, inv);
+                var localN  = TkVector3.Normalize(TkVector3.TransformNormal(worldNormal, inv));
+
+                var meshSplit = PlanarMeshSplitter.Split(piece.Mesh, localPt, localN);
+                bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
+                if (!crosses) { next.Add(piece); continue; }
+
+                // Toolpath moves are baked in WORLD space at slice time (unlike MeshData,
+                // which is local) — confirmed by tracing PlanarSlicer's actual input and
+                // SceneRenderer.AddToolpath's centroid-based node placement. So the toolpath
+                // splitters need the WORLD-space plane, never the local-converted one above.
+                Toolpath? tpPos = null, tpNeg = null;
+                if (piece.Toolpath is { } tp)
+                {
+                    if (TkVector3.Dot(worldNormal, TkVector3.UnitZ) > 0.999f)
+                    {
+                        // Cheap path: a Horizontal cut is always exactly Z-aligned in world
+                        // space (it never rotates). Whole layers bucket below/above, never
+                        // split mid-run.
+                        var hs = HorizontalCutSplitter.Split(tp, worldPoint.Z);
+                        tpPos = hs.Above;
+                        tpNeg = hs.Below;
+                    }
+                    else
+                    {
+                        // General case (Vertical cuts): clip move-by-move against the actual
+                        // world-space plane.
+                        var vs = VerticalCutSplitter.Split(tp,
+                            new NVec3(worldPoint.X, worldPoint.Y, worldPoint.Z),
+                            new NVec3(worldNormal.X, worldNormal.Y, worldNormal.Z));
+                        tpPos = vs.Positive;
+                        tpNeg = vs.Negative;
+                    }
+                }
+
+                next.Add(new ApplyPiece(meshSplit.Positive, tpPos, piece.World, $"{piece.Name} +"));
+                next.Add(new ApplyPiece(meshSplit.Negative, tpNeg, piece.World, $"{piece.Name} -"));
+            }
+            pieces = next;
+        }
+
+        if (pieces.Count <= 1)
+        {
+            LogToConsole("[apply] no modifier's plane actually crossed the model — nothing produced.");
+            return;
+        }
+
+        var outputGroup = vm.CreateAppliedPiecesGroup(ownerItem);
+        SceneNode? firstNode = null;
+
+        for (int i = 0; i < pieces.Count; i++)
+        {
+            var piece = pieces[i];
+            var node = new SceneNode
+            {
+                Name           = $"{outputGroup.Name} {i + 1:D2}",
+                PendingMesh    = piece.Mesh,
+                LocalTransform = piece.World,
+                Selectable     = true,
+                CullFaces      = false,
+                Visible        = true,
+            };
+            firstNode ??= node;
+            vm.PendingNodes.Enqueue(node);
+
+            var pieceItem = vm.CreateOutlinerItem(node, it =>
+            {
+                // The toolpath is only an OUTLINER child of the piece, not a real scene child
+                // (same convention as any other model — see the toolpath-positioning research
+                // this session) — so deleting the piece must explicitly also remove its
+                // toolpath's own node, or it's orphaned: gone from the outliner, still rendered,
+                // still pickable. Mirrors the existing (untouched) Cut Tool's delete flow.
+                foreach (var child in it.Children)
+                    vm.PendingRemoveNodes.Enqueue(child.Node);
+                outputGroup.RemoveChild(it);
+                vm.PendingRemoveNodes.Enqueue(it.Node);
+                vm.NotifyRenderNeeded();
+            }, displayName: node.Name, canDelete: true, modelFileOps: true);
+            outputGroup.AddChild(pieceItem);
+
+            if (piece.Toolpath is { } tp)
+            {
+                var tpNode = new SceneNode { Name = "Toolpath", Selectable = true };
+                vm.RegisterToolpathInOutliner(tpNode, pieceItem);
+                vm.PendingToolpath.Enqueue(new PendingToolpathEntry
+                {
+                    Toolpath      = tp,
+                    RawToolpath   = tp,
+                    Node          = tpNode,
+                    BeadWidth     = snap?.BeadWidth ?? 6f,
+                    LayerHeight   = snap?.LayerHeight ?? 3f,
+                    MaterialColor = snap?.MaterialColor ?? new NVec3(0.95f, 0.95f, 0.95f),
+                });
+            }
+        }
+
+        // Hide the source of truth now that its output exists — looking at both the master
+        // and its fresh pieces at once is just clutter, and the master/stack are still there
+        // (non-destructive), just tucked away until you want to re-Apply.
+        ownerItem.Visible = false;
+        if (tpItem is not null) tpItem.Visible = false;
+        groupItem.Visible = false;
+
+        if (firstNode is not null) _renderer.Select(firstNode);
+        UpdateFocusOverlay();
+        LogToConsole($"[apply] \"{outputGroup.Name}\": {pieces.Count} piece(s) from {cuts.Count} modifier(s).");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void LogToConsole(string message)
+    {
+        if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            mvm.Console.Log(message);
+    }
+
     /// <summary>Ghosted cut plane + gizmo pivot while the interactive Cut Tool is open.</summary>
     private void UpdateCutToolOverlay(ViewportViewModel vm)
     {
@@ -5686,74 +5892,6 @@ public partial class ViewportView : UserControl
         else
             _renderer.GizmoMode = vm.ActiveGizmoModeInternal;
         _renderer.GizmoEnabled = true;
-    }
-
-    /// <summary>
-    /// Ghosted plane for the modifier panel's currently-selected Cut modifier. Runs after
-    /// <see cref="UpdateAnglePlanePreview"/> in the render loop, so an explicitly-selected
-    /// modifier's plane wins over whatever that set — the angled/multi-planar/X-bracing
-    /// previews are ambient (X-bracing's helper is even on by default), while selecting a
-    /// modifier is a deliberate user action and should actually show. Only the interactive
-    /// Cut Tool is treated as truly exclusive, since it's a real modal editing session.
-    ///
-    /// The gizmo targets the modifier's own dedicated SceneNode (see ResolveActiveModifier),
-    /// never the mesh — dragging it runs through the exact same ProcessTranslateDrag/
-    /// ProcessRotateDrag used for every other object, so a modifier is a genuinely independent
-    /// object with its own transform, not a special-cased reinterpretation of the mesh's gizmo.
-    /// </summary>
-    private void UpdateModifierPreviewOverlay(ViewportViewModel vm)
-    {
-        if (vm.IsCutToolActive) return;
-
-        if (ResolveActiveModifier(vm) is not { } active)
-        {
-            _renderer.SetPlanePreview(null, null);
-            return;
-        }
-        var (row, ownerNode, gizmoNode) = active;
-        var cut = row.Cut!;
-
-        var world = gizmoNode.WorldTransform;
-        var point = world.Row3.Xyz;
-
-        // Horizontal's gizmo node is a pure translation (see BuildHorizontalLocalTransform) —
-        // its local X row is never rotated to mean anything, so its face-normal is the local Z
-        // axis instead (transformed by the owner's world rotation, since it's parented to it).
-        // Vertical's node has no parent and encodes its normal directly in the X row (see
-        // BuildVerticalTransform) — using Row0 for both, as before, made Horizontal render
-        // face-on to X instead of Z, i.e. upright instead of flat.
-        var normal = cut.Orientation == CutOrientation.Horizontal
-            ? TkVector3.Normalize(world.Row2.Xyz)
-            : TkVector3.Normalize(world.Row0.Xyz);
-
-        // Restricted extent isn't rectangular in the renderer yet (square quad only) — use
-        // whichever side is larger as a stand-in until PlanePreviewRenderer supports Size X/Y.
-        // Infinite mode used to draw a 30m quad, which at bed scale reads as an undifferentiated
-        // wall of color — too big to see the plane actually move. Bed-sized reads as "the plane"
-        // while still clearly extending past the model.
-        float size = cut.Infinite ? Math.Max(_bedWidth, _bedDepth) : Math.Max(cut.SizeX, cut.SizeY);
-        _renderer.SetPlanePreview(point, normal, size);
-
-        _renderer.GizmoPivotWorld = point;
-        if (vm.ActiveGizmoModeInternal == GizmoMode.None)
-            SetGizmoMode(GizmoMode.Translate);
-        else
-            _renderer.GizmoMode = vm.ActiveGizmoModeInternal;
-        _renderer.GizmoEnabled = true;
-    }
-
-    /// <summary>The modifier row currently driving the panel's settings + the viewport gizmo,
-    /// the SceneNode it's attached to, and its own dedicated gizmo node — null if nothing
-    /// qualifies (no selection, disabled, preview hidden, or not a Cut modifier). Centralizes
-    /// the same resolution used by the preview overlay and the gizmo-drag handlers so they can
-    /// never disagree about what's currently active.</summary>
-    private static (ModifierRowViewModel Row, SceneNode Owner, SceneNode GizmoNode)? ResolveActiveModifier(ViewportViewModel vm)
-    {
-        if (vm.ModifiersPanel?.SelectedModifier is not { } row) return null;
-        if (row.Cut is not { } cut || !cut.Enabled || !cut.PreviewVisible) return null;
-        if (vm.SelectedModifierOwner?.Node is not { } owner) return null;
-        var gizmoNode = vm.GetOrCreateModifierGizmoNode(cut, owner);
-        return (row, owner, gizmoNode);
     }
 
     private async Task MeshCleanupSelectedAsync()
@@ -5992,7 +6130,8 @@ public partial class ViewportView : UserControl
         {
             var userHit = Picker.PickWhere(
                 ray, _renderer.SceneRoot,
-                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n), out _);
+                n => vm.IsUserModelSceneNode(n) || vm.IsEffectorNode(n)
+                     || vm.IsModifierNode(n) || vm.IsModifiersGroupNode(n), out _);
             if (userHit is not null)
                 return Picker.FindSelectableRoot(userHit, _renderer.SceneRoot);
         }
@@ -6006,7 +6145,9 @@ public partial class ViewportView : UserControl
         if (node is not null && vm.FindUserMeshOutlinerItem(node)?.Node is { } userRoot)
             node = userRoot;
 
-        bool isUserContent = node is not null && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node));
+        bool isUserContent = node is not null
+            && (vm.IsUserModelSceneNode(node) || vm.IsEffectorNode(node)
+                || vm.IsModifierNode(node) || vm.IsModifiersGroupNode(node));
 
         // Dev mode: registered environment props (print bed, stands, docks) are pickable —
         // resolve the mesh-leaf hit to its dev root so the gizmo transforms the whole prop.
@@ -9685,10 +9826,29 @@ public partial class ViewportView : UserControl
         _                   => "Transform",
     };
 
-    private void RememberCommittedTransform(SceneNode node)
+    private void RememberCommittedTransform(ViewportViewModel vm, SceneNode node)
     {
         _lastCommittedTransformNode = node;
         _lastCommittedTransform     = node.LocalTransform;
+        foreach (var f in ResolveLinkedNodes(vm, node))
+            _lastCommittedFollowerTransform[f] = f.LocalTransform;
+    }
+
+    /// <summary>Linked nodes (a model's toolpath, etc.) whose LocalTransform has moved on since
+    /// the last commit — paired with the baseline it moved on from, so they can be folded into
+    /// the same undo entry as the primary node instead of being left to drift out of sync.</summary>
+    private List<(SceneNode Node, Matrix4 Before, Matrix4 After)> CaptureFollowerDeltas(
+        ViewportViewModel vm, SceneNode node)
+    {
+        var result = new List<(SceneNode, Matrix4, Matrix4)>();
+        foreach (var f in ResolveLinkedNodes(vm, node))
+        {
+            var after  = f.LocalTransform;
+            var before = _lastCommittedFollowerTransform.TryGetValue(f, out var b) ? b : after;
+            if (!Matrix4Util.NearlyEquals(before, after))
+                result.Add((f, before, after));
+        }
+        return result;
     }
 
     private void RecordTransformUndo(
@@ -9698,10 +9858,25 @@ public partial class ViewportView : UserControl
         Matrix4 after,
         string description)
     {
-        if (Matrix4Util.NearlyEquals(before, after)) return;
-        vm.UndoRedo?.Push(new NodeTransformAction(
-            node, before, after, description, () => OnTransformApplied(vm)));
-        RememberCommittedTransform(node);
+        var followerDeltas  = CaptureFollowerDeltas(vm, node);
+        bool primaryChanged = !Matrix4Util.NearlyEquals(before, after);
+        if (!primaryChanged && followerDeltas.Count == 0) return;
+
+        if (followerDeltas.Count == 0)
+        {
+            vm.UndoRedo?.Push(new NodeTransformAction(
+                node, before, after, description, () => OnTransformApplied(vm)));
+        }
+        else
+        {
+            var entries = new List<(SceneNode, Matrix4, Matrix4)>();
+            if (primaryChanged) entries.Add((node, before, after));
+            entries.AddRange(followerDeltas);
+            vm.UndoRedo?.Push(new LinkedTransformAction(
+                entries, description, () => OnTransformApplied(vm)));
+        }
+
+        RememberCommittedTransform(vm, node);
         if (DataContext is ViewportViewModel devVm && devVm.IsDevMode && IsDevNode(node))
             ScheduleDevTransformAutoSave(devVm, node);
     }
@@ -9712,7 +9887,7 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
         if (_renderer.SelectedNode is { } node)
-            RememberCommittedTransform(node);
+            RememberCommittedTransform(vm, node);
     }
 
     private void RebuildDevNodeRegistry(CellSwapPayload swap)
@@ -9951,7 +10126,7 @@ public partial class ViewportView : UserControl
         vm.SyncSelectionDisplay(
             Math.Round(pos.X, 2), Math.Round(pos.Y, 2), Math.Round(pos.Z, 2),
             Math.Round(a, 2), Math.Round(b, 2), Math.Round(c, 2));
-        RememberCommittedTransform(node);
+        RememberCommittedTransform(vm, node);
     }
 
     private SceneNode? _lastOutlinerSyncedNode;
@@ -12399,25 +12574,11 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        // Modifier gizmo: a real, independent SceneNode (see ResolveActiveModifier) — dragging
-        // it is handled by the exact same translate/rotate code as any other object, just
-        // targeting this node instead of the mesh, so it can never touch the mesh's transform.
-        if (DataContext is ViewportViewModel vmMod && ResolveActiveModifier(vmMod) is { } activeMod)
-        {
-            _gizmoDragModifierRow   = activeMod.Row;
-            _gizmoDragModifierOwner = activeMod.Owner;
-            _gizmoDragInitialLocal  = activeMod.GizmoNode.LocalTransform;
-            _gizmoDragPlanePoint    = activeMod.GizmoNode.WorldTransform.Row3.Xyz;
-            _toolIsDragging = false;
-            _transformLinkFollowers = null;
-            SetupCutPlaneGizmoDrag(mx, my, vpW, vpH);
-            return;
-        }
-        _gizmoDragModifierRow = null;
-        _gizmoDragModifierOwner = null;
-
         if (_renderer.SelectedNode is not { } node) return;
         if (IsToolNodeSelected() && _renderer.GizmoMode == GizmoMode.Scale) return;
+        // A modifier plane isn't a solid part — scaling it means nothing (no field for it).
+        if (DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
+            && _renderer.GizmoMode == GizmoMode.Scale) return;
         _gizmoDragInitialLocal = node.LocalTransform;
         _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
         BeginTransformLink(node);
@@ -12499,12 +12660,6 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        if (_gizmoDragModifierRow is { } dragRow && _gizmoDragModifierOwner is { } dragOwner)
-        {
-            ProcessModifierGizmoDrag(dragRow, dragOwner, mx, my);
-            return;
-        }
-
         if (_renderer.SelectedNode is not { } node) return;
 
         _gizmoDragCurrScreenX = mx;
@@ -12518,38 +12673,11 @@ public partial class ViewportView : UserControl
         float t      = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
         var hitWorld = ray.At(t);
 
-        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
-        switch (dragOp)
-        {
-            case GizmoMode.Translate: ProcessTranslateDrag(node, hitWorld); break;
-            case GizmoMode.Scale:     ProcessScaleDrag(node, hitWorld);     break;
-            case GizmoMode.Rotate:    ProcessRotateDrag(node, hitWorld);    break;
-        }
-        ApplyTransformLink(node);
-    }
-
-    /// <summary>
-    /// Drives a modifier's own gizmo node through the exact same ProcessTranslateDrag/
-    /// ProcessRotateDrag used for any other object — it's a real, independent SceneNode (see
-    /// ResolveActiveModifier/GetOrCreateModifierGizmoNode), so no special-cased math is needed
-    /// here at all. Afterward, pulls the resulting Offset/RotationDegrees back out of the node
-    /// (see ViewportViewModel.SyncModifierAfterGizmoEdit) so the settings panel and the actual
-    /// stored modifier data stay exactly in sync with wherever the gizmo left it.
-    /// </summary>
-    private void ProcessModifierGizmoDrag(ModifierRowViewModel row, SceneNode ownerNode, float mx, float my)
-    {
-        if (DataContext is not ViewportViewModel vm) return;
-        if (row.Cut is not { } cut) return;
-        var node = vm.GetOrCreateModifierGizmoNode(cut, ownerNode);
-
-        _gizmoDragCurrScreenX = mx;
-        float vpW = (float)GlCanvas.Bounds.Width;
-        float vpH = (float)GlCanvas.Bounds.Height;
-        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
-        float denom = Vector3.Dot(ray.Direction, _gizmoDragPlaneNormal);
-        if (MathF.Abs(denom) < 1e-5f) return;
-        float t = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
-        var hitWorld = ray.At(t);
+        // A modifier plane is a real, independent SceneNode — dragging it runs through the
+        // exact same Process*Drag code as any other object, just constrained to the one axis
+        // its data model can actually represent (only the Z rotate ring means anything for a
+        // Vertical plane; Scale never means anything — already blocked in BeginGizmoDrag).
+        var modifierCut = DataContext is ViewportViewModel vmCut ? vmCut.FindModifierForNode(node) : null;
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
         switch (dragOp)
@@ -12557,17 +12685,22 @@ public partial class ViewportView : UserControl
             case GizmoMode.Translate:
                 ProcessTranslateDrag(node, hitWorld);
                 break;
-            case GizmoMode.Rotate when cut.Orientation == CutOrientation.Vertical && _gizmoDragAxis == GizmoAxis.Z:
-                // Only the Z ring means anything for a vertical plane (it only ever rotates
-                // around the vertical axis) — X/Y rotate rings are ignored rather than
-                // producing a tilt the data model (and CutModifierNodeSync's extraction) can't
-                // actually represent.
+            case GizmoMode.Scale when modifierCut is null:
+                ProcessScaleDrag(node, hitWorld);
+                break;
+            case GizmoMode.Rotate when modifierCut is null
+                || (modifierCut.Orientation == CutOrientation.Vertical && _gizmoDragAxis == GizmoAxis.Z):
+                // Only the Z ring means anything for a Vertical plane (it only ever rotates
+                // around the vertical axis); Horizontal has no rotation field at all — X/Y/Z
+                // rotate rings are all ignored rather than producing a tilt the data model
+                // (and CutModifierNodeSync's extraction) can't actually represent.
                 ProcessRotateDrag(node, hitWorld);
                 break;
-            // Scale doesn't mean anything for a plane modifier — no case for it.
         }
+        ApplyTransformLink(node);
 
-        vm.SyncModifierAfterGizmoEdit(cut, node, ownerNode);
+        if (modifierCut is { } cut && DataContext is ViewportViewModel vmMod)
+            vmMod.SyncModifierAfterGizmoEdit(cut, node);
     }
 
     private void ProcessCutPlaneGizmoDrag(CutToolDialogViewModel session, float mx, float my)

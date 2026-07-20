@@ -27,8 +27,9 @@ public static class VerticalCutSplitter
     public sealed record SplitResult(Toolpath Positive, Toolpath Negative);
 
     /// <param name="source">The toolpath to split. Never modified.</param>
-    /// <param name="planePoint">A point on the cut plane, in the same local/design space as the toolpath.</param>
-    /// <param name="planeNormal">Unit (or non-zero) normal of the plane; the side it points toward is <see cref="SplitResult.Positive"/>.</param>
+    /// <param name="planePoint">A point on the cut plane, in WORLD space — toolpath moves are
+    /// baked in world space at slice time, unlike MeshData, which is local.</param>
+    /// <param name="planeNormal">Unit (or non-zero) normal of the plane, in world space; the side it points toward is <see cref="SplitResult.Positive"/>.</param>
     public static SplitResult Split(Toolpath source, Vector3 planePoint, Vector3 planeNormal)
     {
         var n = Vector3.Normalize(planeNormal);

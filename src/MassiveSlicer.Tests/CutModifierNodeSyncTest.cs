@@ -13,22 +13,30 @@ namespace MassiveSlicer.Tests;
 public sealed class CutModifierNodeSyncTest
 {
     [Fact]
-    public void Horizontal_offset_round_trips_through_the_local_transform()
+    public void Horizontal_position_and_offset_round_trip_through_the_world_transform()
     {
-        var local = CutModifierNodeSync.BuildHorizontalLocalTransform(offset: 123.5f);
+        var bedCenter = new Vector3(1475.5f, -609.3f, 70f);
+        var transform = CutModifierNodeSync.BuildHorizontalTransform(
+            positionX: 42f, positionY: -17f, offset: 123.5f, bedCenter);
 
-        Assert.Equal(123.5f, CutModifierNodeSync.ExtractHorizontalOffset(local), 3);
+        var (px, py, offset) = CutModifierNodeSync.ExtractHorizontal(transform, bedCenter);
+        Assert.Equal(42f, px, 3);
+        Assert.Equal(-17f, py, 3);
+        Assert.Equal(123.5f, offset, 3);
     }
 
     [Fact]
-    public void Horizontal_transform_has_no_rotation_or_xy_translation()
+    public void Horizontal_transform_offsets_from_bed_center_with_no_rotation()
     {
-        var local = CutModifierNodeSync.BuildHorizontalLocalTransform(offset: 50f);
+        var bedCenter = new Vector3(500f, -300f, 70f);
+        var transform = CutModifierNodeSync.BuildHorizontalTransform(
+            positionX: 10f, positionY: 20f, offset: 50f, bedCenter);
 
-        Assert.Equal(0f, local.Row3.X, 3);
-        Assert.Equal(0f, local.Row3.Y, 3);
-        Assert.Equal(Vector3.UnitX, local.Row0.Xyz);
-        Assert.Equal(Vector3.UnitZ, local.Row2.Xyz);
+        Assert.Equal(bedCenter.X + 10f, transform.Row3.X, 3);
+        Assert.Equal(bedCenter.Y + 20f, transform.Row3.Y, 3);
+        Assert.Equal(bedCenter.Z + 50f, transform.Row3.Z, 3);
+        Assert.Equal(Vector3.UnitX, transform.Row0.Xyz);
+        Assert.Equal(Vector3.UnitZ, transform.Row2.Xyz);
     }
 
     [Theory]

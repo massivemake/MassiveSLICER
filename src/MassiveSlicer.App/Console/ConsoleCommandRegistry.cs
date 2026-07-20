@@ -1,5 +1,6 @@
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Console;
 
@@ -1006,32 +1007,34 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "modifier-add",
             Aliases = ["addmodifier", "add-cut"],
-            Description = "Add a Cut modifier to the currently-selected model (step 5 MODIFIERS)",
+            Description = "Add a Cut modifier to the currently-selected model (step 5 MODIFIERS) — it becomes the new selection",
             Execute = (ctx, _) =>
             {
                 var panel = ctx.Main.RightPanel.Modifiers;
                 if (!panel.HasOwner) { ctx.LogError("[modifier] select a model first."); return; }
                 panel.AddCutModifierCommand.Execute(null);
-                ctx.Log($"[modifier] added \"{panel.SelectedModifier?.Name}\" ({panel.Rows.Count} in stack).");
+                var owner = ctx.Main.Viewport.SelectedModifierOwner;
+                int count = owner is null ? 0 : ctx.Main.Viewport.GetModifiers(owner).Count;
+                ctx.Log($"[modifier] added \"{panel.SelectedSettings?.Name ?? "?"}\" ({count} in stack).");
             },
         });
 
         Register(new ConsoleCommandDefinition
         {
             Name = "modifier-debug",
-            Description = "Diagnostic: dump the modifier-preview chain (temporary, for tracking down the preview-not-rendering issue)",
+            Description = "Diagnostic: dump the modifier panel/selection chain",
             Execute = (ctx, _) =>
             {
-                var panelViaRightPanel = ctx.Main.RightPanel.Modifiers;
-                var panelViaViewport = ctx.Main.Viewport.ModifiersPanel;
-                ctx.Log($"[debug] RightPanel.Modifiers == Viewport.ModifiersPanel: {ReferenceEquals(panelViaRightPanel, panelViaViewport)}");
-                ctx.Log($"[debug] RightPanel.Modifiers.HasOwner: {panelViaRightPanel.HasOwner}");
-                ctx.Log($"[debug] RightPanel.Modifiers.SelectedModifier: {panelViaRightPanel.SelectedModifier?.Name ?? "null"}");
-                ctx.Log($"[debug] Viewport.ModifiersPanel?.SelectedModifier: {panelViaViewport?.SelectedModifier?.Name ?? "null"}");
-                var cut = panelViaViewport?.SelectedModifier?.Cut;
-                ctx.Log($"[debug] SelectedModifier.Cut is CutModifier: {cut is not null}");
+                var panel = ctx.Main.RightPanel.Modifiers;
+                ctx.Log($"[debug] RightPanel.Modifiers == Viewport.ModifiersPanel: {ReferenceEquals(panel, ctx.Main.Viewport.ModifiersPanel)}");
+                ctx.Log($"[debug] HasOwner: {panel.HasOwner}");
+                ctx.Log($"[debug] SelectedSettings: {panel.SelectedSettings?.Name ?? "null"}");
+                ctx.Log($"[debug] IsGroupSelected: {panel.IsGroupSelected}");
+                var cut = panel.SelectedSettings?.Cut;
+                ctx.Log($"[debug] SelectedSettings.Cut is CutModifier: {cut is not null}");
                 if (cut is not null)
                     ctx.Log($"[debug] Cut: Enabled={cut.Enabled} PreviewVisible={cut.PreviewVisible} Orientation={cut.Orientation} Offset={cut.Offset}");
+                ctx.Log($"[debug] Viewport.SelectedOutlinerItem: {ctx.Main.Viewport.SelectedOutlinerItem?.Name ?? "null"}");
                 ctx.Log($"[debug] Viewport.SelectedModifierOwner: {ctx.Main.Viewport.SelectedModifierOwner?.Name ?? "null"}");
                 ctx.Log($"[debug] IsCutToolActive={ctx.Main.Viewport.IsCutToolActive} AdditiveMethod={ctx.Main.Viewport.AdditiveSettings?.Method}");
                 ctx.Log($"[debug] XBracingEnabled={ctx.Main.Viewport.AdditiveSettings?.XBracingEnabled} XBracingShowHelper={ctx.Main.Viewport.AdditiveSettings?.XBracingShowHelper}");
@@ -1045,11 +1048,11 @@ public sealed class ConsoleCommandRegistry
             Usage = "modifier-set-offset <value>",
             Execute = (ctx, args) =>
             {
-                var row = ctx.Main.RightPanel.Modifiers.SelectedModifier;
-                if (row is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings is null) { ctx.LogError("[modifier] nothing selected."); return; }
                 if (!float.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-offset <value>"); return; }
-                row.Offset = value;
-                ctx.Log($"[modifier] {row.Name} Offset -> {row.Offset}");
+                settings.Offset = value;
+                ctx.Log($"[modifier] {settings.Name} Offset -> {settings.Offset}");
             },
         });
 
@@ -1060,40 +1063,363 @@ public sealed class ConsoleCommandRegistry
             Usage = "modifier-set-rotation <degrees>",
             Execute = (ctx, args) =>
             {
-                var row = ctx.Main.RightPanel.Modifiers.SelectedModifier;
-                if (row is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings is null) { ctx.LogError("[modifier] nothing selected."); return; }
                 if (!float.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-rotation <degrees>"); return; }
-                row.IsVertical = true;
-                row.RotationDegrees = value;
-                ctx.Log($"[modifier] {row.Name} RotationDegrees -> {row.RotationDegrees}");
+                settings.IsVertical = true;
+                settings.RotationDegrees = value;
+                ctx.Log($"[modifier] {settings.Name} RotationDegrees -> {settings.RotationDegrees}");
             },
         });
 
         Register(new ConsoleCommandDefinition
         {
             Name = "modifier-node-debug",
-            Description = "Diagnostic: dump the selected modifier's gizmo node transform vs. the mesh node's transform (confirms they're genuinely independent)",
+            Description = "Diagnostic: dump the selected modifier's plane object transform/flags (confirms it's a real, independent scene object, parented into its owner's Modifiers group)",
             Execute = (ctx, _) =>
             {
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings?.Cut is not { } cut) { ctx.LogError("[modifier] nothing selected."); return; }
                 var vp = ctx.Main.Viewport;
-                var row = vp.ModifiersPanel?.SelectedModifier;
-                if (row?.Cut is not { } cut) { ctx.LogError("[modifier] nothing selected."); return; }
-                var owner = vp.SelectedModifierOwner?.Node;
-                if (owner is null) { ctx.LogError("[modifier] no owning model."); return; }
 
-                var gizmoNode = vp.GetOrCreateModifierGizmoNode(cut, owner);
+                var gizmoNode = vp.GetModifierGizmoNode(cut);
+                if (gizmoNode is null) { ctx.LogError("[modifier] no gizmo node (shouldn't happen for a live selection)."); return; }
                 var gw = gizmoNode.WorldTransform;
-                var ow = owner.WorldTransform;
-                ctx.Log($"[debug] gizmo node parent == mesh node: {ReferenceEquals(gizmoNode.Parent, owner)}");
+                ctx.Log($"[debug] gizmo node parent: {(gizmoNode.Parent is { } p ? p.Name : "(none)")}");
+                ctx.Log($"[debug] gizmo Selectable={gizmoNode.Selectable} PickIgnore={gizmoNode.PickIgnore} Visible={gizmoNode.Visible}");
                 ctx.Log($"[debug] gizmo world pos: ({gw.Row3.X:0.##}, {gw.Row3.Y:0.##}, {gw.Row3.Z:0.##})");
                 ctx.Log($"[debug] gizmo world Row0 (local X): ({gw.Row0.X:0.###}, {gw.Row0.Y:0.###}, {gw.Row0.Z:0.###})");
                 ctx.Log($"[debug] gizmo world Row2 (local Z): ({gw.Row2.X:0.###}, {gw.Row2.Y:0.###}, {gw.Row2.Z:0.###})");
                 var plane = cut.Orientation == MassiveSlicer.Core.Models.CutOrientation.Horizontal
                     ? System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(gw.Row2.X, gw.Row2.Y, gw.Row2.Z))
                     : System.Numerics.Vector3.Normalize(new System.Numerics.Vector3(gw.Row0.X, gw.Row0.Y, gw.Row0.Z));
-                ctx.Log($"[debug] plane preview normal (what the overlay draws): ({plane.X:0.###}, {plane.Y:0.###}, {plane.Z:0.###})");
-                ctx.Log($"[debug] mesh world pos: ({ow.Row3.X:0.##}, {ow.Row3.Y:0.##}, {ow.Row3.Z:0.##})");
+                ctx.Log($"[debug] plane normal: ({plane.X:0.###}, {plane.Y:0.###}, {plane.Z:0.###})");
                 ctx.Log($"[debug] Cut fields: Orientation={cut.Orientation} Offset={cut.Offset} RotationDegrees={cut.RotationDegrees}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-apply",
+            Aliases = ["apply-modifiers"],
+            Description = "Run the selected mesh's Modifiers stack (select its Modifiers group first, or select any modifier in it)",
+            Execute = (ctx, _) =>
+            {
+                var panel = ctx.Main.RightPanel.Modifiers;
+                if (!panel.IsGroupSelected)
+                {
+                    ctx.LogError("[apply] select the mesh's Modifiers group first (e.g. `select Modifiers`).");
+                    return;
+                }
+                panel.ApplyCommand.Execute(null);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "transform-debug",
+            Description = "Diagnostic: dump full-precision World/Local transform + parent name for every outliner item found anywhere matching a name",
+            Usage = "transform-debug <name>",
+            Execute = (ctx, args) =>
+            {
+                var name = args.Trim();
+                if (name.Length == 0) { ctx.LogError("usage: transform-debug <name>"); return; }
+
+                void FindAll(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> results)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) results.Add(item);
+                        FindAll(item.Children, results);
+                    }
+                }
+
+                var matches = new List<OutlinerItemViewModel>();
+                FindAll(ctx.Main.Viewport.OutlinerItems, matches);
+                if (matches.Count == 0) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
+
+                foreach (var found in matches)
+                {
+                    var node = found.Node;
+                    var w = node.WorldTransform;
+                    var l = node.LocalTransform;
+                    string kind = found.IsModifiersGroup ? " [ModifiersGroup]"
+                        : found.IsPiecesGroup ? " [PiecesGroup]"
+                        : found.IsModifier ? " [Modifier]"
+                        : found.IsToolpath ? " [Toolpath]"
+                        : "";
+                    ctx.Log($"[debug] \"{found.Name}\"{kind} parent=\"{node.Parent?.Name ?? "(none)"}\"");
+                    ctx.Log($"[debug]   world pos=({w.Row3.X:0.######}, {w.Row3.Y:0.######}, {w.Row3.Z:0.######})");
+                    ctx.Log($"[debug]   local pos=({l.Row3.X:0.######}, {l.Row3.Y:0.######}, {l.Row3.Z:0.######})");
+                    ctx.Log($"[debug]   world rowX=({w.Row0.X:0.###},{w.Row0.Y:0.###},{w.Row0.Z:0.###}) rowY=({w.Row1.X:0.###},{w.Row1.Y:0.###},{w.Row1.Z:0.###}) rowZ=({w.Row2.X:0.###},{w.Row2.Y:0.###},{w.Row2.Z:0.###})");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "visible-debug",
+            Description = "Diagnostic: dump Visible for every outliner item found anywhere (full recursion) matching a name, and each match's immediate children",
+            Usage = "visible-debug <name>",
+            Execute = (ctx, args) =>
+            {
+                var name = args.Trim();
+                if (name.Length == 0) { ctx.LogError("usage: visible-debug <name>"); return; }
+
+                void FindAll(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> results)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) results.Add(item);
+                        FindAll(item.Children, results);
+                    }
+                }
+
+                var matches = new List<OutlinerItemViewModel>();
+                FindAll(ctx.Main.Viewport.OutlinerItems, matches);
+                if (matches.Count == 0) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
+
+                foreach (var found in matches)
+                {
+                    string kind = found.IsModifiersGroup ? " [ModifiersGroup]"
+                        : found.IsPiecesGroup ? " [PiecesGroup]"
+                        : found.IsModifier ? " [Modifier]"
+                        : found.IsToolpath ? " [Toolpath]"
+                        : "";
+                    ctx.Log($"[debug] \"{found.Name}\"{kind} Visible={found.Visible}");
+                    foreach (var child in found.Children)
+                        ctx.Log($"[debug]   child \"{child.Name}\" Visible={child.Visible}");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "visible-set-group",
+            Description = "Diagnostic: set Visible on the Modifiers/Pieces group matching a name (disambiguates same-named master/group items), to verify the visibility cascade",
+            Usage = "visible-set-group <name> <true|false>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2 || !bool.TryParse(parts[^1], out var value))
+                {
+                    ctx.LogError("usage: visible-set-group <name> <true|false>");
+                    return;
+                }
+                var name = string.Join(' ', parts[..^1]);
+
+                void FindAll(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> results)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                            && (item.IsPiecesGroup || item.IsModifiersGroup))
+                            results.Add(item);
+                        FindAll(item.Children, results);
+                    }
+                }
+
+                var matches = new List<OutlinerItemViewModel>();
+                FindAll(ctx.Main.Viewport.OutlinerItems, matches);
+                if (matches.Count == 0) { ctx.LogError($"[debug] no Modifiers/Pieces group named '{name}'."); return; }
+
+                var target = matches[0];
+                target.Visible = value;
+                ctx.Log($"[debug] set \"{target.Name}\" [{(target.IsPiecesGroup ? "PiecesGroup" : "ModifiersGroup")}] Visible={value}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "visible-set",
+            Description = "Diagnostic: set Visible on the first outliner item matching a name (any kind — mesh, group, toolpath), to verify visibility cascades. Add --toolpath to target the toolpath specifically when names collide with its owning mesh.",
+            Usage = "visible-set <name> <true|false> [--toolpath]",
+            Execute = (ctx, args) =>
+            {
+                bool wantToolpath = args.TrimEnd().EndsWith("--toolpath", StringComparison.OrdinalIgnoreCase);
+                if (wantToolpath) args = args.TrimEnd()[..^"--toolpath".Length];
+
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2 || !bool.TryParse(parts[^1], out var value))
+                {
+                    ctx.LogError("usage: visible-set <name> <true|false> [--toolpath]");
+                    return;
+                }
+                var name = string.Join(' ', parts[..^1]);
+
+                OutlinerItemViewModel? Find(IEnumerable<OutlinerItemViewModel> items)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+                            && (!wantToolpath || item.IsToolpath))
+                            return item;
+                        if (Find(item.Children) is { } found) return found;
+                    }
+                    return null;
+                }
+
+                var target = Find(ctx.Main.Viewport.OutlinerItems);
+                if (target is null) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
+                target.Visible = value;
+                ctx.Log($"[debug] set \"{target.Name}\" Visible={value}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "set-rotation",
+            Description = "Diagnostic: set the SELECTED MODEL's rotation (A/B/C degrees) via the same typed-field path the panel uses (OnSelectionRotated) — exercises the panel-edit undo/toolpath-link path without needing a real gizmo drag",
+            Usage = "set-rotation <a> <b> <c>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !double.TryParse(parts[0], out var a)
+                    || !double.TryParse(parts[1], out var b)
+                    || !double.TryParse(parts[2], out var c))
+                {
+                    ctx.LogError("usage: set-rotation <a> <b> <c>");
+                    return;
+                }
+                ctx.Main.Viewport.SelectionA = a;
+                ctx.Main.Viewport.SelectionB = b;
+                ctx.Main.Viewport.SelectionC = c;
+                ctx.Log($"[debug] set rotation -> A={a} B={b} C={c}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "set-position",
+            Description = "Diagnostic: set the SELECTED node's position (X/Y/Z) via the same typed-field path the panel uses (OnSelectionTranslated) — works whether a mesh or its toolpath is selected, to exercise the bidirectional move-link both directions",
+            Usage = "set-position <x> <y> <z>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !double.TryParse(parts[0], out var x)
+                    || !double.TryParse(parts[1], out var y)
+                    || !double.TryParse(parts[2], out var z))
+                {
+                    ctx.LogError("usage: set-position <x> <y> <z>");
+                    return;
+                }
+                ctx.Main.Viewport.SelectionX = x;
+                ctx.Main.Viewport.SelectionY = y;
+                ctx.Main.Viewport.SelectionZ = z;
+                ctx.Log($"[debug] set position -> X={x} Y={y} Z={z}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "piece-toolpath-debug",
+            Description = "Diagnostic: find a piece by name anywhere in the outliner (full recursion, unlike `select --toolpath`) and dump its toolpath snapshot",
+            Usage = "piece-toolpath-debug <name>",
+            Execute = (ctx, args) =>
+            {
+                var name = args.Trim();
+                if (name.Length == 0) { ctx.LogError("usage: piece-toolpath-debug <name>"); return; }
+
+                OutlinerItemViewModel? Find(IEnumerable<OutlinerItemViewModel> items)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return item;
+                        if (Find(item.Children) is { } found) return found;
+                    }
+                    return null;
+                }
+
+                var piece = Find(ctx.Main.Viewport.OutlinerItems);
+                if (piece is null) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
+
+                ctx.Log($"[debug] found \"{piece.Name}\" IsToolpath={piece.IsToolpath} children={piece.Children.Count}");
+                var tpItem = piece.Children.FirstOrDefault(c => c.IsToolpath);
+                if (tpItem is null) { ctx.LogError("[debug] no IsToolpath child."); return; }
+
+                var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                if (snap is null) { ctx.LogError("[debug] GetToolpathSnapshot returned null (not staged yet, or never registered)."); return; }
+                ctx.Log($"[debug] snapshot: Smoothed.Layers={snap.Smoothed.Layers.Count} Raw.Layers={snap.Raw.Layers.Count} BeadWidth={snap.BeadWidth} LayerHeight={snap.LayerHeight}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "align-debug",
+            Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
+            Usage = "align-debug <name>",
+            Execute = (ctx, args) =>
+            {
+                var name = args.Trim();
+                if (name.Length == 0) { ctx.LogError("usage: align-debug <name>"); return; }
+
+                OutlinerItemViewModel? Find(IEnumerable<OutlinerItemViewModel> items)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && !item.IsToolpath) return item;
+                        if (Find(item.Children) is { } found) return found;
+                    }
+                    return null;
+                }
+
+                var piece = Find(ctx.Main.Viewport.OutlinerItems);
+                if (piece is null) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
+
+                if (piece.Node.Mesh?.PickingData is { } mesh)
+                {
+                    var w = piece.Node.WorldTransform;
+                    var min = new System.Numerics.Vector3(float.MaxValue);
+                    var max = new System.Numerics.Vector3(float.MinValue);
+                    foreach (var p in mesh.Positions)
+                    {
+                        var wp = OpenTK.Mathematics.Vector3.TransformPosition(p, w);
+                        min = System.Numerics.Vector3.Min(min, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
+                        max = System.Numerics.Vector3.Max(max, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
+                    }
+                    ctx.Log($"[debug] mesh world AABB: min=({min.X:0.#},{min.Y:0.#},{min.Z:0.#}) max=({max.X:0.#},{max.Y:0.#},{max.Z:0.#})");
+                }
+                else
+                {
+                    ctx.LogError("[debug] no mesh geometry on this item.");
+                }
+
+                var tpItem = piece.Children.FirstOrDefault(c => c.IsToolpath);
+                if (tpItem is null) { ctx.LogError("[debug] no toolpath child."); return; }
+                var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                if (snap is null) { ctx.LogError("[debug] no toolpath snapshot staged."); return; }
+
+                var tmin = new System.Numerics.Vector3(float.MaxValue);
+                var tmax = new System.Numerics.Vector3(float.MinValue);
+                int moveCount = 0;
+                foreach (var layer in snap.Smoothed.Layers)
+                {
+                    foreach (var mv in layer.Moves)
+                    {
+                        tmin = System.Numerics.Vector3.Min(tmin, System.Numerics.Vector3.Min(mv.From, mv.To));
+                        tmax = System.Numerics.Vector3.Max(tmax, System.Numerics.Vector3.Max(mv.From, mv.To));
+                        moveCount++;
+                    }
+                }
+                if (moveCount == 0) { ctx.LogError("[debug] toolpath has zero moves."); return; }
+                ctx.Log($"[debug] toolpath RAW world AABB ({moveCount} moves): min=({tmin.X:0.#},{tmin.Y:0.#},{tmin.Z:0.#}) max=({tmax.X:0.#},{tmax.Y:0.#},{tmax.Z:0.#})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "delete-selected",
+            Description = "Delete the currently-selected outliner item, via its real DeleteCommand (same as clicking the trash icon)",
+            Execute = (ctx, _) =>
+            {
+                var item = ctx.Main.Viewport.SelectedOutlinerItem;
+                if (item is null) { ctx.LogError("[delete] nothing selected."); return; }
+                if (!item.CanDelete) { ctx.LogError($"[delete] \"{item.Name}\" can't be deleted."); return; }
+                var name = item.Name;
+                item.DeleteCommand.Execute(null);
+                ctx.Log($"[delete] deleted \"{name}\".");
             },
         });
 

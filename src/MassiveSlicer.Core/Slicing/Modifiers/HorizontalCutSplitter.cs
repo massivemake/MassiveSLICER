@@ -13,8 +13,10 @@ public static class HorizontalCutSplitter
     public sealed record SplitResult(Toolpath Below, Toolpath Above);
 
     /// <param name="source">The toolpath to split. Never modified.</param>
-    /// <param name="cutZ">Plane height (mm, local/design space). Layers with Z below this go to
-    /// <see cref="SplitResult.Below"/>; Z at or above go to <see cref="SplitResult.Above"/>.</param>
+    /// <param name="cutZ">Plane height (mm, WORLD space — toolpath moves are baked in world
+    /// space at slice time, unlike MeshData, which is local; confirmed against PlanarSlicer's
+    /// actual input and SceneRenderer's centroid-based node placement). Layers with Z below this
+    /// go to <see cref="SplitResult.Below"/>; Z at or above go to <see cref="SplitResult.Above"/>.</param>
     public static SplitResult Split(Toolpath source, float cutZ)
     {
         var below = new Toolpath { FormboundStats = source.FormboundStats };

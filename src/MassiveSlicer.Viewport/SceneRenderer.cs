@@ -1347,7 +1347,12 @@ public sealed class SceneRenderer : IDisposable
                 if (!a.Visible) { ancestorsVisible = false; break; }
             if (!ancestorsVisible) continue;
             if (n.Mesh is { } glowMesh) glowMesh.RimGlow = 2.5f;
+            // The opaque pass above respects CullFaces (per top-level child); this pass never
+            // did, so anything both translucent and double-sided (e.g. a modifier's cut plane)
+            // silently vanished when viewed from its back side regardless of the flag.
+            if (!n.CullFaces) GL.Disable(EnableCap.CullFace);
             n.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
+            if (!n.CullFaces) GL.Enable(EnableCap.CullFace);
         }
         GL.DepthMask(true);
 
