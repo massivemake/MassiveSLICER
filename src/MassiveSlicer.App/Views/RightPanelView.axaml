@@ -62,8 +62,6 @@
                             </StackPanel>
                         </Expander.Header>
                         <StackPanel Margin="8,0,8,8" Spacing="6">
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Click a modification to expand options. For Support, pick a second path/point on another layer to bridge Formbound scaffolding through the layers in between. Reslice to bake."/>
                             <Grid ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" FontSize="11" Opacity="0.85" VerticalAlignment="Center"
                                            Text="{Binding $parent[Window].DataContext.Viewport.PaintModificationsSummary}"/>
@@ -72,6 +70,90 @@
                                         Command="{Binding $parent[Window].DataContext.Viewport.ClearPaintModificationsCommand}"
                                         ToolTip.Tip="Remove every modification and paint mark"/>
                             </Grid>
+
+                            <!-- Type-to-find modifier: applies to the current selection -->
+                            <AutoCompleteBox FontSize="11" MinimumPrefixLength="0"
+                                             Watermark="Type to add a modifier…"
+                                             FilterMode="Contains"
+                                             ItemsSource="{Binding $parent[Window].DataContext.Viewport.ModifierQuickAddCatalog}"
+                                             SelectedItem="{Binding $parent[Window].DataContext.Viewport.ModifierQuickAddPick, Mode=TwoWay}"
+                                             Text="{Binding $parent[Window].DataContext.Viewport.ModifierQuickAddText, Mode=TwoWay}"
+                                             ToolTip.Tip="Start typing (e.g. 'struct', 'tree', 'offset') and pick a modifier — it applies to the paths/points selected in the viewport."/>
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                       Text="Applies to the current viewport selection. Click a card below to expand its options; Update Slice bakes changes."/>
+
+                            <!-- Offset path settings (shown after picking 'Offset path' above) -->
+                            <Border IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowOffsetPathSettings}"
+                                    Background="{DynamicResource Bg3}" CornerRadius="6" Padding="8,7"
+                                    BorderBrush="{DynamicResource Border1}" BorderThickness="1">
+                                <StackPanel Spacing="8">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <ia:Icon Value="mdi-vector-polyline" FontSize="14" Opacity="0.85"
+                                                 VerticalAlignment="Center"/>
+                                        <TextBlock Text="OFFSET PATH" FontSize="11" FontWeight="SemiBold"
+                                                   LetterSpacing="0.8" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6"
+                                               Text="Creates parallel copies of the selected toolpaths and inserts them into the same layer."/>
+
+                                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="Distance" FontSize="11"
+                                                   Opacity="0.7" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                    HorizontalAlignment="Right">
+                                            <TextBox Width="72" FontSize="11" Padding="6,4"
+                                                     Text="{Binding $parent[Window].DataContext.Viewport.OffsetDistanceMm, Mode=TwoWay}"
+                                                     HorizontalContentAlignment="Right"/>
+                                            <TextBlock Text="mm" FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Join type" FontSize="11"
+                                                   Opacity="0.7" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetJoinTypeOptions}"
+                                                  SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetJoinType, Mode=TwoWay}"/>
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" FontSize="11"
+                                                   Opacity="0.7" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetModeOptions}"
+                                                  SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetMode, Mode=TwoWay}"/>
+
+                                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Offset count" FontSize="11"
+                                                   Opacity="0.7" VerticalAlignment="Center"/>
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4"
+                                                    HorizontalAlignment="Right">
+                                            <Button Classes="ToolbarButton" Padding="8,2" Content="−"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                    CommandParameter="-1"/>
+                                            <TextBlock MinWidth="20" TextAlignment="Center" FontSize="12"
+                                                       VerticalAlignment="Center"
+                                                       Text="{Binding $parent[Window].DataContext.Viewport.OffsetCount}"/>
+                                            <Button Classes="ToolbarButton" Padding="8,2" Content="+"
+                                                    Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
+                                                    CommandParameter="1"/>
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="*,*">
+                                        <TextBlock Grid.Column="0" Text="Open-path side" FontSize="11"
+                                                   Opacity="0.7" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
+                                                  ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetSideOptions}"
+                                                  SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetSide, Mode=TwoWay}"/>
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                                        <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
+                                                Content="Cancel"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.CancelCreateModificationCommand}"/>
+                                        <Button Grid.Column="1" Classes="AccentButton" Padding="14,6" Margin="8,0,0,0"
+                                                Content="Apply"
+                                                Command="{Binding $parent[Window].DataContext.Viewport.ApplyCreateModificationCommand}"
+                                                ToolTip.Tip="Insert parallel offset copies of the selected paths"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
 
                             <!-- Active bridge-target pick banner -->
                             <Border IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintBridgePicking}"
@@ -85,9 +167,9 @@
                                        IsVisible="{Binding !$parent[Window].DataContext.Viewport.HasPaintModifications}"
                                        Text="No modifications yet — select paths and Apply from the SELECTION panel."/>
 
-                            <ScrollViewer MaxHeight="420" VerticalScrollBarVisibility="Auto"
-                                          IsVisible="{Binding $parent[Window].DataContext.Viewport.HasPaintModifications}">
-                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.PaintModifications}">
+                            <!-- Fully expanded — the panel's outer ScrollViewer handles overflow -->
+                            <ItemsControl IsVisible="{Binding $parent[Window].DataContext.Viewport.HasPaintModifications}"
+                                          ItemsSource="{Binding $parent[Window].DataContext.Viewport.PaintModifications}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <Border Background="{DynamicResource Bg3}"
@@ -205,6 +287,72 @@
                                                             </StackPanel>
                                                         </StackPanel>
 
+                                                        <!-- STRUCTURAL SUPPORT: pocket helper settings live on the card -->
+                                                        <StackPanel IsVisible="{Binding IsStructural}" Spacing="4"
+                                                                    Margin="0,2,0,2">
+                                                            <TextBlock Text="POCKET SHAPE" FontSize="9" Opacity="0.55"
+                                                                       LetterSpacing="0.8" FontWeight="SemiBold"/>
+                                                            <CheckBox Content="Enabled" FontSize="11"
+                                                                      IsChecked="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportEnabled, Mode=TwoWay}"/>
+                                                            <Grid ColumnDefinitions="*,Auto">
+                                                                <TextBlock Grid.Column="0" Text="Shape" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <ComboBox Grid.Column="1" Width="110" FontSize="11"
+                                                                          ItemsSource="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShapeOptions}"
+                                                                          SelectedItem="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportShape, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Center X (mm)" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterX, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Center Y (mm)" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F1"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportCenterY, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Width / Ø (mm)" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"
+                                                                           ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                                                               Increment="1" FormatString="F0"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportWidthMm, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Depth (mm)" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="5" Maximum="2000"
+                                                                               Increment="1" FormatString="F0"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportDepthMm, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Rotation (°)" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Increment="5" FormatString="F0"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportRotationDeg, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Layers up" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"
+                                                                           ToolTip.Tip="Layers above the anchor that get the pocket (9999 = to the top)."/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
+                                                                               Increment="10" FormatString="F0"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersUp, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <Grid ColumnDefinitions="*,80">
+                                                                <TextBlock Grid.Column="0" Text="Layers down" FontSize="11" Opacity="0.7"
+                                                                           VerticalAlignment="Center"/>
+                                                                <NumericUpDown Grid.Column="1" FontSize="11" Minimum="0" Maximum="9999"
+                                                                               Increment="10" FormatString="F0"
+                                                                               Value="{Binding $parent[Window].DataContext.RightPanel.Additive.SupportLayersDown, Mode=TwoWay}"/>
+                                                            </Grid>
+                                                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                                                       Text="The anchor (surface break) stays fixed on every layer so the neck stacks vertically. Press Update Slice to apply changes."/>
+                                                        </StackPanel>
+
                                                         <!-- BRIDGE TARGET card (Formbound only — Tree roots to bed) -->
                                                         <StackPanel IsVisible="{Binding ShowBridgeTargetUi}" Spacing="4">
                                                             <Border Background="#1A80B7FF" CornerRadius="6" Padding="8,7"
@@ -261,142 +409,7 @@
                                             </Border>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-                        </StackPanel>
-                    </Expander>
-
-                    <Expander Classes="StepCard"
-                              IsVisible="{Binding $parent[Window].DataContext.Viewport.IsPaintEditOpen}"
-                              IsExpanded="{Binding StepCreateModificationExpanded, Mode=TwoWay}">
-                        <Expander.Header>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
-                                    <ia:Icon Value="mdi-plus-box-outline" FontSize="11"
-                                             Foreground="{DynamicResource AccentHover}"
-                                             HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                                <TextBlock Text="CREATE MODIFICATION" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Expander.Header>
-                        <StackPanel Margin="8,0,8,8" Spacing="6">
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Select paths in the viewport, pick an operation, then Apply. Support / Remove also remain on the SELECTION card."/>
-
-                            <!-- Search operations -->
-                            <TextBox Watermark="Search operations…"
-                                     Text="{Binding $parent[Window].DataContext.Viewport.CreateModificationSearch, Mode=TwoWay}"
-                                     FontSize="11" Padding="8,6"
-                                     Background="{DynamicResource Bg3}"
-                                     BorderBrush="{DynamicResource Border1}"/>
-
-                            <!-- Catalog list -->
-                            <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto"
-                                          IsVisible="{Binding !$parent[Window].DataContext.Viewport.ShowCreateModSettings}">
-                                <ItemsControl ItemsSource="{Binding $parent[Window].DataContext.Viewport.FilteredCreateModifications}">
-                                    <ItemsControl.ItemTemplate>
-                                        <DataTemplate>
-                                            <Button Classes="ToolbarButton"
-                                                    HorizontalAlignment="Stretch"
-                                                    HorizontalContentAlignment="Left"
-                                                    Padding="8,7" Margin="0,0,0,3"
-                                                    Command="{Binding $parent[Window].DataContext.Viewport.SelectCreateModificationCommand}"
-                                                    CommandParameter="{Binding Id}"
-                                                    IsEnabled="{Binding IsAvailable}"
-                                                    ToolTip.Tip="{Binding Description}">
-                                                <Grid ColumnDefinitions="Auto,*,Auto">
-                                                    <ia:Icon Grid.Column="0" Value="{Binding Icon}" FontSize="14"
-                                                             Margin="0,0,8,0" VerticalAlignment="Center"
-                                                             Opacity="0.85"/>
-                                                    <StackPanel Grid.Column="1" Spacing="1">
-                                                        <TextBlock Text="{Binding Title}" FontSize="12"
-                                                                   FontWeight="SemiBold"/>
-                                                        <TextBlock Text="{Binding Description}" FontSize="10"
-                                                                   Opacity="0.55" TextWrapping="Wrap"/>
-                                                    </StackPanel>
-                                                    <TextBlock Grid.Column="2" Text="soon" FontSize="9"
-                                                               Opacity="0.4" VerticalAlignment="Center"
-                                                               IsVisible="{Binding !IsAvailable}"/>
-                                                </Grid>
-                                            </Button>
-                                        </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
-
-                            <!-- Offset path settings -->
-                            <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowOffsetPathSettings}"
-                                        Spacing="8">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <ia:Icon Value="mdi-vector-polyline" FontSize="14" Opacity="0.85"
-                                             VerticalAlignment="Center"/>
-                                    <TextBlock Text="OFFSET PATH" FontSize="11" FontWeight="SemiBold"
-                                               LetterSpacing="0.8" VerticalAlignment="Center"/>
-                                </StackPanel>
-                                <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6"
-                                           Text="Creates parallel copies of the selected toolpaths and inserts them into the same layer."/>
-
-                                <TextBlock Text="SETTINGS" FontSize="9" Opacity="0.5" LetterSpacing="0.8" FontWeight="SemiBold"/>
-
-                                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto,Auto,Auto" ColumnSpacing="8" RowSpacing="6">
-                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Distance" FontSize="11"
-                                               Opacity="0.7" VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal" Spacing="4"
-                                                HorizontalAlignment="Right">
-                                        <TextBox Width="72" FontSize="11" Padding="6,4"
-                                                 Text="{Binding $parent[Window].DataContext.Viewport.OffsetDistanceMm, Mode=TwoWay}"
-                                                 HorizontalContentAlignment="Right"/>
-                                        <TextBlock Text="mm" FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
-                                    </StackPanel>
-
-                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Join type" FontSize="11"
-                                               Opacity="0.7" VerticalAlignment="Center"/>
-                                    <ComboBox Grid.Row="1" Grid.Column="1" HorizontalAlignment="Stretch"
-                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetJoinTypeOptions}"
-                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetJoinType, Mode=TwoWay}"/>
-
-                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="Mode" FontSize="11"
-                                               Opacity="0.7" VerticalAlignment="Center"/>
-                                    <ComboBox Grid.Row="2" Grid.Column="1" HorizontalAlignment="Stretch"
-                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetModeOptions}"
-                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetMode, Mode=TwoWay}"/>
-
-                                    <TextBlock Grid.Row="3" Grid.Column="0" Text="Offset count" FontSize="11"
-                                               Opacity="0.7" VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Spacing="4"
-                                                HorizontalAlignment="Right">
-                                        <Button Classes="ToolbarButton" Padding="8,2" Content="−"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
-                                                CommandParameter="-1"/>
-                                        <TextBlock MinWidth="20" TextAlignment="Center" FontSize="12"
-                                                   VerticalAlignment="Center"
-                                                   Text="{Binding $parent[Window].DataContext.Viewport.OffsetCount}"/>
-                                        <Button Classes="ToolbarButton" Padding="8,2" Content="+"
-                                                Command="{Binding $parent[Window].DataContext.Viewport.NudgeOffsetCountCommand}"
-                                                CommandParameter="1"/>
-                                    </StackPanel>
-                                </Grid>
-
-                                <TextBlock Text="OPEN PATH OFFSETS" FontSize="9" Opacity="0.5"
-                                           LetterSpacing="0.8" FontWeight="SemiBold" Margin="0,4,0,0"/>
-                                <Grid ColumnDefinitions="*,*">
-                                    <TextBlock Grid.Column="0" Text="Side" FontSize="11"
-                                               Opacity="0.7" VerticalAlignment="Center"/>
-                                    <ComboBox Grid.Column="1" HorizontalAlignment="Stretch"
-                                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.OffsetSideOptions}"
-                                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.OffsetSide, Mode=TwoWay}"/>
-                                </Grid>
-
-                                <Grid ColumnDefinitions="*,Auto" Margin="0,6,0,0">
-                                    <Button Grid.Column="0" Classes="ToolbarButton" Padding="10,6"
-                                            Content="Cancel"
-                                            Command="{Binding $parent[Window].DataContext.Viewport.CancelCreateModificationCommand}"/>
-                                    <Button Grid.Column="1" Classes="AccentButton" Padding="14,6" Margin="8,0,0,0"
-                                            Content="Apply"
-                                            Command="{Binding $parent[Window].DataContext.Viewport.ApplyCreateModificationCommand}"
-                                            ToolTip.Tip="Insert parallel offset copies of the selected paths"/>
-                                </Grid>
-                            </StackPanel>
+                            </ItemsControl>
                         </StackPanel>
                     </Expander>
 
@@ -584,6 +597,68 @@
                                   Margin="0,2,0,0"/>
                     </StackPanel>
                 </StackPanel>
+                        </StackPanel>
+                    </Expander>
+                    <Expander Classes="SectionExpander" Header="STRUCTURAL SUPPORTS" IsExpanded="False"
+                              IsVisible="{Binding Additive.HasStructuralSupports}">
+                        <StackPanel Margin="8,4,8,6" Spacing="4">
+                            <Grid ColumnDefinitions="Auto,*,Auto,Auto">
+                                <Button Grid.Column="0" Classes="ToolbarButton" Padding="6,2" Content="◀"
+                                        Command="{Binding Additive.PrevSupportCommand}"/>
+                                <TextBlock Grid.Column="1" Text="{Binding Additive.StructuralSupportsLabel}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <Button Grid.Column="2" Classes="ToolbarButton" Padding="6,2" Content="▶"
+                                        Command="{Binding Additive.NextSupportCommand}"/>
+                                <Button Grid.Column="3" Classes="ToolbarButton" Padding="6,2" Margin="6,0,0,0"
+                                        Content="✕" ToolTip.Tip="Remove this support"
+                                        Command="{Binding Additive.RemoveSelectedSupportCommand}"/>
+                            </Grid>
+                            <CheckBox Content="Enabled" IsChecked="{Binding Additive.SupportEnabled, Mode=TwoWay}"/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Shape" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <ComboBox Grid.Column="1" Width="110" FontSize="11"
+                                          ItemsSource="{Binding Additive.SupportShapeOptions}"
+                                          SelectedItem="{Binding Additive.SupportShape, Mode=TwoWay}"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Center X (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportCenterX, Mode=TwoWay}"
+                                               Increment="5" FormatString="F1" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Center Y (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportCenterY, Mode=TwoWay}"
+                                               Increment="5" FormatString="F1" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Width / Ø (mm)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Rectangle width, or circle diameter. 2×4 actual = 89 × 38 mm."/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportWidthMm, Mode=TwoWay}"
+                                               Minimum="5" Maximum="2000" Increment="1" FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Depth (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportDepthMm, Mode=TwoWay}"
+                                               Minimum="5" Maximum="2000" Increment="1" FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Rotation (°)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportRotationDeg, Mode=TwoWay}"
+                                               Increment="5" FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Layers up" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="How many layers above the anchor layer get the pocket (9999 = to the top)."/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportLayersUp, Mode=TwoWay}"
+                                               Minimum="0" Maximum="9999" Increment="10" FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <Grid ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Layers down" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                <NumericUpDown Grid.Column="1" Value="{Binding Additive.SupportLayersDown, Mode=TwoWay}"
+                                               Minimum="0" Maximum="9999" Increment="10" FormatString="F0" FontSize="11"/>
+                            </Grid>
+                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10" Margin="0,4,0,0"
+                                       Text="The anchor (surface break) stays fixed on every layer so the neck stacks vertically. Press Update Slice to apply changes."/>
                         </StackPanel>
                     </Expander>
                     <Expander Classes="SectionExpander" Header="MATERIAL" IsExpanded="False">
@@ -895,12 +970,21 @@
                             </Grid>
 
                             <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
-                                <TextBlock Grid.Column="0" Text="Resume wait (s)" VerticalAlignment="Center" Classes="LabelMuted"
-                                           ToolTip.Tip="Pause after each travel before the next extrusion move — lets lagging extrusion catch up."/>
+                                <TextBlock Grid.Column="0" Text="Pre-travel pause (ms)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Dwell after the screw stops, BEFORE the travel move — lets barrel pressure bleed so the travel entry doesn't blob."/>
                                 <NumericUpDown Grid.Column="1"
-                                               Value="{Binding Additive.ExtrusionResumeWaitSec, Mode=TwoWay}"
-                                               Minimum="0" Maximum="60" Increment="0.5"
-                                               FormatString="F1" FontSize="11"/>
+                                               Value="{Binding Additive.PreTravelPauseMs, Mode=TwoWay}"
+                                               Minimum="0" Maximum="10000" Increment="50"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
+
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Pre-resume pause (ms)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Screw-on dwell AFTER each travel, before the robot moves — pressure build so layer starts aren't starved."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding Additive.PreResumePauseMs, Mode=TwoWay}"
+                                               Minimum="0" Maximum="10000" Increment="50"
+                                               FormatString="F0" FontSize="11"/>
                             </Grid>
 
                             <TextBlock Text="Post-travel ramp" Classes="LabelMuted" Margin="8,6,8,2"/>

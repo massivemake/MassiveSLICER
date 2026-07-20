@@ -2685,6 +2685,8 @@ public sealed class MainWindowViewModel : ViewModelBase
             Console.Log(toolpathCount > 0
                 ? $"[workspace] Saved {modelCount} model(s) and {toolpathCount} toolpath(s) to {path}"
                 : $"[workspace] Saved {modelCount} model(s) and settings to {path}");
+            if (RightPanel.Additive.SelectedPreset is { } mp)
+                Console.Log($"[workspace] Material preset '{mp.Name}' saved with the workspace.");
         }
         catch (Exception ex)
         {
@@ -2743,7 +2745,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         // quirks; older mass files leave this null and keep the Settings value).
         if (doc.UiSession?.XBracingShowHelper is bool showXHelper)
             RightPanel.Additive.XBracingShowHelper = showXHelper;
-        RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName);
+        RestoreMaterialPresetSelection(doc.Settings.SelectedMaterialPresetName,
+            keepCurrentWhenMissing: true);
 
         if (Enum.TryParse<RightPanelTab>(doc.RightPanelTab, out var tab))
             RightPanel.ActiveTab = tab;
@@ -2922,6 +2925,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.WipeSkipShortTravels    = copy.WipeSkipShortTravels;
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
+        live.SsPreTravelWaitSec      = copy.SsPreTravelWaitSec;
         live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
@@ -2934,6 +2938,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.LayerSpeedMaxMmS          = copy.LayerSpeedMaxMmS;
         live.SeamGuidePoints         = copy.SeamGuidePoints;
         live.PaintMarks              = copy.PaintMarks;
+        live.StructuralSupports      = copy.StructuralSupports;
         live.CurvedBoundarySource       = copy.CurvedBoundarySource;
         live.CurvedAutoDetectBandMm     = copy.CurvedAutoDetectBandMm;
         live.CurvedEnableRegionSplit    = copy.CurvedEnableRegionSplit;
@@ -3042,11 +3047,15 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ScanBaseDataIndex      = copy.ScanBaseDataIndex;
     }
 
-    private void RestoreMaterialPresetSelection(string? presetName)
+    private void RestoreMaterialPresetSelection(
+        string? presetName, bool keepCurrentWhenMissing = false)
     {
-        if (presetName is null)
+        if (string.IsNullOrEmpty(presetName))
         {
-            RightPanel.Additive.SelectedPresetIndex = -1;
+            // Older .mass files never recorded the preset — clearing here would also
+            // wipe the global selection (the change handler persists prefs). Keep it.
+            if (!keepCurrentWhenMissing)
+                RightPanel.Additive.SelectedPresetIndex = -1;
             return;
         }
 
@@ -3055,6 +3064,9 @@ public sealed class MainWindowViewModel : ViewModelBase
             .FirstOrDefault(t => t.p.Name == presetName, (null!, -1)).i;
         if (idx >= 0)
             RightPanel.Additive.SelectedPresetIndex = idx;
+        else
+            Console.Log($"[workspace] Material preset '{presetName}' from the file "
+                + "is not in the local preset library — selection left unchanged.");
     }
 
     /// <summary>
@@ -3273,6 +3285,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.WipeSkipShortTravels    = p.WipeSkipShortTravels;
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
+        add.SsPreTravelWaitSec      = p.SsPreTravelWaitSec;
         add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
         // Ensure post-process header is Caracol URM (not LFAM $ANOUT MAT) when flag is on.
         // SetField no-ops if value already matched, so always re-apply templates after load.
@@ -3289,6 +3302,19 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
+        add.StructuralSupports.Clear();
+        add.StructuralSupports.AddRange(p.StructuralSupports
+            .Where(a => a is { Length: >= 12 })
+            .Select(a => new StructuralSupportSpec
+            {
+                Shape = a[0] >= 1f ? SupportShapeKind.Circle : SupportShapeKind.Rectangle,
+                AnchorX = a[1], AnchorY = a[2], AnchorLayer = (int)a[3],
+                LayersUp = (int)a[4], LayersDown = (int)a[5],
+                CenterX = a[6], CenterY = a[7],
+                WidthMm = a[8], DepthMm = a[9], RotationDeg = a[10],
+                Enabled = a[11] >= 0.5f,
+            }));
+        add.SelectedSupportIndex = add.StructuralSupports.Count > 0 ? 0 : -1;
         add.SetPaintMarks(p.PaintMarks
             .Where(a => a is { Length: >= 5 })
             .Select(a => new PaintMark(
@@ -3473,6 +3499,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ShowEdges   = view.ShowEdges;
 
         // Additive slicing settings
+        // Material preset: capture from the live VM, not the change-event mirror —
+        // the .mass snapshot must always match what the MATERIAL dropdown shows.
+        p.SelectedMaterialPresetName = add.SelectedPreset?.Name;
         p.LayerHeight      = add.LayerHeight;
         p.BeadWidth        = add.BeadWidth;
         p.FirstLayerHeight = add.FirstLayerHeight;
@@ -3563,6 +3592,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.WipeSkipShortTravels    = add.WipeSkipShortTravels;
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
+        p.SsPreTravelWaitSec      = add.SsPreTravelWaitSec;
         p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;
@@ -3581,6 +3611,14 @@ public sealed class MainWindowViewModel : ViewModelBase
                 m.Center.X, m.Center.Y, m.Center.Z, m.Radius,
                 (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
                 (float)m.SupportSide })
+            .ToList();
+        p.StructuralSupports = add.StructuralSupports
+            .Select(s => new[] {
+                s.Shape == SupportShapeKind.Circle ? 1f : 0f,
+                s.AnchorX, s.AnchorY, s.AnchorLayer,
+                s.LayersUp, s.LayersDown,
+                s.CenterX, s.CenterY, s.WidthMm, s.DepthMm, s.RotationDeg,
+                s.Enabled ? 1f : 0f })
             .ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;

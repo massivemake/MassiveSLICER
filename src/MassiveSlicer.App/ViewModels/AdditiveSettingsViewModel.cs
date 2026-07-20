@@ -378,6 +378,158 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public IReadOnlyList<Core.Models.PaintMark> BuildPaintMarkList() => [.. PaintMarks];
 
+    // ── Structural Supports (2×4 pockets / cylinder wraps in the wall path) ──────
+
+    public List<Core.Models.StructuralSupportSpec> StructuralSupports { get; } = [];
+
+    public IReadOnlyList<Core.Models.StructuralSupportSpec> BuildStructuralSupportList()
+        => [.. StructuralSupports];
+
+    private int _selectedSupportIndex = -1;
+    public int SelectedSupportIndex
+    {
+        get => _selectedSupportIndex;
+        set
+        {
+            if (!SetField(ref _selectedSupportIndex, value)) return;
+            NotifySelectedSupportChanged();
+        }
+    }
+
+    public bool HasStructuralSupports => StructuralSupports.Count > 0;
+    public string StructuralSupportsLabel =>
+        StructuralSupports.Count == 1 ? "1 support" : $"{StructuralSupports.Count} supports";
+
+    public string[] SupportShapeOptions { get; } = ["Rectangle", "Circle"];
+
+    Core.Models.StructuralSupportSpec? SelectedSupport =>
+        _selectedSupportIndex >= 0 && _selectedSupportIndex < StructuralSupports.Count
+            ? StructuralSupports[_selectedSupportIndex] : null;
+
+    void ReplaceSelected(Core.Models.StructuralSupportSpec spec)
+    {
+        if (_selectedSupportIndex < 0 || _selectedSupportIndex >= StructuralSupports.Count) return;
+        StructuralSupports[_selectedSupportIndex] = spec;
+        NotifySelectedSupportChanged();
+    }
+
+    void NotifySelectedSupportChanged()
+    {
+        OnPropertyChanged(nameof(SupportShape));
+        OnPropertyChanged(nameof(SupportCenterX));
+        OnPropertyChanged(nameof(SupportCenterY));
+        OnPropertyChanged(nameof(SupportWidthMm));
+        OnPropertyChanged(nameof(SupportDepthMm));
+        OnPropertyChanged(nameof(SupportRotationDeg));
+        OnPropertyChanged(nameof(SupportLayersUp));
+        OnPropertyChanged(nameof(SupportLayersDown));
+        OnPropertyChanged(nameof(SupportEnabled));
+        OnPropertyChanged(nameof(HasStructuralSupports));
+        OnPropertyChanged(nameof(StructuralSupportsLabel));
+        OnStructuralSupportsChanged?.Invoke();
+    }
+
+    /// <summary>Fired on any support add/edit/remove — viewport redraws the helpers.</summary>
+    internal Action? OnStructuralSupportsChanged { get; set; }
+
+    public string SupportShape
+    {
+        get => SelectedSupport?.Shape == Core.Models.SupportShapeKind.Circle ? "Circle" : "Rectangle";
+        set
+        {
+            if (SelectedSupport is { } s)
+                ReplaceSelected(s with
+                {
+                    Shape = value == "Circle"
+                        ? Core.Models.SupportShapeKind.Circle
+                        : Core.Models.SupportShapeKind.Rectangle,
+                });
+        }
+    }
+
+    public double SupportCenterX
+    {
+        get => SelectedSupport?.CenterX ?? 0;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { CenterX = (float)value }); }
+    }
+
+    public double SupportCenterY
+    {
+        get => SelectedSupport?.CenterY ?? 0;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { CenterY = (float)value }); }
+    }
+
+    public double SupportWidthMm
+    {
+        get => SelectedSupport?.WidthMm ?? 92;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { WidthMm = (float)Math.Clamp(value, 5, 2000) }); }
+    }
+
+    public double SupportDepthMm
+    {
+        get => SelectedSupport?.DepthMm ?? 42;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { DepthMm = (float)Math.Clamp(value, 5, 2000) }); }
+    }
+
+    public double SupportRotationDeg
+    {
+        get => SelectedSupport?.RotationDeg ?? 0;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { RotationDeg = (float)value }); }
+    }
+
+    public int SupportLayersUp
+    {
+        get => SelectedSupport?.LayersUp ?? 9999;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { LayersUp = Math.Max(0, value) }); }
+    }
+
+    public int SupportLayersDown
+    {
+        get => SelectedSupport?.LayersDown ?? 0;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { LayersDown = Math.Max(0, value) }); }
+    }
+
+    public bool SupportEnabled
+    {
+        get => SelectedSupport?.Enabled ?? true;
+        set { if (SelectedSupport is { } s) ReplaceSelected(s with { Enabled = value }); }
+    }
+
+    internal void AddStructuralSupport(Core.Models.StructuralSupportSpec spec)
+    {
+        StructuralSupports.Add(spec);
+        SelectedSupportIndex = StructuralSupports.Count - 1;
+        NotifySelectedSupportChanged();
+    }
+
+    private RelayCommand? _removeSupportCmd;
+    public RelayCommand RemoveSelectedSupportCommand => _removeSupportCmd ??= new RelayCommand(() =>
+        RemoveStructuralSupportAt(_selectedSupportIndex));
+
+    internal void RemoveStructuralSupportAt(int index)
+    {
+        if (index < 0 || index >= StructuralSupports.Count) return;
+        StructuralSupports.RemoveAt(index);
+        if (_selectedSupportIndex >= index)
+            _selectedSupportIndex = Math.Min(_selectedSupportIndex, StructuralSupports.Count - 1);
+        OnPropertyChanged(nameof(SelectedSupportIndex));
+        NotifySelectedSupportChanged();
+    }
+
+    private RelayCommand? _prevSupportCmd;
+    public RelayCommand PrevSupportCommand => _prevSupportCmd ??= new RelayCommand(() =>
+    {
+        if (StructuralSupports.Count == 0) return;
+        SelectedSupportIndex = (_selectedSupportIndex - 1 + StructuralSupports.Count) % StructuralSupports.Count;
+    });
+
+    private RelayCommand? _nextSupportCmd;
+    public RelayCommand NextSupportCommand => _nextSupportCmd ??= new RelayCommand(() =>
+    {
+        if (StructuralSupports.Count == 0) return;
+        SelectedSupportIndex = (_selectedSupportIndex + 1) % StructuralSupports.Count;
+    });
+
     /// <summary>Clears every painted mark (both kinds) and re-slices.</summary>
     public RelayCommand ClearPaintMarksCommand => _clearPaintMarks ??= new RelayCommand(() =>
     {
@@ -1708,7 +1860,48 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public double ExtrusionResumeWaitSec
     {
         get => _extrusionResumeWaitSec;
-        set => SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0));
+        set
+        {
+            if (SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3600.0)))
+                OnPropertyChanged(nameof(PreResumePauseMs));
+        }
+    }
+
+    /// <summary>Same value as <see cref="ExtrusionResumeWaitSec"/>, in ms — the screw-on
+    /// dwell after a travel before the robot moves (pressure build).</summary>
+    public double PreResumePauseMs
+    {
+        get => _extrusionResumeWaitSec * 1000.0;
+        set
+        {
+            if (SetField(ref _extrusionResumeWaitSec, Math.Clamp(value, 0.0, 3_600_000.0) / 1000.0))
+                OnPropertyChanged(nameof(ExtrusionResumeWaitSec));
+        }
+    }
+
+    private double _preTravelPauseSec = 0.5;
+
+    /// <summary>Dwell (seconds) after the screw stops, before the travel move starts —
+    /// lets barrel pressure bleed so travel entry doesn't blob.</summary>
+    public double SsPreTravelWaitSec
+    {
+        get => _preTravelPauseSec;
+        set
+        {
+            if (SetField(ref _preTravelPauseSec, Math.Clamp(value, 0.0, 3600.0)))
+                OnPropertyChanged(nameof(PreTravelPauseMs));
+        }
+    }
+
+    /// <summary>Same value as <see cref="SsPreTravelWaitSec"/>, in ms.</summary>
+    public double PreTravelPauseMs
+    {
+        get => _preTravelPauseSec * 1000.0;
+        set
+        {
+            if (SetField(ref _preTravelPauseSec, Math.Clamp(value, 0.0, 3_600_000.0) / 1000.0))
+                OnPropertyChanged(nameof(SsPreTravelWaitSec));
+        }
     }
 
     private bool _digitalStartStopEnabled;

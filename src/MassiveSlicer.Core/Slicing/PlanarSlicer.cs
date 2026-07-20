@@ -258,6 +258,8 @@ public static class PlanarSlicer
         // Brim is the LAST toolpath step: its footprint is built from the actual
         // layer-0 extrude segments, so X-bracing detours and pattern bulges are
         // enclosed by the offset loops.
+        // Structural supports first — brim then wraps the final wall footprint.
+        StructuralSupportPlanner.Apply(toolpath, settings);
         BrimPlanner.Apply(toolpath, settings);
 
         return toolpath;

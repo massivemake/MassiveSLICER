@@ -996,6 +996,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "pick",
+            Description = "Debug: simulate a viewport click at fractional coords (0-1) and trace the selection gates",
+            Usage = "pick <fx> <fy>   e.g. pick 0.5 0.5 (viewport centre)",
+            Execute = (ctx, args) =>
+            {
+                var parts = (args ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2
+                    || !double.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out double fx)
+                    || !double.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out double fy))
+                { ctx.LogError("usage: pick <fx 0-1> <fy 0-1>"); return; }
+                var trace = ctx.Main.Viewport.DebugPickAtViewport?.Invoke(fx, fy) ?? "[pick] viewport hook not wired";
+                foreach (var line in trace.Split('\n'))
+                    ctx.Log(line.TrimEnd('\r'));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "selection",
             Aliases = ["selected"],
             Description = "Report the renderer's current selection (what would be highlighted)",

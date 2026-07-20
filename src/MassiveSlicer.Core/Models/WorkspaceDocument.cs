@@ -180,8 +180,13 @@ public sealed class WorkspacePaintModification
     public string Detail { get; set; } = "";
     public bool IsExpanded { get; set; }
 
-    /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+    /// <summary>"Formbound Buttress", "Formbound Bridge", "Tree Support",
+    /// or "Structural Support".</summary>
     public string SupportType { get; set; } = "Formbound Buttress";
+
+    /// <summary>Structural Support cards: index into the saved StructuralSupports
+    /// list this card edits. -1 = not a structural card.</summary>
+    public int StructuralIndex { get; set; } = -1;
 
     /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
     public string SupportSide { get; set; } = "Inside";

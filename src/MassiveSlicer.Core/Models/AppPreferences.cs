@@ -343,6 +343,9 @@ public sealed class AppPreferences
     public double ExtrusionStartWaitSec { get; set; }
     public double ExtrusionResumeWaitSec { get; set; }
 
+    /// <summary>Digital S&S: dwell after screw-stop before the travel move (seconds).</summary>
+    public double SsPreTravelWaitSec { get; set; } = 0.5;
+
     /// <summary>
     /// When true, KRL export pulses digital Start/Stop around travels:
     /// <c>$OUT[9]</c> (URM / MIO) on before stop, <c>$OUT[7]</c> (print enable / screw) off for travel,
@@ -370,6 +373,11 @@ public sealed class AppPreferences
     /// (SupportBar / ColumnFoot). Bridge marks grow Formbound under painted beads;
     /// Remove marks delete them.</summary>
     public List<float[]> PaintMarks { get; set; } = [];
+
+    /// <summary>Structural Support specs, encoded as float[12]:
+    /// [shape, anchorX, anchorY, anchorLayer, layersUp, layersDown,
+    ///  centerX, centerY, width, depth, rotationDeg, enabled].</summary>
+    public List<float[]> StructuralSupports { get; set; } = [];
 
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";

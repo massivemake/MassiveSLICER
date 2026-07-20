@@ -410,6 +410,10 @@ public sealed class SliceSettings
     /// workspace and survive re-slices.</summary>
     public IReadOnlyList<PaintMark> PaintMarks { get; init; } = [];
 
+    /// <summary>Structural Support modifiers — 2×4 pockets / cylinder wraps spliced
+    /// into the wall path at a fixed anchor so the neck stacks layer over layer.</summary>
+    public IReadOnlyList<StructuralSupportSpec> StructuralSupports { get; init; } = [];
+
     // ── Multi-Planar slicing (a stack of guide planes) ───────────────────────
 
     /// <summary>Guide planes as (height % of the part, tilt °): the slicing plane's

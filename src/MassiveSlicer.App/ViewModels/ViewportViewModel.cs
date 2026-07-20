@@ -1916,6 +1916,72 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
+    // ── Quick-add modifier (autocomplete in the MODIFICATIONS panel) ─────────
+
+    /// <summary>Type-to-find modifier names — replaces the CREATE MODIFICATION card.</summary>
+    public string[] ModifierQuickAddCatalog { get; } =
+    [
+        Core.Models.PaintSupportStyleUtil.LabelStructural,
+        Core.Models.PaintSupportStyleUtil.LabelButtress,
+        Core.Models.PaintSupportStyleUtil.LabelBridge,
+        Core.Models.PaintSupportStyleUtil.LabelTree,
+        "Remove selection",
+        "Offset path",
+    ];
+
+    private string _modifierQuickAddText = "";
+    public string ModifierQuickAddText
+    {
+        get => _modifierQuickAddText;
+        set => SetField(ref _modifierQuickAddText, value ?? "");
+    }
+
+    private string? _modifierQuickAddPick;
+    public string? ModifierQuickAddPick
+    {
+        get => _modifierQuickAddPick;
+        set
+        {
+            if (!SetField(ref _modifierQuickAddPick, value)) return;
+            if (string.IsNullOrWhiteSpace(value)) return;
+            var pick = value;
+            // Clear the box after commit so the next search starts fresh.
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _modifierQuickAddPick = null;
+                OnPropertyChanged(nameof(ModifierQuickAddPick));
+                ModifierQuickAddText = "";
+                ApplyNamedModifier(pick);
+            });
+        }
+    }
+
+    /// <summary>Applies a modifier by catalog name to the current edit selection.</summary>
+    internal void ApplyNamedModifier(string label)
+    {
+        if (string.Equals(label, "Offset path", StringComparison.OrdinalIgnoreCase))
+        {
+            // Show the Offset path settings inline (Apply lives on that block).
+            SelectedCreateModificationId = "offset";
+            return;
+        }
+        if (string.Equals(label, "Remove selection", StringComparison.OrdinalIgnoreCase))
+        {
+            OnPaintApplyRequested?.Invoke(false);
+            return;
+        }
+        var style = Core.Models.PaintSupportStyleUtil.FromLabel(label);
+        if (style == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            OnAddStructuralSupportRequested?.Invoke();
+            return;
+        }
+        PaintModificationMode = "Support";
+        PaintSupportType = Core.Models.PaintSupportStyleUtil.ToLabel(style);
+        ApplyPaintSupportTypeToSettings();
+        OnPaintApplyRequested?.Invoke(true);
+    }
+
     /// <summary>Row data for one applied modification (viewport → panel).</summary>
     internal readonly record struct PaintModRow(
         Guid Id,
@@ -1949,7 +2015,11 @@ public sealed class ViewportViewModel : ViewModelBase
                 Id = id,
                 IsSupport = r.IsSupport,
                 IsOffset = r.IsOffset,
-                KindLabel = r.IsOffset ? "Offset" : r.IsSupport ? "Support" : "Remove",
+                KindLabel = r.IsOffset ? "Offset"
+                    : !r.IsSupport ? "Remove"
+                    : Core.Models.PaintSupportStyleUtil.FromLabel(r.SupportType)
+                        == Core.Models.PaintSupportStyle.StructuralSupport
+                        ? "Structural" : "Support",
                 Title = r.Title,
                 Detail = r.Detail,
                 AnchorSummary = r.AnchorSummary,
@@ -2265,6 +2335,14 @@ public sealed class ViewportViewModel : ViewModelBase
     public RelayCommand ApplyPaintModificationCommand => _applyPaintMod ??= new RelayCommand(() =>
     {
         bool support = !string.Equals(PaintModificationMode, "Remove", StringComparison.OrdinalIgnoreCase);
+        // Structural Support is a toolpath modifier, not a paint mark: Apply creates
+        // a 2×4 pocket / cylinder wrap spec anchored at the selection instead.
+        if (support && Core.Models.PaintSupportStyleUtil.FromLabel(PaintSupportType)
+                == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            OnAddStructuralSupportRequested?.Invoke();
+            return;
+        }
         if (support)
             ApplyPaintSupportTypeToSettings();
         OnPaintApplyRequested?.Invoke(support);
@@ -3508,6 +3586,43 @@ public sealed class ViewportViewModel : ViewModelBase
     }
 
     /// <summary>Wired by the viewport code-behind: keyframe diamond clicked (jump + select).</summary>
+    /// <summary>Edit-mode toolbar: create a Structural Support anchored at the
+    /// current point selection (handled by the viewport code-behind).</summary>
+    // ── 2D slice viewer ghost layers ─────────────────────────────────────────
+    private int _slicePlaneGhostLayers = 3;
+    /// <summary>How many below-layers fade in under the active slice line (default 3).</summary>
+    public int SlicePlaneGhostLayers
+    {
+        get => _slicePlaneGhostLayers;
+        set
+        {
+            if (!SetField(ref _slicePlaneGhostLayers, Math.Clamp(value, 0, 10))) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    private bool _slicePlaneShowAllGhosts;
+    /// <summary>Draw every layer below faintly (single pass) under the ghost band.</summary>
+    public bool SlicePlaneShowAllGhosts
+    {
+        get => _slicePlaneShowAllGhosts;
+        set
+        {
+            if (!SetField(ref _slicePlaneShowAllGhosts, value)) return;
+            NotifyRenderNeeded();
+        }
+    }
+
+    internal Action? OnAddStructuralSupportRequested { get; set; }
+
+    /// <summary>Debug: run the viewport click-selection path at fractional coords
+    /// (0-1) and return a gate-by-gate trace. Backs the `pick` console command.</summary>
+    internal Func<double, double, string>? DebugPickAtViewport { get; set; }
+
+    private RelayCommand? _addStructSupportCmd;
+    public RelayCommand AddStructuralSupportCommand => _addStructSupportCmd ??=
+        new RelayCommand(() => OnAddStructuralSupportRequested?.Invoke());
+
     internal Action<int>? OnKeyframeLaneClicked { get; set; }
 
     /// <summary>Wired by the viewport code-behind: influence tick dragged

@@ -52,6 +52,10 @@ public enum PaintSupportStyle
 
     /// <summary>Tree Support — bed-rooted branching single-bead paths.</summary>
     Tree = 2,
+
+    /// <summary>Structural Support — 2×4 pocket / cylinder wrap spliced into the wall
+    /// at a fixed anchor so the neck stacks vertically (StructuralSupportPlanner).</summary>
+    StructuralSupport = 3,
 }
 
 /// <summary>
@@ -89,9 +93,10 @@ public static class PaintSupportStyleUtil
     public const string LabelButtress = "Formbound Buttress";
     public const string LabelBridge = "Formbound Bridge";
     public const string LabelTree = "Tree Support";
+    public const string LabelStructural = "Structural Support";
 
     public static readonly string[] AllLabels =
-        [LabelButtress, LabelBridge, LabelTree];
+        [LabelButtress, LabelBridge, LabelTree, LabelStructural];
 
     public static bool IsFormbound(PaintSupportStyle s) =>
         s is PaintSupportStyle.FormboundButtress or PaintSupportStyle.FormboundBridge;
@@ -102,6 +107,7 @@ public static class PaintSupportStyleUtil
     {
         LabelBridge or "Lightning Bridge" or "Formbound Bridge" => PaintSupportStyle.FormboundBridge,
         LabelTree or "Tree" or "Tree Support" => PaintSupportStyle.Tree,
+        LabelStructural or "Structural" or "Structural Support" => PaintSupportStyle.StructuralSupport,
         _ => PaintSupportStyle.FormboundButtress,
     };
 
@@ -109,6 +115,7 @@ public static class PaintSupportStyleUtil
     {
         PaintSupportStyle.FormboundBridge => LabelBridge,
         PaintSupportStyle.Tree => LabelTree,
+        PaintSupportStyle.StructuralSupport => LabelStructural,
         _ => LabelButtress,
     };
 

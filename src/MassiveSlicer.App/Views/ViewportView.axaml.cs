@@ -574,7 +574,18 @@ public partial class ViewportView : UserControl
             UpdateFocusOverlay();
         }
 
+        vm.OnAddStructuralSupportRequested = () => AddStructuralSupportFromSelection(vm);
+        if (vm.AdditiveSettings is { } addHook)
+            addHook.OnStructuralSupportsChanged = () => GlCanvas.RequestNextFrameRendering();
         vm.OnDevModeChanged = ApplyDevModeSelectability;
+        // Hard policy: cell fixtures (print bed, stands, docks, rotary) are only
+        // selectable in dev mode — enforced at the renderer so no path around the
+        // Selectable flag (e.g. manually unlocking the outliner padlock) can select them.
+        // User imports/scans are exempt: they live UNDER the bed node (to ride E1).
+        _renderer.SelectionFilter = n => vm.IsDevMode
+            || vm.IsUserModelSceneNode(n)
+            || FindDevNodeRoot(n) is null;
+        vm.DebugPickAtViewport = (fx, fy) => DebugPickAtViewport(vm, fx, fy);
         vm.OnSaveDevTransformRequested     = () => SaveDevTransform(vm);
         vm.OnSaveAllDevTransformsRequested = () => SaveAllDevTransforms(vm);
 
@@ -1075,6 +1086,8 @@ public partial class ViewportView : UserControl
 
             _renderer.SlicePlaneViewerActive = slicePlane;
             _renderer.SlicePlaneLayerIndex = vm.CurrentScrubLayerIndex;
+            _renderer.SlicePlaneBelowLayerCount = vm.SlicePlaneGhostLayers;
+            _renderer.SlicePlaneShowAllBelow = vm.SlicePlaneShowAllGhosts;
             // Prefer live ends from ActiveScrubToolpath so multi-pass always has data.
             int[]? sliceEnds = null;
             if (slicePlane && vm.ActiveScrubToolpath is { Layers.Count: > 0 } scrubTp)
@@ -3709,6 +3722,7 @@ public partial class ViewportView : UserControl
             ThermalSagMarginC          = ResolveThermalSagMarginC(s.SelectedPreset),
             SeamGuidePoints = s.BuildSeamGuideList(),
             PaintMarks      = s.BuildPaintMarkList(),
+            StructuralSupports = s.BuildStructuralSupportList(),
             CurvedBoundaryLowVertices   = s.BuildCurvedLowBoundaryList(),
             CurvedBoundaryHighVertices  = s.BuildCurvedHighBoundaryList(),
             CurvedBoundarySource        = s.CurvedBoundarySource,
@@ -6011,6 +6025,37 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    /// <summary>Debug: run the full viewport-click selection path at fractional
+    /// viewport coords (0-1) and trace every gate. Backs the `pick` console command.</summary>
+    private string DebugPickAtViewport(ViewportViewModel vm, double fx, double fy)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return "[pick] viewport not ready";
+        var ray = _renderer.Camera.GetPickRay(
+            (float)(fx * vpW), (float)(fy * vpH), vpW, vpH);
+
+        var sb = new System.Text.StringBuilder();
+        var raw = _renderer.PickToolpath((float)(fx * vpW), (float)(fy * vpH), vpW, vpH);
+        if (raw is not null)
+            sb.AppendLine($"[pick] toolpath hit: \"{raw.Name}\"");
+        var picked = raw ?? PickForSceneSelection(vm, ray);
+        sb.AppendLine($"[pick] PickForSceneSelection -> {(picked is null ? "null" : $"\"{picked.Name}\" tier={picked.PickTier} selectable={picked.Selectable}")}");
+        if (picked is not null)
+        {
+            var userItem = vm.FindUserMeshOutlinerItem(picked);
+            sb.AppendLine($"[pick] userItem={(userItem?.Name ?? "null")} isUserContent={vm.IsUserModelSceneNode(picked)}");
+            var devRoot = FindDevNodeRoot(picked);
+            sb.AppendLine($"[pick] devRoot={(devRoot is null ? "null" : DevLabel(devRoot))} infra={IsLfamInfrastructureNode(picked)} lockedRow={vm.IsNodeLockedInOutliner(picked)}");
+            var chain = new List<string>();
+            for (var c = picked; c is not null; c = c.Parent) chain.Add(c.Name);
+            sb.AppendLine($"[pick] ancestry: {string.Join(" < ", chain)}");
+        }
+        RequestSceneSelection(vm, picked);
+        sb.Append($"[pick] final selection: {(_renderer.SelectedNode is { } s ? $"\"{s.Name}\"" : "null")}");
+        return sb.ToString();
+    }
+
     SceneNode? PickForSceneSelection(ViewportViewModel vm, Ray ray)
     {
         // On LFAM cells the mounted tool often occludes the print volume — prefer user imports/scans.
@@ -6070,6 +6115,19 @@ public partial class ViewportView : UserControl
         {
             node = _currentToolNode;
         }
+
+        // Cell fixtures (print bed, stands, docks, rotary) are dev-mode-only —
+        // regardless of outliner padlock state. This must null the node BEFORE the
+        // outliner sync below, or the outliner still shows the fixture as selected
+        // even when the renderer vetoes it. User imports/scans are exempt: they are
+        // parented UNDER the bed node (to ride E1), so the dev-root walk would
+        // otherwise swallow every model click.
+        if (!isUserContent && node is not null && !vm.IsDevMode && FindDevNodeRoot(node) is not null)
+            node = null;
+
+        // The scene root itself is never a meaningful selection.
+        if (node == _renderer.SceneRoot)
+            node = null;
 
         // Locked outliner rows (robot, bed, locked toolheads) can't be selected —
         // except dev-editable props while dev mode is on.
@@ -6339,8 +6397,13 @@ public partial class ViewportView : UserControl
         public bool IsExpanded { get; set; }
         public bool HasBridgeTarget => TargetLayer is not null;
 
-        /// <summary>"Formbound Buttress", "Formbound Bridge", or "Tree Support".</summary>
+        /// <summary>"Formbound Buttress", "Formbound Bridge", "Tree Support",
+        /// or "Structural Support".</summary>
         public string SupportType { get; set; } = "Formbound Buttress";
+
+        /// <summary>Index into AdditiveSettings.StructuralSupports when this card is
+        /// a Structural Support (its pocket settings render inline). -1 = not linked.</summary>
+        public int StructuralIndex { get; set; } = -1;
 
         /// <summary>"Inside" or "Outside" — Formbound wall side for this selection.</summary>
         public string SupportSide { get; set; } = "Inside";
@@ -6385,6 +6448,115 @@ public partial class ViewportView : UserControl
     /// <summary>Hover feedback while the Edit menu is open (or a paint tool is armed)
     /// and no stroke is active: yellow contour under the pointer for line-select, or
     /// the brush circle under a brush tool. Throttled — full-path pick is expensive.</summary>
+    /// <summary>Converts an existing modification group (card) into a Structural
+    /// Support: spec anchored at the group's anchor move, default 2×4 rectangle
+    /// one bead inboard. The card stays in MODIFICATIONS with the pocket settings
+    /// inline. Returns the new spec's index, or -1.</summary>
+    private int ConvertModificationToStructuralSupport(
+        ViewportViewModel vm, PaintModificationRecord rec)
+    {
+        var add = vm.AdditiveSettings;
+        if (add is null) return -1;
+
+        int mi = Math.Clamp(rec.Span.Start, 0, rec.Layer.Moves.Count - 1);
+        var mv = rec.Layer.Moves[mi];
+        var mid = (mv.From + mv.To) * 0.5f;
+
+        int layerIdx = 0;
+        if (vm.ActiveScrubToolpath is { } tp)
+        {
+            int found = tp.Layers.IndexOf(rec.Layer);
+            if (found >= 0) layerIdx = found;
+        }
+
+        var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
+        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+        dir = System.Numerics.Vector2.Normalize(dir);
+        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+        float beadW = (float)add.BeadWidth;
+        const float depth = 42f;
+        var center = new System.Numerics.Vector2(mid.X, mid.Y) + left * (depth * 0.5f + beadW * 2f);
+
+        add.AddStructuralSupport(new Core.Models.StructuralSupportSpec
+        {
+            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+            CenterX = center.X, CenterY = center.Y,
+            WidthMm = 92f, DepthMm = depth,
+            LayersUp = 9999, LayersDown = 0,
+        });
+        LogPaintConsole($"[support] group converted to Structural Support @ L{layerIdx} " +
+            $"({mid.X:F0}, {mid.Y:F0}) — tune it on its MODIFICATIONS card, then Update Slice.");
+        vm.UpdateSliceCommand?.Execute(null);
+        return add.StructuralSupports.Count - 1;
+    }
+
+    /// <summary>Creates a Structural Support spec anchored at the last point/section
+    /// selected in edit mode. The helper shape starts one bead inboard (left of travel
+    /// — into the wall for zig-zag panels); adjust in the right panel, then Update Slice.</summary>
+    private void AddStructuralSupportFromSelection(ViewportViewModel vm)
+    {
+        var add = vm.AdditiveSettings;
+        if (add is null) return;
+        if (_paintSelection.Count == 0)
+        {
+            LogPaintConsole("[support] select a point on the wall first (edit mode → click)");
+            return;
+        }
+
+        var sel = _paintSelection[^1];
+        int mi = Math.Clamp(sel.Span.Start, 0, sel.Layer.Moves.Count - 1);
+        var mv = sel.Layer.Moves[mi];
+        var mid = (mv.From + mv.To) * 0.5f;
+
+        int layerIdx = 0;
+        if (vm.ActiveScrubToolpath is { } tp)
+        {
+            int found = tp.Layers.IndexOf(sel.Layer);
+            if (found >= 0) layerIdx = found;
+        }
+
+        var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
+        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+        dir = System.Numerics.Vector2.Normalize(dir);
+        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+        float beadW = (float)add.BeadWidth;
+        const float depth = 42f;
+        var center = new System.Numerics.Vector2(mid.X, mid.Y) + left * (depth * 0.5f + beadW * 2f);
+
+        add.AddStructuralSupport(new Core.Models.StructuralSupportSpec
+        {
+            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+            CenterX = center.X, CenterY = center.Y,
+            WidthMm = 92f, DepthMm = depth,
+            LayersUp = 9999, LayersDown = 0,
+        });
+
+        // The applied group stays in MODIFICATIONS as a Structural card — the
+        // pocket helper settings live on the card itself.
+        _paintModifications.Add(new PaintModificationRecord
+        {
+            Id = Guid.NewGuid(),
+            Kind = Core.Models.PaintMarkKind.Bridge,
+            Layer = sel.Layer,
+            Span = sel.Span,
+            Origin = sel.Origin,
+            Wt = sel.Wt,
+            World = sel.World,
+            MarkCenters = [],
+            Title = $"Structural Support · layer {layerIdx + 1}",
+            Detail = $"anchor ({mid.X:F0}, {mid.Y:F0}) · Update Slice to bake",
+            SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural,
+            StructuralIndex = add.StructuralSupports.Count - 1,
+            IsExpanded = true,
+        });
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+
+        LogPaintConsole($"[support] structural support @ L{layerIdx} anchor ({mid.X:F0}, {mid.Y:F0}) — " +
+            "tune the shape on its MODIFICATIONS card, then Update Slice.");
+        vm.UpdateSliceCommand?.Execute(null);
+    }
+
     private void UpdatePaintHover(ViewportViewModel vm, Avalonia.Point pos)
     {
         // ~12 Hz hover: path pick walks every move; higher rates freeze 50k+ move paths.
@@ -6536,6 +6708,55 @@ public partial class ViewportView : UserControl
         }
         if (!lineHover && _paintHoverWorld is { } hw && vm.PaintBrushActive)
             AddMarkSphere(segs, hw, (float)vm.PaintBrushRadiusMm, cHover);
+
+        // Structural Support helpers: shape outline + anchor tick + neck preview,
+        // visible while edit mode is open (cyan = selected support, dim = others).
+        if (vm.IsPaintEditOpen && add.StructuralSupports.Count > 0)
+        {
+            var cSel = new TkVector3(0.2f, 0.95f, 1f);
+            var cDim = new TkVector3(0.25f, 0.55f, 0.6f);
+            for (int si = 0; si < add.StructuralSupports.Count; si++)
+            {
+                var spec = add.StructuralSupports[si];
+                if (!spec.Enabled) continue;
+                var col = si == add.SelectedSupportIndex ? cSel : cDim;
+                var outline = spec.BuildOutline();
+                if (outline.Length < 3) continue;
+
+                float helperZ = 0f;
+                if (_activeScrubNode is { } hn && _toolpathByNode.TryGetValue(hn, out var htp)
+                    && htp.Layers.Count > 0)
+                {
+                    int li = Math.Clamp(vm.CurrentScrubLayerIndex, 0, htp.Layers.Count - 1);
+                    helperZ = htp.Layers[li].Z;
+                }
+
+                TkVector3 W(float x, float y)
+                {
+                    var w = TransformPoint(new TkVector3(
+                        x - origin.X, y - origin.Y, helperZ - origin.Z), wt);
+                    return new TkVector3(w.X, w.Y, w.Z);
+                }
+
+                var poly = new List<TkVector3>(outline.Length + 1);
+                foreach (var v in outline) poly.Add(W(v.X, v.Y));
+                poly.Add(W(outline[0].X, outline[0].Y));
+                AddThickPolyline(segs, poly, col, radiusMm: 0.9f, fat: si == add.SelectedSupportIndex);
+
+                // Anchor tick + neck preview to nearest outline vertex.
+                var anchorW = W(spec.AnchorX, spec.AnchorY);
+                AddMarkSphere(segs, anchorW, 2.2f, col);
+                int near = 0; float nd = float.MaxValue;
+                for (int i = 0; i < outline.Length; i++)
+                {
+                    float dx = outline[i].X - spec.AnchorX, dy = outline[i].Y - spec.AnchorY;
+                    float d2 = dx * dx + dy * dy;
+                    if (d2 < nd) { nd = d2; near = i; }
+                }
+                AddThickPolyline(segs,
+                    [anchorW, W(outline[near].X, outline[near].Y)], col, radiusMm: 0.6f, fat: false);
+            }
+        }
 
         _renderer.SetPaintOverlay(segs, hlPts.Count > 0 ? hlPts : null);
     }
@@ -7371,8 +7592,43 @@ public partial class ViewportView : UserControl
         var rec = _paintModifications.FirstOrDefault(m => m.Id == id);
         if (rec is null || rec.Kind != Core.Models.PaintMarkKind.Bridge) return;
         var style = Core.Models.PaintSupportStyleUtil.FromLabel(type);
+
+        // Structural Support is a toolpath modifier, not a mark style: convert the
+        // group — spec anchored at the group's anchor point. The card STAYS in
+        // MODIFICATIONS (its marks are retired; the pocket settings render inline).
+        if (style == Core.Models.PaintSupportStyle.StructuralSupport)
+        {
+            if (rec.StructuralIndex >= 0) return; // already converted
+            int specIdx = ConvertModificationToStructuralSupport(vm, rec);
+            if (specIdx < 0) return;
+            if (vm.AdditiveSettings is { } addS)
+            {
+                int stripped = RemoveMarksNearCenters(addS, rec.Kind, rec.MarkCenters);
+                stripped += RemoveMarksNearCenters(addS, rec.Kind, rec.TargetMarkCenters);
+                stripped += RemoveMarksNearCenters(addS, rec.Kind, rec.ScaffoldMarkCenters);
+                if (stripped > 0) addS.BumpPaintStamp();
+            }
+            rec.SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural;
+            rec.StructuralIndex = specIdx;
+            rec.Detail = "pocket settings below · Update Slice to bake";
+            rec.IsExpanded = true;
+            vm.MarkWorkspaceDirty?.Invoke();
+            SyncPaintModificationsUi(vm);
+            return;
+        }
         var v = Core.Models.PaintSupportStyleUtil.ToLabel(style);
         if (string.Equals(rec.SupportType, v, StringComparison.Ordinal)) return;
+
+        // Leaving Structural: retire the spec; the card reverts to a mark-style
+        // support (re-Apply the selection to stamp fresh marks).
+        if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } addOld)
+        {
+            RemoveStructuralSpec(vm, addOld, rec.StructuralIndex);
+            rec.StructuralIndex = -1;
+            LogPaintConsole("[support] structural spec removed — re-Apply the selection to stamp "
+                + $"{v} marks, then Update Slice.");
+            vm.UpdateSliceCommand?.Execute(null);
+        }
         rec.SupportType = v;
 
         // Re-stamp SupportStyle on this mod's marks (match by center).
@@ -7475,6 +7731,7 @@ public partial class ViewportView : UserControl
                 IsExpanded = m.IsExpanded,
                 SupportType = m.SupportType,
                 SupportSide = m.SupportSide,
+                StructuralIndex = m.StructuralIndex,
                 WorldPoints = WorldPts(m.World),
                 ScaffoldLayerCount = m.ScaffoldLayerCount,
                 ScaffoldMarkCenters = Pts(m.ScaffoldMarkCenters),
@@ -7622,6 +7879,7 @@ public partial class ViewportView : UserControl
                 SupportSide = string.IsNullOrWhiteSpace(s.SupportSide)
                     ? Core.Models.PaintSupportSideUtil.LabelInside
                     : s.SupportSide,
+                StructuralIndex = s.StructuralIndex,
             };
             rec.ScaffoldMarkCenters.AddRange(ReadPts(s.ScaffoldMarkCenters));
 
@@ -7793,6 +8051,9 @@ public partial class ViewportView : UserControl
         {
             foreach (var other in _paintModifications)
                 if (other.Id != id) other.IsExpanded = false;
+            // Structural card: point the inline settings at this card's spec.
+            if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } add)
+                add.SelectedSupportIndex = rec.StructuralIndex;
         }
         ReselectPaintModification(vm, id);
         SyncPaintModificationsUi(vm);
@@ -8119,6 +8380,20 @@ public partial class ViewportView : UserControl
             && centers.Any(c => System.Numerics.Vector3.Distance(m.Center, c) < tol));
     }
 
+    /// <summary>Removes a structural spec and re-links every card pointing past it.</summary>
+    private void RemoveStructuralSpec(
+        ViewportViewModel vm,
+        MassiveSlicer.ViewModels.AdditiveSettingsViewModel add,
+        int specIndex)
+    {
+        add.RemoveStructuralSupportAt(specIndex);
+        foreach (var m in _paintModifications)
+        {
+            if (m.StructuralIndex > specIndex) m.StructuralIndex--;
+            else if (m.StructuralIndex == specIndex) m.StructuralIndex = -1;
+        }
+    }
+
     /// <summary>Removes one modification and its paint-mark dabs (anchor + target + scaffold).</summary>
     private void DeletePaintModification(ViewportViewModel vm, Guid id)
     {
@@ -8129,6 +8404,13 @@ public partial class ViewportView : UserControl
 
         if (vm.PaintBridgePickModificationId == id)
             vm.PaintBridgePickModificationId = null;
+
+        // Structural card: retire its pocket spec too and reslice it away.
+        if (rec.StructuralIndex >= 0 && vm.AdditiveSettings is { } addStruct)
+        {
+            RemoveStructuralSpec(vm, addStruct, rec.StructuralIndex);
+            vm.UpdateSliceCommand?.Execute(null);
+        }
 
         if (vm.AdditiveSettings is { } add)
         {
@@ -8148,6 +8430,20 @@ public partial class ViewportView : UserControl
 
     private void ClearAllPaintModifications(ViewportViewModel vm)
     {
+        // Retire structural specs linked to cards (highest index first).
+        var specIdxs = _paintModifications
+            .Where(m => m.StructuralIndex >= 0)
+            .Select(m => m.StructuralIndex)
+            .Distinct()
+            .OrderByDescending(i => i)
+            .ToList();
+        if (specIdxs.Count > 0 && vm.AdditiveSettings is { } addStruct)
+        {
+            foreach (var si in specIdxs)
+                addStruct.RemoveStructuralSupportAt(si);
+            vm.UpdateSliceCommand?.Execute(null);
+        }
+
         _paintModifications.Clear();
         vm.PaintBridgePickModificationId = null;
         if (vm.AdditiveSettings is { } add && add.PaintMarks.Count > 0)
@@ -8892,10 +9188,36 @@ public partial class ViewportView : UserControl
         (ToolpathLayer Layer, ContourSpan Span, System.Numerics.Vector3 Origin, TkMatrix4 Wt) pick,
         bool pointMode)
     {
-        if (pointMode || pick.Span.Count <= 1)
+        if (pointMode)
+            return SpanWorldMidpoints(pick);
+
+        // A single MOVE can be a metre-long wall segment (straight panel sides are
+        // one move each) — Lines mode must highlight it as the actual line, not a
+        // midpoint dot. Only genuinely short beads render as points.
+        if (pick.Span.Count == 1
+            && pick.Span.Start >= 0 && pick.Span.Start < pick.Layer.Moves.Count)
+        {
+            var mv = pick.Layer.Moves[pick.Span.Start];
+            float beadW = (float)(_vm?.AdditiveSettings?.BeadWidth ?? 6.0);
+            if (mv.Kind == MoveKind.Extrude && SingleMoveRendersAsLine(mv, beadW))
+            {
+                var a = TransformPoint(new TkVector3(
+                    mv.From.X - pick.Origin.X, mv.From.Y - pick.Origin.Y, mv.From.Z - pick.Origin.Z), pick.Wt);
+                var b = TransformPoint(new TkVector3(
+                    mv.To.X - pick.Origin.X, mv.To.Y - pick.Origin.Y, mv.To.Z - pick.Origin.Z), pick.Wt);
+                return [new TkVector3(a.X, a.Y, a.Z), new TkVector3(b.X, b.Y, b.Z)];
+            }
+        }
+
+        if (pick.Span.Count <= 1)
             return SpanWorldMidpoints(pick);
         return SpanWorldPolyline(pick);
     }
+
+    /// <summary>Line-mode policy: a lone move longer than ~1.5 beads is a wall line,
+    /// not a bead — highlight it as a segment. (Testable split of the visual rule.)</summary>
+    internal static bool SingleMoveRendersAsLine(ToolpathMove mv, float beadWidthMm) =>
+        (mv.To - mv.From).Length() > MathF.Max(beadWidthMm, 1f) * 1.5f;
 
     /// <summary>One world-space midpoint per extrude bead in the span (point picks).</summary>
     private List<TkVector3> SpanWorldMidpoints(
@@ -13939,6 +14261,7 @@ public partial class ViewportView : UserControl
             ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
+            SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
 
