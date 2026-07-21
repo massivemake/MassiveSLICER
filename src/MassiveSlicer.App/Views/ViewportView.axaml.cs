@@ -2014,6 +2014,21 @@ public partial class ViewportView : UserControl
         return snaps;
     }
 
+    /// <summary>
+    /// World-aligned frame at the centre of a cell's import surface (same anchor new
+    /// imports land on). Used to transfer user content between cells instead of raw
+    /// bed/pivot node transforms: the LFAM 3 rotary pivot lives in the GLB's tilted
+    /// mesh frame (baseAbc, e.g. C=-90), so re-basing against it would tip content
+    /// over and drag it to the mesh origin. A translation-only frame keeps content
+    /// upright at its offset from the print-surface centre.
+    /// </summary>
+    private static Matrix4 ImportSurfaceFrame(CellConfig? cfg)
+    {
+        if (cfg?.Bed is not { } bed) return Matrix4.Identity;
+        var c = bed.ImportSurfaceCenter(cfg.Robot.WorldPosition);
+        return Matrix4.CreateTranslation(c.X, c.Y, c.Z);
+    }
+
     private void RestoreUserContentAfterCellSwap(
         ViewportViewModel vm,
         List<PreservedUserModel> users,
@@ -2023,9 +2038,9 @@ public partial class ViewportView : UserControl
         if (users.Count == 0 && toolpaths.Count == 0) return;
 
         // Old-bed → new-bed frame change. Content keeps its pose relative to the print
-        // bed, so it lands on the new cell's bed instead of floating at the old cell's
-        // world coordinates. Identity when either cell has no bed (world preserved).
-        var newBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
+        // surface centre, so it lands on the new cell's bed instead of floating at the
+        // old cell's world coordinates. Identity when either cell has no bed config.
+        var newBedWorld = ImportSurfaceFrame(vm.ActiveCell);
         var bedDelta    = oldBedWorld.Inverted() * newBedWorld;
 
         foreach (var (node, world) in users)
@@ -2062,9 +2077,10 @@ public partial class ViewportView : UserControl
         else
             Dispatcher.UIThread.Invoke(() => ClearToolChangeSequence(restorePriorMount: false));
 
-        // Content transfers bed-relative: capture the outgoing bed frame before teardown
-        // so restored models/toolpaths land on the NEW bed where they sat on the old one.
-        var oldBedWorld = (_rotaryBedPivot ?? _bedNode)?.WorldTransform ?? Matrix4.Identity;
+        // Content transfers bed-relative: capture the outgoing cell's import-surface
+        // frame before vm.ActiveCell is overwritten, so restored models/toolpaths land
+        // on the NEW bed where they sat on the old one (see ImportSurfaceFrame).
+        var oldBedWorld = ImportSurfaceFrame(vm.ActiveCell);
 
         var preservedUsers      = DetachUserModelsForCellSwap(vm);
         var preservedToolpaths  = SnapshotToolpathsForCellSwap(vm);
