@@ -17,11 +17,65 @@ public static class PlanarMeshSplitter
     /// <param name="planeNormal">Unit normal of the plane; positive side becomes Object A.</param>
     public static SplitResult Split(MeshData source, Vector3 planePoint, Vector3 planeNormal)
     {
-        var n = planeNormal;
-        float len = n.Length;
-        if (len < 1e-8f) n = Vector3.UnitZ;
-        else n /= len;
+        var n = NormalizeOrFallback(planeNormal);
+        var posA = new List<Vector3>(); var nrmA = new List<Vector3>(); var idxA = new List<uint>();
+        var posB = new List<Vector3>(); var nrmB = new List<Vector3>(); var idxB = new List<uint>();
+        var cutEdges = new List<(Vector3 A, Vector3 B)>();
 
+        ClipRaw(source, planePoint, n, posA, nrmA, idxA, posB, nrmB, idxB, cutEdges);
+
+        // Cap faces from cut edge loops.
+        var loops = BuildLoops(cutEdges, n);
+        foreach (var loop in loops)
+        {
+            if (loop.Count < 3) continue;
+            CapLoop(loop, n, planePoint, posA, nrmA, idxA, positive: true);
+            CapLoop(loop, n, planePoint, posB, nrmB, idxB, positive: false);
+        }
+
+        var meshA = new MeshData(posA.ToArray(), nrmA.ToArray(), idxA.ToArray(),
+            source.Name + "_A", source.BaseColor, source.Metallic, source.Roughness);
+        var meshB = new MeshData(posB.ToArray(), nrmB.ToArray(), idxB.ToArray(),
+            source.Name + "_B", source.BaseColor, source.Metallic, source.Roughness);
+        return new SplitResult(meshA, meshB, loops);
+    }
+
+    /// <summary>
+    /// Same per-triangle plane clip as <see cref="Split"/>, but with no cut-face capping — the
+    /// "kept" (Positive) and "discarded" (Negative) fragments are left exactly as clipped, sharing
+    /// identical boundary vertices where the plane sliced through. Used to carve a bounded
+    /// rectangular footprint (see <see cref="BoundedCutSplitter"/>) out of a mesh: the discarded
+    /// side there is never actually "cut" by the model's real cut plane, so it must stay open and
+    /// weld right back onto whichever piece it's still physically continuous with — not gain a
+    /// new face of its own the way an intentional cut does.
+    /// </summary>
+    public static (MeshData Kept, MeshData Discarded) ClipUncapped(MeshData source, Vector3 planePoint, Vector3 planeNormal)
+    {
+        var n = NormalizeOrFallback(planeNormal);
+        var posA = new List<Vector3>(); var nrmA = new List<Vector3>(); var idxA = new List<uint>();
+        var posB = new List<Vector3>(); var nrmB = new List<Vector3>(); var idxB = new List<uint>();
+
+        ClipRaw(source, planePoint, n, posA, nrmA, idxA, posB, nrmB, idxB, cutEdges: []);
+
+        var kept      = new MeshData(posA.ToArray(), nrmA.ToArray(), idxA.ToArray(),
+            source.Name + "_in", source.BaseColor, source.Metallic, source.Roughness);
+        var discarded = new MeshData(posB.ToArray(), nrmB.ToArray(), idxB.ToArray(),
+            source.Name + "_out", source.BaseColor, source.Metallic, source.Roughness);
+        return (kept, discarded);
+    }
+
+    private static Vector3 NormalizeOrFallback(Vector3 n)
+    {
+        float len = n.Length;
+        return len < 1e-8f ? Vector3.UnitZ : n / len;
+    }
+
+    private static void ClipRaw(
+        MeshData source, Vector3 planePoint, Vector3 n,
+        List<Vector3> posA, List<Vector3> nrmA, List<uint> idxA,
+        List<Vector3> posB, List<Vector3> nrmB, List<uint> idxB,
+        List<(Vector3 A, Vector3 B)> cutEdges)
+    {
         float PlaneD(Vector3 p) => Vector3.Dot(p - planePoint, n);
 
         var srcPos = source.Positions;
@@ -29,14 +83,6 @@ public static class PlanarMeshSplitter
         int triCount = source.Indices is { Length: > 0 } idx
             ? idx.Length / 3
             : srcPos.Length / 3;
-
-        var posA = new List<Vector3>();
-        var nrmA = new List<Vector3>();
-        var idxA = new List<uint>();
-        var posB = new List<Vector3>();
-        var nrmB = new List<Vector3>();
-        var idxB = new List<uint>();
-        var cutEdges = new List<(Vector3 A, Vector3 B)>();
 
         void AddTri(List<Vector3> pos, List<Vector3> nrm, List<uint> indices,
             Vector3 p0, Vector3 p1, Vector3 p2, Vector3 n0, Vector3 n1, Vector3 n2)
@@ -88,21 +134,6 @@ public static class PlanarMeshSplitter
             ClipTriangle(v0, v1, v2, nn0, nn1, nn2, d0, d1, d2,
                 posA, nrmA, idxA, posB, nrmB, idxB, cutEdges, n);
         }
-
-        // Cap faces from cut edge loops.
-        var loops = BuildLoops(cutEdges, n);
-        foreach (var loop in loops)
-        {
-            if (loop.Count < 3) continue;
-            CapLoop(loop, n, planePoint, posA, nrmA, idxA, positive: true);
-            CapLoop(loop, n, planePoint, posB, nrmB, idxB, positive: false);
-        }
-
-        var meshA = new MeshData(posA.ToArray(), nrmA.ToArray(), idxA.ToArray(),
-            source.Name + "_A", source.BaseColor, source.Metallic, source.Roughness);
-        var meshB = new MeshData(posB.ToArray(), nrmB.ToArray(), idxB.ToArray(),
-            source.Name + "_B", source.BaseColor, source.Metallic, source.Roughness);
-        return new SplitResult(meshA, meshB, loops);
     }
 
     private static void ClipTriangle(

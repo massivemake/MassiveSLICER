@@ -5925,9 +5925,13 @@ public partial class ViewportView : UserControl
             if (vm.GetModifierGizmoNode(cut) is not { } gizmoNode) continue;
             var gw = gizmoNode.WorldTransform;
             var worldPoint = gw.Row3.Xyz;
-            var worldNormal = cut.Orientation == CutOrientation.Horizontal
-                ? TkVector3.Normalize(gw.Row2.Xyz)
-                : TkVector3.Normalize(gw.Row0.Xyz);
+            // Same rows BuildModifierPlaneMesh already uses for this orientation's preview quad:
+            // Horizontal's plane spans local X/Y (Row0/Row1), normal is Z (Row2); Vertical's
+            // spans local Y/Z (Row1/Row2 — Row2 is always world Z, since RotationDegrees only
+            // ever rotates about Z), normal is X (Row0, see CutModifierNodeSync).
+            var worldNormal   = TkVector3.Normalize(cut.Orientation == CutOrientation.Horizontal ? gw.Row2.Xyz : gw.Row0.Xyz);
+            var worldTangentU = TkVector3.Normalize(cut.Orientation == CutOrientation.Horizontal ? gw.Row0.Xyz : gw.Row1.Xyz);
+            var worldTangentV = TkVector3.Normalize(cut.Orientation == CutOrientation.Horizontal ? gw.Row1.Xyz : gw.Row2.Xyz);
 
             var next = new List<ApplyPiece>();
 
@@ -5938,8 +5942,10 @@ public partial class ViewportView : UserControl
             // glued into one mesh/outliner entry. Split each side into its real connected islands
             // and give each its own piece.
             void AddSplitPieces(MeshData sideMesh, TkMatrix4 world, string baseName)
+                => AddResolvedPieces(MeshIslands.Split(sideMesh), world, baseName);
+
+            void AddResolvedPieces(List<MeshData> islands, TkMatrix4 world, string baseName)
             {
-                var islands = MeshIslands.Split(sideMesh);
                 if (islands.Count == 1) { next.Add(new ApplyPiece(islands[0], world, baseName)); return; }
                 for (int i = 0; i < islands.Count; i++)
                     next.Add(new ApplyPiece(islands[i], world, $"{baseName} {i + 1}"));
@@ -5951,12 +5957,25 @@ public partial class ViewportView : UserControl
                 var localPt = TkVector3.TransformPosition(worldPoint, inv);
                 var localN  = TkVector3.Normalize(TkVector3.TransformNormal(worldNormal, inv));
 
-                var meshSplit = PlanarMeshSplitter.Split(piece.Mesh, localPt, localN);
-                bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
-                if (!crosses) { next.Add(piece); continue; }
+                if (cut.Infinite)
+                {
+                    var meshSplit = PlanarMeshSplitter.Split(piece.Mesh, localPt, localN);
+                    bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
+                    if (!crosses) { next.Add(piece); continue; }
 
-                AddSplitPieces(meshSplit.Positive, piece.World, $"{piece.Name} +");
-                AddSplitPieces(meshSplit.Negative, piece.World, $"{piece.Name} -");
+                    AddSplitPieces(meshSplit.Positive, piece.World, $"{piece.Name} +");
+                    AddSplitPieces(meshSplit.Negative, piece.World, $"{piece.Name} -");
+                }
+                else
+                {
+                    var localTanU = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentU, inv));
+                    var localTanV = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentV, inv));
+                    var bounded = BoundedCutSplitter.Split(
+                        piece.Mesh, localPt, localN, localTanU, localTanV, cut.SizeX * 0.5f, cut.SizeY * 0.5f);
+                    if (bounded is null) { next.Add(piece); continue; }
+
+                    AddResolvedPieces(bounded, piece.World, piece.Name);
+                }
             }
             pieces = next;
         }
