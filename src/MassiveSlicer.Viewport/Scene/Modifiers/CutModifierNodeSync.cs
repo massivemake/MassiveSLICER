@@ -32,31 +32,42 @@ public static class CutModifierNodeSync
 
     /// <summary>
     /// Vertical: builds the node's transform directly in world space (no parent) — a Z rotation
-    /// by <paramref name="rotationDegrees"/> (its Row0 becomes the plane's normal direction),
-    /// translated to <paramref name="bedCenter"/> plus that normal times <paramref name="offset"/>,
-    /// plus <paramref name="positionZ"/> as a free height offset (normal has no Z component, so
-    /// this is the only thing that ever moves the plane up/down).
+    /// by <paramref name="rotationDegrees"/> (its Row0 becomes the plane's normal direction, Row1
+    /// the in-plane tangent direction perpendicular to it), translated to <paramref name="bedCenter"/>
+    /// plus normal×<paramref name="offset"/> plus tangent×<paramref name="positionTangent"/>, plus
+    /// <paramref name="positionZ"/> as a free height offset. Normal and tangent both have zero Z
+    /// component (a pure Z-axis rotation), so PositionZ is the only thing that ever moves the
+    /// plane up/down, and normal/tangent together span every other direction — giving the same
+    /// full 2-free + 1-meaningful translation freedom Horizontal already has via PositionX/Y/Offset.
     /// </summary>
-    public static Matrix4 BuildVerticalTransform(float rotationDegrees, float offset, float positionZ, Vector3 bedCenter)
+    public static Matrix4 BuildVerticalTransform(
+        float rotationDegrees, float offset, float positionZ, float positionTangent, Vector3 bedCenter)
     {
         var rot = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(rotationDegrees));
-        var normal = rot.Row0.Xyz;
-        var center = bedCenter + normal * offset;
+        var normal  = rot.Row0.Xyz;
+        var tangent = rot.Row1.Xyz;
+        var center = bedCenter + normal * offset + tangent * positionTangent;
         rot.Row3 = new Vector4(center.X, center.Y, center.Z + positionZ, 1f);
         return rot;
     }
 
-    /// <summary>Vertical: reads (Offset, RotationDegrees, PositionZ) back out of the (possibly
-    /// gizmo-dragged) transform — Row0 is the current normal direction, translation minus bed
-    /// center projected onto it is Offset; whatever Z is left over (normal is always flat, so it
-    /// never explains any Z) is the free PositionZ.</summary>
-    public static (float Offset, float RotationDegrees, float PositionZ) ExtractVertical(Matrix4 transform, Vector3 bedCenter)
+    /// <summary>Vertical: reads (Offset, RotationDegrees, PositionZ, PositionTangent) back out of
+    /// the (possibly gizmo-dragged) transform. Row0/Row1 (normal/tangent) are untouched by a pure
+    /// translate drag (only Row3 changes), so they still describe an orthogonal basis together
+    /// with world Z — projecting the position delta onto normal, tangent, and Z separately and
+    /// exactly decomposes any drag into its Offset/PositionTangent/PositionZ components with
+    /// nothing left over and nothing double-counted.</summary>
+    public static (float Offset, float RotationDegrees, float PositionZ, float PositionTangent) ExtractVertical(
+        Matrix4 transform, Vector3 bedCenter)
     {
         var normal = transform.Row0.Xyz;
         normal = normal.LengthSquared > 1e-10f ? Vector3.Normalize(normal) : Vector3.UnitX;
+        var tangent = new Vector3(-normal.Y, normal.X, 0f);
         float rotationDegrees = MathHelper.RadiansToDegrees(MathF.Atan2(normal.Y, normal.X));
-        float offset = Vector3.Dot(transform.Row3.Xyz - bedCenter, normal);
-        float positionZ = transform.Row3.Z - bedCenter.Z;
-        return (offset, rotationDegrees, positionZ);
+        var delta = transform.Row3.Xyz - bedCenter;
+        float offset          = Vector3.Dot(delta, normal);
+        float positionTangent = Vector3.Dot(delta, tangent);
+        float positionZ       = delta.Z;
+        return (offset, rotationDegrees, positionZ, positionTangent);
     }
 }

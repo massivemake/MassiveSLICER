@@ -7212,7 +7212,8 @@ public sealed class ViewportViewModel : ViewModelBase
         var bedCenter = ResolveBedCenterXYZ();
         var world = cut.Orientation == CutOrientation.Horizontal
             ? CutModifierNodeSync.BuildHorizontalTransform(cut.PositionX, cut.PositionY, cut.Offset, bedCenter)
-            : CutModifierNodeSync.BuildVerticalTransform(cut.RotationDegrees, cut.Offset, cut.PositionZ, bedCenter);
+            : CutModifierNodeSync.BuildVerticalTransform(
+                cut.RotationDegrees, cut.Offset, cut.PositionZ, cut.PositionTangent, bedCenter);
 
         node.LocalTransform = node.Parent is { } parent ? world * parent.WorldTransform.Inverted() : world;
     }
@@ -7222,10 +7223,11 @@ public sealed class ViewportViewModel : ViewModelBase
     /// its WORLD transform (not local — the node is a real child of its Modifiers group now, so
     /// local space is relative to that group/mesh, not the bed), then rebuilds the node from
     /// those extracted values. For Horizontal this round-trips X/Y too (free position — dragging
-    /// it sideways to get it out of the way is meant to work; only Z is the actual cut value).
-    /// For Vertical this still snaps away anything that doesn't correspond to a real field (e.g.
-    /// dragging its X/Y handle has no meaning; only its along-normal Offset does), so the visual
-    /// result always matches exactly what's stored, never silent untracked drift.
+    /// it sideways to get it out of the way is meant to work; only Z is the actual cut value). For
+    /// Vertical this round-trips PositionZ and PositionTangent the same way (free position in the
+    /// two directions that aren't the cut's own Offset), so a drag in any direction — not just
+    /// exactly along the current normal — lands where you actually dragged it instead of being
+    /// silently discarded.
     /// </summary>
     internal void SyncModifierAfterGizmoEdit(CutModifier cut, SceneNode node)
     {
@@ -7237,10 +7239,11 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         else
         {
-            var (offset, rotation, positionZ) = CutModifierNodeSync.ExtractVertical(world, bedCenter);
-            cut.Offset = offset;
+            var (offset, rotation, positionZ, positionTangent) = CutModifierNodeSync.ExtractVertical(world, bedCenter);
+            cut.Offset          = offset;
             cut.RotationDegrees = rotation;
-            cut.PositionZ = positionZ;
+            cut.PositionZ       = positionZ;
+            cut.PositionTangent = positionTangent;
         }
         SyncModifierGizmoNodeFromFields(cut);
     }

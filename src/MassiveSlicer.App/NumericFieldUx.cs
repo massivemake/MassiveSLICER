@@ -1,6 +1,9 @@
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
+using MassiveSlicer.App.Views;
 
 namespace MassiveSlicer.App;
 
@@ -34,7 +37,12 @@ internal static class NumericFieldUx
         InputElement.KeyDownEvent.AddClassHandler<TextBox>((tb, e) =>
         {
             if (e.Key != Key.Enter || !tb.Classes.Contains(CommitClass)) return;
-            (TopLevel.GetTopLevel(tb) as IInputElement)?.Focus();
+            // Focusing the TopLevel (Window) itself doesn't reliably move focus away from a
+            // child in Avalonia — a Window isn't a real focus target. ViewportView is the one
+            // control in this app already set Focusable=true specifically to be a safe place to
+            // send keyboard focus back to (see its own `this.Focus()` calls); reuse that instead.
+            var viewport = TopLevel.GetTopLevel(tb)?.GetVisualDescendants().OfType<ViewportView>().FirstOrDefault();
+            viewport?.Focus();
             e.Handled = true;
         });
     }

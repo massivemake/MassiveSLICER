@@ -77,6 +77,20 @@ public sealed class CutModifier : IModifier
     /// </summary>
     public float PositionZ { get; set; }
 
+    /// <summary>
+    /// Vertical only: free position (mm) along the in-plane direction perpendicular to
+    /// <see cref="RotationDegrees"/> (i.e. sideways along the cut line itself) — has no effect on
+    /// the cut, purely so the plane can be dragged out of the way. Together with
+    /// <see cref="PositionZ"/> this gives Vertical the same 2 free + 1 meaningful (Offset)
+    /// translation degrees of freedom Horizontal already has via PositionX/PositionY/Offset.
+    /// Without this field, any drag component that wasn't purely along the normal or purely
+    /// vertical had nowhere to go and was silently discarded every frame — visible as an axis
+    /// that wouldn't move at all (0°, where the missing axis lines up with world Y) or as X and Y
+    /// both collapsing onto the same diagonal (45°, where neither world axis lines up with either
+    /// tracked direction). Ignored for Horizontal.
+    /// </summary>
+    public float PositionTangent { get; set; }
+
     /// <summary>When false, the plane's extent is limited to <see cref="SizeX"/>/<see cref="SizeY"/> instead of unbounded.</summary>
     public bool Infinite { get; set; } = true;
 
