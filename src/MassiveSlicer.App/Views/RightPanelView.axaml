@@ -860,6 +860,10 @@
 
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55" Margin="0,8,0,0"
                                            Text="Models must be oriented Z-up (Z is vertical). Rotations re-drop the bottom onto the build plate."/>
+
+                                <CheckBox Content="Show back faces" Margin="0,8,0,0"
+                                          IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowBackFaces, Mode=TwoWay}"
+                                          ToolTip.Tip="See the inside of this model from either side — useful for checking a Cut plane's placement without rotating around it."/>
                             </StackPanel>
                         </StackPanel>
                     </Expander>
@@ -2563,9 +2567,6 @@
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowTravelMoves, Mode=TwoWay}"/>
                         <CheckBox Content="Show seam"            Margin="12,2,8,6"
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowSeam, Mode=TwoWay}"/>
-                        <CheckBox Content="Show back faces (active model)" Margin="12,2,8,6"
-                                  IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowBackFaces, Mode=TwoWay}"
-                                  ToolTip.Tip="See the inside of the active model from either side — useful for checking a Cut plane's placement without rotating around it."/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 

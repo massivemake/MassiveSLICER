@@ -5930,6 +5930,21 @@ public partial class ViewportView : UserControl
                 : TkVector3.Normalize(gw.Row0.Xyz);
 
             var next = new List<ApplyPiece>();
+
+            // A single flat plane can cross a curled/spiral wall at more than one point along
+            // its length — PlanarMeshSplitter only buckets triangles by which side of the plane
+            // they're on, with no idea whether that bucket is one connected piece or several, so
+            // without this, two physically separate chunks on the same side silently end up
+            // glued into one mesh/outliner entry. Split each side into its real connected islands
+            // and give each its own piece.
+            void AddSplitPieces(MeshData sideMesh, TkMatrix4 world, string baseName)
+            {
+                var islands = MeshIslands.Split(sideMesh);
+                if (islands.Count == 1) { next.Add(new ApplyPiece(islands[0], world, baseName)); return; }
+                for (int i = 0; i < islands.Count; i++)
+                    next.Add(new ApplyPiece(islands[i], world, $"{baseName} {i + 1}"));
+            }
+
             foreach (var piece in pieces)
             {
                 var inv = piece.World.Inverted();
@@ -5940,8 +5955,8 @@ public partial class ViewportView : UserControl
                 bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
                 if (!crosses) { next.Add(piece); continue; }
 
-                next.Add(new ApplyPiece(meshSplit.Positive, piece.World, $"{piece.Name} +"));
-                next.Add(new ApplyPiece(meshSplit.Negative, piece.World, $"{piece.Name} -"));
+                AddSplitPieces(meshSplit.Positive, piece.World, $"{piece.Name} +");
+                AddSplitPieces(meshSplit.Negative, piece.World, $"{piece.Name} -");
             }
             pieces = next;
         }
