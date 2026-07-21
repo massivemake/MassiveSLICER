@@ -5162,7 +5162,19 @@ public partial class ViewportView : UserControl
             _validationCts?.Cancel();
             _validationDone = false;
 
-            var preservedLocal = toolpathNode.LocalTransform;
+            // Toolpath moves are always baked in absolute world space (computed from the
+            // mesh's CURRENT world-transformed vertices — see ComputeToolpathAsync), so a
+            // fresh re-slice's raw data already reflects whatever rotation the mesh
+            // currently has. The toolpath node's own rotation, when non-identity, only ever
+            // got there by mirroring the mesh's rotation (the drag-link mesh-follow system) —
+            // never from an independent user action — so re-applying it here would rotate
+            // the already-rotated data a second time (verified live: rotate a piece, then
+            // Create New Toolpath on it, and the toolpath rendered twisted at double the
+            // angle while the mesh stayed correct). Only the translation is ever legitimate
+            // to preserve (e.g. a toolpath nudged independently of its mesh), so strip the
+            // rotation and keep an identity-rotation, translation-only transform.
+            var preservedFull  = toolpathNode.LocalTransform;
+            var preservedLocal = Matrix4.CreateTranslation(preservedFull.M41, preservedFull.M42, preservedFull.M43);
             if (!_toolpathOriginByNode.TryGetValue(toolpathNode, out var preservedOrigin))
             {
                 preservedOrigin = new NVec3(
