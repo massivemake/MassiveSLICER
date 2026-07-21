@@ -220,7 +220,13 @@ public static class PlanarMeshSplitter
                     break;
                 }
             }
-            if (loop.Count >= 3)
+            // Only a chain that actually closed back on itself is a real cross-section
+            // boundary worth capping. A chain that dead-ends (never reconnects to its own
+            // start) means the cut plane crossed the source mesh's own pre-existing open
+            // edge — there is no enclosed cross-section there, so forcing a cap by fanning
+            // across the gap between the two loose ends produces a bogus, twisted triangle
+            // bridging empty space instead of a clean flat face. Leave it uncapped instead.
+            if (closed && loop.Count >= 3)
             {
                 // Order CCW relative to plane normal for consistent caps.
                 if (Vector3.Dot(LoopAreaNormal(loop), planeN) < 0)
