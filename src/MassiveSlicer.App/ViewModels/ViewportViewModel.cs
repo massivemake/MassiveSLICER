@@ -323,7 +323,16 @@ public sealed class ViewportViewModel : ViewModelBase
     public bool ShowBackFaces
     {
         get => _showBackFaces;
-        set => SetField(ref _showBackFaces, value);
+        set
+        {
+            if (!SetField(ref _showBackFaces, value)) return;
+            // Applied here directly (not just left to the per-frame poll loop that also handles
+            // the active-model-changed case) so toggling the checkbox takes effect immediately —
+            // that poll only runs during an already-scheduled frame, so without this it silently
+            // waited for the next unrelated redraw (e.g. orbiting the camera) to catch up.
+            SyncBackFaceFlags(value);
+            NotifyRenderNeeded();
+        }
     }
 
     /// <summary>Applies <see cref="ShowBackFaces"/> to every mesh node under the active print
