@@ -1,5 +1,19 @@
 # MassiveSLICER V3 — Project Memory
 
+## ⚠️ Cut Modifier feature branch — NOT print-verified, do not merge assuming it's safe
+
+This branch (`feature/cut-modifier`) adds a non-destructive Cut Modifier: split a mesh into
+independent pieces, reposition/reorient each one freely, and slice each for real. It has been
+verified in simulation only — reachability, mesh/toolpath alignment, and collision checks all
+pass on-screen, but **no piece has been printed on real hardware yet**. Jeff is running the
+first in-shop print test after this lands.
+
+**If you're reading this before that's happened:** treat Cut Modifier output as unverified for
+production printing. Don't assume "it slices and shows reachable" means "safe to run on the
+robot as usual." Confirm with Jeff whether shop testing has actually validated a printed part
+before trusting this path, and don't merge this branch into `main`/`master` without his
+explicit sign-off.
+
 <<<<<<< HEAD
 Last updated: 2026-07-16 (Windows launch crash fix + `.mass` drag-and-drop; large-STL import crash diagnosed, not yet fixed)
 =======
