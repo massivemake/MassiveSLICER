@@ -3624,6 +3624,7 @@ public partial class ViewportView : UserControl
         foreach (var node in item.Node.SelfAndDescendants())
         {
             if (node.PickTier == PickTier.Environment) continue;
+            if (node.IsAuthoringOverlay) continue;
             if (node.Mesh?.PickingData is not { } md) continue;
             meshSnapshots.Add((md.Positions, md.Indices, node.WorldTransform));
         }

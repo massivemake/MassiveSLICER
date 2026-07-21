@@ -6735,7 +6735,7 @@ public sealed class ViewportViewModel : ViewModelBase
         var existing = ownerItem.Children.FirstOrDefault(c => c.IsModifiersGroup);
         if (existing is not null) return existing.Node;
 
-        var groupNode = new SceneNode { Name = "Modifiers", Selectable = true, PickIgnore = true };
+        var groupNode = new SceneNode { Name = "Modifiers", Selectable = true, PickIgnore = true, IsAuthoringOverlay = true };
         ownerItem.Node.AddChild(groupNode);
 
         var groupItem = CreateOutlinerItem(groupNode, it =>
@@ -6876,6 +6876,10 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private static readonly Vector3 ModifierPlaneTint = new(0.91f, 0.64f, 0.24f); // matches the outliner's Cut-modifier icon color
 
+    /// <summary>The four (sign X, sign Y) corner directions of a rectangle, used to place
+    /// per-corner markers on a modifier's plane.</summary>
+    private static readonly (float sx, float sy)[] CornerSigns = [(-1f, -1f), (1f, -1f), (1f, 1f), (-1f, 1f)];
+
     /// <summary>True when the node is (or is inside) a modifier's own plane object.</summary>
     public bool IsModifierNode(SceneNode? node)
         => FindModifierForNode(node) is not null;
@@ -6955,13 +6959,119 @@ public sealed class ViewportViewModel : ViewModelBase
             });
     }
 
-    /// <summary>Regenerates a modifier's plane geometry (call after Orientation/Infinite/SizeX/SizeY
-    /// changes) and queues the GPU re-upload. No-op if the modifier has no gizmo node yet.</summary>
+    /// <summary>
+    /// Builds the small corner markers that show at a glance whether a plane is Infinite or
+    /// restricted, sitting a hair in front of the main plane fill (same flat color, no per-vertex
+    /// alpha, so a visible offset along the normal is the only way to keep them from blending
+    /// into the translucent fill underneath): four inward-opening 90° brackets (like a
+    /// bounding-box/crop icon) when restricted, or four small arrowheads near each corner
+    /// pointing outward along the diagonal — inset so the tip always stays inside the plane's
+    /// own visible extent — when Infinite.
+    /// </summary>
+    private MeshData? BuildModifierCornerMarkerMesh(CutModifier cut)
+    {
+        var (bedWidth, bedDepth) = ResolveBedSizeXY();
+        float extent = Math.Max(bedWidth, bedDepth);
+        float halfA = (cut.Infinite ? extent : Math.Max(cut.SizeX, 10f)) * 0.5f;
+        float halfB = (cut.Infinite ? extent : Math.Max(cut.SizeY, 10f)) * 0.5f;
+        float minExtent = Math.Min(halfA, halfB) * 2f;
+
+        const float NormalOffset = 0.75f; // mm in front of the fill — avoids z-fighting, not a real depth
+        Vector3 Embed(float u, float v) => cut.Orientation == CutOrientation.Horizontal
+            ? new Vector3(u, v, NormalOffset)
+            : new Vector3(NormalOffset, u, v);
+        var normal = cut.Orientation == CutOrientation.Horizontal ? Vector3.UnitZ : Vector3.UnitX;
+
+        var positions = new List<Vector3>();
+        var indices   = new List<uint>();
+
+        void AddQuad(Vector2 a, Vector2 b, Vector2 c, Vector2 d)
+        {
+            uint i = (uint)positions.Count;
+            positions.Add(Embed(a.X, a.Y)); positions.Add(Embed(b.X, b.Y));
+            positions.Add(Embed(c.X, c.Y)); positions.Add(Embed(d.X, d.Y));
+            indices.Add(i); indices.Add(i + 1); indices.Add(i + 2);
+            indices.Add(i); indices.Add(i + 2); indices.Add(i + 3);
+        }
+
+        void AddTri(Vector2 a, Vector2 b, Vector2 c)
+        {
+            uint i = (uint)positions.Count;
+            positions.Add(Embed(a.X, a.Y)); positions.Add(Embed(b.X, b.Y)); positions.Add(Embed(c.X, c.Y));
+            indices.Add(i); indices.Add(i + 1); indices.Add(i + 2);
+        }
+
+        if (!cut.Infinite)
+        {
+            float armLen    = Math.Clamp(minExtent * 0.2f, 8f, 60f);
+            float thickness = Math.Clamp(armLen * 0.18f, 1.5f, 8f);
+
+            foreach (var (sx, sy) in CornerSigns)
+            {
+                float cx = sx * halfA, cy = sy * halfB;
+                // Arm hugging the halfB edge, running inward along U.
+                AddQuad(
+                    new Vector2(cx, cy),
+                    new Vector2(cx - sx * armLen, cy),
+                    new Vector2(cx - sx * armLen, cy - sy * thickness),
+                    new Vector2(cx, cy - sy * thickness));
+                // Arm hugging the halfA edge, running inward along V.
+                AddQuad(
+                    new Vector2(cx, cy),
+                    new Vector2(cx, cy - sy * armLen),
+                    new Vector2(cx - sx * thickness, cy - sy * armLen),
+                    new Vector2(cx - sx * thickness, cy));
+            }
+        }
+        else
+        {
+            float arrowLen   = Math.Clamp(minExtent * 0.015f, 10f, 45f);
+            float arrowWidth = arrowLen * 0.7f;
+            float margin     = arrowLen * 0.9f; // keeps the tip inside the plane's own extent
+
+            foreach (var (sx, sy) in CornerSigns)
+            {
+                var dir    = Vector2.Normalize(new Vector2(sx, sy));
+                var perp   = new Vector2(-dir.Y, dir.X);
+                var corner = new Vector2(sx * halfA, sy * halfB);
+                var tip    = corner - dir * margin;
+                var baseC  = tip - dir * arrowLen;
+                AddTri(tip, baseC + perp * (arrowWidth * 0.5f), baseC - perp * (arrowWidth * 0.5f));
+            }
+        }
+
+        if (positions.Count == 0) return null;
+
+        var normals = new Vector3[positions.Count];
+        Array.Fill(normals, normal);
+
+        var color = new Vector4(ModifierPlaneTint.X, ModifierPlaneTint.Y, ModifierPlaneTint.Z, 0.85f);
+        return new MeshData(positions.ToArray(), normals, indices.ToArray(), $"{cut.Name} Markers", color, 0f, 1f,
+            uvs: null, tangents: null,
+            material: new MaterialData
+            {
+                BaseColorFactor = color,
+                MetallicFactor  = 0f,
+                RoughnessFactor = 1f,
+                EmissiveFactor  = ModifierPlaneTint * 0.55f,
+                AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
+            });
+    }
+
+    /// <summary>Regenerates a modifier's plane geometry and its Infinite/restricted corner
+    /// markers (call after Orientation/Infinite/SizeX/SizeY changes) and queues the GPU
+    /// re-upload. No-op if the modifier has no gizmo node yet.</summary>
     internal void RebuildModifierPlaneMesh(CutModifier cut)
     {
         if (!_modifierGizmoNodes.TryGetValue(cut, out var node)) return;
         node.PendingMesh = BuildModifierPlaneMesh(cut);
         PendingModelRefresh.Enqueue(node);
+
+        if (node.Children.FirstOrDefault(c => c.IsAuthoringOverlay) is { } markerNode)
+        {
+            markerNode.PendingMesh = BuildModifierCornerMarkerMesh(cut);
+            PendingModelRefresh.Enqueue(markerNode);
+        }
         NotifyRenderNeeded();
     }
 
@@ -6985,18 +7095,34 @@ public sealed class ViewportViewModel : ViewModelBase
 
             node = new SceneNode
             {
-                Name            = cut.Name,
-                Selectable      = true,
-                PickIgnore      = false,
-                CullFaces       = false,
-                TranslucentPass = true,
-                KeepOwnMaterial = true,
-                Visible         = cut.PreviewVisible,
-                PendingMesh     = BuildModifierPlaneMesh(cut),
+                Name               = cut.Name,
+                Selectable         = true,
+                PickIgnore         = false,
+                CullFaces          = false,
+                TranslucentPass    = true,
+                KeepOwnMaterial    = true,
+                Visible            = cut.PreviewVisible,
+                PendingMesh        = BuildModifierPlaneMesh(cut),
+                IsAuthoringOverlay = true,
             };
             _modifierGizmoNodes[cut] = node;
             groupNode.AddChild(node);
             PendingModelRefresh.Enqueue(node);
+
+            var markerNode = new SceneNode
+            {
+                Name               = $"{cut.Name} Markers",
+                Selectable         = false,
+                PickIgnore         = true,
+                CullFaces          = false,
+                TranslucentPass    = true,
+                KeepOwnMaterial    = true,
+                Visible            = cut.PreviewVisible,
+                PendingMesh        = BuildModifierCornerMarkerMesh(cut),
+                IsAuthoringOverlay = true,
+            };
+            node.AddChild(markerNode);
+            PendingModelRefresh.Enqueue(markerNode);
 
             var groupItem = ownerItem.Children.First(c => c.IsModifiersGroup);
             var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, it =>
@@ -7049,7 +7175,7 @@ public sealed class ViewportViewModel : ViewModelBase
         var bedCenter = ResolveBedCenterXYZ();
         var world = cut.Orientation == CutOrientation.Horizontal
             ? CutModifierNodeSync.BuildHorizontalTransform(cut.PositionX, cut.PositionY, cut.Offset, bedCenter)
-            : CutModifierNodeSync.BuildVerticalTransform(cut.RotationDegrees, cut.Offset, bedCenter);
+            : CutModifierNodeSync.BuildVerticalTransform(cut.RotationDegrees, cut.Offset, cut.PositionZ, bedCenter);
 
         node.LocalTransform = node.Parent is { } parent ? world * parent.WorldTransform.Inverted() : world;
     }
@@ -7074,9 +7200,10 @@ public sealed class ViewportViewModel : ViewModelBase
         }
         else
         {
-            var (offset, rotation) = CutModifierNodeSync.ExtractVertical(world, bedCenter);
+            var (offset, rotation, positionZ) = CutModifierNodeSync.ExtractVertical(world, bedCenter);
             cut.Offset = offset;
             cut.RotationDegrees = rotation;
+            cut.PositionZ = positionZ;
         }
         SyncModifierGizmoNodeFromFields(cut);
     }

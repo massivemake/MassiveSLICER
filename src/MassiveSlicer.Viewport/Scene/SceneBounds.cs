@@ -20,6 +20,7 @@ public static class SceneBounds
         foreach (var n in root.SelfAndDescendants())
         {
             if (!n.Visible) continue;
+            if (n.IsAuthoringOverlay) continue;
 
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;
@@ -58,6 +59,7 @@ public static class SceneBounds
         foreach (var n in sceneRoot.SelfAndDescendants())
         {
             if (!n.Visible) continue;
+            if (n.IsAuthoringOverlay) continue;
 
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;

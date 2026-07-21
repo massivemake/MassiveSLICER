@@ -67,6 +67,14 @@ public sealed class SceneNode
     public bool PickIgnore { get; set; } = false;
 
     /// <summary>
+    /// Authoring-only overlay geometry (e.g. a modifier's gizmo plane) — real, pickable, and
+    /// rendered like any other node, but never real model content. Excluded from mesh-collection
+    /// utilities (slicing, bounding-box, export) so it never leaks into a toolpath or measurement,
+    /// even though it lives as a genuine child of the mesh it belongs to.
+    /// </summary>
+    public bool IsAuthoringOverlay { get; set; } = false;
+
+    /// <summary>
     /// When <c>false</c> this node and its entire subtree are skipped during rendering.
     /// Toggle to show or hide geometry without removing it from the scene graph.
     /// </summary>

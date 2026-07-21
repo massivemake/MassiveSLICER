@@ -40,19 +40,22 @@ public sealed class CutModifierNodeSyncTest
     }
 
     [Theory]
-    [InlineData(0f, 100f)]
-    [InlineData(90f, 50f)]
-    [InlineData(37f, 10f)]
-    [InlineData(-45f, 200f)]
-    [InlineData(180f, 75f)]
-    public void Vertical_offset_and_rotation_round_trip_through_the_transform(float rotationDegrees, float offset)
+    [InlineData(0f, 100f, 0f)]
+    [InlineData(90f, 50f, 0f)]
+    [InlineData(37f, 10f, -80f)]
+    [InlineData(-45f, 200f, 300f)]
+    [InlineData(180f, 75f, -5f)]
+    public void Vertical_offset_rotation_and_positionZ_round_trip_through_the_transform(
+        float rotationDegrees, float offset, float positionZ)
     {
         var bedCenter = new Vector3(1475.5f, -609.3f, 70f);
 
-        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees, offset, bedCenter);
-        var (extractedOffset, extractedRotation) = CutModifierNodeSync.ExtractVertical(transform, bedCenter);
+        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees, offset, positionZ, bedCenter);
+        var (extractedOffset, extractedRotation, extractedPositionZ) =
+            CutModifierNodeSync.ExtractVertical(transform, bedCenter);
 
         Assert.Equal(offset, extractedOffset, 2);
+        Assert.Equal(positionZ, extractedPositionZ, 2);
         // Normalize both angles into [0,360) before comparing, since -45 and 315 are the same direction.
         float Norm(float deg) => ((deg % 360f) + 360f) % 360f;
         Assert.Equal(Norm(rotationDegrees), Norm(extractedRotation), 2);
@@ -62,7 +65,7 @@ public sealed class CutModifierNodeSyncTest
     public void Vertical_at_zero_degrees_faces_positive_x_matching_CutModifierGeometry()
     {
         var bedCenter = Vector3.Zero;
-        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees: 0f, offset: 25f, bedCenter);
+        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees: 0f, offset: 25f, positionZ: 0f, bedCenter);
 
         // Must agree with CutModifierGeometry.Normal/PlanePoint for the same inputs — these two
         // code paths (the live gizmo node, and the plain-data math used by Apply/Split) must
@@ -75,9 +78,18 @@ public sealed class CutModifierNodeSyncTest
     public void Vertical_translation_pivots_around_bed_center_not_local_origin()
     {
         var bedCenter = new Vector3(500f, -300f, 70f);
-        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees: 90f, offset: 10f, bedCenter);
+        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees: 90f, offset: 10f, positionZ: 0f, bedCenter);
 
         // At 90 degrees the normal is +Y, so translation should be bedCenter + (0,10,0).
         Assert.Equal(new Vector3(500f, -290f, 70f), transform.Row3.Xyz);
+    }
+
+    [Fact]
+    public void Vertical_positionZ_moves_the_plane_up_and_down_independent_of_offset_and_rotation()
+    {
+        var bedCenter = new Vector3(500f, -300f, 70f);
+        var transform = CutModifierNodeSync.BuildVerticalTransform(rotationDegrees: 37f, offset: 10f, positionZ: 150f, bedCenter);
+
+        Assert.Equal(bedCenter.Z + 150f, transform.Row3.Z, 3);
     }
 }

@@ -38,6 +38,7 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             SliderTypeIn.Install();
+            NumericFieldUx.Install();
             MacDockIcon.TrySet("macos-app-icon.png");
             StartupWorkspacePath = ResolveStartupWorkspacePath(desktop.Args);
             desktop.MainWindow = new MainWindow();

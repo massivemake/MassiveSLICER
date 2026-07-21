@@ -61,20 +61,28 @@ public sealed class CutModifier : IModifier
     /// <summary>
     /// Horizontal only: free X/Y position (mm, relative to bed center) — has no effect on the
     /// cut (only <see cref="Offset"/>'s Z height does), it's purely so the plane can be dragged
-    /// out of the way to isolate/select a piece underneath it. Ignored for Vertical, whose
-    /// in-plane position isn't independently adjustable yet.
+    /// out of the way to isolate/select a piece underneath it. Ignored for Vertical, which uses
+    /// <see cref="PositionZ"/> for the equivalent free position instead.
     /// </summary>
     public float PositionX { get; set; }
 
     /// <summary>See <see cref="PositionX"/>.</summary>
     public float PositionY { get; set; }
 
+    /// <summary>
+    /// Vertical only: free height (mm, relative to bed center Z) — has no effect on the cut (a
+    /// vertical plane cuts through every Z regardless of where it visually sits), it's purely so
+    /// the plane can be dragged up/down out of the way. Ignored for Horizontal, which uses
+    /// <see cref="PositionX"/>/<see cref="PositionY"/> for the equivalent free position instead.
+    /// </summary>
+    public float PositionZ { get; set; }
+
     /// <summary>When false, the plane's extent is limited to <see cref="SizeX"/>/<see cref="SizeY"/> instead of unbounded.</summary>
     public bool Infinite { get; set; } = true;
 
     /// <summary>Rectangular plane extent (mm) along its first in-plane axis, when <see cref="Infinite"/> is false.</summary>
-    public float SizeX { get; set; } = 500f;
+    public float SizeX { get; set; } = 1500f;
 
     /// <summary>Rectangular plane extent (mm) along its second in-plane axis, when <see cref="Infinite"/> is false.</summary>
-    public float SizeY { get; set; } = 500f;
+    public float SizeY { get; set; } = 1500f;
 }

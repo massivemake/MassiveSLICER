@@ -2842,16 +2842,19 @@
                                          until they're relevant) — enabled only when Orientation is Vertical. A vertical
                                          plane can face any direction, not just axis-aligned, and rotates around bed
                                          center (not the mesh's own origin) so the exact angle stays reproducible. -->
-                                    <Grid ColumnDefinitions="*,70" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
+                                    <Grid ColumnDefinitions="*,*" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
                                         <TextBlock Grid.Column="0" Text="Rotation (deg, around bed center)" Classes="LabelMuted"
-                                                   VerticalAlignment="Center" TextWrapping="Wrap"/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox"
-                                                 Text="{Binding Modifiers.SelectedSettings.RotationDegrees}"/>
+                                                   VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   ToolTip.Tip="Double-click the slider to type an exact value."/>
+                                        <Slider Grid.Column="1" Minimum="0" Maximum="360"
+                                                Value="{Binding Modifiers.SelectedSettings.RotationDegrees}"
+                                                VerticalAlignment="Center" Margin="8,0,0,0"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox" Text="{Binding Modifiers.SelectedSettings.Offset}"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit"
+                                                 Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,Auto">
@@ -2862,10 +2865,10 @@
                                     <!-- Always shown — enabled only when Infinite is off (rectangular restricted extent). -->
                                     <Grid ColumnDefinitions="*,70,70" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
                                         <TextBlock Grid.Column="0" Text="Size X / Y (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox" Margin="0,0,4,0"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeX}"/>
-                                        <TextBox Grid.Column="2" Classes="PanelTextBox"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeY}"/>
+                                        <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit" Margin="0,0,4,0"
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus}"/>
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus}"/>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>

@@ -33,25 +33,30 @@ public static class CutModifierNodeSync
     /// <summary>
     /// Vertical: builds the node's transform directly in world space (no parent) — a Z rotation
     /// by <paramref name="rotationDegrees"/> (its Row0 becomes the plane's normal direction),
-    /// translated to <paramref name="bedCenter"/> plus that normal times <paramref name="offset"/>.
+    /// translated to <paramref name="bedCenter"/> plus that normal times <paramref name="offset"/>,
+    /// plus <paramref name="positionZ"/> as a free height offset (normal has no Z component, so
+    /// this is the only thing that ever moves the plane up/down).
     /// </summary>
-    public static Matrix4 BuildVerticalTransform(float rotationDegrees, float offset, Vector3 bedCenter)
+    public static Matrix4 BuildVerticalTransform(float rotationDegrees, float offset, float positionZ, Vector3 bedCenter)
     {
         var rot = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(rotationDegrees));
         var normal = rot.Row0.Xyz;
-        rot.Row3 = new Vector4(bedCenter + normal * offset, 1f);
+        var center = bedCenter + normal * offset;
+        rot.Row3 = new Vector4(center.X, center.Y, center.Z + positionZ, 1f);
         return rot;
     }
 
-    /// <summary>Vertical: reads (Offset, RotationDegrees) back out of the (possibly
+    /// <summary>Vertical: reads (Offset, RotationDegrees, PositionZ) back out of the (possibly
     /// gizmo-dragged) transform — Row0 is the current normal direction, translation minus bed
-    /// center projected onto it is Offset.</summary>
-    public static (float Offset, float RotationDegrees) ExtractVertical(Matrix4 transform, Vector3 bedCenter)
+    /// center projected onto it is Offset; whatever Z is left over (normal is always flat, so it
+    /// never explains any Z) is the free PositionZ.</summary>
+    public static (float Offset, float RotationDegrees, float PositionZ) ExtractVertical(Matrix4 transform, Vector3 bedCenter)
     {
         var normal = transform.Row0.Xyz;
         normal = normal.LengthSquared > 1e-10f ? Vector3.Normalize(normal) : Vector3.UnitX;
         float rotationDegrees = MathHelper.RadiansToDegrees(MathF.Atan2(normal.Y, normal.X));
         float offset = Vector3.Dot(transform.Row3.Xyz - bedCenter, normal);
-        return (offset, rotationDegrees);
+        float positionZ = transform.Row3.Z - bedCenter.Z;
+        return (offset, rotationDegrees, positionZ);
     }
 }
