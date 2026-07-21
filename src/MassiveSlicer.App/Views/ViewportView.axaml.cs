@@ -372,7 +372,7 @@ public partial class ViewportView : UserControl
                 vm.SetOutlinerSelection(node);
                 RequestSceneSelection(vm, node);
             };
-            vm.OnApplyModifiersRequested = ownerItem => ApplyModifierStack(vm, ownerItem);
+            vm.OnApplyModifiersRequested = ownerItem => _ = ApplyModifierStackAsync(vm, ownerItem);
             vm.OnOutlinerMultiScanViewportSync = _ => SyncScanSelectionToRenderer(vm);
             vm.OnScanSelectionChanged = () => SyncScanSelectionToRenderer(vm);
             vm.OnOutlinerToolheadSelected = toolName => ApplyExclusiveToolheadFromOutliner(toolName, vm);
@@ -5838,7 +5838,7 @@ public partial class ViewportView : UserControl
     /// <summary>One piece in the working set while folding a Modifiers stack over the master —
     /// its own mesh/toolpath content, plus the world pose it should keep (splitting never moves
     /// anything, only divides geometry).</summary>
-    private readonly record struct ApplyPiece(MeshData Mesh, Toolpath? Toolpath, TkMatrix4 World, string Name);
+    private readonly record struct ApplyPiece(MeshData Mesh, TkMatrix4 World, string Name);
 
     /// <summary>
     /// Runs a mesh's Modifiers stack: folds an ordered list of Cut modifiers over a working set
@@ -5853,8 +5853,10 @@ public partial class ViewportView : UserControl
     /// Horizontal/VerticalCutSplitter for the toolpath). Non-destructive: the master and its
     /// stack are never touched; results land in a fresh sibling group.
     /// </summary>
-    private void ApplyModifierStack(ViewportViewModel vm, OutlinerItemViewModel ownerItem)
+    private async Task ApplyModifierStackAsync(ViewportViewModel vm, OutlinerItemViewModel ownerItem)
     {
+        if (vm.IsSlicing) return;
+
         var groupItem = ownerItem.Children.FirstOrDefault(c => c.IsModifiersGroup);
         if (groupItem is null) return;
 
@@ -5875,9 +5877,8 @@ public partial class ViewportView : UserControl
         }
 
         var tpItem = ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
-        var snap = tpItem is not null ? vm.GetToolpathSnapshot?.Invoke(tpItem.Node) : null;
 
-        var pieces = new List<ApplyPiece> { new(masterMesh, snap?.Smoothed, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
+        var pieces = new List<ApplyPiece> { new(masterMesh, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
 
         foreach (var cut in cuts)
         {
@@ -5899,36 +5900,8 @@ public partial class ViewportView : UserControl
                 bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
                 if (!crosses) { next.Add(piece); continue; }
 
-                // Toolpath moves are baked in WORLD space at slice time (unlike MeshData,
-                // which is local) — confirmed by tracing PlanarSlicer's actual input and
-                // SceneRenderer.AddToolpath's centroid-based node placement. So the toolpath
-                // splitters need the WORLD-space plane, never the local-converted one above.
-                Toolpath? tpPos = null, tpNeg = null;
-                if (piece.Toolpath is { } tp)
-                {
-                    if (TkVector3.Dot(worldNormal, TkVector3.UnitZ) > 0.999f)
-                    {
-                        // Cheap path: a Horizontal cut is always exactly Z-aligned in world
-                        // space (it never rotates). Whole layers bucket below/above, never
-                        // split mid-run.
-                        var hs = HorizontalCutSplitter.Split(tp, worldPoint.Z);
-                        tpPos = hs.Above;
-                        tpNeg = hs.Below;
-                    }
-                    else
-                    {
-                        // General case (Vertical cuts): clip move-by-move against the actual
-                        // world-space plane.
-                        var vs = VerticalCutSplitter.Split(tp,
-                            new NVec3(worldPoint.X, worldPoint.Y, worldPoint.Z),
-                            new NVec3(worldNormal.X, worldNormal.Y, worldNormal.Z));
-                        tpPos = vs.Positive;
-                        tpNeg = vs.Negative;
-                    }
-                }
-
-                next.Add(new ApplyPiece(meshSplit.Positive, tpPos, piece.World, $"{piece.Name} +"));
-                next.Add(new ApplyPiece(meshSplit.Negative, tpNeg, piece.World, $"{piece.Name} -"));
+                next.Add(new ApplyPiece(meshSplit.Positive, piece.World, $"{piece.Name} +"));
+                next.Add(new ApplyPiece(meshSplit.Negative, piece.World, $"{piece.Name} -"));
             }
             pieces = next;
         }
@@ -5939,66 +5912,136 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var outputGroup = vm.CreateAppliedPiecesGroup(ownerItem);
-        SceneNode? firstNode = null;
-
-        for (int i = 0; i < pieces.Count; i++)
+        vm.IsSlicing = true;
+        try
         {
-            var piece = pieces[i];
-            var node = new SceneNode
-            {
-                Name           = $"{outputGroup.Name} {i + 1:D2}",
-                PendingMesh    = piece.Mesh,
-                LocalTransform = piece.World,
-                Selectable     = true,
-                CullFaces      = false,
-                Visible        = true,
-            };
-            firstNode ??= node;
-            vm.PendingNodes.Enqueue(node);
+            var outputGroup = vm.CreateAppliedPiecesGroup(ownerItem);
+            SceneNode? firstNode = null;
+            var created = new List<(ApplyPiece piece, SceneNode node, OutlinerItemViewModel item)>();
 
-            var pieceItem = vm.CreateOutlinerItem(node, it =>
+            for (int i = 0; i < pieces.Count; i++)
             {
-                // The toolpath is only an OUTLINER child of the piece, not a real scene child
-                // (same convention as any other model — see the toolpath-positioning research
-                // this session) — so deleting the piece must explicitly also remove its
-                // toolpath's own node, or it's orphaned: gone from the outliner, still rendered,
-                // still pickable. Mirrors the existing (untouched) Cut Tool's delete flow.
-                foreach (var child in it.Children)
-                    vm.PendingRemoveNodes.Enqueue(child.Node);
-                outputGroup.RemoveChild(it);
-                vm.PendingRemoveNodes.Enqueue(it.Node);
-                vm.NotifyRenderNeeded();
-            }, displayName: node.Name, canDelete: true, modelFileOps: true);
-            outputGroup.AddChild(pieceItem);
+                var piece = pieces[i];
+                var node = new SceneNode
+                {
+                    Name           = $"{outputGroup.Name} {i + 1:D2}",
+                    PendingMesh    = piece.Mesh,
+                    LocalTransform = piece.World,
+                    Selectable     = true,
+                    CullFaces      = false,
+                    Visible        = true,
+                };
+                firstNode ??= node;
+                vm.PendingNodes.Enqueue(node);
 
-            if (piece.Toolpath is { } tp)
+                var pieceItem = vm.CreateOutlinerItem(node, it =>
+                {
+                    // The toolpath is only an OUTLINER child of the piece, not a real scene child
+                    // (same convention as any other model — see the toolpath-positioning research
+                    // this session) — so deleting the piece must explicitly also remove its
+                    // toolpath's own node, or it's orphaned: gone from the outliner, still rendered,
+                    // still pickable. Mirrors the existing (untouched) Cut Tool's delete flow.
+                    foreach (var child in it.Children)
+                        vm.PendingRemoveNodes.Enqueue(child.Node);
+                    outputGroup.RemoveChild(it);
+                    vm.PendingRemoveNodes.Enqueue(it.Node);
+                    vm.NotifyRenderNeeded();
+                }, displayName: node.Name, canDelete: true, modelFileOps: true);
+                outputGroup.AddChild(pieceItem);
+
+                created.Add((piece, node, pieceItem));
+            }
+
+            // Each piece gets a REAL slice through the same pipeline any imported mesh uses
+            // (see RunSliceAsync) — not a cheap split of the pre-cut toolpath's old moves.
+            // Splitting old moves carried over motion computed for the whole, uncut wall:
+            // misaligned starts, no brim/seam re-evaluation for the new cut face, and dead-end
+            // paths right at the cut. Slicing fresh from each piece's own mesh (current
+            // AdditiveSettings — same seam/brim/infill pipeline as any other model) is what
+            // actually makes a cut piece printable.
+            foreach (var (piece, node, pieceItem) in created)
             {
-                var tpNode = new SceneNode { Name = "Toolpath", Selectable = true };
-                vm.RegisterToolpathInOutliner(tpNode, pieceItem);
+                var cancel = BeginSliceCancellation();
+                var meshSnapshots = new List<(TkVector3[] positions, uint[]? indices, TkMatrix4 world)>
+                {
+                    (piece.Mesh.Positions, piece.Mesh.Indices, piece.World),
+                };
+
+                var method   = vm.AdditiveSettings?.Method ?? SliceMethod.Planar;
+                var settings = BuildSliceSettings(vm.AdditiveSettings);
+                ApplyEffectorSettings(vm, settings);
+                SetSliceStatus(vm, $"{SliceMethodLabel(method)}: slicing \"{node.Name}\"…");
+
+                Toolpath smoothedToolpath, rawToolpath;
+                try
+                {
+                    (smoothedToolpath, rawToolpath, _) = await ComputeToolpathAsync(
+                        meshSnapshots, method, settings, msg => SetSliceStatus(vm, msg),
+                        pct => Dispatcher.UIThread.Post(() => vm.SliceProgressPercent = pct),
+                        cancel);
+                }
+                catch (OperationCanceledException)
+                {
+                    LogToConsole($"[apply] slicing \"{node.Name}\" was cancelled.");
+                    continue;
+                }
+
+                LogFormboundEmitStats(smoothedToolpath, settings);
+
+                if (smoothedToolpath.Layers.Count == 0)
+                {
+                    LogToConsole($"[apply] \"{node.Name}\" sliced to 0 layers — check the piece's geometry.");
+                    continue;
+                }
+
+                var toolpathName = ToolpathNameFrom(pieceItem.Name);
+                var toolpathNode = new SceneNode { Name = toolpathName, Selectable = true };
+                vm.RegisterToolpathInOutliner(toolpathNode, pieceItem);
+                var selectedPreset = vm.AdditiveSettings is { } asp
+                    && asp.SelectedPresetIndex >= 0
+                    && asp.SelectedPresetIndex < asp.MaterialPresets.Count
+                    ? asp.MaterialPresets[asp.SelectedPresetIndex] : null;
                 vm.PendingToolpath.Enqueue(new PendingToolpathEntry
                 {
-                    Toolpath      = tp,
-                    RawToolpath   = tp,
-                    Node          = tpNode,
-                    BeadWidth     = snap?.BeadWidth ?? 6f,
-                    LayerHeight   = snap?.LayerHeight ?? 3f,
-                    MaterialColor = snap?.MaterialColor ?? new NVec3(0.95f, 0.95f, 0.95f),
+                    Toolpath      = smoothedToolpath,
+                    RawToolpath   = rawToolpath,
+                    Node          = toolpathNode,
+                    BeadWidth     = (float)(vm.AdditiveSettings?.BeadWidth  ?? 6.0),
+                    LayerHeight   = (float)(vm.AdditiveSettings?.LayerHeight ?? 3.0),
+                    MaterialColor = MapMaterialColor(selectedPreset?.Color),
                 });
+
+                ApplyToolpathStats(vm, smoothedToolpath);
             }
+
+            // The master's own pre-cut toolpath (if any) no longer represents anything
+            // printable — each piece now has its own real, independent toolpath — so remove
+            // it outright rather than just hiding it (a hidden-but-still-registered toolpath
+            // is what caused the stale toolpath to resurface on a view-mode switch).
+            if (tpItem is not null)
+            {
+                foreach (var child in tpItem.Children)
+                    vm.PendingRemoveNodes.Enqueue(child.Node);
+                ownerItem.RemoveChild(tpItem);
+                vm.PendingRemoveNodes.Enqueue(tpItem.Node);
+            }
+
+            // Hide the source of truth now that its output exists — looking at both the master
+            // and its fresh pieces at once is just clutter, and the master/stack are still there
+            // (non-destructive), just tucked away until you want to re-Apply.
+            ownerItem.Visible = false;
+            groupItem.Visible = false;
+
+            if (firstNode is not null) _renderer.Select(firstNode);
+            UpdateFocusOverlay();
+            LogToConsole($"[apply] \"{outputGroup.Name}\": {pieces.Count} piece(s) from {cuts.Count} modifier(s), sliced and printable.");
+            vm.MarkWorkspaceDirty?.Invoke();
+            GlCanvas.RequestNextFrameRendering();
         }
-
-        // Hide the source of truth now that its output exists — looking at both the master
-        // and its fresh pieces at once is just clutter, and the master/stack are still there
-        // (non-destructive), just tucked away until you want to re-Apply.
-        ownerItem.Visible = false;
-        if (tpItem is not null) tpItem.Visible = false;
-        groupItem.Visible = false;
-
-        if (firstNode is not null) _renderer.Select(firstNode);
-        UpdateFocusOverlay();
-        LogToConsole($"[apply] \"{outputGroup.Name}\": {pieces.Count} piece(s) from {cuts.Count} modifier(s).");
-        GlCanvas.RequestNextFrameRendering();
+        finally
+        {
+            vm.IsSlicing = false;
+        }
     }
 
     private void LogToConsole(string message)
