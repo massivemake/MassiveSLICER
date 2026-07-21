@@ -1,4 +1,5 @@
 ﻿using MassiveSlicer.Viewport.Rendering;
+using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.Scene;
@@ -145,7 +146,18 @@ public sealed class SceneNode
         if (!Visible) return;
         var world   = WorldTransform;
         var fullMvp = world * viewProj;
-        Mesh?.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);
+        if (Mesh is { } mesh)
+        {
+            // Set explicitly (not toggle-and-restore) so this is correct regardless of whatever
+            // state a parent or earlier sibling left behind — the caller previously only ever
+            // checked CullFaces on SceneRoot's direct children before drawing each entire
+            // subtree in one shot, silently ignoring every individual mesh node's own flag
+            // (e.g. imported meshes are set CullFaces=false at import specifically so their
+            // inside faces stay visible, several levels below any top-level child — that
+            // setting was dead code).
+            if (CullFaces) GL.Enable(EnableCap.CullFace); else GL.Disable(EnableCap.CullFace);
+            mesh.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);
+        }
 
         foreach (var child in Children)
             if (!child.TranslucentPass)

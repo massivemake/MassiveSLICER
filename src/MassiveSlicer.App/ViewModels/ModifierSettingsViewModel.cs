@@ -71,6 +71,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             if (Cut is null || Cut.RotationDegrees == value) return;
             Cut.RotationDegrees = value;
             _viewport.SyncModifierGizmoNodeFromFields(Cut);
+            _viewport.NotifyRenderNeeded();
             OnPropertyChanged();
         }
     }
@@ -95,6 +96,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             if (Cut is null || Cut.Offset == value) return;
             Cut.Offset = value;
             _viewport.SyncModifierGizmoNodeFromFields(Cut);
+            _viewport.NotifyRenderNeeded();
             OnPropertyChanged();
         }
     }

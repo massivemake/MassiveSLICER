@@ -1,5 +1,6 @@
 using Avalonia.Controls;
 using Avalonia.Input;
+using Avalonia.Threading;
 
 namespace MassiveSlicer.App;
 
@@ -21,8 +22,13 @@ internal static class NumericFieldUx
     {
         InputElement.GotFocusEvent.AddClassHandler<TextBox>((tb, _) =>
         {
-            if (tb.Classes.Contains(CommitClass))
-                tb.SelectAll();
+            if (!tb.Classes.Contains(CommitClass)) return;
+            // The click that focuses the field also places the caret at the clicked character —
+            // that happens AFTER GotFocus in the same input pass, so a synchronous SelectAll()
+            // here gets immediately overwritten. Deferring to the next dispatcher pass (same
+            // trick SliderTypeIn already uses) runs after the click has finished, so the
+            // selection sticks.
+            Dispatcher.UIThread.Post(() => tb.SelectAll());
         });
 
         InputElement.KeyDownEvent.AddClassHandler<TextBox>((tb, e) =>

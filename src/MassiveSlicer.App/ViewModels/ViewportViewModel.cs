@@ -316,6 +316,27 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _showSeam, value);
     }
 
+    private bool _showBackFaces = true;
+    /// <summary>Whether the active model's inside faces render (vs. being culled away) — on by
+    /// default so a Cut cross-section is visible from either side. See
+    /// <see cref="SyncBackFaceFlags"/> for how this reaches each mesh node's own CullFaces.</summary>
+    public bool ShowBackFaces
+    {
+        get => _showBackFaces;
+        set => SetField(ref _showBackFaces, value);
+    }
+
+    /// <summary>Applies <see cref="ShowBackFaces"/> to every mesh node under the active print
+    /// object — CullFaces lives per-node (not inherited from an ancestor), so this has to walk
+    /// the whole subtree rather than set one flag at the root.</summary>
+    internal void SyncBackFaceFlags(bool showBackFaces)
+    {
+        if (ResolveActivePrintObjectItem()?.Node is not { } target) return;
+        foreach (var n in target.SelfAndDescendants())
+            if (n.Mesh is not null || n.PendingMesh is not null)
+                n.CullFaces = !showBackFaces;
+    }
+
     private bool _showDimensions;
 
     /// <summary>Whether the bounding-box dimension overlay is visible.</summary>
@@ -7001,6 +7022,10 @@ public sealed class ViewportViewModel : ViewModelBase
             indices.Add(i); indices.Add(i + 1); indices.Add(i + 2);
         }
 
+        // Pulled in from the true edge on both axes so neither marker ever sits right on the
+        // plane's boundary line (kept clear of any border/edge highlight drawn elsewhere).
+        float edgeInset = Math.Clamp(minExtent * 0.06f, 6f, 30f);
+
         if (!cut.Infinite)
         {
             float armLen    = Math.Clamp(minExtent * 0.2f, 8f, 60f);
@@ -7008,35 +7033,45 @@ public sealed class ViewportViewModel : ViewModelBase
 
             foreach (var (sx, sy) in CornerSigns)
             {
-                float cx = sx * halfA, cy = sy * halfB;
-                // Arm hugging the halfB edge, running inward along U.
-                AddQuad(
-                    new Vector2(cx, cy),
-                    new Vector2(cx - sx * armLen, cy),
-                    new Vector2(cx - sx * armLen, cy - sy * thickness),
-                    new Vector2(cx, cy - sy * thickness));
-                // Arm hugging the halfA edge, running inward along V.
-                AddQuad(
-                    new Vector2(cx, cy),
-                    new Vector2(cx, cy - sy * armLen),
-                    new Vector2(cx - sx * thickness, cy - sy * armLen),
-                    new Vector2(cx - sx * thickness, cy));
+                float cx = sx * (halfA - edgeInset), cy = sy * (halfB - edgeInset);
+                float ix = -sx, iy = -sy; // inward direction along each axis
+
+                // A single non-overlapping "L" hexagon (outer corner, out armLen along U, step in
+                // by thickness, inner corner, out armLen along V, back to outer corner) — two
+                // separate overlapping quads used to double-blend at the shared corner square,
+                // making that corner render more opaque than the rest of each arm.
+                var p0 = new Vector2(cx, cy);
+                var p1 = new Vector2(cx + ix * armLen, cy);
+                var p2 = new Vector2(cx + ix * armLen, cy + iy * thickness);
+                var p3 = new Vector2(cx + ix * thickness, cy + iy * thickness);
+                var p4 = new Vector2(cx + ix * thickness, cy + iy * armLen);
+                var p5 = new Vector2(cx, cy + iy * armLen);
+                AddTri(p0, p1, p2); AddTri(p0, p2, p3); AddTri(p0, p3, p4); AddTri(p0, p4, p5);
             }
         }
         else
         {
-            float arrowLen   = Math.Clamp(minExtent * 0.015f, 10f, 45f);
-            float arrowWidth = arrowLen * 0.7f;
-            float margin     = arrowLen * 0.9f; // keeps the tip inside the plane's own extent
+            float arrowLen   = Math.Clamp(minExtent * 0.02f, 14f, 60f);
+            float arrowWidth = arrowLen * 0.75f;
+            float tailLen    = arrowLen * 0.7f;
+            float tailWidth  = arrowWidth * 0.35f;
 
             foreach (var (sx, sy) in CornerSigns)
             {
                 var dir    = Vector2.Normalize(new Vector2(sx, sy));
                 var perp   = new Vector2(-dir.Y, dir.X);
-                var corner = new Vector2(sx * halfA, sy * halfB);
-                var tip    = corner - dir * margin;
-                var baseC  = tip - dir * arrowLen;
-                AddTri(tip, baseC + perp * (arrowWidth * 0.5f), baseC - perp * (arrowWidth * 0.5f));
+                var corner = new Vector2(sx * (halfA - edgeInset), sy * (halfB - edgeInset));
+
+                // Tip sits at the inset corner (already pulled in from the true edge above);
+                // arrowhead points outward along the diagonal, with a short tail behind it.
+                var tip      = corner;
+                var headBase = tip - dir * arrowLen;
+                var tailEnd  = headBase - dir * tailLen;
+
+                AddTri(tip, headBase + perp * (arrowWidth * 0.5f), headBase - perp * (arrowWidth * 0.5f));
+                AddQuad(
+                    headBase + perp * (tailWidth * 0.5f), headBase - perp * (tailWidth * 0.5f),
+                    tailEnd  - perp * (tailWidth * 0.5f), tailEnd  + perp * (tailWidth * 0.5f));
             }
         }
 
@@ -7045,7 +7080,9 @@ public sealed class ViewportViewModel : ViewModelBase
         var normals = new Vector3[positions.Count];
         Array.Fill(normals, normal);
 
-        var color = new Vector4(ModifierPlaneTint.X, ModifierPlaneTint.Y, ModifierPlaneTint.Z, 0.85f);
+        // Deliberately translucent, matching the plane fill (Jeff: "I like transparent for
+        // both") — just a touch brighter/more opaque than the fill so the shape still reads.
+        var color = new Vector4(ModifierPlaneTint.X, ModifierPlaneTint.Y, ModifierPlaneTint.Z, 0.4f);
         return new MeshData(positions.ToArray(), normals, indices.ToArray(), $"{cut.Name} Markers", color, 0f, 1f,
             uvs: null, tangents: null,
             material: new MaterialData
@@ -7053,7 +7090,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 BaseColorFactor = color,
                 MetallicFactor  = 0f,
                 RoughnessFactor = 1f,
-                EmissiveFactor  = ModifierPlaneTint * 0.55f,
+                EmissiveFactor  = ModifierPlaneTint * 0.3f,
                 AlphaMode       = MassiveSlicer.Viewport.Scene.AlphaMode.Blend,
             });
     }

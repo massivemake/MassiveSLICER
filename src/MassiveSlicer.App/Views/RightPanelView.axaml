@@ -2563,6 +2563,9 @@
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowTravelMoves, Mode=TwoWay}"/>
                         <CheckBox Content="Show seam"            Margin="12,2,8,6"
                                   IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowSeam, Mode=TwoWay}"/>
+                        <CheckBox Content="Show back faces (active model)" Margin="12,2,8,6"
+                                  IsChecked="{Binding $parent[Window].DataContext.Viewport.ShowBackFaces, Mode=TwoWay}"
+                                  ToolTip.Tip="See the inside of the active model from either side — useful for checking a Cut plane's placement without rotating around it."/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
@@ -2842,19 +2845,22 @@
                                          until they're relevant) — enabled only when Orientation is Vertical. A vertical
                                          plane can face any direction, not just axis-aligned, and rotates around bed
                                          center (not the mesh's own origin) so the exact angle stays reproducible. -->
-                                    <Grid ColumnDefinitions="*,*" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
+                                    <Grid ColumnDefinitions="*,*,60" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
                                         <TextBlock Grid.Column="0" Text="Rotation (deg, around bed center)" Classes="LabelMuted"
                                                    VerticalAlignment="Center" TextWrapping="Wrap"
                                                    ToolTip.Tip="Double-click the slider to type an exact value."/>
                                         <Slider Grid.Column="1" Minimum="0" Maximum="360"
                                                 Value="{Binding Modifiers.SelectedSettings.RotationDegrees}"
-                                                VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                                 Text="{Binding Modifiers.SelectedSettings.RotationDegrees, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,80">
                                         <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit"
-                                                 Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,Auto">
@@ -2866,9 +2872,9 @@
                                     <Grid ColumnDefinitions="*,70,70" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
                                         <TextBlock Grid.Column="0" Text="Size X / Y (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit" Margin="0,0,4,0"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
                                         <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>

@@ -48,6 +48,8 @@ public partial class ViewportView : UserControl
     private readonly HashSet<SceneNode> _lfamInfrastructureNodes = [];
     private bool                   _lastOutlinerLayerPreview;
     private SceneNode?             _lastLayerPreviewTargetNode;
+    private bool                   _lastShowBackFaces = true;
+    private SceneNode?             _lastBackFaceTargetNode;
     private const float InteractionScale = 0.55f;
     private readonly Queue<SceneNode> _cellGpuUploadQueue = new();
     private bool _cellGpuUploadPending;
@@ -1164,6 +1166,15 @@ public partial class ViewportView : UserControl
                 _renderer.InvalidateShaderAppearance();
                 if (layerPreview && layerTarget is not null)
                     _ = ComputeLayerPreviewAsync(vm);
+            }
+            bool showBackFaces = vm.ShowBackFaces;
+            var backFaceTarget = vm.ResolveActivePrintObjectItem()?.Node;
+            if (showBackFaces != _lastShowBackFaces || backFaceTarget != _lastBackFaceTargetNode)
+            {
+                _lastShowBackFaces     = showBackFaces;
+                _lastBackFaceTargetNode = backFaceTarget;
+                vm.SyncBackFaceFlags(showBackFaces);
+                GlCanvas.RequestNextFrameRendering();
             }
             _renderer.LightAzimuth   = vm.LightAzimuth;
             _renderer.LightElevation = vm.LightElevation;
