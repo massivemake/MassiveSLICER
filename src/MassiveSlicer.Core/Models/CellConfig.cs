@@ -416,6 +416,12 @@ public sealed record RotaryBedCellConfig
     public float[] BaseAbc { get; init; } = [0f, 0f, 0f];
     public float E1Sign { get; init; } = 1f;
 
+    /// <summary>
+    /// KUKA <c>MACHINE_DEF[n]</c> index for this positioner, used to emit the external-kinematic
+    /// base in KRL export: <c>$BASE = EK(MACHINE_DEF[n]...)</c>. LFAM 3 = 2.
+    /// </summary>
+    public int MachineDefIndex { get; init; } = 2;
+
     /// <summary>LFAM 3 validated factory default when omitted from cell JSON.</summary>
     public const float DefaultOrientationOffsetDeg = -0.97f;
 

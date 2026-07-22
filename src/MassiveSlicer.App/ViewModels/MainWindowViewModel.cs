@@ -2927,6 +2927,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ExtrusionStartWaitSec   = copy.ExtrusionStartWaitSec;
         live.ExtrusionResumeWaitSec  = copy.ExtrusionResumeWaitSec;
         live.SsPreTravelWaitSec      = copy.SsPreTravelWaitSec;
+        live.SsResumePrimePercent    = copy.SsResumePrimePercent;
         live.DigitalStartStopEnabled = copy.DigitalStartStopEnabled;
         live.ResumeRampEnabled         = copy.ResumeRampEnabled;
         live.ResumeRampStartSpeed      = copy.ResumeRampStartSpeed;
@@ -3287,6 +3288,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.ExtrusionStartWaitSec   = p.ExtrusionStartWaitSec;
         add.ExtrusionResumeWaitSec  = p.ExtrusionResumeWaitSec;
         add.SsPreTravelWaitSec      = p.SsPreTravelWaitSec;
+        add.SsResumePrimePercent    = p.SsResumePrimePercent;
         add.DigitalStartStopEnabled = p.DigitalStartStopEnabled;
         // Ensure post-process header is Caracol URM (not LFAM $ANOUT MAT) when flag is on.
         // SetField no-ops if value already matched, so always re-apply templates after load.
@@ -3594,6 +3596,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ExtrusionStartWaitSec   = add.ExtrusionStartWaitSec;
         p.ExtrusionResumeWaitSec  = add.ExtrusionResumeWaitSec;
         p.SsPreTravelWaitSec      = add.SsPreTravelWaitSec;
+        p.SsResumePrimePercent    = add.SsResumePrimePercent;
         p.DigitalStartStopEnabled = add.DigitalStartStopEnabled;
         p.ResumeRampEnabled         = add.ResumeRampEnabled;
         p.ResumeRampStartSpeed      = add.ResumeRampStartSpeed;

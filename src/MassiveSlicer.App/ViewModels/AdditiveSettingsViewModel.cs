@@ -43,7 +43,10 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ExtrusionSpeedPercent));
 
             if (e.PropertyName is nameof(SelectedPresetIndex) or nameof(TemperatureOffset))
+            {
                 OnPropertyChanged(nameof(ExportTemperatureC));
+                OnPropertyChanged(nameof(ExportTemperaturesLabel));
+            }
         };
     }
 
@@ -1781,6 +1784,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         Temperature3 = p.Temperature3;
         OnPropertyChanged(nameof(ExtrusionSpeedPercent));
         OnPropertyChanged(nameof(ExportTemperatureC));
+        OnPropertyChanged(nameof(ExportTemperaturesLabel));
     }
 
     // -- KRL export (Toolpath tab) ---------------------------------------------
@@ -1797,10 +1801,16 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Material preset temperature (°C) shown for all zones before offset.</summary>
     public double ExportTemperatureC => Temperature1;
 
-    /// <summary>Zone temperature (°C) written to KRL after applying <see cref="TemperatureOffset"/>.</summary>
-    public float GetEffectiveExportTemperature()
+    /// <summary>Material setpoints per zone, e.g. "290 / 290 / 300" — export base before offset.</summary>
+    public string ExportTemperaturesLabel =>
+        $"{Temperature1:F0}/{Temperature2:F0}/{Temperature3:F0}";
+
+    /// <summary>Zone temperature (°C) written to KRL: the MATERIAL SETPOINT for that zone
+    /// plus the all-zones <see cref="TemperatureOffset"/> (e.g. +10 raises every zone 10°).</summary>
+    public float GetEffectiveExportTemperature(int zone = 1)
     {
-        float temp = (float)Temperature1 + (float)ParseSignedOffset(_temperatureOffset);
+        double baseT = zone switch { 2 => Temperature2, 3 => Temperature3, _ => Temperature1 };
+        float temp = (float)baseT + (float)ParseSignedOffset(_temperatureOffset);
         return Math.Clamp(temp, 0f, 450f);
     }
 
@@ -1902,6 +1912,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             if (SetField(ref _preTravelPauseSec, Math.Clamp(value, 0.0, 3_600_000.0) / 1000.0))
                 OnPropertyChanged(nameof(SsPreTravelWaitSec));
         }
+    }
+
+    private double _ssResumePrimePercent = 100.0;
+
+    /// <summary>Screw speed during the stationary resume wait, % of segment RPM (5–100).
+    /// 100 = full-RPM pre-charge (legacy). Lower values widen the usable wait window —
+    /// VLE reads a stopped robot as full ratio, so full-RPM priming blobs if the wait
+    /// runs long. First print start always primes at 100%.</summary>
+    public double SsResumePrimePercent
+    {
+        get => _ssResumePrimePercent;
+        set => SetField(ref _ssResumePrimePercent, Math.Clamp(value, 5.0, 100.0));
     }
 
     private bool _digitalStartStopEnabled;
