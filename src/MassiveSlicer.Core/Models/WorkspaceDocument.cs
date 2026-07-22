@@ -253,6 +253,32 @@ public sealed class WorkspaceModelEntry
 
     /// <summary>Toolpaths generated from this model (child outliner entries).</summary>
     public List<WorkspaceToolpathEntry> Toolpaths { get; set; } = [];
+
+    /// <summary>Non-destructive modifiers (Cut planes, future braces/supports). Applied when the workspace loads.</summary>
+    public List<WorkspaceCutModifier> Modifiers { get; set; } = [];
+}
+
+/// <summary>Serialized Cut modifier (plane position, orientation, size bounds).</summary>
+public sealed class WorkspaceCutModifier
+{
+    public string Name { get; set; } = "Cut";
+    public bool Enabled { get; set; } = true;
+    public bool PreviewVisible { get; set; } = true;
+    public bool Cut { get; set; } = true;
+
+    /// <summary>"Horizontal" or "Vertical".</summary>
+    public string Orientation { get; set; } = "Horizontal";
+
+    public float RotationDegrees { get; set; }
+    public float Offset { get; set; }
+    public float PositionX { get; set; }
+    public float PositionY { get; set; }
+    public float PositionZ { get; set; }
+    public float PositionTangent { get; set; }
+
+    public bool Infinite { get; set; } = true;
+    public float SizeX { get; set; } = 1500f;
+    public float SizeY { get; set; } = 1500f;
 }
 
 /// <summary>One toolpath outliner child saved with its parent model.</summary>

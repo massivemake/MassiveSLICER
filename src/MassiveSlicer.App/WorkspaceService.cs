@@ -123,6 +123,36 @@ internal static class WorkspaceService
                 state.ToolpathEntries.Add((tpEntry, ToolpathClone.Copy(snap.Raw)));
             }
 
+            // Save non-destructive modifiers (Cut planes) in the model's stack
+            var modifiersGroup = item.Children.FirstOrDefault(c => c.IsModifiersGroup);
+            if (modifiersGroup?.Node.Children is not null)
+            {
+                foreach (var modifierNode in modifiersGroup.Node.Children)
+                {
+                    if (viewport.FindModifierForNode(modifierNode) is not { } cut)
+                        continue;
+
+                    var modEntry = new WorkspaceCutModifier
+                    {
+                        Name              = cut.Name,
+                        Enabled           = cut.Enabled,
+                        PreviewVisible    = cut.PreviewVisible,
+                        Cut               = cut.Cut,
+                        Orientation       = cut.Orientation.ToString(),
+                        RotationDegrees   = cut.RotationDegrees,
+                        Offset            = cut.Offset,
+                        PositionX         = cut.PositionX,
+                        PositionY         = cut.PositionY,
+                        PositionZ         = cut.PositionZ,
+                        PositionTangent   = cut.PositionTangent,
+                        Infinite          = cut.Infinite,
+                        SizeX             = cut.SizeX,
+                        SizeY             = cut.SizeY,
+                    };
+                    entry.Modifiers.Add(modEntry);
+                }
+            }
+
             doc.Models.Add(entry);
         }
 
@@ -295,6 +325,26 @@ internal static class WorkspaceService
                         : default,
                     LocalTransformOverride = FromArray(tpEntry.LocalTransform),
                 });
+            }
+
+            // Restore non-destructive modifiers (Cut planes)
+            foreach (var modEntry in entry.Modifiers)
+            {
+                var cut = viewport.AddCutModifier(parentItem);
+                cut.Name            = modEntry.Name;
+                cut.Enabled         = modEntry.Enabled;
+                cut.PreviewVisible  = modEntry.PreviewVisible;
+                cut.Cut             = modEntry.Cut;
+                cut.Orientation     = Enum.Parse<CutOrientation>(modEntry.Orientation);
+                cut.RotationDegrees = modEntry.RotationDegrees;
+                cut.Offset          = modEntry.Offset;
+                cut.PositionX       = modEntry.PositionX;
+                cut.PositionY       = modEntry.PositionY;
+                cut.PositionZ       = modEntry.PositionZ;
+                cut.PositionTangent = modEntry.PositionTangent;
+                cut.Infinite        = modEntry.Infinite;
+                cut.SizeX           = modEntry.SizeX;
+                cut.SizeY           = modEntry.SizeY;
             }
 
             viewport.NotifyRenderNeeded();
