@@ -346,6 +346,9 @@ public sealed class AppPreferences
     /// <summary>Digital S&S: dwell after screw-stop before the travel move (seconds).</summary>
     public double SsPreTravelWaitSec { get; set; } = 0.5;
 
+    /// <summary>Digital S&S: screw speed during the resume wait, % of segment RPM (5-100).</summary>
+    public double SsResumePrimePercent { get; set; } = 100.0;
+
     /// <summary>
     /// When true, KRL export pulses digital Start/Stop around travels:
     /// <c>$OUT[9]</c> (URM / MIO) on before stop, <c>$OUT[7]</c> (print enable / screw) off for travel,

@@ -14616,6 +14616,8 @@ public partial class ViewportView : UserControl
                 HomeE1Mm         = cell.RobotRail is not null && vm.Robot is { } millRobot
                                        ? (float)millRobot.E1
                                        : float.NaN,
+                RotaryExternalKinematic = cell.RotaryBed is not null,
+                RotaryMachineDefIndex   = cell.RotaryBed?.MachineDefIndex ?? 2,
                 E1MotionEnabled  = cell.RobotRail is not null && settings.E1MotionEnabled,
                 E1YPlusMm        = (float)settings.E1YPlusMm,
                 E1YMinusMm       = (float)settings.E1YMinusMm,
@@ -14641,7 +14643,10 @@ public partial class ViewportView : UserControl
 
         var selectedPreset = settings.SelectedPreset;
         var postProcess    = settings.KrlPostProcess.ToSettings();
-        float exportTemp   = settings.GetEffectiveExportTemperature();
+        // Per-zone material setpoints + the all-zones additional offset.
+        float exportTemp1  = settings.GetEffectiveExportTemperature(1);
+        float exportTemp2  = settings.GetEffectiveExportTemperature(2);
+        float exportTemp3  = settings.GetEffectiveExportTemperature(3);
         float flow         = (float)(selectedPreset?.FlowRate ?? 0.463);
 
         var exportSettings = new KrlExportSettings
@@ -14657,14 +14662,16 @@ public partial class ViewportView : UserControl
             ToolheadOffsetA     = (float)settings.ToolheadA,
             ToolheadOffsetB     = (float)settings.ToolheadB,
             ToolheadOffsetC     = (float)settings.ToolheadC,
-            Temperature1        = exportTemp,
-            Temperature2        = exportTemp,
-            Temperature3        = exportTemp,
+            Temperature1        = exportTemp1,
+            Temperature2        = exportTemp2,
+            Temperature3        = exportTemp3,
             BeadWidthMm         = (float)settings.BeadWidth,
             LayerHeightMm       = (float)settings.LayerHeight,
             FlowRate            = flow,
             HomePosition              = settings.SelectedHomeAngles,
             HomeE1Mm                  = ResolveHomeE1Mm(cell, vm, toolpath, settings),
+            RotaryExternalKinematic   = cell.RotaryBed is not null,
+            RotaryMachineDefIndex     = cell.RotaryBed?.MachineDefIndex ?? 2,
             E1MotionEnabled           = cell.RobotRail is not null && settings.E1MotionEnabled,
             E1YPlusMm                 = (float)settings.E1YPlusMm,
             E1YMinusMm                = (float)settings.E1YMinusMm,
@@ -14696,6 +14703,7 @@ public partial class ViewportView : UserControl
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
+            SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
 

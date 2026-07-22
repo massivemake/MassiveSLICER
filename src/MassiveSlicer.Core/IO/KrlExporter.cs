@@ -86,6 +86,15 @@ public sealed record KrlExportSettings
     public float SsPreTravelWaitSec { get; init; } = 0.5f;
 
     /// <summary>
+    /// Caracol S&amp;S: screw speed during the stationary resume wait, as a percent of the
+    /// segment RPM (5–100). VLE reads a stopped robot as full ratio, so priming at 100%
+    /// makes the wait duration hyper-critical (blob if long, lean if short). Reduced
+    /// priming widens the usable wait window. 100 = legacy full-RPM pre-charge.
+    /// First print start always primes at 100% (initial nozzle fill).
+    /// </summary>
+    public float SsResumePrimePercent { get; init; } = 100f;
+
+    /// <summary>
     /// Caracol S&amp;S: print-speed scale for the final approach after OUT[7]=FALSE
     /// (handover suggests ~50%). Default 0.5.
     /// </summary>
@@ -94,6 +103,20 @@ public sealed record KrlExportSettings
     public float[] HomePosition { get; init; } = [0f, -90f, 90f, 0f, 15f, 0f];
     /// <summary>LFAM 1 rail: E1 position (mm) emitted in the header HOME PTP. NaN = omit.</summary>
     public float HomeE1Mm { get; init; } = float.NaN;
+
+    /// <summary>
+    /// Rotary-bed cell (LFAM 3): the print bed is an external kinematic (positioner) the
+    /// robot base must be coupled to. When true, the header emits
+    /// <c>$BASE = EK(MACHINE_DEF[n]...)</c> and the HOME PTP carries E1/E2/E3, so coordinated
+    /// LIN+E1 moves are geometrically valid. When false (LFAM 1 rail / LFAM 2 static) no EK
+    /// base is written. Wrong value = "impermissible start motion" (KSS01443) or a mis-framed
+    /// toolpath — so export refuses if this is true but the base block is missing.
+    /// </summary>
+    public bool RotaryExternalKinematic { get; init; }
+
+    /// <summary>MACHINE_DEF index for the rotary positioner (LFAM 3 = 2). Only used when
+    /// <see cref="RotaryExternalKinematic"/> is true.</summary>
+    public int RotaryMachineDefIndex { get; init; } = 2;
 
     /// <summary>
     /// When true, LIN points use a planned E1 that tracks the path along the rail
@@ -242,7 +265,7 @@ public static class KrlExporter
         ;ENDFOLD
 
         BAS(#BASE,{{BASE_NO}})
-        BAS(#VEL_PTP,10)
+        {{EK_BASE}}BAS(#VEL_PTP,10)
         {{HOME_PTP}}
         """;
 
@@ -370,7 +393,7 @@ public static class KrlExporter
         WAIT FOR $IN[6]==TRUE
         ;ENDFOLD (READYTOPRINT)
         BAS(#BASE,{{BASE_NO}})
-        BAS(#VEL_PTP,10)
+        {{EK_BASE}}BAS(#VEL_PTP,10)
         {{HOME_PTP}}
         """;
 
@@ -431,7 +454,7 @@ public static class KrlExporter
         ;ENDFOLD
 
         BAS(#BASE,{{BASE_NO}})
-        BAS(#VEL_PTP,10)
+        {{EK_BASE}}BAS(#VEL_PTP,10)
         {{HOME_PTP}}
         """;
 
@@ -669,8 +692,8 @@ public static class KrlExporter
                     // Key for change-detection (same rate → same command text).
                     string extrudeKey = FormatExtruderOn(s, extrudeRpmScale, "", useTrigger: false);
                     string velText = extrudeSpeedMps.ToString("F6", Inv);
-                    bool anoutChanged = !string.Equals(extrudeKey, lastExtrudeAnoutText, StringComparison.Ordinal);
-                    bool velChanged = !string.Equals(velText, lastExtrudeVelText, StringComparison.Ordinal);
+                    bool anoutChanged = !string.Equals(extrudeKey, lastExtrudeAnoutText, System.StringComparison.Ordinal);
+                    bool velChanged = !string.Equals(velText, lastExtrudeVelText, System.StringComparison.Ordinal);
 
                     if (needsRpmOn)
                     {
@@ -810,6 +833,10 @@ public static class KrlExporter
     {
         sb.AppendLine(";digital start/stop - start (Caracol URM)");
         sb.AppendLine("$OUT[7] = TRUE");
+        float primePct = Math.Clamp(
+            s.SsResumePrimePercent <= 0f ? 100f : s.SsResumePrimePercent, 5f, 100f);
+        if (waitSec > 0f && primePct < 99.5f && !isFirstPrintStart)
+            sb.AppendLine(FormatExtruderOn(s, rpmScale * primePct / 100f, "resume prime", useTrigger: false));
         if (waitSec > 0f)
             sb.AppendLine(FormatWaitSec(waitSec));
         sb.AppendLine("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE");
@@ -890,10 +917,21 @@ public static class KrlExporter
                       $"A3 {h[2].ToString("F3", Inv)}, A4 {h[3].ToString("F3", Inv)}, " +
                       $"A5 {h[4].ToString("F3", Inv)}, A6 {h[5].ToString("F3", Inv)}";
         if (!float.IsNaN(s.HomeE1Mm))
-            homePtp += $", E1 {s.HomeE1Mm.ToString("F3", Inv)}";
+            homePtp += $", E1 {s.HomeE1Mm.ToString("F3", Inv)}";     // LFAM 1 rail (linear E1)
+        else if (s.RotaryExternalKinematic)
+            homePtp += ", E1 0.000, E2 0.000, E3 0.000";            // LFAM 3 rotary positioner axes
         homePtp += "}";
 
-        return template
+        // Rotary cells (LFAM 3): couple the base to the positioner (external kinematic).
+        // Without this, coordinated LIN+E1 moves throw KSS01443 "Impermissible start motion".
+        int ekIdx = s.RotaryMachineDefIndex;
+        string ekBase = s.RotaryExternalKinematic
+            ? $"$BASE = EK(MACHINE_DEF[{ekIdx}].ROOT,MACHINE_DEF[{ekIdx}].MECH_TYPE," +
+              $"BASE_DATA[{s.BaseDataIndex}]:{{X 0, Y 0, Z 0, A 0, B 0, C 0}})\n"
+            : "";
+
+        var rendered = template
+            .Replace("{{EK_BASE}}", ekBase)
             .Replace("{{PROGRAM_NAME}}", programName)
             .Replace("{{TOOL_NO}}",      s.ToolDataIndex.ToString(Inv))
             .Replace("{{BASE_NO}}",      s.BaseDataIndex.ToString(Inv))
@@ -912,6 +950,29 @@ public static class KrlExporter
             .Replace("{{SPINDLE_RPM}}",   s.SpindleRpm.ToString("F0", Inv))
             .Replace("{{APO_CVEL}}",      s.ApoCvel.ToString(Inv))
             .Replace("{{HOME_PTP}}",      homePtp);
+
+        if (s.RotaryExternalKinematic && !rendered.Contains("EK(", System.StringComparison.Ordinal))
+        {
+            // A user-overridden header may predate the {{EK_BASE}} placeholder. Inject the
+            // external-kinematic base right after the BAS(#BASE,n) line so rotary exports are
+            // never shipped without it.
+            int idx = rendered.IndexOf("BAS(#BASE", System.StringComparison.Ordinal);
+            if (idx >= 0)
+            {
+                int eol = rendered.IndexOf('\n', idx);
+                if (eol >= 0)
+                    rendered = rendered.Insert(eol + 1, ekBase);
+            }
+            // Hard guard: refuse to emit a rotary-cell program with no positioner coupling.
+            // Silent omission is what produced KSS01443 "Impermissible start motion" on LFAM 3.
+            if (!rendered.Contains("EK(", System.StringComparison.Ordinal))
+                throw new InvalidOperationException(
+                    "KRL export: this cell has a rotary positioner (external kinematic) but the " +
+                    "header has no $BASE = EK(...) line and none could be injected. Reset the KRL " +
+                    "header to the default, or the toolpath will fault with KSS01443 on the robot.");
+        }
+
+        return rendered;
     }
 
     private static (ToolpathMove move, ToolpathLayer layer)? FindFirstExtrude(Toolpath tp)
