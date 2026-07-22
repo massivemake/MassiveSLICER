@@ -5968,10 +5968,16 @@ public partial class ViewportView : UserControl
                 }
                 else
                 {
+                    // TEMP DIAGNOSTIC: logging for "Apply does nothing" bug
+                    int triCount = piece.Mesh.Positions.Length / 3;
+                    LogToConsole($"[apply-bounded] triCount={triCount} cut.Infinite={cut.Infinite} cut.SizeX={cut.SizeX} cut.SizeY={cut.SizeY} cuts.Count={cuts.Count}");
+
                     var localTanU = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentU, inv));
                     var localTanV = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentV, inv));
                     var bounded = BoundedCutSplitter.Split(
                         piece.Mesh, localPt, localN, localTanU, localTanV, cut.SizeX * 0.5f, cut.SizeY * 0.5f);
+                    LogToConsole($"[apply-bounded] BoundedCutSplitter returned: {(bounded is null ? "null" : $"list with {bounded.Count} items")}");
+
                     if (bounded is null) { next.Add(piece); continue; }
 
                     AddResolvedPieces(bounded, piece.World, piece.Name);
