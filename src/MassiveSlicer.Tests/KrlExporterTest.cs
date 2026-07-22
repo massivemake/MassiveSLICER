@@ -668,4 +668,31 @@ public sealed class KrlExporterTest
         Assert.Contains("EK", ex.Message);
     }
 
+    [Fact]
+    public void Export_emits_distinct_per_zone_temperatures_not_flattened_to_zone1()
+    {
+        // Regression: the export call site once passed a single zone-1-derived value for
+        // all three KrlExportSettings.Temperature1/2/3, silently flattening a material's
+        // distinct zone setpoints (e.g. 290/275/300) to 290/290/290 in the SRC. Each zone
+        // must reach the header independently.
+        var krl = KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+        {
+            ProgramName             = "distinct_zone_temps",
+            Temperature1             = 290f,
+            Temperature2             = 275f,
+            Temperature3             = 300f,
+            DigitalStartStopEnabled  = true,
+            HeaderTemplate           = KrlExporter.DefaultUrmHeaderTemplate,
+            FooterTemplate           = KrlExporter.DefaultFooterTemplate,
+        });
+
+        Assert.Contains("T1 = 290", krl);
+        Assert.Contains("T2 = 275", krl);
+        Assert.Contains("T3 = 300", krl);
+        // The re-latch nudge (target - 5) must track each zone's own target, not zone 1's.
+        Assert.Contains("T1 = 285", krl);
+        Assert.Contains("T2 = 270", krl);
+        Assert.Contains("T3 = 295", krl);
+    }
+
 }
