@@ -1,10 +1,6 @@
 # MassiveSLICER V3 — Project Memory
 
-<<<<<<< HEAD
-Last updated: 2026-07-16 (Windows launch crash fix + `.mass` drag-and-drop; large-STL import crash diagnosed, not yet fixed)
-=======
-Last updated: 2026-07-16 (Brim fix; Header/Footer gear; URM edits honored; ANALOGHANDLER re-latch guard)
->>>>>>> origin/master
+Last updated: 2026-07-21 (Branch model simplified: `master` deleted, `main` is the only shared branch; LFAM 3 cell-swap fix)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -515,7 +511,17 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Session changelog (reverse chronological)
 
-<<<<<<< HEAD
+### 2026-07-21 — Branch model simplified: `master` is gone, `main` is everything
+- Upstream cleanup (Thom's side): **`master` and the old merged feature branches were deleted from GitHub**; `origin/HEAD` now points at `main`. The 2026-07-04 master/main split convention below is **obsolete history**.
+- **New mode of operation:** `main` is the single shared branch everyone pulls from and pushes finished work to. Unproven/risky work lives on `feature/<name>` branches (currently `feature/cut-modifier`, `feature/presets`); keep them fresh by merging `main` in, and merge them back to `main` only after real-machine testing. Nothing on a feature branch is in anyone else's build until it's merged.
+- CLAUDE.md / AGENTS.md git conventions updated to match.
+
+### 2026-07-21 — Model lost when switching to LFAM 3 (cell-swap frame fix)
+- **Symptom (team report):** a model loaded on LFAM 1/2 survives switching between those two cells, but switching to LFAM 3 leaves the bed blank ("I think that is by design" — it wasn't).
+- **Cause:** cell-swap content transfer re-based preserved models/toolpaths against the raw scene-node transform of `(_rotaryBedPivot ?? _bedNode)`. LFAM 1/2 bed nodes are translation-only so that worked; LFAM 3's rotary pivot (`RotaryBed_Top`) lives in the rotary GLB's tilted mesh frame (baseAbc, e.g. C=−90) at the mesh origin, so the transfer delta rotated the part ~90° and dragged it to the turntable's mesh origin — off the bed, though still listed in the outliner.
+- **Fix:** transfer now uses a world-aligned frame at each cell's `Bed.ImportSurfaceCenter` (the same anchor fresh imports land on) — the delta is a pure translation, so parts stay upright at their offset from the print-surface centre. `ViewportView.axaml.cs`: new `ImportSurfaceFrame()`, captured in `ApplyCellSwap`, applied in `RestoreUserContentAfterCellSwap`.
+- Also resolved committed merge-conflict markers in this file (header "Last updated" + changelog section, left over from the 07-16 two-sided merge).
+
 ### 2026-07-16 — Auto build numbers, RPM calibration inputs, launcher TFM fix
 - **Build identity is now auto-generated** (`GenerateBuildInfo` target in MassiveSlicer.App.csproj): build number = git commit count, shown as `build N · date · sha`. Hand-edited `BuildInfo.cs` deleted. Same number on every machine; `git log --oneline` maps builds → commits.
 - **Calibration dialog takes true RPM** (read off the extruder drive) plus a one-time "RPM at 100% output" drive scale (default 100 — on our machine %==RPM, e.g. 60% = 60 RPM). `CalibMotorPercent` remains as a computed property for the calibration-scene generator.
@@ -536,13 +542,6 @@ Workaround for now: simplify meshes outside the slicer before importing.
 
 Key files: `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`, `src/MassiveSlicer.Viewport/Loading/StlLoader.cs`.
 
-<<<<<<< HEAD
-### 2026-07-04 — Branch convention (agreed with Thom)
-- **`master` = integration branch (GitHub default), Thom merges everything there.**
-- **Mac side works on and pushes to `main`.** Sync = `git merge origin/master` into `main` (fast-forwards when both sides merge regularly). As of today both branches point at the same commit (`2b6d55b`).
-- Also today: curtain print failure root cause **corrected — truncated program transfer, not singularity.** The production-share .src ends mid-line at Z 2154 (layer 718 of 1047), matching the physical print height and the nozzle-drool blob at the final preview pose. TCP auto-rotation (build 27) remains valuable but the immediate prevention is transfer verification on export/Send-to-Robot (planned).
-=======
-=======
 ### 2026-07-16 (later 2) — URM re-latch guard (extruder-stays-cold fix)
 
 **Field:** Rev05 exported fine (header identical to a known-good file) but the extruder never
@@ -648,7 +647,6 @@ LFAM 2 D:\ share the same day; controller-side complements: sps.sub URM-latch gu
 $OV_PRO speed-scaled RPM + self-heal, ID3 submit re-registration (see LFAM install session notes).
 
 
->>>>>>> origin/master
 ### 2026-07-12 — 2D Slice Plane Viewer + edit multipass + Target Support Selections
 
 **Scope:** Long iterative session on the **2D Slice Plane Viewer** (edit mode), multipass layer stack, navigation, selection, Formbound “Target Support Selections”, LFAM 1 bed BASE alignment, and ortho zoom clipping. Work tree: `/Users/thomboessel/MassiveSLICER V3`.
@@ -733,7 +731,11 @@ $OV_PRO speed-scaled RPM + self-heal, ID3 submit re-registration (see LFAM insta
 - Dev bed edits: verify both **repo** `assets/cells/...` and **bin** cell path; rebuild can overwrite bin from assets.
 - Target Support Selections: requires **Support Apply** marks, not bare selection alone.
 - GLSL: no non-ASCII in shader strings (premature EOF).
->>>>>>> origin/master
+
+### 2026-07-04 — Branch convention (agreed with Thom)
+- **`master` = integration branch (GitHub default), Thom merges everything there.**
+- **Mac side works on and pushes to `main`.** Sync = `git merge origin/master` into `main` (fast-forwards when both sides merge regularly). As of today both branches point at the same commit (`2b6d55b`).
+- Also today: curtain print failure root cause **corrected — truncated program transfer, not singularity.** The production-share .src ends mid-line at Z 2154 (layer 718 of 1047), matching the physical print height and the nozzle-drool blob at the final preview pose. TCP auto-rotation (build 27) remains valuable but the immediate prevention is transfer verification on export/Send-to-Robot (planned).
 
 ### 2026-07-04 — Curtain print failure countermeasures (builds 25–30)
 **Print failed mid-run: KUKA hit wrist singularity.** Root cause: KRL export wrote a frozen `A 0, B 90, C 0` orientation on every move — the exporter's gimbal-lock branch zeroed any TCP rotation for a straight-down tool.

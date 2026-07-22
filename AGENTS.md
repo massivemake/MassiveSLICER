@@ -29,8 +29,11 @@ Build identity is auto-generated: build number = git commit count
 
 ## Git conventions
 
-- `master` = integration branch (Thom merges everything there).
-- Mac-side work lands on `main`; sync = merge `origin/master` into `main`.
+- `main` = the ONLY shared branch (GitHub default; `master` was deleted 2026-07 —
+  the old master/main split is gone).
+- Risky or experimental work goes on a `feature/<name>` branch; merge `main` into
+  it regularly, and merge it back to `main` only after real-machine testing.
+- Sync = `git pull` on `main` (or merge `origin/main` into your feature branch).
 - If a fetch reports **forced update**, history was rewritten upstream —
   verify content (`git diff HEAD origin/<branch>`) before adopting; never
   blind-merge rewritten history.
