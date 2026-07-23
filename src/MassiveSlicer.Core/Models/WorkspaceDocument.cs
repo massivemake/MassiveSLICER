@@ -256,6 +256,11 @@ public sealed class WorkspaceModelEntry
 
     /// <summary>Non-destructive modifiers (Cut planes, future braces/supports). Applied when the workspace loads.</summary>
     public List<WorkspaceCutModifier> Modifiers { get; set; } = [];
+
+    /// <summary>Name of the Applied-Pieces group this entry belonged to at save time (see
+    /// ViewportViewModel.CreateAppliedPiecesGroup), or null for a model that isn't a Cut
+    /// modifier's output piece. Entries sharing the same name are re-grouped together on load.</summary>
+    public string? PiecesGroupName { get; set; }
 }
 
 /// <summary>Serialized Cut modifier (plane position, orientation, size bounds).</summary>

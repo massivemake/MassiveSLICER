@@ -46,22 +46,32 @@ public static class BoundedCutSplitter
             if (discarded.Positions.Length > 0) outside.Add(discarded);
         }
 
-        if (inside.Positions.Length == 0) return null; // rectangle doesn't overlap this mesh at all
+        if (inside.Positions.Length == 0)
+            return null; // rectangle doesn't overlap this mesh at all
 
         var cut = PlanarMeshSplitter.Split(inside, planePoint, planeNormal);
         bool crosses = cut.Positive.Positions.Length > 0 && cut.Negative.Positions.Length > 0;
-        if (!crosses) return null; // footprint overlaps the mesh, but the plane doesn't cross it there
+        if (!crosses)
+            return null; // footprint overlaps the mesh, but the plane doesn't cross it there
 
         // Resolve each side's OWN connectivity first (loose epsilon — safe here, since only one
         // side's geometry, including its own cap, is present; no opposite side to be mistaken
         // for). Only after that do the different pieces get merged against each other — Positive
         // and Negative are never compared directly (see MeshIslands.MergeFragments), only ever
         // bridged via genuinely untouched Outside material.
+        //
+        // Each of the 4 half-space clips can discard a chunk that is itself NOT one connected
+        // piece — a curved wall clipped by one flat wall of the footprint rectangle can easily
+        // fall away as two (or more) physically separate pieces on either side of where the wall
+        // curves back through that plane. Splitting Positive/Negative into islands but leaving
+        // `outside` as one atomic blob per clip meant two genuinely unrelated outside fragments —
+        // one only ever touching Positive, the other only ever touching Negative — got glued into
+        // a single fragment here, which then bridged the two sides through nothing real.
         List<(MeshData, MeshIslands.FragmentSide)> fragments =
         [
             .. MeshIslands.Split(cut.Positive).Select(m => (m, MeshIslands.FragmentSide.Positive)),
             .. MeshIslands.Split(cut.Negative).Select(m => (m, MeshIslands.FragmentSide.Negative)),
-            .. outside.Select(m => (m, MeshIslands.FragmentSide.Outside)),
+            .. outside.SelectMany(m => MeshIslands.Split(m)).Select(m => (m, MeshIslands.FragmentSide.Outside)),
         ];
         return MeshIslands.MergeFragments(fragments);
     }

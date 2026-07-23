@@ -6347,6 +6347,32 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // ── Bridge/console selection + object diagnostics ─────────────────────────
 
+    /// <summary>Dumps the full outliner hierarchy (real parent/child nesting, not the flattened
+    /// EnumerateUserModelItems view) with indentation and per-row flags — built to verify
+    /// structural fixes (e.g. Modifiers/Applied-Pieces group persistence) without needing a
+    /// screenshot. Backs the console/bridge `outliner-tree` command.</summary>
+    public string DescribeOutlinerTree()
+    {
+        var sb = new System.Text.StringBuilder();
+        void Walk(OutlinerItemViewModel item, int depth)
+        {
+            var flags = new List<string>();
+            if (item.IsModifiersGroup) flags.Add("ModifiersGroup");
+            if (item.IsPiecesGroup) flags.Add("PiecesGroup");
+            if (item.IsModifier) flags.Add("Modifier");
+            if (item.IsToolpath) flags.Add("Toolpath");
+            if (item.IsEffector) flags.Add("Effector");
+            if (!item.Visible) flags.Add("Hidden");
+            string flagStr = flags.Count == 0 ? "" : $" [{string.Join(",", flags)}]";
+            sb.AppendLine($"{new string(' ', depth * 2)}- {item.Name}{flagStr}");
+            foreach (var child in item.Children)
+                Walk(child, depth + 1);
+        }
+        foreach (var root in OutlinerItems)
+            Walk(root, 0);
+        return sb.Length == 0 ? "[outliner-tree] (empty)" : sb.ToString().TrimEnd();
+    }
+
     /// <summary>Lists user-content outliner items (imports/scans/toolpaths) with mesh + pick info.
     /// Backs the console/bridge `objects` command.</summary>
     public string ListContentObjects()
@@ -6661,7 +6687,7 @@ public sealed class ViewportViewModel : ViewModelBase
         return null;
     }
 
-    private OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
+    internal OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
     {
         foreach (var root in OutlinerItems)
         {
@@ -6805,7 +6831,15 @@ public sealed class ViewportViewModel : ViewModelBase
         string name = baseName;
         int n = 2;
         while (existingPiecesGroupNames.Contains(name)) name = $"{baseName} ({n++})";
+        return CreateAppliedPiecesGroupNamed(name);
+    }
 
+    /// <summary>Recreates a previously-saved Applied-Pieces group verbatim by name — used when
+    /// restoring a workspace, where the name was already made unique at save time (see
+    /// WorkspaceService.Capture's WorkspaceModelEntry.PiecesGroupName), so no collision-suffix
+    /// logic is needed here.</summary>
+    internal OutlinerItemViewModel CreateAppliedPiecesGroupNamed(string name)
+    {
         var groupNode = new SceneNode { Name = name, Selectable = false, PickIgnore = true };
         var groupItem = CreateOutlinerItem(groupNode, it =>
         {
@@ -6840,6 +6874,29 @@ public sealed class ViewportViewModel : ViewModelBase
         };
         OutlinerItems.Add(groupItem);
         return groupItem;
+    }
+
+    /// <summary>Restores a single Applied-Pieces piece from a workspace file: registers its
+    /// SceneNode the same way any import is (GPU upload, rotary-bed awareness via
+    /// EnqueueRotarySceneNode), but parents its outliner row under <paramref name="groupItem"/>
+    /// (an Applied-Pieces group recreated via <see cref="CreateAppliedPiecesGroupNamed"/>)
+    /// instead of at the outliner root, with a delete callback that mirrors the live Apply flow
+    /// (removes from the group, not the root — <see cref="RemoveUserNode"/> would no-op here
+    /// since the item was never added to the top-level OutlinerItems).</summary>
+    internal OutlinerItemViewModel AddRestoredPieceToGroup(SceneNode node, OutlinerItemViewModel groupItem)
+    {
+        EnqueueRotarySceneNode(node);
+        var pieceItem = CreateOutlinerItem(node, it =>
+        {
+            foreach (var child in it.Children)
+                PendingRemoveNodes.Enqueue(child.Node);
+            groupItem.RemoveChild(it);
+            PendingRemoveNodes.Enqueue(it.Node);
+            NotifyRenderNeeded();
+        }, displayName: node.Name, canDelete: true, modelFileOps: true);
+        groupItem.AddChild(pieceItem);
+        OnModelGeometryChanged?.Invoke();
+        return pieceItem;
     }
 
     /// <summary>The modifier stack for a mesh, in application (= outliner) order. Empty if it

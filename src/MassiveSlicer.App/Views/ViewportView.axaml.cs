@@ -5919,6 +5919,7 @@ public partial class ViewportView : UserControl
         var tpItem = ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
 
         var pieces = new List<ApplyPiece> { new(masterMesh, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
+        bool anyChange = false;
 
         foreach (var cut in cuts)
         {
@@ -5963,30 +5964,27 @@ public partial class ViewportView : UserControl
                     bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
                     if (!crosses) { next.Add(piece); continue; }
 
+                    anyChange = true;
                     AddSplitPieces(meshSplit.Positive, piece.World, $"{piece.Name} +");
                     AddSplitPieces(meshSplit.Negative, piece.World, $"{piece.Name} -");
                 }
                 else
                 {
-                    // TEMP DIAGNOSTIC: logging for "Apply does nothing" bug
-                    int triCount = piece.Mesh.Positions.Length / 3;
-                    LogToConsole($"[apply-bounded] triCount={triCount} cut.Infinite={cut.Infinite} cut.SizeX={cut.SizeX} cut.SizeY={cut.SizeY} cuts.Count={cuts.Count}");
-
                     var localTanU = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentU, inv));
                     var localTanV = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentV, inv));
                     var bounded = BoundedCutSplitter.Split(
                         piece.Mesh, localPt, localN, localTanU, localTanV, cut.SizeX * 0.5f, cut.SizeY * 0.5f);
-                    LogToConsole($"[apply-bounded] BoundedCutSplitter returned: {(bounded is null ? "null" : $"list with {bounded.Count} items")}");
 
                     if (bounded is null) { next.Add(piece); continue; }
 
+                    anyChange = true;
                     AddResolvedPieces(bounded, piece.World, piece.Name);
                 }
             }
             pieces = next;
         }
 
-        if (pieces.Count <= 1)
+        if (!anyChange)
         {
             LogToConsole("[apply] no modifier's plane actually crossed the model — nothing produced.");
             return;

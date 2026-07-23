@@ -73,6 +73,13 @@ internal static class WorkspaceService
                 LocalTransform = ToArray(node.WorldTransform),
             };
 
+            // EnumerateUserModelItems() flattens Applied-Pieces groups (see its own comment) so
+            // each piece is independently slicable/exportable — but that means the group
+            // membership itself would otherwise be lost on save. Recover it here so the group can
+            // be recreated on load instead of every piece reappearing flat at the outliner root.
+            if (viewport.FindParentOutlinerItem(item) is { IsPiecesGroup: true } piecesGroup)
+                entry.PiecesGroupName = piecesGroup.Name;
+
             if (node.SourceFilePath is { } src && File.Exists(src))
                 entry.SourcePath = src;
 
@@ -223,6 +230,8 @@ internal static class WorkspaceService
     {
         viewport.ClearUserScene();
 
+        var piecesGroups = new Dictionary<string, ViewModels.OutlinerItemViewModel>(StringComparer.OrdinalIgnoreCase);
+
         int restored = 0;
         foreach (var entry in doc.Models)
         {
@@ -241,6 +250,7 @@ internal static class WorkspaceService
             }
 
             SceneNode? node = null;
+            ViewModels.OutlinerItemViewModel? parentItem = null;
             if (loadPath is not null)
             {
                 var transform = FromArray(entry.LocalTransform);
@@ -250,7 +260,21 @@ internal static class WorkspaceService
                     node.Name         = entry.Name;
                     node.Visible      = entry.Visible;
                     node.LayerPreview = entry.LayerPreview;
-                    viewport.AddImportNode(node);
+
+                    if (entry.PiecesGroupName is { } groupName)
+                    {
+                        if (!piecesGroups.TryGetValue(groupName, out var groupItem))
+                        {
+                            groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
+                            groupItem.Visible = entry.Visible;
+                            piecesGroups[groupName] = groupItem;
+                        }
+                        parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                    }
+                    else
+                    {
+                        viewport.AddImportNode(node);
+                    }
                 }
             }
 
@@ -280,13 +304,14 @@ internal static class WorkspaceService
 
             restored++;
 
-            if (entry.Toolpaths.Count == 0)
-            {
-                viewport.NotifyRenderNeeded();
-                continue;
-            }
-
-            var parentItem = viewport.FindOutlinerItem(node);
+            // NOTE: previously this bailed out early ("continue") whenever a model had zero
+            // toolpaths — which silently skipped the Modifiers-restore loop below for any entry
+            // in that state, including the master mesh after an Apply (its own pre-cut toolpath
+            // is deliberately deleted, not hidden, once real per-piece toolpaths exist — see
+            // ApplyModifierStackAsync). That made a saved Cut modifier stack vanish on reload
+            // even though Capture() had written it correctly. Both loops below are no-ops on
+            // empty lists, so there's no need to special-case either one.
+            parentItem ??= viewport.FindOutlinerItem(node);
             if (parentItem is null)
             {
                 viewport.NotifyRenderNeeded();
