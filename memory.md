@@ -525,6 +525,23 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 
 ## Session changelog (reverse chronological)
 
+### 2026-07-23 (later) — PRESETS merged into MODEL as a nested, collapsed-by-default sub-section
+
+Following the presets sync (below), merged the PRESETS card into MODEL per Jeff's request:
+PRESETS is no longer its own top-level workflow step — it's now a plain `SectionExpander`
+("PRESETS", no step-number badge) nested inside "1 MODEL", collapsed by default. It persists
+its own open/closed state across restarts for free via the existing app-wide `PersistExpander`
+behavior (keyed off its plain-string header — same mechanism as ROBOT NETWORK/BED SETTINGS),
+no new plumbing needed. MODEL's existing auto-open-on-import behavior is untouched; the nested
+Presets section deliberately does NOT auto-expand alongside it (Jeff: "keep auto opening
+[Model], but don't auto-expand preset too"). Retired the now-dead `StepPresetsExpanded` VM
+property. Also fixed stale intro copy claiming presets are "still in-memory only" — no longer
+true post-sync. Verified via build + a live bridge smoke test (imported a test cube, confirmed
+MODEL auto-opened with PRESETS collapsed underneath, no duplicate blocks).
+
+Key files: `src/MassiveSlicer.App/Views/RightPanelView.axaml`,
+`src/MassiveSlicer.App/ViewModels/RightPanelViewModel.cs`.
+
 ### 2026-07-23 — Synced real Presets logic from `feature/presets` onto `main` (Jeff, w/ Claude)
 
 `feature/presets` had gone stale (only 5 real commits ahead of its branch point, vs. 62 commits
