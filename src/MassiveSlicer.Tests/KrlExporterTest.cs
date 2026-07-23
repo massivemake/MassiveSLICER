@@ -695,4 +695,52 @@ public sealed class KrlExporterTest
         Assert.Contains("T3 = 295", krl);
     }
 
+    [Fact]
+    public void Export_first_layer_speed_and_rpm_override_apply_only_to_layer0()
+    {
+        // Two layers, one extrude move each. First-layer overrides must hit layer 0
+        // only, and speed vs RPM must be independent.
+        var tp = new Toolpath();
+        var l0 = new ToolpathLayer(0, 3f) { PlaneNormal = Vector3.UnitZ };
+        l0.Moves.Add(new ToolpathMove(new Vector3(0,0,3), new Vector3(50,0,3), MoveKind.Extrude){ Normal = Vector3.UnitZ });
+        var l1 = new ToolpathLayer(1, 6f) { PlaneNormal = Vector3.UnitZ };
+        l1.Moves.Add(new ToolpathMove(new Vector3(0,0,6), new Vector3(50,0,6), MoveKind.Extrude){ Normal = Vector3.UnitZ });
+        tp.Layers.Add(l0); tp.Layers.Add(l1);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName          = "first_layer",
+            PrintSpeedMps        = 0.100f,   // normal 100 mm/s
+            ExtrusionRpmPercent  = 40f,      // normal 40%
+            FirstLayerSpeedMps   = 0.040f,   // first layer 40 mm/s
+            FirstLayerRpmPercent = 22f,      // first layer 22% (independent of speed)
+            DigitalStartStopEnabled = true,
+            HeaderTemplate       = KrlExporter.DefaultUrmHeaderTemplate,
+            FooterTemplate       = KrlExporter.DefaultFooterTemplate,
+        });
+
+        // First-layer speed + RPM present.
+        Assert.Contains("$VEL.CP = 0.040000", krl);
+        Assert.Contains("RPM = 22", krl);
+        // Normal (layer 1) speed + RPM also present, distinct from first layer.
+        Assert.Contains("$VEL.CP = 0.100000", krl);
+        Assert.Contains("RPM = 40", krl);
+        // First-layer values appear before the normal ones (layer 0 emitted first).
+        Assert.True(krl.IndexOf("$VEL.CP = 0.040000", System.StringComparison.Ordinal)
+                    < krl.IndexOf("$VEL.CP = 0.100000", System.StringComparison.Ordinal));
+
+        // With no overrides (0), the first layer uses the normal speed/RPM (unchanged behavior).
+        var krlBase = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName          = "no_first_layer",
+            PrintSpeedMps        = 0.100f,
+            ExtrusionRpmPercent  = 40f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate       = KrlExporter.DefaultUrmHeaderTemplate,
+            FooterTemplate       = KrlExporter.DefaultFooterTemplate,
+        });
+        Assert.DoesNotContain("$VEL.CP = 0.040000", krlBase);
+        Assert.DoesNotContain("RPM = 22", krlBase);
+    }
+
 }

@@ -14700,6 +14700,13 @@ public partial class ViewportView : UserControl
             HeaderTemplate = postProcess.HeaderText,
             FooterTemplate = postProcess.FooterText,
             ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
+            // First-layer overrides: only pass a value when the operator set an override
+            // (or it differs from the normal), so a plain print is unchanged. The exporter
+            // treats 0 as "use the normal speed/RPM".
+            FirstLayerSpeedMps      = settings.FirstLayerSpeed > 0.0
+                                          ? (float)(settings.FirstLayerSpeedEffective / 1000.0) : 0f,
+            FirstLayerRpmPercent    = settings.FirstLayerRpm > 0.0
+                                          ? (float)settings.FirstLayerRpmEffective : 0f,
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,

@@ -320,6 +320,12 @@ public sealed class AppPreferences
     /// <summary>Deposition print speed in mm/s.</summary>
     public double PrintSpeed { get; set; } = 100.0;
 
+    /// <summary>First-layer print speed override (mm/s). 0 = use the calculated (normal) speed.</summary>
+    public double FirstLayerSpeed { get; set; }
+
+    /// <summary>First-layer extrusion RPM override (%). 0 = use the calculated RPM.</summary>
+    public double FirstLayerRpm { get; set; }
+
     /// <summary>Travel (PTP) speed in mm/s.</summary>
     public double TravelSpeed { get; set; } = 120.0;
 

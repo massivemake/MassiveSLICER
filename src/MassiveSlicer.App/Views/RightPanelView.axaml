@@ -1308,6 +1308,30 @@
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ZHopMm}"/>
                             </Grid>
 
+                            <!-- First layer speed / RPM overrides (KRL export) -->
+                            <TextBlock Text="FIRST LAYER" FontSize="9" Opacity="0.55" LetterSpacing="0.8"
+                                       FontWeight="SemiBold" Margin="8,6,8,2"/>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="*,Auto,80">
+                                <TextBlock Grid.Column="0" Text="First layer speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="First-layer print speed for KRL export. Leave 0 to use the calculated (normal print) speed shown at right. Enter a number to override just the first layer."/>
+                                <TextBlock Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center" Classes="LabelMuted"
+                                           Text="{Binding Additive.FirstLayerSpeedCalculated, StringFormat='calc {0:F0}'}"
+                                           ToolTip.Tip="Calculated first-layer speed (= normal print speed)."/>
+                                <NumericUpDown Grid.Column="2" Value="{Binding Additive.FirstLayerSpeed, Mode=TwoWay}"
+                                               Minimum="0" Maximum="2000" Increment="5" FormatString="F0" FontSize="11"
+                                               ToolTip.Tip="0 = use calculated"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,Auto,80">
+                                <TextBlock Grid.Column="0" Text="First layer RPM (%)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="First-layer extrusion RPM for KRL export. Leave 0 to use the calculated value at right (from bead width, first-layer height, first-layer speed, material flow). Enter a number to override."/>
+                                <TextBlock Grid.Column="1" Margin="0,0,6,0" VerticalAlignment="Center" Classes="LabelMuted"
+                                           Text="{Binding Additive.FirstLayerRpmCalculated, StringFormat='calc {0:F1}'}"
+                                           ToolTip.Tip="Calculated first-layer RPM from bead geometry + first-layer height + first-layer speed + flow."/>
+                                <NumericUpDown Grid.Column="2" Value="{Binding Additive.FirstLayerRpm, Mode=TwoWay}"
+                                               Minimum="0" Maximum="100" Increment="1" FormatString="F1" FontSize="11"
+                                               ToolTip.Tip="0 = use calculated"/>
+                            </Grid>
+
                             <!-- Nested Wipe settings -->
                             <Expander Classes="SectionExpander" Header="WIPE" IsExpanded="False" Margin="0,4,0,2">
                                 <StackPanel Margin="0,2,0,4">

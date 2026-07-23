@@ -3029,6 +3029,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.TiltAngle              = copy.TiltAngle;
         live.TiltAngleX             = copy.TiltAngleX;
         live.PrintSpeed             = copy.PrintSpeed;
+        live.FirstLayerSpeed        = copy.FirstLayerSpeed;
+        live.FirstLayerRpm          = copy.FirstLayerRpm;
         live.TravelSpeed            = copy.TravelSpeed;
         live.Acceleration           = copy.Acceleration;
         live.ApproachZ              = copy.ApproachZ;
@@ -3281,6 +3283,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.TiltAngle     = p.TiltAngle;
         add.TiltAngleX    = p.TiltAngleX;
         add.PrintSpeed      = p.PrintSpeed;
+        add.FirstLayerSpeed = p.FirstLayerSpeed;
+        add.FirstLayerRpm   = p.FirstLayerRpm;
         add.TravelSpeed   = p.TravelSpeed;
         add.Acceleration  = p.Acceleration;
         add.ApproachZ     = p.ApproachZ;
@@ -3589,6 +3593,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.TiltAngle        = add.TiltAngle;
         p.TiltAngleX       = add.TiltAngleX;
         p.PrintSpeed         = add.PrintSpeed;
+        p.FirstLayerSpeed    = add.FirstLayerSpeed;
+        p.FirstLayerRpm      = add.FirstLayerRpm;
         p.TravelSpeed      = add.TravelSpeed;
         p.Acceleration     = add.Acceleration;
         p.ApproachZ        = add.ApproachZ;

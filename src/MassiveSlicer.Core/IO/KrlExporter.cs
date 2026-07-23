@@ -56,6 +56,19 @@ public sealed record KrlExportSettings
     public float? ExtrusionRpmPercent { get; init; }
 
     /// <summary>
+    /// First-layer (layer index 0) print speed in m/s. 0 = use <see cref="PrintSpeedMps"/>.
+    /// Applied only to first-layer extrude moves; independent of first-layer RPM.
+    /// </summary>
+    public float FirstLayerSpeedMps { get; init; }
+
+    /// <summary>
+    /// First-layer (layer index 0) extrusion motor speed (%). 0 = use the normal
+    /// (geometry/override) RPM. Applied only to first-layer extrude moves; independent
+    /// of first-layer print speed.
+    /// </summary>
+    public float FirstLayerRpmPercent { get; init; }
+
+    /// <summary>
     /// Pause (seconds) after the first extrusion RPM-on before the first print move. 0 = disabled.
     /// When &gt; 0, emits an immediate <c>$ANOUT[4]</c> (not TRIGGER) so the wait happens after RPM changes.
     /// </summary>
@@ -533,6 +546,19 @@ public static class KrlExporter
             var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
             var smoothedLayer = smoothedByLayer?[li];
 
+            // First-layer speed/RPM override: use a per-layer settings copy for the
+            // extrude speed/RPM emission on layer 0 only. Overriding PrintSpeedMps and
+            // ExtrusionRpmPercent here reaches every downstream speed/RPM call without
+            // threading params; 0-valued overrides leave layerS == s (no behavior change).
+            var layerS = s;
+            if (li == 0 && (s.FirstLayerSpeedMps > 1e-6f || s.FirstLayerRpmPercent > 1e-6f))
+                layerS = s with
+                {
+                    PrintSpeedMps = s.FirstLayerSpeedMps > 1e-6f ? s.FirstLayerSpeedMps : s.PrintSpeedMps,
+                    ExtrusionRpmPercent = s.FirstLayerRpmPercent > 1e-6f
+                        ? s.FirstLayerRpmPercent : s.ExtrusionRpmPercent,
+                };
+
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
                 var move = layer.Moves[mi];
@@ -649,7 +675,7 @@ public static class KrlExporter
                     if (move.IsResumeRamp)
                     {
                         float rpmScale  = EffectiveRpmScale(move);
-                        float speedMps  = EffectivePrintSpeedMps(move, s);
+                        float speedMps  = EffectivePrintSpeedMps(move, layerS);
                         if (needsRpmOn)
                         {
                             float waitSec = ResolveResumeWaitSec(
@@ -657,12 +683,12 @@ public static class KrlExporter
                             pendingResumeWaitSec = null;
                             if (s.DigitalStartStopEnabled)
                             {
-                                EmitCaracolSsPostTravel(sb, s, waitSec, rpmScale, isFirstPrintStart);
+                                EmitCaracolSsPostTravel(sb, layerS, waitSec, rpmScale, isFirstPrintStart);
                                 ssStopActive = false;
                             }
                             else
                             {
-                                sb.AppendLine(FormatExtruderOn(s, rpmScale, "RPM ramp", useTrigger: false));
+                                sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                                 if (waitSec > 0f)
                                     sb.AppendLine(FormatWaitSec(waitSec));
                             }
@@ -671,7 +697,7 @@ public static class KrlExporter
                         }
                         else if (!s.DigitalStartStopEnabled)
                         {
-                            sb.AppendLine(FormatExtruderOn(s, rpmScale, "RPM ramp", useTrigger: false));
+                            sb.AppendLine(FormatExtruderOn(layerS, rpmScale, "RPM ramp", useTrigger: false));
                         }
 
                         sb.AppendLine($"$VEL.CP = {speedMps.ToString("F6", Inv)}");
@@ -684,13 +710,13 @@ public static class KrlExporter
                     }
 
                     float extrudeRpmScale = EffectiveRpmScale(move);
-                    float extrudeSpeedMps = EffectivePrintSpeedMps(move, s);
+                    float extrudeSpeedMps = EffectivePrintSpeedMps(move, layerS);
                     // Compare the *emitted* KRL text, not raw floats. Multi-planar HeightScale
                     // and layer-speed scales jitter every bead; if ANOUT/VEL round to the same
                     // digits, re-writing them between every LIN kills $ADVANCE continuous path
                     // and makes the robot stutter on dense clusters.
                     // Key for change-detection (same rate → same command text).
-                    string extrudeKey = FormatExtruderOn(s, extrudeRpmScale, "", useTrigger: false);
+                    string extrudeKey = FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false);
                     string velText = extrudeSpeedMps.ToString("F6", Inv);
                     bool anoutChanged = !string.Equals(extrudeKey, lastExtrudeAnoutText, System.StringComparison.Ordinal);
                     bool velChanged = !string.Equals(velText, lastExtrudeVelText, System.StringComparison.Ordinal);
@@ -703,16 +729,16 @@ public static class KrlExporter
                         // Caracol S&S post-travel (steps 8-10) or first start; non-URM = ANOUT path.
                         if (s.DigitalStartStopEnabled)
                         {
-                            EmitCaracolSsPostTravel(sb, s, waitSec, extrudeRpmScale, isFirstPrintStart);
+                            EmitCaracolSsPostTravel(sb, layerS, waitSec, extrudeRpmScale, isFirstPrintStart);
                             ssStopActive = false;
                         }
                         else if (waitSec > 0f)
                         {
-                            sb.AppendLine(FormatExtruderOn(s, extrudeRpmScale, "RPM on", useTrigger: false));
+                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: false));
                             sb.AppendLine(FormatWaitSec(waitSec));
                         }
                         else
-                            sb.AppendLine(FormatExtruderOn(s, extrudeRpmScale, "RPM on", useTrigger: true));
+                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "RPM on", useTrigger: true));
 
                         sb.AppendLine($"$VEL.CP = {velText}");
                         isFirstPrintStart = false;
@@ -723,9 +749,9 @@ public static class KrlExporter
                     else if (anoutChanged || velChanged)
                     {
                         if (anoutChanged && !s.DigitalStartStopEnabled)
-                            sb.AppendLine(FormatExtruderOn(s, extrudeRpmScale, "layer speed", useTrigger: false));
+                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "layer speed", useTrigger: false));
                         else if (anoutChanged && s.DigitalStartStopEnabled)
-                            sb.AppendLine(FormatExtruderOn(s, extrudeRpmScale, "", useTrigger: false));
+                            sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "", useTrigger: false));
                         if (velChanged)
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;

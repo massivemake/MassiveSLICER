@@ -42,6 +42,17 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 or nameof(SelectedPresetIndex) or nameof(ExtrusionSpeedOffset))
                 OnPropertyChanged(nameof(ExtrusionSpeedPercent));
 
+            // First-layer calculated speed/RPM depend on bead width, first-layer height,
+            // print speed (= default first-layer speed) and material.
+            if (e.PropertyName is nameof(BeadWidth) or nameof(FirstLayerHeight) or nameof(PrintSpeed)
+                or nameof(SelectedPresetIndex))
+            {
+                OnPropertyChanged(nameof(FirstLayerSpeedCalculated));
+                OnPropertyChanged(nameof(FirstLayerSpeedEffective));
+                OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+                OnPropertyChanged(nameof(FirstLayerRpmEffective));
+            }
+
             if (e.PropertyName is nameof(SelectedPresetIndex) or nameof(TemperatureOffset))
             {
                 OnPropertyChanged(nameof(ExportTemperatureC));
@@ -1853,6 +1864,59 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         float pct = (float)ComputeExtrusionSpeedPercent() + (float)ParseSignedOffset(_extrusionSpeedOffset);
         return Math.Max(0f, pct);
     }
+
+    // -- First layer speed / RPM (override the first layer only) ---------------
+    // Both are OVERRIDES: 0 = "use the calculated value". The UI shows the live
+    // calculated value and lets the operator type an explicit number. Export and
+    // .mass persistence use the *effective* value (override if set, else calculated).
+
+    private double _firstLayerSpeed;   // mm/s, 0 = use calculated (= normal print speed)
+    /// <summary>First-layer print speed override (mm/s). 0 = use the calculated value.</summary>
+    public double FirstLayerSpeed
+    {
+        get => _firstLayerSpeed;
+        set
+        {
+            if (!SetField(ref _firstLayerSpeed, Math.Clamp(value, 0.0, 2000.0))) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedEffective));
+            OnPropertyChanged(nameof(FirstLayerRpmCalculated));
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    private double _firstLayerRpm;     // %, 0 = use calculated
+    /// <summary>First-layer extrusion RPM override (%). 0 = use the calculated value.</summary>
+    public double FirstLayerRpm
+    {
+        get => _firstLayerRpm;
+        set
+        {
+            if (!SetField(ref _firstLayerRpm, Math.Clamp(value, 0.0, 100.0))) return;
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
+    /// <summary>Calculated first-layer print speed (mm/s) — same as the normal print speed.</summary>
+    public double FirstLayerSpeedCalculated => PrintSpeed;
+
+    /// <summary>Effective first-layer print speed (mm/s): override if set, else calculated.</summary>
+    public double FirstLayerSpeedEffective => _firstLayerSpeed > 0.0 ? _firstLayerSpeed : FirstLayerSpeedCalculated;
+
+    /// <summary>Calculated first-layer RPM (%) — from bead width, FIRST-layer height,
+    /// the effective first-layer speed, and material flow.</summary>
+    public double FirstLayerRpmCalculated
+    {
+        get
+        {
+            float flow = (float)(SelectedPreset?.FlowRateFor(ActiveExtruderIsHf) ?? 0.463);
+            return KrlAnout.ComputeRpmPercent(
+                (float)BeadWidth, (float)FirstLayerHeight,
+                (float)(FirstLayerSpeedEffective / 1000.0), flow);
+        }
+    }
+
+    /// <summary>Effective first-layer RPM (%): override if set, else calculated.</summary>
+    public double FirstLayerRpmEffective => _firstLayerRpm > 0.0 ? _firstLayerRpm : FirstLayerRpmCalculated;
 
     private double _extrusionStartWaitSec;
 
