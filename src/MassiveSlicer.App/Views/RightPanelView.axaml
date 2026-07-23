@@ -413,23 +413,30 @@
                         </StackPanel>
                     </Expander>
 
-                    <!-- 0 PRESETS (comp/prototype — sample data only, not wired to real save/load) -->
-                    <Expander Classes="StepCard PresetsCard"
+                    <!-- 1 MODEL (Presets nested inside — search/filter/apply/favorites/import-export/persistence) -->
+                    <Expander Classes="StepCard"
                               IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
-                              IsExpanded="{Binding StepPresetsExpanded, Mode=TwoWay}">
+                              IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
                         <Expander.Header>
                             <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource ColorSuccess}">
-                                    <TextBlock Text="0" FontSize="10" FontWeight="Bold"
-                                               Foreground="#0A0E14"
+                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
+                                    <TextBlock Text="1" FontSize="10" FontWeight="Bold"
+                                               Foreground="{DynamicResource AccentHover}"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Border>
-                                <TextBlock Text="PRESETS" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
+                                <TextBlock Text="MODEL" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Expander.Header>
+                        <StackPanel Margin="8,0,8,6" Spacing="6">
+                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
+                                       Text="Import a model with the dropzone in the left panel (or File > Import). Position it in the viewport: G move, R rotate, S scale, or use the floating tools when selected."/>
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
+                                       Text="Tiny imports that look like metres are auto-scaled x1000."/>
+
+                            <Expander Classes="SectionExpander" Header="PRESETS" IsExpanded="False" Margin="0,8,0,0">
                         <StackPanel Margin="8,0,8,8" Spacing="8">
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                       Text="Apply pushes a preset's settings onto the panel below for real. The library itself is still in-memory only — not yet saved to disk between sessions."/>
+                                       Text="Apply pushes a preset's settings onto the panel below for real. Presets persist across restarts to disk automatically."/>
 
                             <!-- Search + filter toggle -->
                             <Grid ColumnDefinitions="*,Auto">
@@ -806,27 +813,7 @@
                                 </StackPanel>
                             </Border>
                         </StackPanel>
-                    </Expander>
-
-                    <!-- 1 MODEL -->
-                    <Expander Classes="StepCard"
-                              IsVisible="{Binding !$parent[Window].DataContext.Viewport.IsPaintEditOpen}"
-                              IsExpanded="{Binding StepModelExpanded, Mode=TwoWay}">
-                        <Expander.Header>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Border Width="18" Height="18" CornerRadius="9" Background="{DynamicResource AccentMuted}">
-                                    <TextBlock Text="1" FontSize="10" FontWeight="Bold"
-                                               Foreground="{DynamicResource AccentHover}"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                </Border>
-                                <TextBlock Text="MODEL" FontSize="12" LetterSpacing="2" VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Expander.Header>
-                        <StackPanel Margin="8,0,8,6" Spacing="6">
-                            <TextBlock TextWrapping="Wrap" FontSize="11" Opacity="0.75"
-                                       Text="Import a model with the dropzone in the left panel (or File > Import). Position it in the viewport: G move, R rotate, S scale, or use the floating tools when selected."/>
-                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.55"
-                                       Text="Tiny imports that look like metres are auto-scaled x1000."/>
+                            </Expander>
 
                             <!-- Selected-model quick edits (effector import panel) -->
                             <StackPanel IsVisible="{Binding $parent[Window].DataContext.Viewport.HasMeshSelected}"

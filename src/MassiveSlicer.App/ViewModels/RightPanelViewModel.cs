@@ -91,16 +91,8 @@ public sealed class RightPanelViewModel : ViewModelBase
         Presets = new PresetsCardViewModel(Additive);
     }
 
-    private bool _stepPresetsExpanded = true;
-    /// <summary>PRESETS card expansion (sits above step 1 MODEL). Comp/prototype scaffold — not yet backed by real persistence.</summary>
-    public bool StepPresetsExpanded
-    {
-        get => _stepPresetsExpanded;
-        set => SetField(ref _stepPresetsExpanded, value);
-    }
-
     private bool _stepModelExpanded;
-    /// <summary>Step 1 MODEL card expansion (auto-opened on import).</summary>
+    /// <summary>Step 1 MODEL card expansion (auto-opened on import). Presets now nests inside this card as its own independently-collapsible/remembered SectionExpander (see RightPanelView.axaml) rather than a separate step.</summary>
     public bool StepModelExpanded
     {
         get => _stepModelExpanded;
@@ -163,7 +155,6 @@ public sealed class RightPanelViewModel : ViewModelBase
     {
         if (editOpen)
         {
-            StepPresetsExpanded = false;
             StepModelExpanded = false;
             StepSliceExpanded = false;
             StepPatternExpanded = false;
