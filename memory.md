@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-21 (LFAM 3 cell-swap fix: models now transfer onto the rotary bed; merge-conflict markers in this file resolved)
+Last updated: 2026-07-21 (Branch model simplified: `master` deleted, `main` is the only shared branch; LFAM 3 cell-swap fix: models now transfer onto the rotary bed; merge-conflict markers in this file resolved)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -524,6 +524,11 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-21 — Branch model simplified: `master` is gone, `main` is everything
+- Upstream cleanup (Thom's side): **`master` and the old merged feature branches were deleted from GitHub**; `origin/HEAD` now points at `main`. The 2026-07-04 master/main split convention below is **obsolete history**.
+- **New mode of operation:** `main` is the single shared branch everyone pulls from and pushes finished work to. Unproven/risky work lives on `feature/<name>` branches (currently `feature/cut-modifier`, `feature/presets`); keep them fresh by merging `main` in, and merge them back to `main` only after real-machine testing. Nothing on a feature branch is in anyone else's build until it's merged.
+- CLAUDE.md / AGENTS.md git conventions updated to match.
 
 ### 2026-07-21 — Model lost when switching to LFAM 3 (cell-swap frame fix)
 - **Symptom (team report):** a model loaded on LFAM 1/2 survives switching between those two cells, but switching to LFAM 3 leaves the bed blank ("I think that is by design" — it wasn't).

@@ -1382,6 +1382,15 @@
                                                FormatString="F0" FontSize="11"/>
                             </Grid>
 
+                            <Grid Margin="8,2,8,4" ColumnDefinitions="*,80">
+                                <TextBlock Grid.Column="0" Text="Resume prime (%)" VerticalAlignment="Center" Classes="LabelMuted"
+                                           ToolTip.Tip="Screw speed DURING the pre-resume pause, as % of the segment RPM. 100 = full-RPM pre-charge (blob-prone if the pause runs long — VLE reads a stopped robot as full ratio). ~30-40% widens the usable pause window. First print start always primes at 100%."/>
+                                <NumericUpDown Grid.Column="1"
+                                               Value="{Binding Additive.SsResumePrimePercent, Mode=TwoWay}"
+                                               Minimum="5" Maximum="100" Increment="5"
+                                               FormatString="F0" FontSize="11"/>
+                            </Grid>
+
                             <TextBlock Text="Post-travel ramp" Classes="LabelMuted" Margin="8,6,8,2"/>
                             <CheckBox Content="Ramp speed + RPM after travel"
                                       Margin="8,0,8,4"
@@ -2679,17 +2688,18 @@
                             </Button>
                         </Grid>
 
-                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">
-                            <TextBlock Grid.Column="0" Text="Temp all zones (°C)"
+                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,Auto,44">
+                            <TextBlock Grid.Column="0" Text="Additional temp all zones (°C)"
                                        VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Material preset temperature for all extruder zones. URM writes T1/T2/T3; LFAM writes $ANOUT[1–3]."/>
-                            <TextBlock Grid.Column="1"
-                                       Text="{Binding Additive.ExportTemperatureC, StringFormat={}{0:F0}}"
-                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"/>
+                                       ToolTip.Tip="T1/T2/T3 export from the MATERIAL setpoints (shown as T1/T2/T3). The +/- box ADDS to every zone: +10 exports each zone 10°C above its material setpoint."/>
+                            <TextBlock Grid.Column="1" Margin="4,0,0,0"
+                                       Text="{Binding Additive.ExportTemperaturesLabel}"
+                                       VerticalAlignment="Center" TextAlignment="Right" Classes="LabelMuted"
+                                       ToolTip.Tip="Material setpoints T1/T2/T3 (°C) — the export base before the offset."/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox" Margin="4,0,0,0"
                                        Text="{Binding Additive.TemperatureOffset, Mode=TwoWay}"
                                        PlaceholderText="+/-"
-                                       ToolTip.Tip="Optional ±°C adjustment applied to all zones. +10 raises export temp by 10°C; -10 lowers it. Leave empty for no change."/>
+                                       ToolTip.Tip="Additional °C added to ALL zones on top of the material setpoints. +10 = every zone 10° hotter; -10 = cooler. Empty = material setpoints as-is."/>
                         </Grid>
 
                         <Grid Margin="8,0,8,4" ColumnDefinitions="*,44,44">

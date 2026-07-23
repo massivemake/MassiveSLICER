@@ -10,6 +10,7 @@ public partial class ViewportOverlayView : UserControl
 {
     private DispatcherTimer? _regionSelectLongPress;
     private bool _regionSelectLongPressFired;
+    private ViewportViewModel? _dockMarginVm;
 
     public ViewportOverlayView()
     {
@@ -39,7 +40,15 @@ public partial class ViewportOverlayView : UserControl
                 if (e.Property == BoundsProperty || e.Property == IsVisibleProperty)
                     UpdateBottomDockMargin();
             };
-        DataContextChanged += (_, _) => UpdateBottomDockMargin();
+        DataContextChanged += (_, _) =>
+        {
+            if (_dockMarginVm is not null)
+                _dockMarginVm.PropertyChanged -= OnDockMarginVmPropertyChanged;
+            _dockMarginVm = DataContext as ViewportViewModel;
+            if (_dockMarginVm is not null)
+                _dockMarginVm.PropertyChanged += OnDockMarginVmPropertyChanged;
+            UpdateBottomDockMargin();
+        };
 
         // Long-press region-select icon → toggle Square ↔ Lasso.
         RegionSelectButton.AddHandler(PointerPressedEvent, OnRegionSelectPointerPressed, handledEventsToo: true);
@@ -120,14 +129,35 @@ public partial class ViewportOverlayView : UserControl
         _regionSelectLongPressFired = false;
     }
 
+    private void OnDockMarginVmPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        // Lfam3WorkflowMaxHeight drives the lift below — it changes the instant a phase
+        // card or the embedded Live I/O expands, ahead of any layout pass touching Bounds.
+        if (e.PropertyName == nameof(ViewportViewModel.Lfam3WorkflowMaxHeight))
+            UpdateBottomDockMargin();
+    }
+
     private void UpdateBottomDockMargin()
     {
         if (DataContext is not ViewportViewModel vm) return;
 
         double lift = 8;
-        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar, Lfam3WorkflowBar })
+        foreach (Control bar in new Control[] { SimTimelineBar, PlaybackTimelineBar })
             if (bar.IsVisible && bar.Bounds.Height > 0)
                 lift = Math.Max(lift, bar.Margin.Bottom + bar.Bounds.Height + 16);
+
+        // Lfam3WorkflowBar's phase-detail cards and embedded Live I/O monitor float above
+        // the collapsed panel via negative-margin + ClipToBounds=False (a deliberate trick
+        // so expanding a card doesn't push the header row down) — so Bounds.Height only
+        // ever reports the COLLAPSED height and under-reports the true visual footprint
+        // whenever a card or Live I/O is open. That under-count is why the ERP / Live I/O
+        // corner docks used to sit low enough to overlap the timeline on LFAM 3. Use the
+        // analytically-computed max height (already modelled correctly) as a floor.
+        if (Lfam3WorkflowBar.IsVisible)
+        {
+            double workflowHeight = Math.Max(Lfam3WorkflowBar.Bounds.Height, vm.Lfam3WorkflowMaxHeight);
+            lift = Math.Max(lift, Lfam3WorkflowBar.Margin.Bottom + workflowHeight + 16);
+        }
 
         vm.BottomDockMargin = new Avalonia.Thickness(8, 8, 8, lift);
 

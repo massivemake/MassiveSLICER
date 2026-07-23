@@ -524,4 +524,175 @@ public sealed class KrlExporterTest
         Assert.Contains(";FOLD CaracolSafety", krl2);
     }
 
+    [Fact]
+    public void Export_resume_prime_reduces_rpm_during_resume_wait()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(50, 0, 10), new Vector3(100, 0, 10), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(new Vector3(100, 0, 10), new Vector3(150, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var krl = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName             = "test_prime",
+            ExtrusionRpmPercent     = 50f,
+            ExtrusionResumeWaitSec  = 0.5f,
+            SsPreTravelWaitSec      = 0.5f,
+            SsResumePrimePercent    = 40f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+
+        // Prime = 40% of the 50% segment RPM = 20, emitted between OUT[7]=TRUE and the wait.
+        Assert.Contains("; resume prime", krl);
+        Assert.Contains("RPM = 20", krl);
+        // Anchor on the REAL travel (the initial approach also emits ";travel end").
+        int travelStart = krl.IndexOf(";travel start", StringComparison.Ordinal);
+        int endTr   = krl.IndexOf(";travel end", travelStart, StringComparison.Ordinal);
+        int out7On  = krl.IndexOf("$OUT[7] = TRUE", endTr, StringComparison.Ordinal);
+        int prime   = krl.IndexOf("; resume prime", endTr, StringComparison.Ordinal);
+        int wait    = krl.IndexOf("WAIT SEC 0.5", prime, StringComparison.Ordinal);
+        int out8Off = krl.IndexOf("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $OUT[8] = FALSE", wait, StringComparison.Ordinal);
+        Assert.True(out7On >= 0 && prime > out7On && wait > prime && out8Off > wait,
+            "prime must sit between OUT[7]=TRUE and the resume wait");
+
+        // First print start keeps the full-RPM pre-charge: exactly one prime (one travel).
+        int first = krl.IndexOf("; resume prime", StringComparison.Ordinal);
+        Assert.Equal(first, krl.LastIndexOf("; resume prime", StringComparison.Ordinal));
+
+        // Default (100%) emits no prime line at all — legacy output unchanged.
+        var krlLegacy = KrlExporter.Export(tp, new KrlExportSettings
+        {
+            ProgramName             = "test_prime_off",
+            ExtrusionRpmPercent     = 50f,
+            ExtrusionResumeWaitSec  = 0.5f,
+            DigitalStartStopEnabled = true,
+            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+        Assert.DoesNotContain("; resume prime", krlLegacy);
+    }
+
+    static Toolpath TwoMoveTp()
+    {
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 10f) { PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+        return tp;
+    }
+
+    [Fact]
+    public void Rotary_cell_export_emits_EK_base_and_E_axis_home()
+    {
+        var krl = KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+        {
+            ProgramName             = "rotary_prog",
+            RotaryExternalKinematic = true,
+            RotaryMachineDefIndex   = 2,
+            BaseDataIndex           = 1,
+            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+        // External-kinematic base coupling present, indexed to the positioner + base.
+        Assert.Contains("$BASE = EK(MACHINE_DEF[2].ROOT,MACHINE_DEF[2].MECH_TYPE,BASE_DATA[1]", krl);
+        // Home PTP carries the positioner axes so the first coordinated move is valid.
+        Assert.Contains("E1 0.000, E2 0.000, E3 0.000}", krl);
+        // EK line sits before the first motion.
+        Assert.True(krl.IndexOf("EK(", System.StringComparison.Ordinal)
+                    < krl.IndexOf("BAS(#VEL_PTP", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Static_cell_export_has_no_EK_base()
+    {
+        var krl = KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+        {
+            ProgramName             = "static_prog",
+            RotaryExternalKinematic = false,
+            HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+        Assert.DoesNotContain("EK(", krl);
+        Assert.DoesNotContain("MACHINE_DEF", krl);
+    }
+
+    [Fact]
+    public void Rotary_cell_injects_EK_into_legacy_header_without_placeholder()
+    {
+        // A user header saved before {{EK_BASE}} existed — no placeholder, no EK line.
+        const string legacyHeader = """
+            &ACCESS RVP
+            DEF {{PROGRAM_NAME}}()
+            BAS(#BASE,{{BASE_NO}})
+            BAS(#VEL_PTP,10)
+            {{HOME_PTP}}
+            """;
+        var krl = KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+        {
+            ProgramName             = "legacy_rotary",
+            RotaryExternalKinematic = true,
+            BaseDataIndex           = 1,
+            HeaderTemplate          = legacyHeader,
+            FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+        });
+        // Injected right after BAS(#BASE,...) even though the header had no placeholder.
+        Assert.Contains("EK(MACHINE_DEF[2]", krl);
+        Assert.True(krl.IndexOf("BAS(#BASE", System.StringComparison.Ordinal)
+                    < krl.IndexOf("EK(", System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Rotary_cell_export_refuses_header_with_no_base_line()
+    {
+        // Header with neither placeholder nor a BAS(#BASE) anchor to inject after.
+        const string brokenHeader = """
+            &ACCESS RVP
+            DEF {{PROGRAM_NAME}}()
+            {{HOME_PTP}}
+            """;
+        var ex = Assert.Throws<System.InvalidOperationException>(() =>
+            KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+            {
+                ProgramName             = "broken_rotary",
+                RotaryExternalKinematic = true,
+                HeaderTemplate          = brokenHeader,
+                FooterTemplate          = KrlExporter.DefaultFooterTemplate,
+            }));
+        Assert.Contains("EK", ex.Message);
+    }
+
+    [Fact]
+    public void Export_emits_distinct_per_zone_temperatures_not_flattened_to_zone1()
+    {
+        // Regression: the export call site once passed a single zone-1-derived value for
+        // all three KrlExportSettings.Temperature1/2/3, silently flattening a material's
+        // distinct zone setpoints (e.g. 290/275/300) to 290/290/290 in the SRC. Each zone
+        // must reach the header independently.
+        var krl = KrlExporter.Export(TwoMoveTp(), new KrlExportSettings
+        {
+            ProgramName             = "distinct_zone_temps",
+            Temperature1             = 290f,
+            Temperature2             = 275f,
+            Temperature3             = 300f,
+            DigitalStartStopEnabled  = true,
+            HeaderTemplate           = KrlExporter.DefaultUrmHeaderTemplate,
+            FooterTemplate           = KrlExporter.DefaultFooterTemplate,
+        });
+
+        Assert.Contains("T1 = 290", krl);
+        Assert.Contains("T2 = 275", krl);
+        Assert.Contains("T3 = 300", krl);
+        // The re-latch nudge (target - 5) must track each zone's own target, not zone 1's.
+        Assert.Contains("T1 = 285", krl);
+        Assert.Contains("T2 = 270", krl);
+        Assert.Contains("T3 = 295", krl);
+    }
+
 }
