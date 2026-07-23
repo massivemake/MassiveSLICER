@@ -92,7 +92,7 @@ public sealed class RightPanelViewModel : ViewModelBase
     }
 
     private bool _stepModelExpanded;
-    /// <summary>Step 1 MODEL card expansion (auto-opened on import). Presets now nests inside this card as its own independently-collapsible/remembered SectionExpander (see RightPanelView.axaml) rather than a separate step.</summary>
+    /// <summary>Step 1 MODEL card expansion (auto-opened on import, and persisted across restarts via PersistExpander.Key="Model" in RightPanelView.axaml). Presets now nests inside this card as its own independently-collapsible/remembered SectionExpander rather than a separate step.</summary>
     public bool StepModelExpanded
     {
         get => _stepModelExpanded;
