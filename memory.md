@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-21 (Branch model simplified: `master` deleted, `main` is the only shared branch; LFAM 3 cell-swap fix: models now transfer onto the rotary bed; merge-conflict markers in this file resolved)
+Last updated: 2026-07-23 (Synced real Presets logic from stale `feature/presets` branch onto `main` via cherry-pick — see changelog)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -524,6 +524,36 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-23 — Synced real Presets logic from `feature/presets` onto `main` (Jeff, w/ Claude)
+
+`feature/presets` had gone stale (only 5 real commits ahead of its branch point, vs. 62 commits
+`main` had raced ahead with — Cut Modifier, effector UX, etc.), so a straight branch merge risked
+conflicts across files the branch never touched but that had since been heavily reworked
+(`GizmoRenderer.cs`, `PlanarMeshSplitter.cs`, `SceneRenderer.cs`, `SceneNode.cs`). Cherry-picked
+instead, on a throwaway `sync/presets-to-main` branch off `main`:
+
+- Skipped `4eddb94` ("Add PRESETS card...") — `main` already had this exact content committed
+  independently as `b94a280` (same message/date, different hash from a prior merge). Verified
+  `PresetsCardViewModel.cs` and `PrintPresetsLoader.cs` on `main` were byte-identical to that
+  shared base before touching anything, so nothing since had drifted.
+- Skipped `9f97512` (GL-thread DataContext crash fix) — same bug class already fixed on `main`
+  via `ee6dbf0`; confirmed `main`'s `ViewportView.axaml.cs` already reads `_vm` at those lines.
+- Cherry-picked `a4cd4b2` (real field-group schema — Save/Apply only touch fields a preset
+  actually captured, plus a real "Master Defaults" preset) and `dd7986a` (Info popup now shows
+  every captured field-group instead of a fixed 7).
+- First cherry-pick attempt (of `4eddb94`) silently duplicated the whole "0 PRESETS" `Expander`
+  block in `RightPanelView.axaml` (two copies both bound to `StepPresetsExpanded`) — caught via
+  `grep -c` before it went further, reset, and re-planned around skipping that commit entirely.
+- Verified clean: `dotnet build` (0 errors), then a live smoke test via the local control bridge
+  (`build-and-run.ps1` → `GET /screenshot` @ :8723) — Presets card renders once, no duplication,
+  and shows real persisted presets loaded from disk (`Master Defaults`, `Thom HHN Nasty Wall`),
+  confirming `PrintPresetsLoader.cs`'s real save/load path actually works end-to-end.
+- Merged `sync/presets-to-main` into `main` (`0450a3b..ef6c9ec`, fast-forward, no conflicts) and
+  pushed. `feature/presets` itself left untouched on GitHub — not deleted, just superseded.
+
+Key files: `src/MassiveSlicer.App/ViewModels/PresetsCardViewModel.cs`,
+`src/MassiveSlicer.Core/IO/PrintPresetsLoader.cs`, `src/MassiveSlicer.App/Views/RightPanelView.axaml`.
 
 ### 2026-07-21 — Branch model simplified: `master` is gone, `main` is everything
 - Upstream cleanup (Thom's side): **`master` and the old merged feature branches were deleted from GitHub**; `origin/HEAD` now points at `main`. The 2026-07-04 master/main split convention below is **obsolete history**.
