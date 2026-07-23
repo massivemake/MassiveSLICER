@@ -245,7 +245,13 @@ public sealed class WorkspaceModelEntry
     public string? EmbeddedMeshPath { get; set; }
 
     public string Name { get; set; } = "Model";
+
+    /// <summary>Always serialized even when false — false is bool's TYPE default, so
+    /// WhenWritingDefault would otherwise drop it and silently reset to true (this class's
+    /// declared default) on load. See WorkspaceUiSession.XBracingShowHelper for the same pattern.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Visible { get; set; } = true;
+
     public bool LayerPreview { get; set; }
 
     /// <summary>Row-major 4×4 local transform (16 floats: M11–M44).</summary>
@@ -267,8 +273,16 @@ public sealed class WorkspaceModelEntry
 public sealed class WorkspaceCutModifier
 {
     public string Name { get; set; } = "Cut";
+
+    // Enabled/PreviewVisible/Cut/Infinite all default to true — false is bool's TYPE default,
+    // so WhenWritingDefault would otherwise drop a false value entirely and silently reset it
+    // to true (this class's declared default) on load. Same pattern as WorkspaceModelEntry.Visible
+    // and WorkspaceUiSession.XBracingShowHelper.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Enabled { get; set; } = true;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool PreviewVisible { get; set; } = true;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Cut { get; set; } = true;
 
     /// <summary>"Horizontal" or "Vertical".</summary>
@@ -281,6 +295,7 @@ public sealed class WorkspaceCutModifier
     public float PositionZ { get; set; }
     public float PositionTangent { get; set; }
 
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Infinite { get; set; } = true;
     public float SizeX { get; set; } = 1500f;
     public float SizeY { get; set; } = 1500f;
@@ -290,6 +305,9 @@ public sealed class WorkspaceCutModifier
 public sealed class WorkspaceToolpathEntry
 {
     public string Name { get; set; } = "Toolpath";
+
+    /// <summary>Always serialized even when false — see WorkspaceModelEntry.Visible.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Visible { get; set; } = true;
 
     /// <summary>Row-major 4×4 local transform (centroid offset if the toolpath was moved).</summary>

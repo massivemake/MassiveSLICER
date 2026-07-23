@@ -370,6 +370,16 @@ internal static class WorkspaceService
                 cut.Infinite        = modEntry.Infinite;
                 cut.SizeX           = modEntry.SizeX;
                 cut.SizeY           = modEntry.SizeY;
+
+                // AddCutModifier() already built this modifier's gizmo node — with the
+                // Orientation/Infinite/Size defaults it had at that moment, since none of the
+                // saved fields above were assigned yet. Every live panel edit re-syncs the
+                // gizmo's transform and rebuilds its plane mesh after a field change; restore
+                // must do the same or the gizmo (what ApplyModifierStackAsync actually reads
+                // the cut geometry from) stays stuck at its creation-time defaults even though
+                // the CutModifier's own fields are correct.
+                viewport.SyncModifierGizmoNodeFromFields(cut);
+                viewport.RebuildModifierPlaneMesh(cut);
             }
 
             viewport.NotifyRenderNeeded();

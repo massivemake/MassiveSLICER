@@ -7195,6 +7195,20 @@ public sealed class ViewportViewModel : ViewModelBase
             if (cut.Orientation == CutOrientation.Horizontal
                 && ComputeWorldCenter(ownerItem.Node) is { } ownerCenter)
                 cut.Offset = ownerCenter.Z - ResolveBedCenterXYZ().Z;
+            else if (cut.Orientation == CutOrientation.Vertical
+                && ComputeWorldCenter(ownerItem.Node) is { } ownerCenterV)
+            {
+                // Same idea as Horizontal above — start the plane at the owner mesh's own
+                // location instead of always at raw bed center, since a mesh won't always sit
+                // at bed center. RotationDegrees is always 0 for a brand-new modifier (normal =
+                // +X, tangent = +Y), so this is just the mesh's bed-center-relative X/Y/Z split
+                // directly across Offset/PositionTangent/PositionZ.
+                var bedCenterV = ResolveBedCenterXYZ();
+                var deltaV = ownerCenterV - bedCenterV;
+                cut.Offset          = deltaV.X;
+                cut.PositionTangent = deltaV.Y;
+                cut.PositionZ       = deltaV.Z;
+            }
 
             node = new SceneNode
             {
@@ -7282,6 +7296,39 @@ public sealed class ViewportViewModel : ViewModelBase
                 cut.RotationDegrees, cut.Offset, cut.PositionZ, cut.PositionTangent, bedCenter);
 
         node.LocalTransform = node.Parent is { } parent ? world * parent.WorldTransform.Inverted() : world;
+    }
+
+    /// <summary>
+    /// Sets a Vertical Cut modifier's RotationDegrees WITHOUT moving its plane — call this
+    /// instead of setting <see cref="CutModifier.RotationDegrees"/> directly whenever the change
+    /// comes from something other than a live gizmo drag (the panel's numeric field, or a
+    /// console/bridge command). <see cref="CutModifierNodeSync.BuildVerticalTransform"/> treats
+    /// Offset/PositionTangent as distances along the CURRENT normal/tangent, which both rotate
+    /// with RotationDegrees — so naively changing RotationDegrees alone swings the plane through
+    /// an arc around bed center at radius Offset, instead of spinning it in place. This captures
+    /// the plane's actual current world position first, then re-solves Offset/PositionTangent for
+    /// the NEW rotation so that position doesn't move (PositionZ is untouched — it's Z-only and
+    /// was never rotation-dependent). The live gizmo-drag path doesn't need this: dragging the
+    /// rotate ring already rotates the node in place, and SyncModifierAfterGizmoEdit's
+    /// extract-then-rebuild round-trip already preserves position the same way.
+    /// </summary>
+    internal void SetVerticalRotationInPlace(CutModifier cut, float newRotationDegrees)
+    {
+        if (cut.Orientation != CutOrientation.Vertical || cut.RotationDegrees == newRotationDegrees)
+        {
+            cut.RotationDegrees = newRotationDegrees;
+            return;
+        }
+
+        var bedCenter  = ResolveBedCenterXYZ();
+        var oldRot     = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        var currentPos = bedCenter + oldRot.Row0.Xyz * cut.Offset + oldRot.Row1.Xyz * cut.PositionTangent;
+
+        var newRot    = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(newRotationDegrees));
+        var delta     = currentPos - bedCenter;
+        cut.Offset          = Vector3.Dot(delta, newRot.Row0.Xyz);
+        cut.PositionTangent = Vector3.Dot(delta, newRot.Row1.Xyz);
+        cut.RotationDegrees = newRotationDegrees;
     }
 
     /// <summary>

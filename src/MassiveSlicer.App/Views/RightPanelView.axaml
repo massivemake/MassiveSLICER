@@ -2854,12 +2854,13 @@
 
                                     <!-- Always shown (per feedback: don't collapse dependent settings, just gray them out
                                          until they're relevant) — enabled only when Orientation is Vertical. A vertical
-                                         plane can face any direction, not just axis-aligned, and rotates around bed
-                                         center (not the mesh's own origin) so the exact angle stays reproducible. -->
+                                         plane can face any direction, not just axis-aligned, and spins in place around
+                                         wherever the plane currently sits (not bed center — a mesh won't always be
+                                         centered on the bed, so orbiting bed center is more confusing than useful). -->
                                     <Grid ColumnDefinitions="*,*,60" IsEnabled="{Binding Modifiers.SelectedSettings.IsVertical}">
-                                        <TextBlock Grid.Column="0" Text="Rotation (deg, around bed center)" Classes="LabelMuted"
+                                        <TextBlock Grid.Column="0" Text="Rotation (deg)" Classes="LabelMuted"
                                                    VerticalAlignment="Center" TextWrapping="Wrap"
-                                                   ToolTip.Tip="Double-click the slider to type an exact value."/>
+                                                   ToolTip.Tip="Double-click the slider to type an exact value. Spins the plane in place — its position doesn't move."/>
                                         <Slider Grid.Column="1" Minimum="0" Maximum="360"
                                                 Value="{Binding Modifiers.SelectedSettings.RotationDegrees}"
                                                 VerticalAlignment="Center" Margin="8,0,4,0"/>
@@ -2869,7 +2870,8 @@
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,80">
-                                        <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   ToolTip.Tip="Horizontal: height above the bed (Z). Vertical: distance from the plane's own position along its current facing direction — not the same axis, since the two orientations cut along different directions."/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit"
                                                  Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
                                     </Grid>
