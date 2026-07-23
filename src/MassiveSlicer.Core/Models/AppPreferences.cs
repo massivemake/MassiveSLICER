@@ -320,6 +320,10 @@ public sealed class AppPreferences
     /// <summary>Deposition print speed in mm/s.</summary>
     public double PrintSpeed { get; set; } = 100.0;
 
+    /// <summary>Master toggle for first-layer speed/RPM adjustments. When false the first layer
+    /// prints at the normal speed/RPM and the override fields are ignored on export.</summary>
+    public bool FirstLayerAdjustmentsEnabled { get; set; }
+
     /// <summary>First-layer print speed override (mm/s). 0 = use the calculated (normal) speed.</summary>
     public double FirstLayerSpeed { get; set; }
 

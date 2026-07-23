@@ -1870,6 +1870,21 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     // calculated value and lets the operator type an explicit number. Export and
     // .mass persistence use the *effective* value (override if set, else calculated).
 
+    private bool _firstLayerAdjustmentsEnabled;
+    /// <summary>Master toggle for the FIRST LAYER speed/RPM overrides. When false the first
+    /// layer prints at the normal speed/RPM (export ignores the override fields) and the UI
+    /// hides the input fields.</summary>
+    public bool FirstLayerAdjustmentsEnabled
+    {
+        get => _firstLayerAdjustmentsEnabled;
+        set
+        {
+            if (!SetField(ref _firstLayerAdjustmentsEnabled, value)) return;
+            OnPropertyChanged(nameof(FirstLayerSpeedEffective));
+            OnPropertyChanged(nameof(FirstLayerRpmEffective));
+        }
+    }
+
     private double _firstLayerSpeed;   // mm/s, 0 = use calculated (= normal print speed)
     /// <summary>First-layer print speed override (mm/s). 0 = use the calculated value.</summary>
     public double FirstLayerSpeed
