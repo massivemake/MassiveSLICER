@@ -171,7 +171,10 @@ public static class ThermalSimulator
     /// <summary>
     /// Stamps <see cref="ToolpathLayer.ThermalTempC"/> on every layer: the predicted
     /// temperature of the surface a layer is deposited onto, from the previous layer's
-    /// actual print time (per-move speeds included). Cheap — run after post-processing.
+    /// print time at the BASE print speed. Adaptive layer speed is deliberately ignored here
+    /// (short layers get slowed by adaptive comp, which would otherwise invert the thermal map
+    /// so short layers read cool/blue) — the view is meant to show the inherent geometry-driven
+    /// thermal tendency: short layers hot/red, long layers cool/blue. Cheap — run after post-processing.
     /// </summary>
     public static void StampLayerTemps(Toolpath toolpath, SliceSettings settings)
     {
@@ -190,7 +193,9 @@ public static class ThermalSimulator
             foreach (var move in layer.Moves)
             {
                 double dist = Vector3.Distance(move.From, move.To);
-                layerTime += ToolpathStatistics.MoveTimeSeconds(move, rates, dist);
+                // Time at BASE print speed (ignorePrintSpeedScale) so the thermal colouring
+                // reflects layer geometry, not the adaptive speed comp that slows short layers.
+                layerTime += ToolpathStatistics.MoveTimeSeconds(move, rates, dist, ignorePrintSpeedScale: true);
             }
             // First layer lands on the bed — use its own period as the proxy.
             float period = float.IsNaN(prevTime) ? (float)layerTime : prevTime;

@@ -104,6 +104,31 @@ public class ThermalSimulatorTest
     }
 
     [Fact]
+    public void StampedTempsIgnoreAdaptiveSpeedScale_ShortLayersStayHot()
+    {
+        // Regression: with adaptive speed/flow on, short layers are printed SLOW (low
+        // PrintSpeedScale) and long layers FAST. If the thermal stamp used those adaptive
+        // speeds, a short layer's long print time would make the layer above it read COOL —
+        // inverting the map so short layers show blue. The thermal view must reflect layer
+        // geometry (base speed): short layers hot, long layers cool, regardless of adaptive.
+        var tp = Stack(400f, 400f, 1600f, 1600f);
+        // Simulate adaptive comp: short (400) layers slowed to 0.25x, long (1600) sped to 1.0x.
+        foreach (var layer in tp.Layers)
+        {
+            float scale = layer.Index < 2 ? 0.25f : 1.0f; // short slow, long fast
+            for (int mi = 0; mi < layer.Moves.Count; mi++)
+                layer.Moves[mi] = layer.Moves[mi] with { PrintSpeedScale = scale };
+        }
+
+        ThermalSimulator.StampLayerTemps(tp, Settings());
+
+        // Even though the short layers were slowed, the layer sitting on a short layer must
+        // still read HOTTER than the layer sitting on a long layer (short region = red).
+        Assert.True(tp.Layers[1].ThermalTempC > tp.Layers[3].ThermalTempC,
+            $"short-layer interface should be hotter: L1={tp.Layers[1].ThermalTempC:0.#} vs L3={tp.Layers[3].ThermalTempC:0.#}");
+    }
+
+    [Fact]
     public void CloneCarriesThermalAndLightningData()
     {
         var tp = Stack(400f);

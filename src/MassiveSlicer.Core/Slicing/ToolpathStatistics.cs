@@ -65,15 +65,28 @@ public static class ToolpathStatistics
         };
     }
 
-    public static double MoveTimeSeconds(ToolpathMove move, ToolpathMotionRates rates, double distanceMm)
+    /// <param name="ignorePrintSpeedScale">
+    /// When true, extrude moves are timed at the base print speed, ignoring the layer-adaptive
+    /// <see cref="ToolpathMove.PrintSpeedScale"/>. Used by the thermal view so its colouring shows
+    /// the inherent geometry-driven thermal tendency (short layers hot/red, long layers cool/blue)
+    /// rather than the post-adaptive result — adaptive speed deliberately slows short layers, which
+    /// would otherwise invert the map (short layers appearing blue).
+    /// </param>
+    public static double MoveTimeSeconds(
+        ToolpathMove move, ToolpathMotionRates rates, double distanceMm,
+        bool ignorePrintSpeedScale = false)
     {
         if (move.IsWipe)
             return distanceMm / rates.WipeMmS;
         if (move.Kind == MoveKind.Extrude)
         {
-            double speed = rates.PrintMmS * Math.Max(move.PrintSpeedScale, 1e-6f);
-            if (move.IsResumeRamp)
-                speed *= Math.Max(move.ResumeSpeedScale, 1e-6f);
+            double speed = rates.PrintMmS;
+            if (!ignorePrintSpeedScale)
+            {
+                speed *= Math.Max(move.PrintSpeedScale, 1e-6f);
+                if (move.IsResumeRamp)
+                    speed *= Math.Max(move.ResumeSpeedScale, 1e-6f);
+            }
             return distanceMm / speed;
         }
         double travelMmS = move.TravelSpeedMps is { } mps and > 0f
