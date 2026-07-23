@@ -6347,6 +6347,32 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // ── Bridge/console selection + object diagnostics ─────────────────────────
 
+    /// <summary>Dumps the full outliner hierarchy (real parent/child nesting, not the flattened
+    /// EnumerateUserModelItems view) with indentation and per-row flags — built to verify
+    /// structural fixes (e.g. Modifiers/Applied-Pieces group persistence) without needing a
+    /// screenshot. Backs the console/bridge `outliner-tree` command.</summary>
+    public string DescribeOutlinerTree()
+    {
+        var sb = new System.Text.StringBuilder();
+        void Walk(OutlinerItemViewModel item, int depth)
+        {
+            var flags = new List<string>();
+            if (item.IsModifiersGroup) flags.Add("ModifiersGroup");
+            if (item.IsPiecesGroup) flags.Add("PiecesGroup");
+            if (item.IsModifier) flags.Add("Modifier");
+            if (item.IsToolpath) flags.Add("Toolpath");
+            if (item.IsEffector) flags.Add("Effector");
+            if (!item.Visible) flags.Add("Hidden");
+            string flagStr = flags.Count == 0 ? "" : $" [{string.Join(",", flags)}]";
+            sb.AppendLine($"{new string(' ', depth * 2)}- {item.Name}{flagStr}");
+            foreach (var child in item.Children)
+                Walk(child, depth + 1);
+        }
+        foreach (var root in OutlinerItems)
+            Walk(root, 0);
+        return sb.Length == 0 ? "[outliner-tree] (empty)" : sb.ToString().TrimEnd();
+    }
+
     /// <summary>Lists user-content outliner items (imports/scans/toolpaths) with mesh + pick info.
     /// Backs the console/bridge `objects` command.</summary>
     public string ListContentObjects()
@@ -6661,7 +6687,7 @@ public sealed class ViewportViewModel : ViewModelBase
         return null;
     }
 
-    private OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
+    internal OutlinerItemViewModel? FindParentOutlinerItem(OutlinerItemViewModel item)
     {
         foreach (var root in OutlinerItems)
         {
@@ -6805,7 +6831,15 @@ public sealed class ViewportViewModel : ViewModelBase
         string name = baseName;
         int n = 2;
         while (existingPiecesGroupNames.Contains(name)) name = $"{baseName} ({n++})";
+        return CreateAppliedPiecesGroupNamed(name);
+    }
 
+    /// <summary>Recreates a previously-saved Applied-Pieces group verbatim by name — used when
+    /// restoring a workspace, where the name was already made unique at save time (see
+    /// WorkspaceService.Capture's WorkspaceModelEntry.PiecesGroupName), so no collision-suffix
+    /// logic is needed here.</summary>
+    internal OutlinerItemViewModel CreateAppliedPiecesGroupNamed(string name)
+    {
         var groupNode = new SceneNode { Name = name, Selectable = false, PickIgnore = true };
         var groupItem = CreateOutlinerItem(groupNode, it =>
         {
@@ -6840,6 +6874,29 @@ public sealed class ViewportViewModel : ViewModelBase
         };
         OutlinerItems.Add(groupItem);
         return groupItem;
+    }
+
+    /// <summary>Restores a single Applied-Pieces piece from a workspace file: registers its
+    /// SceneNode the same way any import is (GPU upload, rotary-bed awareness via
+    /// EnqueueRotarySceneNode), but parents its outliner row under <paramref name="groupItem"/>
+    /// (an Applied-Pieces group recreated via <see cref="CreateAppliedPiecesGroupNamed"/>)
+    /// instead of at the outliner root, with a delete callback that mirrors the live Apply flow
+    /// (removes from the group, not the root — <see cref="RemoveUserNode"/> would no-op here
+    /// since the item was never added to the top-level OutlinerItems).</summary>
+    internal OutlinerItemViewModel AddRestoredPieceToGroup(SceneNode node, OutlinerItemViewModel groupItem)
+    {
+        EnqueueRotarySceneNode(node);
+        var pieceItem = CreateOutlinerItem(node, it =>
+        {
+            foreach (var child in it.Children)
+                PendingRemoveNodes.Enqueue(child.Node);
+            groupItem.RemoveChild(it);
+            PendingRemoveNodes.Enqueue(it.Node);
+            NotifyRenderNeeded();
+        }, displayName: node.Name, canDelete: true, modelFileOps: true);
+        groupItem.AddChild(pieceItem);
+        OnModelGeometryChanged?.Invoke();
+        return pieceItem;
     }
 
     /// <summary>The modifier stack for a mesh, in application (= outliner) order. Empty if it
@@ -7138,6 +7195,20 @@ public sealed class ViewportViewModel : ViewModelBase
             if (cut.Orientation == CutOrientation.Horizontal
                 && ComputeWorldCenter(ownerItem.Node) is { } ownerCenter)
                 cut.Offset = ownerCenter.Z - ResolveBedCenterXYZ().Z;
+            else if (cut.Orientation == CutOrientation.Vertical
+                && ComputeWorldCenter(ownerItem.Node) is { } ownerCenterV)
+            {
+                // Same idea as Horizontal above — start the plane at the owner mesh's own
+                // location instead of always at raw bed center, since a mesh won't always sit
+                // at bed center. RotationDegrees is always 0 for a brand-new modifier (normal =
+                // +X, tangent = +Y), so this is just the mesh's bed-center-relative X/Y/Z split
+                // directly across Offset/PositionTangent/PositionZ.
+                var bedCenterV = ResolveBedCenterXYZ();
+                var deltaV = ownerCenterV - bedCenterV;
+                cut.Offset          = deltaV.X;
+                cut.PositionTangent = deltaV.Y;
+                cut.PositionZ       = deltaV.Z;
+            }
 
             node = new SceneNode
             {
@@ -7225,6 +7296,39 @@ public sealed class ViewportViewModel : ViewModelBase
                 cut.RotationDegrees, cut.Offset, cut.PositionZ, cut.PositionTangent, bedCenter);
 
         node.LocalTransform = node.Parent is { } parent ? world * parent.WorldTransform.Inverted() : world;
+    }
+
+    /// <summary>
+    /// Sets a Vertical Cut modifier's RotationDegrees WITHOUT moving its plane — call this
+    /// instead of setting <see cref="CutModifier.RotationDegrees"/> directly whenever the change
+    /// comes from something other than a live gizmo drag (the panel's numeric field, or a
+    /// console/bridge command). <see cref="CutModifierNodeSync.BuildVerticalTransform"/> treats
+    /// Offset/PositionTangent as distances along the CURRENT normal/tangent, which both rotate
+    /// with RotationDegrees — so naively changing RotationDegrees alone swings the plane through
+    /// an arc around bed center at radius Offset, instead of spinning it in place. This captures
+    /// the plane's actual current world position first, then re-solves Offset/PositionTangent for
+    /// the NEW rotation so that position doesn't move (PositionZ is untouched — it's Z-only and
+    /// was never rotation-dependent). The live gizmo-drag path doesn't need this: dragging the
+    /// rotate ring already rotates the node in place, and SyncModifierAfterGizmoEdit's
+    /// extract-then-rebuild round-trip already preserves position the same way.
+    /// </summary>
+    internal void SetVerticalRotationInPlace(CutModifier cut, float newRotationDegrees)
+    {
+        if (cut.Orientation != CutOrientation.Vertical || cut.RotationDegrees == newRotationDegrees)
+        {
+            cut.RotationDegrees = newRotationDegrees;
+            return;
+        }
+
+        var bedCenter  = ResolveBedCenterXYZ();
+        var oldRot     = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        var currentPos = bedCenter + oldRot.Row0.Xyz * cut.Offset + oldRot.Row1.Xyz * cut.PositionTangent;
+
+        var newRot    = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(newRotationDegrees));
+        var delta     = currentPos - bedCenter;
+        cut.Offset          = Vector3.Dot(delta, newRot.Row0.Xyz);
+        cut.PositionTangent = Vector3.Dot(delta, newRot.Row1.Xyz);
+        cut.RotationDegrees = newRotationDegrees;
     }
 
     /// <summary>

@@ -838,6 +838,101 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "cam-focus",
+            Aliases = ["focus"],
+            Description = "Frame the camera on the current selection (bridge-friendly alternative to `frame`, which requires a robot connection) — use after `select <name>`",
+            Execute = (ctx, _) => ctx.Main.Viewport.OnFocusRequested?.Invoke(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-frame-all",
+            Description = "Frame the whole scene (bridge-friendly alternative to `frame`, which requires a robot connection)",
+            Execute = (ctx, _) => ctx.Main.Viewport.OnFrameAllRequested?.Invoke(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-preset",
+            Description = "Snap the camera to a named view preset",
+            Usage = "cam-preset <Top|Bottom|Left|Right|Front|Back|Iso>",
+            Execute = (ctx, args) =>
+            {
+                string name = args.Trim();
+                if (name.Length == 0) { ctx.LogError("usage: cam-preset <Top|Bottom|Left|Right|Front|Back|Iso>"); return; }
+                ctx.Main.Viewport.OnViewPresetRequested?.Invoke(name);
+                ctx.Log($"[cam] preset -> {name}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-debug",
+            Description = "Print the current camera state (Azimuth/Elevation/Radius/Target)",
+            Execute = (ctx, _) =>
+            {
+                if (ctx.Main.Viewport.GetCameraState?.Invoke() is not { } cam) { ctx.LogError("[cam] no camera state available."); return; }
+                ctx.Log($"[cam] Azimuth={cam.Azimuth:0.#} Elevation={cam.Elevation:0.#} Radius={cam.Radius:0.#} Target=({cam.TargetX:0.#},{cam.TargetY:0.#},{cam.TargetZ:0.#}) Ortho={cam.IsOrthographic}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-orbit",
+            Description = "Set the camera's orbit angles directly (degrees) — use `cam-debug` first to see current values",
+            Usage = "cam-orbit <azimuth> <elevation>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2 || !float.TryParse(parts[0], out var az) || !float.TryParse(parts[1], out var el))
+                {
+                    ctx.LogError("usage: cam-orbit <azimuth> <elevation>");
+                    return;
+                }
+                if (ctx.Main.Viewport.GetCameraState?.Invoke() is not { } cam) { ctx.LogError("[cam] no camera state available."); return; }
+                ctx.Main.Viewport.ApplyCameraState?.Invoke(cam with { Azimuth = az, Elevation = el });
+                ctx.Log($"[cam] Azimuth -> {az}, Elevation -> {el}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-zoom",
+            Description = "Set the camera's orbit radius (distance from target) directly",
+            Usage = "cam-zoom <radius>",
+            Execute = (ctx, args) =>
+            {
+                if (!float.TryParse(args.Trim(), out var radius)) { ctx.LogError("usage: cam-zoom <radius>"); return; }
+                if (ctx.Main.Viewport.GetCameraState?.Invoke() is not { } cam) { ctx.LogError("[cam] no camera state available."); return; }
+                ctx.Main.Viewport.ApplyCameraState?.Invoke(cam with { Radius = radius });
+                ctx.Log($"[cam] Radius -> {radius}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "cam-pan",
+            Description = "Set the camera's orbit target (look-at point) directly",
+            Usage = "cam-pan <x> <y> <z>",
+            Execute = (ctx, args) =>
+            {
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 3
+                    || !float.TryParse(parts[0], out var x)
+                    || !float.TryParse(parts[1], out var y)
+                    || !float.TryParse(parts[2], out var z))
+                {
+                    ctx.LogError("usage: cam-pan <x> <y> <z>");
+                    return;
+                }
+                if (ctx.Main.Viewport.GetCameraState?.Invoke() is not { } cam) { ctx.LogError("[cam] no camera state available."); return; }
+                ctx.Main.Viewport.ApplyCameraState?.Invoke(cam with { TargetX = x, TargetY = y, TargetZ = z });
+                ctx.Log($"[cam] Target -> ({x},{y},{z})");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "slice",
             Aliases = ["generate-slice"],
             Description = "Slice the selected mesh into toolpaths",
@@ -973,6 +1068,18 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "outliner-tree",
+            Aliases = ["tree"],
+            Description = "Dump the full outliner hierarchy (real parent/child nesting + group/modifier/toolpath/visibility flags) — verify structural fixes without a screenshot",
+            Execute = (ctx, _) =>
+            {
+                foreach (var line in ctx.Main.Viewport.DescribeOutlinerTree().Split('\n'))
+                    ctx.Log(line.TrimEnd('\r'));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "select",
             Aliases = ["sel"],
             Description = "Select a content object by name (drives the outliner selection path)",
@@ -1087,6 +1194,44 @@ public sealed class ConsoleCommandRegistry
                 settings.IsVertical = true;
                 settings.RotationDegrees = value;
                 ctx.Log($"[modifier] {settings.Name} RotationDegrees -> {settings.RotationDegrees}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-set-infinite",
+            Description = "Diagnostic: set the selected modifier's Infinite flag directly (true = unbounded plane, false = Restricted/bounded — verifies Apply without needing a checkbox click)",
+            Usage = "modifier-set-infinite <true|false>",
+            Execute = (ctx, args) =>
+            {
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                if (!bool.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-infinite <true|false>"); return; }
+                settings.Infinite = value;
+                ctx.Log($"[modifier] {settings.Name} Infinite -> {settings.Infinite}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-set-size",
+            Description = "Diagnostic: set the selected Restricted-mode modifier's SizeX/SizeY directly",
+            Usage = "modifier-set-size <sizeX> <sizeY>",
+            Execute = (ctx, args) =>
+            {
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length != 2
+                    || !float.TryParse(parts[0], out var sizeX)
+                    || !float.TryParse(parts[1], out var sizeY))
+                {
+                    ctx.LogError("usage: modifier-set-size <sizeX> <sizeY>");
+                    return;
+                }
+                settings.SizeX = sizeX;
+                settings.SizeY = sizeY;
+                ctx.Log($"[modifier] {settings.Name} SizeX -> {settings.SizeX}, SizeY -> {settings.SizeY}");
             },
         });
 

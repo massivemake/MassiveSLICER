@@ -75,9 +75,16 @@ public sealed class GizmoRenderer : IDisposable
 
     // -- Draw -----------------------------------------------------------------
 
-    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode)
+    /// <summary>
+    /// <paramref name="axisBasis"/> optionally reorients the whole gizmo (rotation only, no
+    /// translation) before placing it at <paramref name="worldPos"/> — used so a Vertical Cut
+    /// modifier's gizmo can show/hit-test its own local X/Y (aligned to its RotationDegrees)
+    /// instead of always being world-axis-aligned like every other selectable object.
+    /// </summary>
+    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode, Matrix4? axisBasis = null)
     {
         var mvp = Matrix4.CreateScale(scale)
+                * (axisBasis ?? Matrix4.Identity)
                 * Matrix4.CreateTranslation(worldPos.X, worldPos.Y, worldPos.Z)
                 * viewProj;
 
@@ -113,7 +120,7 @@ public sealed class GizmoRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    public void DrawAxisHighlight(Vector3 worldPos, GizmoAxis axis, float lineLength, Matrix4 viewProj)
+    public void DrawAxisHighlight(Vector3 worldPos, GizmoAxis axis, float lineLength, Matrix4 viewProj, Matrix4? axisBasis = null)
     {
         if (axis == GizmoAxis.None || axis == GizmoAxis.All) return;
 
@@ -126,6 +133,7 @@ public sealed class GizmoRenderer : IDisposable
 
         var mvp = Matrix4.CreateScale(lineLength)
                 * rotation
+                * (axisBasis ?? Matrix4.Identity)
                 * Matrix4.CreateTranslation(worldPos.X, worldPos.Y, worldPos.Z)
                 * viewProj;
 
@@ -150,11 +158,12 @@ public sealed class GizmoRenderer : IDisposable
     /// Redraws only the active ring in a brighter colour and thicker line width.
     /// Call after <see cref="Draw"/> so the highlight renders on top.
     /// </summary>
-    public void DrawRingHighlight(Vector3 worldPos, GizmoAxis axis, float scale, Matrix4 viewProj)
+    public void DrawRingHighlight(Vector3 worldPos, GizmoAxis axis, float scale, Matrix4 viewProj, Matrix4? axisBasis = null)
     {
         if (axis == GizmoAxis.None) return;
 
         var mvp = Matrix4.CreateScale(scale)
+                * (axisBasis ?? Matrix4.Identity)
                 * Matrix4.CreateTranslation(worldPos.X, worldPos.Y, worldPos.Z)
                 * viewProj;
 
@@ -181,14 +190,17 @@ public sealed class GizmoRenderer : IDisposable
     public static GizmoAxis HitTestAxes(
         Vector3 worldPos, float scale,
         float mx, float my, float vpW, float vpH,
-        Matrix4 viewProj, GizmoMode mode = GizmoMode.Translate)
+        Matrix4 viewProj, GizmoMode mode = GizmoMode.Translate, Matrix4? axisBasis = null)
     {
         const float Threshold = 10f;
 
-        var origin = ToScreen(worldPos,                                    viewProj, vpW, vpH);
-        var tipX   = ToScreen(worldPos + new Vector3(scale, 0f,    0f),    viewProj, vpW, vpH);
-        var tipY   = ToScreen(worldPos + new Vector3(0f,    scale, 0f),    viewProj, vpW, vpH);
-        var tipZ   = ToScreen(worldPos + new Vector3(0f,    0f,    scale), viewProj, vpW, vpH);
+        var basis = axisBasis ?? Matrix4.Identity;
+        Vector3 Rotated(Vector3 v) => Vector3.TransformVector(v, basis);
+
+        var origin = ToScreen(worldPos,                                        viewProj, vpW, vpH);
+        var tipX   = ToScreen(worldPos + Rotated(new Vector3(scale, 0f,    0f)), viewProj, vpW, vpH);
+        var tipY   = ToScreen(worldPos + Rotated(new Vector3(0f,    scale, 0f)), viewProj, vpW, vpH);
+        var tipZ   = ToScreen(worldPos + Rotated(new Vector3(0f,    0f,    scale)), viewProj, vpW, vpH);
 
         var   mouse = new Vector2(mx, my);
 
@@ -210,14 +222,17 @@ public sealed class GizmoRenderer : IDisposable
     public static GizmoAxis HitTestRings(
         Vector3 worldPos, float scale,
         float mx, float my, float vpW, float vpH,
-        Matrix4 viewProj)
+        Matrix4 viewProj, Matrix4? axisBasis = null)
     {
         const float Threshold = 8f;
 
         var mouse = new Vector2(mx, my);
+        var basis = axisBasis ?? Matrix4.Identity;
+        Vector3 Rotated(Vector3 v) => Vector3.TransformVector(v, basis);
 
         float BestDist(Vector3 axis1, Vector3 axis2)
         {
+            axis1 = Rotated(axis1); axis2 = Rotated(axis2);
             float best = float.MaxValue;
             for (int i = 0; i < RingSegs; i++)
             {

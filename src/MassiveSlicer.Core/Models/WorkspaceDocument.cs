@@ -245,7 +245,13 @@ public sealed class WorkspaceModelEntry
     public string? EmbeddedMeshPath { get; set; }
 
     public string Name { get; set; } = "Model";
+
+    /// <summary>Always serialized even when false — false is bool's TYPE default, so
+    /// WhenWritingDefault would otherwise drop it and silently reset to true (this class's
+    /// declared default) on load. See WorkspaceUiSession.XBracingShowHelper for the same pattern.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Visible { get; set; } = true;
+
     public bool LayerPreview { get; set; }
 
     /// <summary>Row-major 4×4 local transform (16 floats: M11–M44).</summary>
@@ -253,12 +259,55 @@ public sealed class WorkspaceModelEntry
 
     /// <summary>Toolpaths generated from this model (child outliner entries).</summary>
     public List<WorkspaceToolpathEntry> Toolpaths { get; set; } = [];
+
+    /// <summary>Non-destructive modifiers (Cut planes, future braces/supports). Applied when the workspace loads.</summary>
+    public List<WorkspaceCutModifier> Modifiers { get; set; } = [];
+
+    /// <summary>Name of the Applied-Pieces group this entry belonged to at save time (see
+    /// ViewportViewModel.CreateAppliedPiecesGroup), or null for a model that isn't a Cut
+    /// modifier's output piece. Entries sharing the same name are re-grouped together on load.</summary>
+    public string? PiecesGroupName { get; set; }
+}
+
+/// <summary>Serialized Cut modifier (plane position, orientation, size bounds).</summary>
+public sealed class WorkspaceCutModifier
+{
+    public string Name { get; set; } = "Cut";
+
+    // Enabled/PreviewVisible/Cut/Infinite all default to true — false is bool's TYPE default,
+    // so WhenWritingDefault would otherwise drop a false value entirely and silently reset it
+    // to true (this class's declared default) on load. Same pattern as WorkspaceModelEntry.Visible
+    // and WorkspaceUiSession.XBracingShowHelper.
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public bool Enabled { get; set; } = true;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public bool PreviewVisible { get; set; } = true;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public bool Cut { get; set; } = true;
+
+    /// <summary>"Horizontal" or "Vertical".</summary>
+    public string Orientation { get; set; } = "Horizontal";
+
+    public float RotationDegrees { get; set; }
+    public float Offset { get; set; }
+    public float PositionX { get; set; }
+    public float PositionY { get; set; }
+    public float PositionZ { get; set; }
+    public float PositionTangent { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
+    public bool Infinite { get; set; } = true;
+    public float SizeX { get; set; } = 1500f;
+    public float SizeY { get; set; } = 1500f;
 }
 
 /// <summary>One toolpath outliner child saved with its parent model.</summary>
 public sealed class WorkspaceToolpathEntry
 {
     public string Name { get; set; } = "Toolpath";
+
+    /// <summary>Always serialized even when false — see WorkspaceModelEntry.Visible.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.Never)]
     public bool Visible { get; set; } = true;
 
     /// <summary>Row-major 4×4 local transform (centroid offset if the toolpath was moved).</summary>

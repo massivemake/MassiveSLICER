@@ -136,10 +136,20 @@
     <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true"
           ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitShaExit"/>
     </Exec>
+    <!--
+      Defensive, not just "was it empty": when git isn't resolvable at all (e.g. a shortcut/.bat
+      launched from Explorer with a stale PATH that doesn't include git — exit 9009, "command not
+      recognized"), ConsoleOutput ends up holding cmd's own error text, not an empty string. A
+      naive "== ''" check misses that entirely and bakes the error message straight into the
+      generated .cs file as a "constant", breaking the build with cascading parser errors instead
+      of just falling back to a placeholder build label. Require the actual expected SHAPE of each
+      value (all-digits / no whitespace) in addition to the exit code and emptiness checks.
+    -->
     <PropertyGroup>
-      <GitCommitCount Condition="'$(GitCountExit)' != '0' or '$(GitCommitCount)' == ''">0</GitCommitCount>
-      <GitShortSha Condition="'$(GitShortSha)' == ''">dev</GitShortSha>
+      <GitCommitCount Condition="'$(GitCountExit)' != '0' or '$(GitCommitCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitCommitCount)', '^\d+$'))">0</GitCommitCount>
+      <GitShortSha Condition="'$(GitShaExit)' != '0' or '$(GitShortSha)' == '' or $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitShortSha)', '\s'))">dev</GitShortSha>
       <BuildDateStamp>$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</BuildDateStamp>
       <BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
     </PropertyGroup>

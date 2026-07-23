@@ -69,7 +69,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
         set
         {
             if (Cut is null || Cut.RotationDegrees == value) return;
-            Cut.RotationDegrees = value;
+            _viewport.SetVerticalRotationInPlace(Cut, value);
             _viewport.SyncModifierGizmoNodeFromFields(Cut);
             _viewport.NotifyRenderNeeded();
             OnPropertyChanged();

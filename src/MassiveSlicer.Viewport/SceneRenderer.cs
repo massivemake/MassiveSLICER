@@ -518,6 +518,11 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public Vector3? GizmoPivotWorld { get; set; }
 
+    /// <summary>Optional rotation-only basis (no translation) the gizmo is drawn/hit-tested in,
+    /// instead of always being world-axis-aligned — set when the selection is a Vertical Cut
+    /// modifier so its gizmo's X/Y follow the plane's own RotationDegrees.</summary>
+    public Matrix4? GizmoAxisBasis { get; set; }
+
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
 
@@ -1692,13 +1697,13 @@ public sealed class SceneRenderer : IDisposable
             GL.Disable(EnableCap.CullFace);
 
             if (ActiveDragAxis != GizmoAxis.None)
-                _gizmo.DrawAxisHighlight(nodePos, ActiveDragAxis, Camera.FarClip * 0.9f, mvp);
+                _gizmo.DrawAxisHighlight(nodePos, ActiveDragAxis, Camera.FarClip * 0.9f, mvp, GizmoAxisBasis);
 
             if (GizmoEnabled && GizmoMode != GizmoMode.None)
             {
-                _gizmo.Draw(nodePos, scale, mvp, GizmoMode);
+                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis);
                 if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
-                    _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp);
+                    _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp, GizmoAxisBasis);
             }
 
             GL.Enable(EnableCap.CullFace);
@@ -2118,8 +2123,8 @@ public sealed class SceneRenderer : IDisposable
         var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
 
         return GizmoMode == GizmoMode.Rotate
-            ? GizmoRenderer.HitTestRings(nodePos, scale, mx, my, vpW, vpH, viewProj)
-            : GizmoRenderer.HitTestAxes (nodePos, scale, mx, my, vpW, vpH, viewProj, GizmoMode);
+            ? GizmoRenderer.HitTestRings(nodePos, scale, mx, my, vpW, vpH, viewProj, GizmoAxisBasis)
+            : GizmoRenderer.HitTestAxes (nodePos, scale, mx, my, vpW, vpH, viewProj, GizmoMode, GizmoAxisBasis);
     }
 
     /// <inheritdoc/>

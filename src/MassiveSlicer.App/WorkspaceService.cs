@@ -73,6 +73,13 @@ internal static class WorkspaceService
                 LocalTransform = ToArray(node.WorldTransform),
             };
 
+            // EnumerateUserModelItems() flattens Applied-Pieces groups (see its own comment) so
+            // each piece is independently slicable/exportable — but that means the group
+            // membership itself would otherwise be lost on save. Recover it here so the group can
+            // be recreated on load instead of every piece reappearing flat at the outliner root.
+            if (viewport.FindParentOutlinerItem(item) is { IsPiecesGroup: true } piecesGroup)
+                entry.PiecesGroupName = piecesGroup.Name;
+
             if (node.SourceFilePath is { } src && File.Exists(src))
                 entry.SourcePath = src;
 
@@ -121,6 +128,36 @@ internal static class WorkspaceService
                 };
                 entry.Toolpaths.Add(tpEntry);
                 state.ToolpathEntries.Add((tpEntry, ToolpathClone.Copy(snap.Raw)));
+            }
+
+            // Save non-destructive modifiers (Cut planes) in the model's stack
+            var modifiersGroup = item.Children.FirstOrDefault(c => c.IsModifiersGroup);
+            if (modifiersGroup?.Node.Children is not null)
+            {
+                foreach (var modifierNode in modifiersGroup.Node.Children)
+                {
+                    if (viewport.FindModifierForNode(modifierNode) is not { } cut)
+                        continue;
+
+                    var modEntry = new WorkspaceCutModifier
+                    {
+                        Name              = cut.Name,
+                        Enabled           = cut.Enabled,
+                        PreviewVisible    = cut.PreviewVisible,
+                        Cut               = cut.Cut,
+                        Orientation       = cut.Orientation.ToString(),
+                        RotationDegrees   = cut.RotationDegrees,
+                        Offset            = cut.Offset,
+                        PositionX         = cut.PositionX,
+                        PositionY         = cut.PositionY,
+                        PositionZ         = cut.PositionZ,
+                        PositionTangent   = cut.PositionTangent,
+                        Infinite          = cut.Infinite,
+                        SizeX             = cut.SizeX,
+                        SizeY             = cut.SizeY,
+                    };
+                    entry.Modifiers.Add(modEntry);
+                }
             }
 
             doc.Models.Add(entry);
@@ -193,6 +230,8 @@ internal static class WorkspaceService
     {
         viewport.ClearUserScene();
 
+        var piecesGroups = new Dictionary<string, ViewModels.OutlinerItemViewModel>(StringComparer.OrdinalIgnoreCase);
+
         int restored = 0;
         foreach (var entry in doc.Models)
         {
@@ -211,6 +250,7 @@ internal static class WorkspaceService
             }
 
             SceneNode? node = null;
+            ViewModels.OutlinerItemViewModel? parentItem = null;
             if (loadPath is not null)
             {
                 var transform = FromArray(entry.LocalTransform);
@@ -220,7 +260,21 @@ internal static class WorkspaceService
                     node.Name         = entry.Name;
                     node.Visible      = entry.Visible;
                     node.LayerPreview = entry.LayerPreview;
-                    viewport.AddImportNode(node);
+
+                    if (entry.PiecesGroupName is { } groupName)
+                    {
+                        if (!piecesGroups.TryGetValue(groupName, out var groupItem))
+                        {
+                            groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
+                            groupItem.Visible = entry.Visible;
+                            piecesGroups[groupName] = groupItem;
+                        }
+                        parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                    }
+                    else
+                    {
+                        viewport.AddImportNode(node);
+                    }
                 }
             }
 
@@ -250,13 +304,14 @@ internal static class WorkspaceService
 
             restored++;
 
-            if (entry.Toolpaths.Count == 0)
-            {
-                viewport.NotifyRenderNeeded();
-                continue;
-            }
-
-            var parentItem = viewport.FindOutlinerItem(node);
+            // NOTE: previously this bailed out early ("continue") whenever a model had zero
+            // toolpaths — which silently skipped the Modifiers-restore loop below for any entry
+            // in that state, including the master mesh after an Apply (its own pre-cut toolpath
+            // is deliberately deleted, not hidden, once real per-piece toolpaths exist — see
+            // ApplyModifierStackAsync). That made a saved Cut modifier stack vanish on reload
+            // even though Capture() had written it correctly. Both loops below are no-ops on
+            // empty lists, so there's no need to special-case either one.
+            parentItem ??= viewport.FindOutlinerItem(node);
             if (parentItem is null)
             {
                 viewport.NotifyRenderNeeded();
@@ -295,6 +350,36 @@ internal static class WorkspaceService
                         : default,
                     LocalTransformOverride = FromArray(tpEntry.LocalTransform),
                 });
+            }
+
+            // Restore non-destructive modifiers (Cut planes)
+            foreach (var modEntry in entry.Modifiers)
+            {
+                var cut = viewport.AddCutModifier(parentItem);
+                cut.Name            = modEntry.Name;
+                cut.Enabled         = modEntry.Enabled;
+                cut.PreviewVisible  = modEntry.PreviewVisible;
+                cut.Cut             = modEntry.Cut;
+                cut.Orientation     = Enum.Parse<CutOrientation>(modEntry.Orientation);
+                cut.RotationDegrees = modEntry.RotationDegrees;
+                cut.Offset          = modEntry.Offset;
+                cut.PositionX       = modEntry.PositionX;
+                cut.PositionY       = modEntry.PositionY;
+                cut.PositionZ       = modEntry.PositionZ;
+                cut.PositionTangent = modEntry.PositionTangent;
+                cut.Infinite        = modEntry.Infinite;
+                cut.SizeX           = modEntry.SizeX;
+                cut.SizeY           = modEntry.SizeY;
+
+                // AddCutModifier() already built this modifier's gizmo node — with the
+                // Orientation/Infinite/Size defaults it had at that moment, since none of the
+                // saved fields above were assigned yet. Every live panel edit re-syncs the
+                // gizmo's transform and rebuilds its plane mesh after a field change; restore
+                // must do the same or the gizmo (what ApplyModifierStackAsync actually reads
+                // the cut geometry from) stays stuck at its creation-time defaults even though
+                // the CutModifier's own fields are correct.
+                viewport.SyncModifierGizmoNodeFromFields(cut);
+                viewport.RebuildModifierPlaneMesh(cut);
             }
 
             viewport.NotifyRenderNeeded();

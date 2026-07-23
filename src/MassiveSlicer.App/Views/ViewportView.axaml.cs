@@ -1569,6 +1569,8 @@ public partial class ViewportView : UserControl
                 : null;
         }
 
+        _renderer.GizmoAxisBasis = GetModifierAxisBasis(_renderer.SelectedNode);
+
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
     }
@@ -5919,6 +5921,7 @@ public partial class ViewportView : UserControl
         var tpItem = ownerItem.Children.FirstOrDefault(c => c.IsToolpath);
 
         var pieces = new List<ApplyPiece> { new(masterMesh, ownerItem.Node.WorldTransform, ownerItem.Node.Name) };
+        bool anyChange = false;
 
         foreach (var cut in cuts)
         {
@@ -5963,6 +5966,7 @@ public partial class ViewportView : UserControl
                     bool crosses = meshSplit.Positive.Positions.Length > 0 && meshSplit.Negative.Positions.Length > 0;
                     if (!crosses) { next.Add(piece); continue; }
 
+                    anyChange = true;
                     AddSplitPieces(meshSplit.Positive, piece.World, $"{piece.Name} +");
                     AddSplitPieces(meshSplit.Negative, piece.World, $"{piece.Name} -");
                 }
@@ -5972,15 +5976,17 @@ public partial class ViewportView : UserControl
                     var localTanV = TkVector3.Normalize(TkVector3.TransformNormal(worldTangentV, inv));
                     var bounded = BoundedCutSplitter.Split(
                         piece.Mesh, localPt, localN, localTanU, localTanV, cut.SizeX * 0.5f, cut.SizeY * 0.5f);
+
                     if (bounded is null) { next.Add(piece); continue; }
 
+                    anyChange = true;
                     AddResolvedPieces(bounded, piece.World, piece.Name);
                 }
             }
             pieces = next;
         }
 
-        if (pieces.Count <= 1)
+        if (!anyChange)
         {
             LogToConsole("[apply] no modifier's plane actually crossed the model — nothing produced.");
             return;
@@ -6510,6 +6516,23 @@ public partial class ViewportView : UserControl
         if (IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp)
             return tcp.Row3.Xyz;
         return node.WorldTransform.Row3.Xyz;
+    }
+
+    /// <summary>Rotation-only basis (no translation) the gizmo should be drawn/hit-tested/dragged
+    /// in for <paramref name="node"/> — a Vertical Cut modifier's own RotationDegrees around Z
+    /// (X/Y follow the plane, Z stays world-up since RotationDegrees only ever rotates about Z
+    /// anyway), or null (world-axis-aligned, every other selectable object's existing behavior)
+    /// for anything else. Scoped to Cut modifiers only — see feedback from Jeff 2026-07-22.</summary>
+    private Matrix4? GetModifierAxisBasis(SceneNode? node)
+    {
+        // Called from OnRender (GL thread) every frame — must use the cached _vm field, never
+        // DataContext (an Avalonia dispatcher-verified property that throws
+        // InvalidOperationException off the UI thread). See the GL-thread DataContext audit
+        // referenced in project memory; this exact mistake crashed on the very next model import.
+        if (node is null) return null;
+        if (_vm is not { } vm) return null;
+        if (vm.FindModifierForNode(node) is not { Orientation: CutOrientation.Vertical } cut) return null;
+        return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
     }
 
     private void BeginToolIkDrag(SceneNode node)
@@ -13369,11 +13392,18 @@ public partial class ViewportView : UserControl
         }
         else
         {
+            // Every other gizmo (meshes, effectors, etc.) stays world-axis-aligned — this is
+            // scoped to Cut modifiers only. A Vertical cut's X/Y axes follow its own
+            // RotationDegrees so dragging "sideways" moves along the plane's own line instead of
+            // requiring a diagonal X+Y combination; Z stays world-up always (RotationDegrees only
+            // ever rotates about Z for a Vertical cut, so Z was never tilting anyway — this just
+            // makes that explicit rather than accidental).
+            var basis = GetModifierAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
             _gizmoDragAxisDir = axis switch
             {
-                GizmoAxis.X => new Vector3(1f, 0f, 0f),
-                GizmoAxis.Y => new Vector3(0f, 1f, 0f),
-                _           => new Vector3(0f, 0f, 1f),
+                GizmoAxis.X => basis.Row0.Xyz,
+                GizmoAxis.Y => basis.Row1.Xyz,
+                _           => basis.Row2.Xyz,
             };
         }
 
