@@ -147,27 +147,44 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="GitBaselineCount"/>
       <Output TaskParameter="ExitCode" PropertyName="GitBaselineExit"/>
     </Exec>
-    <Exec Command="git rev-list --count origin/main..HEAD" ConsoleToMSBuild="true"
-          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitDeltaCount"/>
-      <Output TaskParameter="ExitCode" PropertyName="GitDeltaExit"/>
-    </Exec>
     <!--
-      Defensive, not just "was it empty": when git isn't resolvable at all (e.g. a shortcut/.bat
-      launched from Explorer with a stale PATH that doesn't include git — exit 9009, "command not
-      recognized"), ConsoleOutput ends up holding cmd's own error text, not an empty string. A
-      naive "== ''" check misses that entirely and bakes the error message straight into the
-      generated .cs file as a "constant", breaking the build with cascading parser errors instead
-      of just falling back to a placeholder build label. Require the actual expected SHAPE of each
-      value (all-digits / no whitespace, matching the exact pattern for that field) in addition to
-      the exit code and emptiness checks. GitBaselineCount/GitDeltaCount fall back to 0 the same
-      way if origin/main isn't resolvable at all (e.g. a fresh clone with no fetch yet).
+      Delta is deliberately NOT a plain count of commits origin/main doesn't have — that
+      formula never resets after a squash landing, because a squash
+      commit has no ancestry link back to the commits it was squashed from, so they count
+      forever even once their content has genuinely shipped. It also can't be "commits since
+      the most recent merge-from-main", because syncing (pulling main in, which can happen
+      many times a day) creates a merge commit too, and that would wrongly reset the count
+      even though none of your own work has actually shipped.
+      Instead: only an explicit landing moves a per-branch tag (refs/tags/landed/<branch>,
+      created by the land tooling, never by an ordinary sync). Delta counts first-parent
+      commits since that tag if one exists for this branch; otherwise since the branch's
+      fork point from origin/main (git merge-base). Ordinary "pull main in" syncs never move
+      the tag, so they never reset the count — only a real landing does.
     -->
+    <Exec Command="git rev-parse --verify -q refs/tags/landed/$(GitBranchName)" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitLandedSha"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitLandedExit"/>
+    </Exec>
+    <Exec Command="git merge-base HEAD origin/main" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitMergeBase"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitMergeBaseExit"/>
+    </Exec>
     <PropertyGroup>
+      <!--
+        Defensive, not just "was it empty": when git isn't resolvable at all (e.g. a shortcut/.bat
+        launched from Explorer with a stale PATH that doesn't include git — exit 9009, "command not
+        recognized"), ConsoleOutput ends up holding cmd's own error text, not an empty string. A
+        naive "== ''" check misses that entirely and bakes the error message straight into the
+        generated .cs file as a "constant", breaking the build with cascading parser errors instead
+        of just falling back to a placeholder build label. Require the actual expected SHAPE of each
+        value (all-digits / no whitespace, matching the exact pattern for that field) in addition to
+        the exit code and emptiness checks.
+      -->
       <GitBranchName Condition="'$(GitBranchExit)' != '0' or '$(GitBranchName)' == '' or $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitBranchName)', '\s'))">unknown</GitBranchName>
       <GitShortSha Condition="'$(GitShaExit)' != '0' or '$(GitShortSha)' == '' or $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitShortSha)', '\s'))">dev</GitShortSha>
       <GitBaselineCount Condition="'$(GitBaselineExit)' != '0' or '$(GitBaselineCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitBaselineCount)', '^\d+$'))">0</GitBaselineCount>
-      <GitDeltaCount Condition="'$(GitDeltaExit)' != '0' or '$(GitDeltaCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitDeltaCount)', '^\d+$'))">0</GitDeltaCount>
       <BuildDateStamp>$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</BuildDateStamp>
       <BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
 
@@ -177,10 +194,24 @@
       <GitSuffixChar>b</GitSuffixChar>
       <GitSuffixChar Condition="'$(GitIsMain)' == 'true'">c</GitSuffixChar>
 
-      <!-- With nothing ahead of origin/main, the label is just the baseline number —
-           whether that's main itself, or a freshly-forked branch with no commits of its
-           own yet (genuinely identical states, so they look identical). The suffix only
-           shows up the moment there's a real commit to count. -->
+      <!-- Reference point for delta: the branch's own landed tag if it validly exists,
+           else the fork point from origin/main, else (everything failed) HEAD itself. -->
+      <GitDeltaRef Condition="'$(GitMergeBaseExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitMergeBase)', '^[0-9a-f]{7,40}$'))">$(GitMergeBase)</GitDeltaRef>
+      <GitDeltaRef Condition="'$(GitDeltaRef)' == ''">HEAD</GitDeltaRef>
+      <GitDeltaRef Condition="'$(GitLandedExit)' == '0' and $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitLandedSha)', '^[0-9a-f]{7,40}$'))">$(GitLandedSha)</GitDeltaRef>
+    </PropertyGroup>
+    <Exec Command="git rev-list --count --first-parent $(GitDeltaRef)..HEAD" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitDeltaCount"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitDeltaExit"/>
+    </Exec>
+    <PropertyGroup>
+      <GitDeltaCount Condition="'$(GitDeltaExit)' != '0' or '$(GitDeltaCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitDeltaCount)', '^\d+$'))">0</GitDeltaCount>
+
+      <!-- With nothing counted since the reference point, the label is just the baseline
+           number — whether that's main itself, a freshly-forked branch, or a branch sitting
+           right at its own landed tag. The suffix only shows up the moment there's a real
+           commit to count since then. -->
       <GitShowSuffix>true</GitShowSuffix>
       <GitShowSuffix Condition="'$(GitDeltaCount)' == '0'">false</GitShowSuffix>
 
