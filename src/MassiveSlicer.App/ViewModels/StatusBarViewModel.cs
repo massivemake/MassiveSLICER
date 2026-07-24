@@ -57,6 +57,40 @@ public sealed class StatusBarViewModel : ViewModelBase
 
     public string BuildLabel { get; } = BuildInfo.Label;
 
+    private bool _isBuildStale;
+    private int _latestBaseline;
+
+    /// <summary>
+    /// True once the background launch check (see <c>BuildFreshnessChecker</c>) finds
+    /// origin/main has moved past this build's baked-in <see cref="BuildInfo.Baseline"/>.
+    /// Starts false and only ever flips on later — the check runs off to the side and
+    /// never blocks or delays startup.
+    /// </summary>
+    public bool IsBuildStale
+    {
+        get => _isBuildStale;
+        set
+        {
+            if (!SetField(ref _isBuildStale, value)) return;
+            OnPropertyChanged(nameof(BuildLabelTooltip));
+        }
+    }
+
+    /// <summary>origin/main's commit count as of the last freshness check, once it's found something newer than this build's own baseline.</summary>
+    public int LatestBaseline
+    {
+        get => _latestBaseline;
+        set
+        {
+            if (!SetField(ref _latestBaseline, value)) return;
+            OnPropertyChanged(nameof(BuildLabelTooltip));
+        }
+    }
+
+    public string BuildLabelTooltip => IsBuildStale
+        ? $"main has moved on to build {LatestBaseline} (this build is based on {BuildInfo.Baseline}) — pull main in to catch up."
+        : $"Branch: {BuildInfo.Branch}";
+
     private bool _isProgressActive;
 
     /// <summary>True while a long-running operation is in progress (shows the footer progress line).</summary>

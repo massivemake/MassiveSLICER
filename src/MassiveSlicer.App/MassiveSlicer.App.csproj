@@ -123,20 +123,34 @@
   </ItemGroup>
 
 
-  <!-- Auto-generated build identity: number = git commit count (same on every
-       machine, maps 1:1 to a commit for changelog/support), date = compile day,
-       sha = exact code state. Replaces the old hand-edited BuildInfo.cs. -->
+  <!-- Auto-generated build identity: baseline = origin/main's commit count (same on every
+       machine once pushed), delta = commits on HEAD not yet on origin/main (a feature branch's
+       save points, or unpushed commits sitting directly on main), branch = current branch name,
+       sha = exact code state. On main with nothing unpushed, the label is just the baseline
+       number, same as always; anywhere else a suffix count is appended — "b" for a feature
+       branch's save points, "c" for local commits waiting on main. Replaces the old hand-edited
+       BuildInfo.cs. -->
   <Target Name="GenerateBuildInfo" BeforeTargets="CoreCompile"
           Condition="'$(DesignTimeBuild)' != 'true'">
-    <Exec Command="git rev-list --count HEAD" ConsoleToMSBuild="true"
+    <Exec Command="git rev-parse --abbrev-ref HEAD" ConsoleToMSBuild="true"
           ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitCommitCount"/>
-      <Output TaskParameter="ExitCode" PropertyName="GitCountExit"/>
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitBranchName"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitBranchExit"/>
     </Exec>
     <Exec Command="git rev-parse --short HEAD" ConsoleToMSBuild="true"
           ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha"/>
       <Output TaskParameter="ExitCode" PropertyName="GitShaExit"/>
+    </Exec>
+    <Exec Command="git rev-list --count origin/main" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitBaselineCount"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitBaselineExit"/>
+    </Exec>
+    <Exec Command="git rev-list --count origin/main..HEAD" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitDeltaCount"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitDeltaExit"/>
     </Exec>
     <!--
       Defensive, not just "was it empty": when git isn't resolvable at all (e.g. a shortcut/.bat
@@ -145,24 +159,48 @@
       naive "== ''" check misses that entirely and bakes the error message straight into the
       generated .cs file as a "constant", breaking the build with cascading parser errors instead
       of just falling back to a placeholder build label. Require the actual expected SHAPE of each
-      value (all-digits / no whitespace) in addition to the exit code and emptiness checks.
+      value (all-digits / no whitespace, matching the exact pattern for that field) in addition to
+      the exit code and emptiness checks. GitBaselineCount/GitDeltaCount fall back to 0 the same
+      way if origin/main isn't resolvable at all (e.g. a fresh clone with no fetch yet).
     -->
     <PropertyGroup>
-      <GitCommitCount Condition="'$(GitCountExit)' != '0' or '$(GitCommitCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitCommitCount)', '^\d+$'))">0</GitCommitCount>
+      <GitBranchName Condition="'$(GitBranchExit)' != '0' or '$(GitBranchName)' == '' or $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitBranchName)', '\s'))">unknown</GitBranchName>
       <GitShortSha Condition="'$(GitShaExit)' != '0' or '$(GitShortSha)' == '' or $([System.Text.RegularExpressions.Regex]::IsMatch('$(GitShortSha)', '\s'))">dev</GitShortSha>
+      <GitBaselineCount Condition="'$(GitBaselineExit)' != '0' or '$(GitBaselineCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitBaselineCount)', '^\d+$'))">0</GitBaselineCount>
+      <GitDeltaCount Condition="'$(GitDeltaExit)' != '0' or '$(GitDeltaCount)' == '' or !$([System.Text.RegularExpressions.Regex]::IsMatch('$(GitDeltaCount)', '^\d+$'))">0</GitDeltaCount>
       <BuildDateStamp>$([System.DateTime]::Now.ToString('yyyy-MM-dd'))</BuildDateStamp>
       <BuildInfoFile>$(IntermediateOutputPath)BuildInfo.g.cs</BuildInfoFile>
+
+      <GitIsMain>false</GitIsMain>
+      <GitIsMain Condition="'$(GitBranchName)' == 'main'">true</GitIsMain>
+
+      <GitSuffixChar>b</GitSuffixChar>
+      <GitSuffixChar Condition="'$(GitIsMain)' == 'true'">c</GitSuffixChar>
+
+      <!-- With nothing ahead of origin/main, the label is just the baseline number —
+           whether that's main itself, or a freshly-forked branch with no commits of its
+           own yet (genuinely identical states, so they look identical). The suffix only
+           shows up the moment there's a real commit to count. -->
+      <GitShowSuffix>true</GitShowSuffix>
+      <GitShowSuffix Condition="'$(GitDeltaCount)' == '0'">false</GitShowSuffix>
+
+      <GitLabelCore>$(GitBaselineCount)</GitLabelCore>
+      <GitLabelCore Condition="'$(GitShowSuffix)' == 'true'">$(GitBaselineCount)$(GitSuffixChar)$(GitDeltaCount)</GitLabelCore>
     </PropertyGroup>
     <ItemGroup>
       <BuildInfoLine Include="// &lt;auto-generated /&gt; — GenerateBuildInfo target (MassiveSlicer.App.csproj). Do not edit."/>
       <BuildInfoLine Include="namespace MassiveSlicer.App%3B"/>
       <BuildInfoLine Include="public static class BuildInfo"/>
       <BuildInfoLine Include="{"/>
-      <BuildInfoLine Include="    /// &lt;summary&gt;Git commit count — increments with every commit, identical on all machines.&lt;/summary&gt;"/>
-      <BuildInfoLine Include="    public const int BuildNumber = $(GitCommitCount)%3B"/>
+      <BuildInfoLine Include="    /// &lt;summary&gt;origin/main's commit count at build time — the baseline this build sits on.&lt;/summary&gt;"/>
+      <BuildInfoLine Include="    public const int Baseline = $(GitBaselineCount)%3B"/>
+      <BuildInfoLine Include="    /// &lt;summary&gt;Commits on HEAD not yet on origin/main — save points on a branch, or unpushed commits on main.&lt;/summary&gt;"/>
+      <BuildInfoLine Include="    public const int Delta = $(GitDeltaCount)%3B"/>
+      <BuildInfoLine Include="    public const string Branch = &quot;$(GitBranchName)&quot;%3B"/>
+      <BuildInfoLine Include="    public const bool IsMain = $(GitIsMain)%3B"/>
       <BuildInfoLine Include="    public const string CommitSha = &quot;$(GitShortSha)&quot;%3B"/>
       <BuildInfoLine Include="    public const string BuildDate = &quot;$(BuildDateStamp)&quot;%3B"/>
-      <BuildInfoLine Include="    public static readonly string Label = &quot;build $(GitCommitCount)  ·  $(BuildDateStamp)  ·  $(GitShortSha)&quot;%3B"/>
+      <BuildInfoLine Include="    public static readonly string Label = &quot;$(GitLabelCore)  ·  $(BuildDateStamp)  ·  $(GitShortSha)&quot;%3B"/>
       <BuildInfoLine Include="}"/>
     </ItemGroup>
     <WriteLinesToFile File="$(BuildInfoFile)" Lines="@(BuildInfoLine)"

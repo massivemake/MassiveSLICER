@@ -79,6 +79,11 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Initialises the ViewModel and wires child ViewModels.</summary>
     public MainWindowViewModel()
     {
+        // One-shot, off-to-the-side check for whether origin/main has moved past this
+        // build's baseline. Never awaited here — must never add even a millisecond to
+        // startup. Silently does nothing if it can't reach git or the network.
+        BuildFreshnessChecker.CheckAsync(StatusBar);
+
         // Persist/restore collapsible-panel (Expander) open state across sessions via prefs.json.
         MassiveSlicer.App.Behaviors.PersistExpander.Store = AppPreferences;
 
