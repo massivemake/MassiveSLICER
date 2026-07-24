@@ -3,6 +3,20 @@
              x:Class="MassiveSlicer.App.Views.StatusBarView"
              x:CompileBindings="False">
 
+    <UserControl.Styles>
+        <!-- Faint by default, same as before. Yellow + full opacity when a background
+             check finds origin/main has moved past this build's baked-in baseline —
+             opacity has to live in the style (not an inline attribute) so the more
+             specific .Stale selector can actually override it. -->
+        <Style Selector="TextBlock.LabelMuted.BuildLabel">
+            <Setter Property="Opacity" Value="0.45"/>
+        </Style>
+        <Style Selector="TextBlock.LabelMuted.BuildLabel.Stale">
+            <Setter Property="Opacity" Value="1"/>
+            <Setter Property="Foreground" Value="{DynamicResource ColorWarning}"/>
+        </Style>
+    </UserControl.Styles>
+
     <Border Background="{DynamicResource Bg1}"
             BorderBrush="{DynamicResource Border1}"
             BorderThickness="0,1,0,0">
@@ -23,8 +37,9 @@
             <TextBlock Text="{Binding BuildLabel}"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Center"
-                       Classes="LabelMuted"
-                       Opacity="0.45"/>
+                       Classes="LabelMuted BuildLabel"
+                       Classes.Stale="{Binding IsBuildStale}"
+                       ToolTip.Tip="{Binding BuildLabelTooltip}"/>
             <TextBlock Text="{Binding OperationFeedback}"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Right"

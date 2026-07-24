@@ -1753,6 +1753,19 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "check-build-freshness",
+            Aliases = ["build-freshness", "check-baseline"],
+            Description = "Re-run the origin/main freshness check now (same one that fires once at launch)",
+            Execute = (ctx, _) =>
+            {
+                ctx.Log($"[build] this build: baseline {MassiveSlicer.App.BuildInfo.Baseline}, branch {MassiveSlicer.App.BuildInfo.Branch}, delta {MassiveSlicer.App.BuildInfo.Delta}. Checking origin/main...");
+                BuildFreshnessChecker.CheckAsync(ctx.Main.StatusBar);
+                ctx.Log($"[build] check kicked off in the background — watch the status bar for yellow, or run this again in a moment.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "screenshot",
             Aliases = ["viewport-shot", "capture-viewport"],
             Description = "Save a PNG of the full app window to %LOCALAPPDATA%/MassiveSlicer/screenshots/",
