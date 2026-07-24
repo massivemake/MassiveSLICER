@@ -177,11 +177,12 @@
       <GitSuffixChar>b</GitSuffixChar>
       <GitSuffixChar Condition="'$(GitIsMain)' == 'true'">c</GitSuffixChar>
 
-      <!-- On main with nothing unpushed, the label is just the baseline number — same as
-           today. Everywhere else (a branch, or main with local unpushed commits), append
-           the suffix count. -->
+      <!-- With nothing ahead of origin/main, the label is just the baseline number —
+           whether that's main itself, or a freshly-forked branch with no commits of its
+           own yet (genuinely identical states, so they look identical). The suffix only
+           shows up the moment there's a real commit to count. -->
       <GitShowSuffix>true</GitShowSuffix>
-      <GitShowSuffix Condition="'$(GitIsMain)' == 'true' and '$(GitDeltaCount)' == '0'">false</GitShowSuffix>
+      <GitShowSuffix Condition="'$(GitDeltaCount)' == '0'">false</GitShowSuffix>
 
       <GitLabelCore>$(GitBaselineCount)</GitLabelCore>
       <GitLabelCore Condition="'$(GitShowSuffix)' == 'true'">$(GitBaselineCount)$(GitSuffixChar)$(GitDeltaCount)</GitLabelCore>
