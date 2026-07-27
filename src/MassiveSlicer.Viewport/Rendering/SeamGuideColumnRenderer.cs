@@ -37,8 +37,9 @@ public sealed class SeamGuideColumnRenderer : IDisposable
         out vec4 fragColor;
         void main()
         {
+            // Nearly flat: a guide should read as a drawn line, not a shaded 3D tube.
             float d = max(dot(normalize(vNormal), normalize(vec3(0.3, 0.5, 1.0))), 0.0);
-            fragColor = vec4(uColor * (0.45 + d * 0.55), 1.0);
+            fragColor = vec4(uColor * (0.85 + d * 0.15), 1.0);
         }
         """;
 

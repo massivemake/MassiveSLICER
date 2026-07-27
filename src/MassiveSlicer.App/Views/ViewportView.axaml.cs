@@ -995,24 +995,26 @@ public partial class ViewportView : UserControl
         return false;
     }
 
-    private bool TryDragSeamGuide(Ray ray, ViewportViewModel vm, int index, out System.Numerics.Vector3 hit)
+    /// <summary>
+    /// Seam guide position under the cursor, always ON the model: a direct face hit when the ray
+    /// crosses the model, else the nearest point of the model wall in screen space. Deliberately
+    /// does NOT fall back to the bed like <see cref="TryPlaceSeamGuide"/> — a guide belongs on the
+    /// wall it seams, and this lets it slide along the wall as the mouse moves past the silhouette.
+    /// </summary>
+    private bool TrySeamGuideOnModel(Ray ray, float mx, float my, out TkVector3 hit)
     {
-        if (index < 0 || index >= vm.SeamGuideDraft.Count)
+        var (node, _, meshHit) = _renderer.PickFace(ray);
+        if (node is not null && !_renderer.IsToolpathNode(node))
         {
-            hit = default;
-            return false;
-        }
-
-        float planeZ = vm.SeamGuideDraft[index].Z;
-        if (SceneRenderer.TryPickHorizontalPlane(ray, planeZ, out var planeHit))
-        {
-            hit = new System.Numerics.Vector3(planeHit.X, planeHit.Y, planeHit.Z);
+            hit = meshHit;
             return true;
         }
 
-        hit = default;
-        return false;
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        return _renderer.TryNearestContentSurfacePoint(mx, my, vpW, vpH, out hit);
     }
+
 
     private void OnRender(TimeSpan delta, int w, int h)
     {
@@ -2934,9 +2936,10 @@ public partial class ViewportView : UserControl
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
-                _renderer.SetSeamGuidePreview(TryPlaceSeamGuide(ray, out var previewHit)
-                    ? new TkVector3(previewHit.X, previewHit.Y, previewHit.Z)
-                    : null);
+                _renderer.SetSeamGuidePreview(
+                    TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit)
+                        ? previewHit
+                        : null);
                 GlCanvas.RequestNextFrameRendering();
             }
             else
@@ -2949,9 +2952,12 @@ public partial class ViewportView : UserControl
             float vpW = (float)GlCanvas.Bounds.Width;
             float vpH = (float)GlCanvas.Bounds.Height;
             var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
-            if (TryDragSeamGuide(ray, dragVm, _seamGuideDragIndex, out var hit))
+            // Drag rides the model wall too (was a flat Z-plane slide, which let a guide
+            // drift off the surface it seams).
+            if (TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var hit))
             {
-                dragVm.MoveSeamGuidePoint(_seamGuideDragIndex, SeamGuidePoint.FromVector3(hit));
+                dragVm.MoveSeamGuidePoint(_seamGuideDragIndex,
+                    new SeamGuidePoint(hit.X, hit.Y, hit.Z));
                 UpdateSeamGuideMarkers(dragVm);
             }
             GlCanvas.RequestNextFrameRendering();
@@ -3196,9 +3202,11 @@ public partial class ViewportView : UserControl
                         UpdateSeamGuideMarkers(flatVm);
                     }
                     else if (flatVm.SeamEditorTool == SeamEditorToolKind.AddPoint
-                             && TryPlaceSeamGuide(ray, out var placeHit))
+                             && TrySeamGuideOnModel(ray, (float)_leftDownPos.X, (float)_leftDownPos.Y,
+                                                    out var placeHit))
                     {
-                        flatVm.AddSeamGuidePoint(SeamGuidePoint.FromVector3(placeHit));
+                        // Same resolver as the hover ghost: what you previewed is what you place.
+                        flatVm.AddSeamGuidePoint(new SeamGuidePoint(placeHit.X, placeHit.Y, placeHit.Z));
                         UpdateSeamGuideMarkers(flatVm);
                     }
                     else if (flatVm.SeamEditorTool == SeamEditorToolKind.SelectPoint)

@@ -1609,19 +1609,20 @@ public sealed class SceneRenderer : IDisposable
                 // Column radius scales with part height so guides stay visible when the whole
                 // model is framed — a fixed few-mm marker vanished on metre-scale panels.
                 float span   = MathF.Max(_seamGuideZMax - _seamGuideZMin, 1f);
-                float radius = MathF.Max(6f, span * 0.004f);
+                float radius = MathF.Max(4f, span * 0.0022f);
                 _seamGuides.Update(_seamGuidePoints, _seamGuideSelectedIndex,
                     _seamGuideZMin, _seamGuideZMax, _seamGuidePreview,
-                    radius, radius * 1.7f);
+                    radius, radius * 1.5f);
                 _seamGuidesDirty = false;
             }
 
             GL.Clear(ClearBufferMask.DepthBufferBit);
             GL.Disable(EnableCap.DepthTest);
+            // Placed = green (committed seam), selected = brighter green, hover ghost = yellow.
             _seamGuides.Draw(mvp,
-                new Vector3(0.1f, 0.85f, 0.95f),
-                new Vector3(1.0f, 0.85f, 0.1f),
-                new Vector3(0.45f, 0.45f, 0.5f));
+                new Vector3(0.16f, 0.88f, 0.28f),
+                new Vector3(0.55f, 1.00f, 0.35f),
+                new Vector3(1.00f, 0.90f, 0.10f));
             GL.Enable(EnableCap.DepthTest);
         }
 
@@ -1846,6 +1847,45 @@ public sealed class SceneRenderer : IDisposable
         _seamGuideZMin          = zMin;
         _seamGuideZMax          = zMax;
         _seamGuidesDirty        = true;
+    }
+
+    /// <summary>
+    /// Nearest point of user content (<see cref="PickTier.Content"/>, excluding toolpaths) to the
+    /// cursor, measured in screen space. Used by the seam guide editor so a guide stays stuck to
+    /// the model wall and slides along it when the ray misses the silhouette, instead of dropping
+    /// onto the bed or vanishing. Vertices are subsampled to keep this cheap on every mouse move.
+    /// </summary>
+    public bool TryNearestContentSurfacePoint(float mx, float my, float vpW, float vpH,
+        out Vector3 world)
+    {
+        world = Vector3.Zero;
+        if (vpW <= 0 || vpH <= 0) return false;
+
+        float aspect   = vpW / vpH;
+        var   viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
+        var   click    = new Vector2(mx, my);
+        float bestD2   = float.MaxValue;
+        bool  found    = false;
+
+        foreach (var n in SceneRoot.SelfAndDescendants())
+        {
+            if (!n.Visible || n.PickTier != PickTier.Content || IsToolpathNode(n)) continue;
+            var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
+            if (mesh is null || mesh.Positions.Length == 0) continue;
+
+            var m    = n.WorldTransform;
+            int step = Math.Max(1, mesh.Positions.Length / 4000);
+            for (int i = 0; i < mesh.Positions.Length; i += step)
+            {
+                var w      = Vector3.TransformPosition(mesh.Positions[i], m);
+                var screen = WorldToScreen(w, viewProj, vpW, vpH);
+                if (float.IsNaN(screen.X)) continue;
+                float d2 = (screen - click).LengthSquared;
+                if (d2 < bestD2) { bestD2 = d2; world = w; found = true; }
+            }
+        }
+
+        return found;
     }
 
     /// <summary>Squared distance from <paramref name="p"/> to segment ab (screen space).</summary>
