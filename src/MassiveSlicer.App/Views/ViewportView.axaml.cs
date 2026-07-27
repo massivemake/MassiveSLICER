@@ -827,8 +827,36 @@ public partial class ViewportView : UserControl
                 .Select(g => new TkVector3(g.X, g.Y, g.Z))
                 .ToList() ?? [];
         }
-        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex);
+        if (!vm.IsSeamEditorActive)
+            _renderer.SetSeamGuidePreview(null);   // no ghost left behind when the editor closes
+
+        var (zLo, zHi) = SeamGuideHeightRange(vm);
+        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex, zLo, zHi);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Z extent the seam guide columns span: the visible user models' world height, falling
+    /// back to a bed-height stub when nothing is loaded.
+    /// </summary>
+    private (float Lo, float Hi) SeamGuideHeightRange(ViewportViewModel vm)
+    {
+        float lo = float.MaxValue, hi = float.MinValue;
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            if (!item.Visible) continue;
+            var (min, max) = ImportHelper.ComputeSubtreeWorldAabb(item.Node);
+            if (min.Z > max.Z) continue;
+            lo = MathF.Min(lo, min.Z);
+            hi = MathF.Max(hi, max.Z);
+        }
+
+        if (lo > hi)
+        {
+            float bedZ = _bedBaseMarker.Z;
+            return (bedZ, bedZ + 1000f);
+        }
+        return (lo, hi);
     }
 
     private void UpdateBoundaryMarkers(ViewportViewModel vm)
@@ -2895,6 +2923,24 @@ public partial class ViewportView : UserControl
             var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
             UpdateXBraceCylinderDrag(xcDragVm, ray);
             return;
+        }
+
+        // Placing a guide: ghost the column the click would create, so the seam position is
+        // visible before committing (previously you clicked blind and got a marker).
+        if (!_seamGuideDragging && DataContext is ViewportViewModel hoverVm)
+        {
+            if (hoverVm.IsSeamEditorActive && hoverVm.SeamEditorTool == SeamEditorToolKind.AddPoint)
+            {
+                float vpW = (float)GlCanvas.Bounds.Width;
+                float vpH = (float)GlCanvas.Bounds.Height;
+                var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+                _renderer.SetSeamGuidePreview(TryPlaceSeamGuide(ray, out var previewHit)
+                    ? new TkVector3(previewHit.X, previewHit.Y, previewHit.Z)
+                    : null);
+                GlCanvas.RequestNextFrameRendering();
+            }
+            else
+                _renderer.SetSeamGuidePreview(null);
         }
 
         if (_seamGuideDragging && DataContext is ViewportViewModel dragVm)

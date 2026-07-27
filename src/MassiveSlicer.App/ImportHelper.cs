@@ -379,7 +379,7 @@ internal static class ImportHelper
             p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
             p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
 
-    private static (Vector3 Min, Vector3 Max) ComputeSubtreeWorldAabb(SceneNode root)
+    internal static (Vector3 Min, Vector3 Max) ComputeSubtreeWorldAabb(SceneNode root)
     {
         var min = new Vector3(float.MaxValue);
         var max = new Vector3(float.MinValue);
