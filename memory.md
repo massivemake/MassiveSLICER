@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-23 (Synced real Presets logic from stale `feature/presets` branch onto `main` via cherry-pick — see changelog)
+Last updated: 2026-07-27 (Field rule: Zig-zag seam is single-wall-only — silently amputates enclosed models; use Normal for closed solids)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -524,6 +524,33 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-27 — Field diagnosis: two "gaps in the toolpath" failure signatures (Scene 08 panels)
+
+Two different diseases produced near-identical team reports of "gaps / printing in mid air".
+Diagnosed by dumping the stored toolpath from the shared `.mass` files (no re-slice needed):
+
+1. **Overhang (design problem)** — Panel 02: surface flares curve to ~5° from horizontal in the
+   upper third; in single-bead Surface mode consecutive beads land ~33mm apart in XY (bond limit
+   ≈ half a bead, 4mm). Signature: fanned ribbons on shallow surfaces; unsupported-bead bands of
+   25–50% (measured Z 955–1340). No orientation fixes it (flares face multiple directions —
+   best whole-part rotation only 3.7%→3.0% bad area). Fix: cut at Z≈945 (bottom piece 0.2% bad,
+   prints as-is), lay top piece back ~44°, or steepen the design.
+2. **Zig-zag seam on an enclosed model (mode misuse, reads like a slicer bug)** — Panel 04:
+   Zig-zag is *single-skin* mode by design (`PlanarSlicer.ExtractSingleSkinOpenFaces`): each
+   closed loop is cut to its longest open arc (thin panels = one skin pass, correct). On an
+   enclosed solid this amputates the perimeter; with same-layer travel off,
+   `KeepLongestOpenFaceOnly` keeps ONE island per layer → layers jump between regions,
+   islands flicker, mid-air starts everywhere. **Field rule: Zig-zag = single-wall/open panels
+   only; enclosed or multi-island models = Normal seam.** (Team-confirmed: switching to Normal
+   fixed Panel 04 and, retroactively, the Drone.) Possible fix (not built): replace the
+   ring-vs-wall heuristic (`IsRingLikeContour`, shape-based) with a thickness test
+   (2·area/perimeter ≈ bead ⇒ thin skin ⇒ extract; else keep closed) + a status-bar warning.
+
+Also recurring: `.mass` files shared without their `workspace_meshes/` sidecar folder can be
+viewed (stored toolpath) but not re-sliced ("Update failed: source mesh has no geometry") and
+hide the actual sliced mesh from diagnosis — always share the `.mass` + sidecar together.
+Backlog: unsupported-bead validation check (would auto-flag both failure modes at export).
 
 ### 2026-07-23 (later) — PRESETS merged into MODEL as a nested, collapsed-by-default sub-section
 
