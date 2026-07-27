@@ -1849,45 +1849,6 @@ public sealed class SceneRenderer : IDisposable
         _seamGuidesDirty        = true;
     }
 
-    /// <summary>
-    /// Nearest point of user content (<see cref="PickTier.Content"/>, excluding toolpaths) to the
-    /// cursor, measured in screen space. Used by the seam guide editor so a guide stays stuck to
-    /// the model wall and slides along it when the ray misses the silhouette, instead of dropping
-    /// onto the bed or vanishing. Vertices are subsampled to keep this cheap on every mouse move.
-    /// </summary>
-    public bool TryNearestContentSurfacePoint(float mx, float my, float vpW, float vpH,
-        out Vector3 world)
-    {
-        world = Vector3.Zero;
-        if (vpW <= 0 || vpH <= 0) return false;
-
-        float aspect   = vpW / vpH;
-        var   viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
-        var   click    = new Vector2(mx, my);
-        float bestD2   = float.MaxValue;
-        bool  found    = false;
-
-        foreach (var n in SceneRoot.SelfAndDescendants())
-        {
-            if (!n.Visible || n.PickTier != PickTier.Content || IsToolpathNode(n)) continue;
-            var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
-            if (mesh is null || mesh.Positions.Length == 0) continue;
-
-            var m    = n.WorldTransform;
-            int step = Math.Max(1, mesh.Positions.Length / 4000);
-            for (int i = 0; i < mesh.Positions.Length; i += step)
-            {
-                var w      = Vector3.TransformPosition(mesh.Positions[i], m);
-                var screen = WorldToScreen(w, viewProj, vpW, vpH);
-                if (float.IsNaN(screen.X)) continue;
-                float d2 = (screen - click).LengthSquared;
-                if (d2 < bestD2) { bestD2 = d2; world = w; found = true; }
-            }
-        }
-
-        return found;
-    }
-
     /// <summary>Squared distance from <paramref name="p"/> to segment ab (screen space).</summary>
     private static float DistanceToSegmentSquared(Vector2 p, Vector2 a, Vector2 b)
     {

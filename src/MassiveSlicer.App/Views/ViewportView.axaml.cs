@@ -828,7 +828,11 @@ public partial class ViewportView : UserControl
                 .ToList() ?? [];
         }
         if (!vm.IsSeamEditorActive)
-            _renderer.SetSeamGuidePreview(null);   // no ghost left behind when the editor closes
+        {
+            // No ghost left behind, and no stale hold-position leaking into the next session.
+            _renderer.SetSeamGuidePreview(null);
+            _lastSeamGuideSurfacePoint = null;
+        }
 
         var (zLo, zHi) = SeamGuideHeightRange(vm);
         _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex, zLo, zHi);
@@ -842,6 +846,7 @@ public partial class ViewportView : UserControl
     private (float Lo, float Hi) SeamGuideHeightRange(ViewportViewModel vm)
     {
         float lo = float.MaxValue, hi = float.MinValue;
+
         foreach (var item in vm.EnumerateUserModelItems())
         {
             if (!item.Visible) continue;
@@ -849,6 +854,24 @@ public partial class ViewportView : UserControl
             if (min.Z > max.Z) continue;
             lo = MathF.Min(lo, min.Z);
             hi = MathF.Max(hi, max.Z);
+        }
+
+        // Toolpath nodes carry no mesh, so the AABB pass above misses them. After slicing the
+        // model is usually hidden and only the toolpath is shown — without this the range fell
+        // back to a fixed bed+1000mm stub and the columns overshot the part.
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible || tp.Layers.Count == 0) continue;
+            var world = node.WorldTransform;
+            foreach (var layer in tp.Layers)
+            {
+                if (layer.Moves.Count == 0) continue;
+                var p = TkVector3.TransformPosition(
+                    new TkVector3(layer.Moves[0].From.X, layer.Moves[0].From.Y, layer.Moves[0].From.Z),
+                    world);
+                lo = MathF.Min(lo, p.Z);
+                hi = MathF.Max(hi, p.Z);
+            }
         }
 
         if (lo > hi)
@@ -1001,18 +1024,31 @@ public partial class ViewportView : UserControl
     /// does NOT fall back to the bed like <see cref="TryPlaceSeamGuide"/> — a guide belongs on the
     /// wall it seams, and this lets it slide along the wall as the mouse moves past the silhouette.
     /// </summary>
+    private TkVector3? _lastSeamGuideSurfacePoint;
+
     private bool TrySeamGuideOnModel(Ray ray, float mx, float my, out TkVector3 hit)
     {
+        // Exact ray/face hit while the cursor is over the model: the guide tracks the wall
+        // smoothly and is by construction ON the surface.
         var (node, _, meshHit) = _renderer.PickFace(ray);
         if (node is not null && !_renderer.IsToolpathNode(node))
         {
+            _lastSeamGuideSurfacePoint = meshHit;
             hit = meshHit;
             return true;
         }
 
-        float vpW = (float)GlCanvas.Bounds.Width;
-        float vpH = (float)GlCanvas.Bounds.Height;
-        return _renderer.TryNearestContentSurfacePoint(mx, my, vpW, vpH, out hit);
+        // Cursor left the silhouette: hold the last on-surface position. Snapping to the
+        // nearest sampled vertex instead made the column jitter between scattered vertices
+        // and occasionally land off the visible wall.
+        if (_lastSeamGuideSurfacePoint is { } held)
+        {
+            hit = held;
+            return true;
+        }
+
+        hit = default;
+        return false;
     }
 
 
