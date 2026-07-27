@@ -3931,6 +3931,7 @@ public partial class ViewportView : UserControl
             // Effects/post-processors rebuild the toolpath and drop FormboundStats —
             // capture now and re-stamp on the results so the console report survives.
             var fbStats = tp.FormboundStats;
+            var sliceWarnings = tp.Warnings.Count > 0 ? tp.Warnings.ToList() : null;
 
             Report("Applying post-processing…");
             tp = WaveEffect.Apply(tp, settings);
@@ -3976,6 +3977,11 @@ public partial class ViewportView : UserControl
 
             smoothed.FormboundStats ??= fbStats;
             raw.FormboundStats ??= fbStats;
+            if (sliceWarnings is not null)
+            {
+                smoothed.Warnings.AddRange(sliceWarnings);
+                raw.Warnings.AddRange(sliceWarnings);
+            }
             return (smoothed, raw);
         }, cancel);
 
@@ -4390,9 +4396,14 @@ public partial class ViewportView : UserControl
             GlCanvas.RequestNextFrameRendering();
 
             int moveCount = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
-            SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+            if (smoothedToolpath.Warnings.Count > 0)
+                SetSliceStatus(vm, $"⚠ {smoothedToolpath.Warnings[0]}", isError: true);
+            else
+            {
+                SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+                ScheduleClearSliceStatus(vm);
+            }
             vm.MarkWorkspaceDirty?.Invoke();
-            ScheduleClearSliceStatus(vm);
         }
         catch (OperationCanceledException)
         {
@@ -5243,9 +5254,14 @@ public partial class ViewportView : UserControl
             }, DispatcherPriority.Background);
             GlCanvas.RequestNextFrameRendering();
 
-            SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+            if (smoothedToolpath.Warnings.Count > 0)
+                SetSliceStatus(vm, $"⚠ {smoothedToolpath.Warnings[0]}", isError: true);
+            else
+            {
+                SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+                ScheduleClearSliceStatus(vm);
+            }
             vm.MarkWorkspaceDirty?.Invoke();
-            ScheduleClearSliceStatus(vm);
         }
         catch (OperationCanceledException)
         {

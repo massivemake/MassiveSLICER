@@ -543,9 +543,18 @@ Diagnosed by dumping the stored toolpath from the shared `.mass` files (no re-sl
    `KeepLongestOpenFaceOnly` keeps ONE island per layer → layers jump between regions,
    islands flicker, mid-air starts everywhere. **Field rule: Zig-zag = single-wall/open panels
    only; enclosed or multi-island models = Normal seam.** (Team-confirmed: switching to Normal
-   fixed Panel 04 and, retroactively, the Drone.) Possible fix (not built): replace the
-   ring-vs-wall heuristic (`IsRingLikeContour`, shape-based) with a thickness test
-   (2·area/perimeter ≈ bead ⇒ thin skin ⇒ extract; else keep closed) + a status-bar warning.
+   fixed Panel 04 and, retroactively, the Drone.)
+   **FIXED same day (guard + warning):** `ExtractSingleSkinOpenFaces` now takes bead width and
+   keeps any ring whose mean width (2·area/perimeter, `AverageRingWidth`) exceeds 4×bead closed —
+   walls up to ~4 beads thick still single-skin (ZigZagSingleSkinTest's 20mm wall / 6mm bead),
+   enclosed solids (mean width tens–hundreds of mm) stay intact. `KeepLongestOpenFaceOnly` no
+   longer prunes when any closed ring remains (it deleted whole islands). New
+   `Toolpath.Warnings` carries slicer warnings through post-processing (re-stamped like
+   FormboundStats in ViewportView) and shows as a red status-bar alert on Slice/Update complete:
+   "Zig-zag seam is a single-wall mode… use Seam mode 'Normal'". Tests:
+   `ZigZagEnclosedGuardTest` ×6; suite 539 pass / same 14 pre-existing failures as baseline.
+   Enclosed models under zig-zag now slice like Normal (closed loops + alternating direction)
+   instead of amputating — but the honest recommendation stays: use Normal.
 
 Also recurring: `.mass` files shared without their `workspace_meshes/` sidecar folder can be
 viewed (stored toolpath) but not re-sliced ("Update failed: source mesh has no geometry") and

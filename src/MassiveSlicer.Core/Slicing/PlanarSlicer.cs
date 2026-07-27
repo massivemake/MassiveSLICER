@@ -65,6 +65,7 @@ public static class PlanarSlicer
             zPositions = PrependTreeBedFoundationLayers(zPositions, zMin, settings);
 
         var toolpath     = new Toolpath();
+        ZigZagEnclosedKeptCount = 0;
         var prevTracks   = new List<ContourTrack>();
         ToolpathLayer? prevLayer = null;
 
@@ -262,6 +263,7 @@ public static class PlanarSlicer
         StructuralSupportPlanner.Apply(toolpath, settings);
         BrimPlanner.Apply(toolpath, settings);
 
+        AttachZigZagWarning(toolpath);
         return toolpath;
     }
 
@@ -510,7 +512,7 @@ public static class PlanarSlicer
                         : new List<Vector2>());
                 }
             }
-            ExtractSingleSkinOpenFaces(insetContours, insetClosed);
+            ExtractSingleSkinOpenFaces(insetContours, insetClosed, settings.BeadWidth);
             if (!settings.ZigZagAllowSameLayerTravel)
                 KeepLongestOpenFaceOnly(insetContours, insetClosed);
         }
@@ -708,8 +710,25 @@ public static class PlanarSlicer
     /// closed so half-circle skins are not produced.
     /// Shared with <see cref="AngledPlanarSlicer"/> (Multi-Planar / Angled).
     /// </summary>
+    /// <summary>
+    /// Per-Slice() tally of enclosed contours the thin-wall guard kept closed under
+    /// zig-zag (layers slice sequentially on one thread; reset at the top of each
+    /// Slice pass, read at the end to attach a <see cref="Toolpath.Warnings"/> entry).
+    /// </summary>
+    [ThreadStatic] internal static int ZigZagEnclosedKeptCount;
+
+    /// <summary>Adds the zig-zag/enclosed-model warning when the guard fired, and resets the tally.</summary>
+    internal static void AttachZigZagWarning(Toolpath toolpath)
+    {
+        if (ZigZagEnclosedKeptCount <= 0) return;
+        toolpath.Warnings.Add(
+            $"Zig-zag seam is a single-wall mode: {ZigZagEnclosedKeptCount} enclosed contour(s) " +
+            "were kept as closed loops instead of being cut open. For enclosed models use Seam mode \"Normal\".");
+        ZigZagEnclosedKeptCount = 0;
+    }
+
     internal static void ExtractSingleSkinOpenFaces(
-        List<List<Vector2>> contours, List<bool> closed)
+        List<List<Vector2>> contours, List<bool> closed, float beadWidth)
     {
         for (int i = 0; i < contours.Count; i++)
         {
@@ -721,6 +740,19 @@ public static class PlanarSlicer
             if (IsRingLikeContour(c))
                 continue;
 
+            // Thin-wall test: a wall panel's contour loop hugs the wall, so its mean
+            // width (2·area/perimeter) stays within a few beads (walls up to ~4 beads
+            // thick still single-skin — see ZigZagSingleSkinTest's 20mm wall / 6mm
+            // bead). An ENCLOSED solid's perimeter ring encloses real area — mean
+            // width in the tens-to-hundreds of mm — and skinning it amputates the
+            // model (whole outline sections silently deleted). Keep those closed; the
+            // caller reports it so the user learns zig-zag is a single-wall mode.
+            if (AverageRingWidth(c) > beadWidth * 4f)
+            {
+                ZigZagEnclosedKeptCount++;
+                continue;
+            }
+
             var face = LongestOpenFace(c);
             if (face.Count < 2) continue;
             // Orient so left-of-travel points into the original closed wall (for X hairpins).
@@ -728,6 +760,26 @@ public static class PlanarSlicer
             contours[i] = face;
             if (i < closed.Count) closed[i] = false;
         }
+    }
+
+    /// <summary>
+    /// Mean width of a closed ring, 2·area/perimeter: ≈0 for an inset centreline loop,
+    /// ≈ wall thickness for a thin-wall outline, and far larger for an enclosed solid.
+    /// </summary>
+    internal static float AverageRingWidth(IReadOnlyList<Vector2> ring)
+    {
+        int n = ring.Count;
+        if (n > 2 && Dist2(ring[0], ring[^1]) < 1e-6f) n--;
+        if (n < 3) return 0f;
+        float area2 = 0f, perim = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            var a = ring[i];
+            var b = ring[(i + 1) % n];
+            area2 += a.X * b.Y - b.X * a.Y;
+            perim += Vector2.Distance(a, b);
+        }
+        return perim < 1e-3f ? 0f : MathF.Abs(area2) / perim; // (|area2|/2)·2/perim
     }
 
     /// <summary>
@@ -787,6 +839,12 @@ public static class PlanarSlicer
     internal static void KeepLongestOpenFaceOnly(List<List<Vector2>> contours, List<bool> closed)
     {
         if (contours.Count <= 1) return;
+        // Enclosed rings kept closed by the thin-wall guard mean island travels are
+        // unavoidable on this layer — pruning to one path would silently delete model
+        // geometry. Only prune when the layer is purely open skins (the original
+        // single-panel zig-zag case this rule was written for).
+        for (int i = 0; i < contours.Count; i++)
+            if (i >= closed.Count || closed[i]) return;
         int best = -1;
         float bestLen = -1f;
         for (int i = 0; i < contours.Count; i++)

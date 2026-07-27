@@ -67,6 +67,7 @@ public static class AngledPlanarSlicer
         var seamDirLocal = new Vector2(Vector3.Dot(sd3d, u), Vector3.Dot(sd3d, v));
 
         var   toolpath   = new Toolpath();
+        PlanarSlicer.ZigZagEnclosedKeptCount = 0;
         int   idx        = 0;
         var   prevTracks = new List<ContourTrack>();
         Vector3? prevEnd = null;
@@ -205,6 +206,7 @@ public static class AngledPlanarSlicer
         if (lightningPlan is not null)
             toolpath.FormboundStats = lightningPlan.ToStats();
 
+        PlanarSlicer.AttachZigZagWarning(toolpath);
         return toolpath;
     }
 
@@ -272,6 +274,7 @@ public static class AngledPlanarSlicer
         }
 
         var toolpath  = new Toolpath();
+        PlanarSlicer.ZigZagEnclosedKeptCount = 0;
         var prevTracks = new List<ContourTrack>();
         int idx = 0;
         Vector3? prevEnd = null;
@@ -537,6 +540,7 @@ public static class AngledPlanarSlicer
         if (lightningPlan is not null)
             toolpath.FormboundStats = lightningPlan.ToStats();
 
+        PlanarSlicer.AttachZigZagWarning(toolpath);
         return toolpath;
     }
 
@@ -782,7 +786,7 @@ public static class AngledPlanarSlicer
 
         if (singleSkinZigZag)
         {
-            PlanarSlicer.ExtractSingleSkinOpenFaces(insetContours, insetClosed);
+            PlanarSlicer.ExtractSingleSkinOpenFaces(insetContours, insetClosed, settings.BeadWidth);
             if (!settings.ZigZagAllowSameLayerTravel)
                 PlanarSlicer.KeepLongestOpenFaceOnly(insetContours, insetClosed);
 
