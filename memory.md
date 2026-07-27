@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-27 (Field rule: Zig-zag seam is single-wall-only — silently amputates enclosed models; use Normal for closed solids)
+Last updated: 2026-07-27 (Zig-zag single-wall guard + warning; seam guide editor reworked to on-wall vertical columns)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -524,6 +524,34 @@ Synced into `lfam3.json` `robot.joints[]` (A1–A6 only; E1 is rotary bed axis).
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-27 (later) — Seam position guides made usable (on-wall vertical columns)
+
+We already had Caracol/Eidos-style seam placement (SEAM → LOCATION → "Seam position guides" →
+Edit, `SeamGuidePoint` → `PlanarSlicer` line ~654) but nobody could use it: guides drew as a
+**4mm sphere (7mm selected)**, which on a 2.8m panel is ~2 screen pixels. You clicked blind and
+selecting a guide looked like a no-op. Reworked the editor's visuals and hit-testing only —
+**no slicer behavior changed**, and existing `.mass` guides keep working.
+
+- **Guides render as full-height vertical columns** (`SeamGuideColumnRenderer`, new). This is the
+  honest picture: the slicer uses only a guide's XY (`SeamGuidePoints.Select(g => g.ToXY())`), so
+  one guide re-seams *every* layer bottom to top. Radius scales with part height (0.22%, min 4mm)
+  and shading is nearly flat so it reads as a drawn line, not a 3D tube.
+  `SeamGuideRenderer` is deliberately untouched — it is a shared **sphere** renderer also used by
+  curved-boundary and sequence-path markers (changing it broke `SequencePathRenderer`; don't).
+- **Colors:** yellow = hover ghost (un-placed), green = placed, brighter green = selected.
+- **Always on the wall.** Hover/click/drag share one resolver: exact ray/face hit over the model,
+  holding the last on-surface point once the cursor leaves the silhouette. An earlier
+  nearest-sampled-vertex fallback jittered between scattered vertices and could land off the
+  visible wall — removed. Drag previously slid on a flat Z-plane and could pull a guide off the
+  surface; it now rides the wall too.
+- **Column height = the actual part.** Toolpath nodes carry no mesh, so a model-AABB-only range
+  found nothing whenever the model was hidden (the normal state after slicing) and fell back to a
+  fixed bed+1000mm stub — columns overshot the part. Range now also spans visible toolpaths.
+
+**Known gap (not built):** guides are a single XY, so the seam is always perfectly vertical.
+Seam staggering/randomizing and height-varying seam paths (a guide *path* rather than a point)
+would be additive to this system — see Eidos parity notes.
 
 ### 2026-07-27 — Field diagnosis: two "gaps in the toolpath" failure signatures (Scene 08 panels)
 
