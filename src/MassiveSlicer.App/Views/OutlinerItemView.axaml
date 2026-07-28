@@ -74,12 +74,22 @@
                         ToolTip.Tip="Expand / collapse">
                     <ia:Icon Value="{Binding ExpandGlyph}" FontSize="14"/>
                 </Button>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ia:Icon Value="{Binding TypeIcon}" FontSize="13"
+                <Grid Grid.Column="1" VerticalAlignment="Center">
+                    <!-- Auto icon + * text column (not a StackPanel): a StackPanel never
+                         constrains its children's width, so the TextBlock below could always
+                         request its full natural width and TextTrimming never triggered. A
+                         Grid column actually clips the text to the available space. -->
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <ia:Icon Grid.Column="0"
+                             Value="{Binding TypeIcon}" FontSize="13"
                              Margin="4,0,0,0" VerticalAlignment="Center"
                              Foreground="{Binding TypeColor}"
                              ToolTip.Tip="{Binding TypeTip}"/>
-                    <TextBlock Text="{Binding Name}"
+                    <TextBlock Grid.Column="1"
+                               Text="{Binding Name}"
                                IsVisible="{Binding !IsRenaming}"
                                VerticalAlignment="Center"
                                Padding="4,4"
@@ -87,15 +97,17 @@
                                TextTrimming="CharacterEllipsis"
                                DoubleTapped="OnNameDoubleTapped"
                                Background="Transparent"
-                               Foreground="{Binding IsRowHighlighted, Converter={StaticResource OutlinerRowText}}"/>
-                    <TextBox x:Name="RenameBox"
+                               Foreground="{Binding IsRowHighlighted, Converter={StaticResource OutlinerRowText}}"
+                               ToolTip.Tip="{Binding Name}"/>
+                    <TextBox Grid.Column="1"
+                             x:Name="RenameBox"
                              IsVisible="{Binding IsRenaming}"
                              Text="{Binding EditName, Mode=TwoWay}"
                              MinWidth="130" Padding="4,2" FontSize="12"
                              VerticalAlignment="Center"
                              KeyDown="OnRenameKeyDown"
                              LostFocus="OnRenameLostFocus"/>
-                </StackPanel>
+                </Grid>
                 <Button Grid.Column="2"
                         Command="{Binding ToggleLockCommand}"
                         Classes="ToolbarButton"
