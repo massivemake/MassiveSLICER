@@ -6,6 +6,19 @@
              HorizontalAlignment="Stretch"
              VerticalAlignment="Bottom">
 
+    <UserControl.Styles>
+        <!-- Faint by default. Same faint weight when a background check finds origin/main
+             has moved past this build's baked-in baseline — just recolored to the theme's
+             warning yellow, not also brightened, so it reads as a subtle recoloring rather
+             than a jarring jump in intensity. -->
+        <Style Selector="TextBlock.LabelMuted.BuildLabel">
+            <Setter Property="Opacity" Value="0.45"/>
+        </Style>
+        <Style Selector="TextBlock.LabelMuted.BuildLabel.Stale">
+            <Setter Property="Foreground" Value="{DynamicResource ColorWarning}"/>
+        </Style>
+    </UserControl.Styles>
+
     <Border Background="{DynamicResource Bg2}"
             BorderBrush="{DynamicResource Border2}"
             BorderThickness="0,1,0,0"
@@ -100,8 +113,8 @@
                             <TextBlock Text="{Binding StatusBar.BuildLabel}"
                                        VerticalAlignment="Center"
                                        IsHitTestVisible="False"
-                                       Classes="LabelMuted"
-                                       Opacity="0.45"/>
+                                       Classes="LabelMuted BuildLabel"
+                                       Classes.Stale="{Binding StatusBar.IsBuildStale}"/>
                         </Border>
                         <TextBlock Text="{Binding StatusBar.OperationFeedback}"
                                    VerticalAlignment="Center"
