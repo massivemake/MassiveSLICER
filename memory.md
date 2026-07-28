@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-27 (Zig-zag single-wall guard + warning; seam guide editor reworked to on-wall vertical columns)
+Last updated: 2026-07-28 (Touchpad navigation + Preferences controls; preference edits no longer re-slice; repo working-cost cleanup for multi-dev AI sessions)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -401,6 +401,67 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-28 — Trackpad navigation, Preferences controls, and a preference→re-slice bug
+
+**Trackpad only zoomed; rotate/pan needed a mouse.** Root cause was *not* missing code — the
+`Touchpad` navigation preset already existed and worked. Two things hid it:
+- `AppPreferences.ActivePreset` defaults to **`Rhino`**, whose wheel branch zooms and ignores
+  modifiers entirely — exactly the "only zooms no matter what keys I hold" symptom. Diagnose this
+  by reading `~/Library/Application Support/MassiveSlicer/prefs.json` → `ActivePreset`, not by
+  re-reading the handler (that mistake cost two round trips).
+- The preset's Preferences labels were **wrong on all three bindings** (advertised Ctrl-orbit /
+  plain-two-finger-pan / pinch-zoom), so anyone who found it tried the wrong gestures and
+  concluded it was broken. Labels in `NavigationPreset.All` must change together with
+  `ViewportView.OnPointerWheelChanged` — that is the authoritative mapping.
+
+**Final Touchpad mapping** (per shop request): two-finger = **pan**, Shift + two-finger = zoom,
+Cmd + two-finger = **rotate**. Pan default speed raised 4 → 9. Pan is centralised in
+`ViewportView.PanFromTouchpad()` so the normal and 2D-slice-plane branches can't drift.
+Horizontal **always** follows the fingers; `TouchpadInvertPan` flips the **vertical axis only**
+(negating both axes mirrored left/right — a bug shipped and fixed same day).
+
+**New prefs + UI:** `TouchpadPanSpeed` / `TouchpadOrbitSpeed` / `TouchpadZoomSpeed` /
+`TouchpadInvertPan` in `AppPreferences`, mirrored on `ViewportViewModel`, applied live via
+`SyncViewportFromPrefs`, edited under **Preferences → Navigation → TOUCHPAD GESTURES** (visible
+only when the Touchpad preset is active). Preferences window was `Height=480` +
+`CanResize="False"`, making lower settings unreachable → now 640, resizable, min 360 / max 1100.
+Default preset is still `Rhino` — switching it is a team decision (mouse users would get pan on
+plain wheel).
+
+**BUG WORTH KNOWING — editing any preference re-sliced the model.**
+`PreferencesViewModel.Commit` → `SyncViewportFromPrefs`, which also re-pushed **every slicing
+setting** from prefs into the Additive panel; those assignments raise `PropertyChanged`, which the
+realtime-slice watchlist turns into a re-slice. It also **silently overwrote slicing settings
+changed in the panel this session** (e.g. resetting `SeamMode` from a stale pref — nasty given the
+zig-zag/Normal rule below). Fix: slicing block extracted to `SyncSlicingSettingsFromPrefs()` and
+gated behind `SyncViewportFromPrefs(bool includeSlicingSettings = true)`; preference edits pass
+`false`, startup/workspace-load still do the full sync. **If you add a settings sync path, keep
+slicing settings out of it.**
+
+### 2026-07-28 — Repo working-cost cleanup (for 4–5 devs running AI sessions)
+
+Changes were slow and token-expensive. Measured, then fixed the cheap causes:
+- **`docs/CODE-MAP.md`** (new): subsystem → file index plus section anchors inside the oversized
+  files. Read costs measured: `ViewportView.axaml.cs` **~178k tokens**, `ViewportViewModel` ~86k,
+  `RightPanelView.axaml` ~76k, `LightningPlanner` ~55k, all of `Core/Slicing/` ~223k.
+- **`docs/KNOWN-TEST-FAILURES.md`** (new): the **15** baseline failures with reasons (9
+  path/CWD-dependent — the count wobbles 14↔15 because `MeshoptDecodeTest` calls
+  `Directory.SetCurrentDirectory`; 6 real WIP incl. the two Cut Modifier "Apply does nothing"
+  repros). Compare against this list instead of stash-deriving a baseline.
+- **`memory.md` 1,221 → ~740 lines**; pre-07-04 entries + build 1–30 log moved verbatim to
+  **`docs/memory-archive.md`**. Rotate again past ~800 lines.
+- **`.claude/settings.json`** (new, shared): allowlists routine build/test/read-only-git/search so
+  nobody is prompted for them. `.gitignore` un-ignores just that file.
+- **`CLAUDE.md`/`AGENTS.md`**: efficiency defaults, an explicit "when to read broadly" rule (if you
+  can name what you're looking for, grep; if not, read the whole thing), a deep-dive escalation
+  protocol with the measured cost table, and multi-developer git prompts (pull before first edit;
+  branch for slicer/KRL/schema/multi-session work; land or park a branch before switching
+  features; merge `main` daily). Keep the two files identical.
+
+**Branch hygiene note:** `feature/cut-modifier` is 0 ahead / 18 behind — fully merged, safe to
+delete. `feature/presets` is 5 ahead / **80 behind** and its presets logic was already
+cherry-picked onto `main` on 07-23; needs an owner decision.
 
 ### 2026-07-27 (later) — Seam position guides made usable (on-wall vertical columns)
 
