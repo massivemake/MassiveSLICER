@@ -34,15 +34,29 @@
                            VerticalAlignment="Center"
                            Classes="LabelMuted"/>
             </StackPanel>
-            <!-- Click copies the build label; SelectableTextBlock also allows manual select + Cmd+C. -->
-            <SelectableTextBlock Text="{Binding BuildLabel}"
-                                 VerticalAlignment="Center"
-                                 HorizontalAlignment="Center"
-                                 Cursor="Hand"
-                                 Classes="LabelMuted BuildLabel"
-                                 Classes.Stale="{Binding IsBuildStale}"
-                                 ToolTip.Tip="{Binding BuildLabelTooltip}"
-                                 Tapped="OnBuildLabelTapped"/>
+            <!--
+                The hover target is this padded Border, not the glyphs: a tooltip attached to
+                thin centred text flickers as the pointer crosses in and out of the tight text
+                bounds. Background="Transparent" is required for the Border to hit-test at all.
+                Placement=Top keeps the tooltip off the cursor — the status bar hugs the bottom
+                of the screen, so a below-cursor tooltip gets clamped over the pointer and
+                oscillates open/closed.
+            -->
+            <Border HorizontalAlignment="Center"
+                    VerticalAlignment="Stretch"
+                    Background="Transparent"
+                    Padding="14,0"
+                    Cursor="Hand"
+                    ToolTip.Tip="{Binding BuildLabelTooltip}"
+                    ToolTip.Placement="Top"
+                    ToolTip.VerticalOffset="-6"
+                    Tapped="OnBuildLabelTapped">
+                <TextBlock Text="{Binding BuildLabel}"
+                           VerticalAlignment="Center"
+                           IsHitTestVisible="False"
+                           Classes="LabelMuted BuildLabel"
+                           Classes.Stale="{Binding IsBuildStale}"/>
+            </Border>
             <TextBlock Text="{Binding OperationFeedback}"
                        VerticalAlignment="Center"
                        HorizontalAlignment="Right"

@@ -87,15 +87,22 @@
                                    VerticalAlignment="Center"
                                    HorizontalAlignment="Left"
                                    Classes="LabelMuted"/>
-                        <!-- Click copies the build label (also selectable for manual Cmd+C). -->
-                        <SelectableTextBlock Text="{Binding StatusBar.BuildLabel}"
-                                             VerticalAlignment="Center"
-                                             HorizontalAlignment="Center"
-                                             Cursor="Hand"
-                                             Classes="LabelMuted"
-                                             Opacity="0.45"
-                                             ToolTip.Tip="{Binding StatusBar.BuildLabelTooltip}"
-                                             Tapped="OnBuildLabelTapped"/>
+                        <!-- Padded Border is the hover/click target — see StatusBarView.axaml. -->
+                        <Border HorizontalAlignment="Center"
+                                VerticalAlignment="Stretch"
+                                Background="Transparent"
+                                Padding="14,0"
+                                Cursor="Hand"
+                                ToolTip.Tip="{Binding StatusBar.BuildLabelTooltip}"
+                                ToolTip.Placement="Top"
+                                ToolTip.VerticalOffset="-6"
+                                Tapped="OnBuildLabelTapped">
+                            <TextBlock Text="{Binding StatusBar.BuildLabel}"
+                                       VerticalAlignment="Center"
+                                       IsHitTestVisible="False"
+                                       Classes="LabelMuted"
+                                       Opacity="0.45"/>
+                        </Border>
                         <TextBlock Text="{Binding StatusBar.OperationFeedback}"
                                    VerticalAlignment="Center"
                                    HorizontalAlignment="Right"
