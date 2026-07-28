@@ -6021,6 +6021,65 @@ public partial class ViewportView : UserControl
     /// Horizontal/VerticalCutSplitter for the toolpath). Non-destructive: the master and its
     /// stack are never touched; results land in a fresh sibling group.
     /// </summary>
+    /// <summary>
+    /// Returns <paramref name="root"/>'s own mesh if it carries one directly (STL/OBJ/3MF/STEP
+    /// imports, and the common case generally), or — for a GLB import, whose primitives live on
+    /// child <see cref="SceneNode"/>s rather than the wrapper root the outliner registers — merges
+    /// every descendant mesh into one combined <see cref="MeshData"/> expressed in root's own local
+    /// space, so Cut Apply works the same regardless of which loader produced the hierarchy.
+    /// Skips <see cref="SceneNode.IsAuthoringOverlay"/> nodes — the Modifiers group and each Cut's
+    /// own preview-plane/corner-marker geometry are real, pickable, GPU-uploaded meshes parented
+    /// under this same root, and must never be swept into the geometry actually being cut.
+    /// </summary>
+    private static MeshData? GetSubtreeMeshInLocalSpace(SceneNode root)
+    {
+        if (root.Mesh?.PickingData is { } direct) return direct;
+
+        var positions = new List<TkVector3>();
+        var normals   = new List<TkVector3>();
+        var indices   = new List<uint>();
+        Vector4? color = null;
+        float metallic = 0f, roughness = 1f;
+        var rootWorldInv = root.WorldTransform.Inverted();
+
+        foreach (var n in root.SelfAndDescendants())
+        {
+            if (ReferenceEquals(n, root) || n.IsAuthoringOverlay) continue;
+            if (n.Mesh?.PickingData is not { } mesh) continue;
+
+            color    ??= mesh.BaseColor;
+            metallic   = mesh.Metallic;
+            roughness  = mesh.Roughness;
+
+            var toRoot = n.WorldTransform * rootWorldInv;
+            uint baseIndex = (uint)positions.Count;
+            foreach (var p in mesh.Positions)
+                positions.Add(TkVector3.TransformPosition(p, toRoot));
+            foreach (var nrm in mesh.Normals)
+                normals.Add(TransformNormalDirection(nrm, toRoot));
+
+            if (mesh.Indices is { Length: > 0 } idx)
+                foreach (var i in idx)
+                    indices.Add(baseIndex + i);
+            else
+                for (uint i = 0; i < mesh.Positions.Length; i++)
+                    indices.Add(baseIndex + i);
+        }
+
+        if (positions.Count == 0) return null;
+        return new MeshData(positions.ToArray(), normals.ToArray(), indices.ToArray(),
+                             root.Name, color, metallic, roughness);
+    }
+
+    private static TkVector3 TransformNormalDirection(TkVector3 n, TkMatrix4 m)
+    {
+        var d = new TkVector3(
+            n.X * m.M11 + n.Y * m.M21 + n.Z * m.M31,
+            n.X * m.M12 + n.Y * m.M22 + n.Z * m.M32,
+            n.X * m.M13 + n.Y * m.M23 + n.Z * m.M33);
+        return d.LengthSquared > 1e-12f ? TkVector3.Normalize(d) : n;
+    }
+
     private async Task ApplyModifierStackAsync(ViewportViewModel vm, OutlinerItemViewModel ownerItem)
     {
         if (vm.IsSlicing) return;
@@ -6038,7 +6097,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        if (ownerItem.Node.Mesh?.PickingData is not { } masterMesh)
+        if (GetSubtreeMeshInLocalSpace(ownerItem.Node) is not { } masterMesh)
         {
             LogToConsole("[apply] master mesh has no geometry yet.");
             return;

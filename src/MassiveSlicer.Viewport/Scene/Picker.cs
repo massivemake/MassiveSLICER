@@ -120,31 +120,38 @@ public static class Picker
         bool hit = false;
         var pos = mesh.Positions;
 
+        // The "a" determinant below scales linearly with |rd|. A node whose WorldTransform bakes
+        // in a non-unit scale (e.g. GLTF's native-metres-to-scene-mm ×1000 conversion) shrinks the
+        // local-space rd by the inverse of that scale, so a fixed absolute epsilon silently rejects
+        // real hits as "parallel". Scale the epsilon by |rd| so it stays correct at any node scale.
+        float eps = BaseEps * rd.Length;
+
         if (mesh.Indices is { } idx)
         {
             for (int i = 0; i + 2 < idx.Length; i += 3)
-                TestTri(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd, ref tMin, ref hit);
+                TestTri(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd, eps, ref tMin, ref hit);
         }
         else
         {
             for (int i = 0; i + 2 < pos.Length; i += 3)
-                TestTri(pos[i], pos[i + 1], pos[i + 2], ro, rd, ref tMin, ref hit);
+                TestTri(pos[i], pos[i + 1], pos[i + 2], ro, rd, eps, ref tMin, ref hit);
         }
 
         return hit;
     }
 
+    private const float BaseEps = 1e-6f;
+
     private static void TestTri(
         Vector3 v0, Vector3 v1, Vector3 v2,
-        Vector3 ro, Vector3 rd,
+        Vector3 ro, Vector3 rd, float eps,
         ref float tMin, ref bool hit)
     {
-        const float Eps = 1e-6f;
         var e1 = v1 - v0;
         var e2 = v2 - v0;
         var h  = Vector3.Cross(rd, e2);
         float a = Vector3.Dot(e1, h);
-        if (MathF.Abs(a) < Eps) return;
+        if (MathF.Abs(a) < eps) return;
 
         float f = 1f / a;
         var s   = ro - v0;
@@ -156,7 +163,7 @@ public static class Picker
         if (v < 0f || u + v > 1f) return;
 
         float t = f * Vector3.Dot(e2, q);
-        if (t > Eps && t < tMin)
+        if (t > BaseEps && t < tMin)
         {
             tMin = t;
             hit  = true;
@@ -220,16 +227,21 @@ public static class Picker
         Vector3 bestE1 = default, bestE2 = default;
         var     pos    = mesh.Positions;
 
+        // See the matching comment in Intersect(): epsilon must scale with |rd|, or a node whose
+        // WorldTransform bakes in a non-unit scale (GLB's ×1000 metres->mm conversion) shrinks rd
+        // enough that real hits get rejected as "parallel".
+        float eps = BaseEps * rd.Length;
+
         if (mesh.Indices is { } idx)
         {
             for (int i = 0; i + 2 < idx.Length; i += 3)
-                TestTriFace(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd,
+                TestTriFace(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd, eps,
                             ref tMin, ref hit, ref bestE1, ref bestE2);
         }
         else
         {
             for (int i = 0; i + 2 < pos.Length; i += 3)
-                TestTriFace(pos[i], pos[i + 1], pos[i + 2], ro, rd,
+                TestTriFace(pos[i], pos[i + 1], pos[i + 2], ro, rd, eps,
                             ref tMin, ref hit, ref bestE1, ref bestE2);
         }
 
@@ -245,16 +257,15 @@ public static class Picker
 
     private static void TestTriFace(
         Vector3 v0, Vector3 v1, Vector3 v2,
-        Vector3 ro, Vector3 rd,
+        Vector3 ro, Vector3 rd, float eps,
         ref float tMin, ref bool hit,
         ref Vector3 bestE1, ref Vector3 bestE2)
     {
-        const float Eps = 1e-6f;
         var e1 = v1 - v0;
         var e2 = v2 - v0;
         var h  = Vector3.Cross(rd, e2);
         float a = Vector3.Dot(e1, h);
-        if (MathF.Abs(a) < Eps) return;
+        if (MathF.Abs(a) < eps) return;
 
         float f = 1f / a;
         var s   = ro - v0;
@@ -266,7 +277,7 @@ public static class Picker
         if (v < 0f || u + v > 1f) return;
 
         float t = f * Vector3.Dot(e2, q);
-        if (t > Eps && t < tMin)
+        if (t > BaseEps && t < tMin)
         {
             tMin   = t;
             hit    = true;
