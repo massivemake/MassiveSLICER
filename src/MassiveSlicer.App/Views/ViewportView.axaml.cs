@@ -3339,9 +3339,10 @@ public partial class ViewportView : UserControl
         if (IsSlicePlaneNavLocked)
         {
             if (ActivePreset == NavigationPresetId.Touchpad
-                && mods.HasFlag(KeyModifiers.Meta))
+                && !mods.HasFlag(KeyModifiers.Shift))
             {
-                // Cmd + two fingers → pan (same as normal Touchpad).
+                // Touchpad: plain two fingers → pan, same as the unlocked view. Cmd would
+                // orbit, which this mode forbids, so it also falls through to pan here.
                 _renderer.Camera.Pan(
                     deltaX:         dx * 4f,
                     deltaY:        -dy * 4f,
@@ -3350,7 +3351,7 @@ public partial class ViewportView : UserControl
             }
             else
             {
-                // Plain scroll / two-finger drag → zoom (no rotate).
+                // Mouse presets: plain scroll → zoom. Touchpad: Shift + two fingers → zoom.
                 float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
                 _renderer.Camera.Zoom(zoom);
             }
@@ -3375,19 +3376,21 @@ public partial class ViewportView : UserControl
         }
         else if (mods.HasFlag(KeyModifiers.Meta))
         {
-            // Cmd + two fingers → pan
+            // Cmd + two fingers → orbit/rotate
+            _renderer.Camera.Orbit(
+                deltaAzimuth:   -dx * 2f,
+                deltaElevation:  dy * 2f);
+        }
+        else
+        {
+            // Two fingers (no modifier) → pan/reposition. This is the macOS convention
+            // (plain two-finger scroll moves content) and what the shop asked for; rotate
+            // moved to Cmd. Keep NavigationPreset.All's Touchpad labels in sync.
             _renderer.Camera.Pan(
                 deltaX:         dx * 4f,
                 deltaY:        -dy * 4f,
                 viewportWidth:  (float)GlCanvas.Bounds.Width,
                 viewportHeight: (float)GlCanvas.Bounds.Height);
-        }
-        else
-        {
-            // Two fingers (no modifier) → orbit/rotate
-            _renderer.Camera.Orbit(
-                deltaAzimuth:   -dx * 2f,
-                deltaElevation:  dy * 2f);
         }
 
         GlCanvas.RequestNextFrameRendering();
