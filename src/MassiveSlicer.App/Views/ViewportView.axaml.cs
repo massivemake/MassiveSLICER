@@ -6027,6 +6027,9 @@ public partial class ViewportView : UserControl
     /// child <see cref="SceneNode"/>s rather than the wrapper root the outliner registers — merges
     /// every descendant mesh into one combined <see cref="MeshData"/> expressed in root's own local
     /// space, so Cut Apply works the same regardless of which loader produced the hierarchy.
+    /// Skips <see cref="SceneNode.IsAuthoringOverlay"/> nodes — the Modifiers group and each Cut's
+    /// own preview-plane/corner-marker geometry are real, pickable, GPU-uploaded meshes parented
+    /// under this same root, and must never be swept into the geometry actually being cut.
     /// </summary>
     private static MeshData? GetSubtreeMeshInLocalSpace(SceneNode root)
     {
@@ -6041,7 +6044,8 @@ public partial class ViewportView : UserControl
 
         foreach (var n in root.SelfAndDescendants())
         {
-            if (ReferenceEquals(n, root) || n.Mesh?.PickingData is not { } mesh) continue;
+            if (ReferenceEquals(n, root) || n.IsAuthoringOverlay) continue;
+            if (n.Mesh?.PickingData is not { } mesh) continue;
 
             color    ??= mesh.BaseColor;
             metallic   = mesh.Metallic;
