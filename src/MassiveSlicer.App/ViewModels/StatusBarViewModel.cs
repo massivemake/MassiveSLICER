@@ -1,4 +1,5 @@
-﻿using Avalonia.Media;
+﻿using Avalonia.Input.Platform;
+using Avalonia.Media;
 using MassiveSlicer.App;
 using MassiveSlicer.ViewModels.Base;
 
@@ -88,8 +89,20 @@ public sealed class StatusBarViewModel : ViewModelBase
     }
 
     public string BuildLabelTooltip => IsBuildStale
-        ? $"main has moved on to build {LatestBaseline} (this build is based on {BuildInfo.Baseline}) — pull main in to catch up."
-        : $"Branch: {BuildInfo.Branch}";
+        ? $"main has moved on to build {LatestBaseline} (this build is based on {BuildInfo.Baseline}) — pull main in to catch up. Click to copy."
+        : $"Branch: {BuildInfo.Branch} — click to copy";
+
+    /// <summary>
+    /// Copies the build label to the clipboard so it can be pasted into a message to the team,
+    /// and confirms in the status bar. Callers pass their own <c>TopLevel.GetTopLevel(this)?.Clipboard</c>
+    /// (a ViewModel has no TopLevel of its own); a null clipboard is a no-op.
+    /// </summary>
+    public async Task CopyBuildLabelAsync(IClipboard? clipboard)
+    {
+        if (clipboard is null) return;
+        await clipboard.SetTextAsync(BuildLabel);
+        OperationFeedback = $"Copied “{BuildLabel}” to clipboard";
+    }
 
     private bool _isProgressActive;
 

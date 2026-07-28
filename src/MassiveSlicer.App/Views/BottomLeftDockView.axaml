@@ -87,11 +87,15 @@
                                    VerticalAlignment="Center"
                                    HorizontalAlignment="Left"
                                    Classes="LabelMuted"/>
-                        <TextBlock Text="{Binding StatusBar.BuildLabel}"
-                                   VerticalAlignment="Center"
-                                   HorizontalAlignment="Center"
-                                   Classes="LabelMuted"
-                                   Opacity="0.45"/>
+                        <!-- Click copies the build label (also selectable for manual Cmd+C). -->
+                        <SelectableTextBlock Text="{Binding StatusBar.BuildLabel}"
+                                             VerticalAlignment="Center"
+                                             HorizontalAlignment="Center"
+                                             Cursor="Hand"
+                                             Classes="LabelMuted"
+                                             Opacity="0.45"
+                                             ToolTip.Tip="{Binding StatusBar.BuildLabelTooltip}"
+                                             Tapped="OnBuildLabelTapped"/>
                         <TextBlock Text="{Binding StatusBar.OperationFeedback}"
                                    VerticalAlignment="Center"
                                    HorizontalAlignment="Right"

@@ -28,6 +28,13 @@ public partial class BottomLeftDockView : UserControl
     private ToolbarViewModel? Toolbar =>
         DataContext is MainWindowViewModel root ? root.Toolbar : null;
 
+    /// <summary>Click the build label to copy it (for pasting into a message to the team).</summary>
+    private async void OnBuildLabelTapped(object? sender, TappedEventArgs e)
+    {
+        if (DataContext is not MainWindowViewModel root) return;
+        await root.StatusBar.CopyBuildLabelAsync(TopLevel.GetTopLevel(this)?.Clipboard);
+    }
+
     private void ResizeGrip_PointerPressed(object? sender, PointerPressedEventArgs e)
     {
         if (Toolbar is not { IsConsoleVisible: true } toolbar) return;
