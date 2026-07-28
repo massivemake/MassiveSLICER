@@ -89,7 +89,11 @@ public sealed class MainWindowViewModel : ViewModelBase
 
         Preferences = new PreferencesViewModel(AppPreferences, () =>
         {
-            SyncViewportFromPrefs();
+            // Preferences edits (theme, navigation, touchpad) must NOT re-push slicing
+            // settings: those assignments fire PropertyChanged, which the realtime-slice
+            // watchlist turns into a re-slice, and they would also overwrite slicing values
+            // the user changed in the Additive panel this session.
+            SyncViewportFromPrefs(includeSlicingSettings: false);
             OnSettingsChanged();
         });
 
@@ -3124,7 +3128,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// Copies all persisted settings from <see cref="AppPreferences"/> back into
     /// the live ViewModels. Called at startup and after the Preferences dialog applies.
     /// </summary>
-    public void SyncViewportFromPrefs()
+    public void SyncViewportFromPrefs(bool includeSlicingSettings = true)
     {
         var p    = AppPreferences;
         var vp   = Viewport;
@@ -3189,6 +3193,27 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
         view.ShowEdges            = p.ShowEdges;
         view.ShadowCatcherEnabled = vp.ShowContactShadows;
+
+        if (includeSlicingSettings) SyncSlicingSettingsFromPrefs();
+        // Scan settings
+        var scan = RightPanel.Scan;
+        scan.CameraIp        = p.ScanCameraIp;
+        scan.OutputDirectory = p.ScanOutputDirectory;
+        scan.ToolDataIndex   = p.ScanToolDataIndex;
+        scan.BaseDataIndex   = p.ScanBaseDataIndex;
+    }
+
+    /// <summary>
+    /// Pushes persisted SLICING settings into the Additive panel. Separate from
+    /// <see cref="SyncViewportFromPrefs"/> because these assignments raise PropertyChanged on
+    /// AdditiveSettingsViewModel, which the realtime-slice watchlist reacts to — editing an
+    /// unrelated preference (theme, touchpad invert) must not kick off a re-slice, and must not
+    /// clobber slicing settings the user changed in the panel this session.
+    /// </summary>
+    private void SyncSlicingSettingsFromPrefs()
+    {
+        var p   = AppPreferences;
+        var add = RightPanel.Additive;
 
         // Additive slicing settings
         add.LayerHeight      = p.LayerHeight;
@@ -3372,12 +3397,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.OrientationSigmaMm       = p.OrientationSigmaMm;
         add.ApoCvel                = p.ApoCvel;
 
-        // Scan settings
-        var scan = RightPanel.Scan;
-        scan.CameraIp        = p.ScanCameraIp;
-        scan.OutputDirectory = p.ScanOutputDirectory;
-        scan.ToolDataIndex   = p.ScanToolDataIndex;
-        scan.BaseDataIndex   = p.ScanBaseDataIndex;
     }
 
     /// <summary>

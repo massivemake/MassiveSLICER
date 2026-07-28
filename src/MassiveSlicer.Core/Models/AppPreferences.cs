@@ -36,8 +36,8 @@ public sealed class AppPreferences
     public float TouchpadZoomSpeed { get; set; } = 1f;
 
     /// <summary>
-    /// When true, two-finger pan is inverted (drag right → part moves left, "game style").
-    /// Default false = the part follows your fingers.
+    /// When true, the VERTICAL axis of two-finger pan is inverted (swipe up → part moves down).
+    /// Horizontal always follows the fingers. Default false = part follows fingers on both axes.
     /// </summary>
     public bool TouchpadInvertPan { get; set; }
 

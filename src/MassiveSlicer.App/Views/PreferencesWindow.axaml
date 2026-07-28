@@ -138,7 +138,7 @@
                                                HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.8"/>
                                 </Grid>
 
-                                <CheckBox Content="Invert reposition direction  —  &quot;game style&quot;, part moves against your fingers"
+                                <CheckBox Content="Invert vertical reposition  —  up/down only; left/right always follows your fingers"
                                           IsChecked="{Binding TouchpadInvertPan}"
                                           Margin="0,2,0,10"/>
 

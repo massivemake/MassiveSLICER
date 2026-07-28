@@ -3336,15 +3336,18 @@ public partial class ViewportView : UserControl
     private bool  TouchpadInvertPan  => (_vm as ViewportViewModel)?.TouchpadInvertPan  ?? false;
 
     /// <summary>
-    /// Two-finger pan. Default (InvertPan off) drags the part WITH your fingers; the old
-    /// hard-coded signs were the inverted "game style" and are what InvertPan restores.
+    /// Two-finger pan. The part follows your fingers on BOTH axes: swipe left it goes left,
+    /// swipe up it goes up. <see cref="TouchpadInvertPan"/> flips the vertical axis only
+    /// (the "natural scrolling" preference people actually disagree about); horizontal always
+    /// tracks the fingers, so it can never end up mirrored against the vertical.
     /// </summary>
     private void PanFromTouchpad(float dx, float dy)
     {
-        float s = TouchpadPanSpeed * (TouchpadInvertPan ? 1f : -1f);
+        float s     = TouchpadPanSpeed;
+        float ySign = TouchpadInvertPan ? -1f : 1f;
         _renderer.Camera.Pan(
             deltaX:          dx * s,
-            deltaY:         -dy * s,
+            deltaY:          dy * s * ySign,
             viewportWidth:  (float)GlCanvas.Bounds.Width,
             viewportHeight: (float)GlCanvas.Bounds.Height);
     }
