@@ -1,9 +1,15 @@
-# Code map — read this instead of reading big files
+# Code map — find your way in without reading everything
 
 **Why this file exists:** four of our largest files are 2,600–14,900 lines. Reading
-`ViewportView.axaml.cs` end to end costs roughly 150k tokens and fills most of an AI context
-window before any work starts. Use the anchors below to `grep` and read a few hundred lines
-instead. Line numbers drift — treat them as "search near here", and confirm with `grep -n`.
+`ViewportView.axaml.cs` end to end costs roughly 150k tokens, which is worth spending
+deliberately and wasteful to spend by reflex. Use the anchors below to `grep` and read a few
+hundred lines when you know what you're changing. Line numbers drift — treat them as "search
+near here", and confirm with `grep -n`.
+
+**This map is a shortcut, not a fence.** When you're auditing for a class of bug, chasing a
+symptom you can't localize, refactoring, or touching anything that reaches the robot, read
+broadly — see "When to read broadly" in `CLAUDE.md`. The map still helps: it tells you which
+subsystem to read in full.
 
 ## Where things live (by task)
 

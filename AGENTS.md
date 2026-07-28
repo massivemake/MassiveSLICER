@@ -5,18 +5,49 @@ Product definition and backlog live in **`ROADMAP.md`**. Past work lives in
 
 ## Work efficiently — this repo is large
 
-Four files are 2,600–14,900 lines; reading `ViewportView.axaml.cs` whole costs ~150k tokens
-and buys almost nothing. Rules:
+Four files are 2,600–14,900 lines. Reading `ViewportView.axaml.cs` whole costs ~150k tokens,
+so do it **on purpose, not by reflex**. This is a cost default, not a capability limit — the
+rules below are about not paying 150k tokens to change one line. Deep reading is explicitly
+sanctioned when the work calls for it (see the next section).
 
 1. **Read `docs/CODE-MAP.md` first.** It maps every subsystem to a file, with section
-   anchors inside the big files. Grep the anchor, read a few hundred lines, edit.
-2. **Never read a >1,000-line file end to end.** Use `grep -n` to locate, then read with
-   `offset`/`limit`. Same for `memory.md` — skim the newest entries, don't ingest 1,200 lines.
-3. **`memory.md` is recent history only.** Anything older than the current milestone is in
-   `docs/memory-archive.md`; go there only when digging into a specific past decision.
+   anchors inside the big files, and it is the cheapest way to find where you are going.
+2. **Default to targeted reads.** `grep -n` to locate, then read with `offset`/`limit`.
+3. **`memory.md` is recent history only.** Older entries are in `docs/memory-archive.md`;
+   go there when digging into a specific past decision.
 4. **Trace a setting** with the chain in CODE-MAP rather than searching blind.
 
-## Verifying a change (saves a whole wasted cycle)
+## When to read broadly (do this without hesitation)
+
+**The test is whether you can name what you are looking for.** If you can name it, grep for
+it. If you are looking for what you don't yet know is there, read broadly — a targeted read
+cannot find a bug you can't name, and pattern-matching across a whole subsystem is how the
+non-obvious problems surface.
+
+Read whole files / whole subsystems for:
+
+- **Auditing a class of problem** — thread safety, disposal, error handling, silent failure
+  paths. These live in the gaps between named functions.
+- **A bug you cannot localize.** If the symptom doesn't map to a function name, stop grepping.
+- **Refactors and file splits**, performance sweeps, and reviewing an unfamiliar subsystem
+  before a design change.
+- **Anything where being wrong is expensive** — export/KRL correctness, robot motion, and
+  anything that reaches real hardware. Verify by reading, not by assuming.
+
+Two ways to make broad reading cheap, so cost never becomes a reason to skip it:
+
+- **Delegate it.** Hand the whole-file pass to a subagent and keep the conclusions, not the
+  file contents — the 150k tokens land in a context you throw away.
+- **Read it once per session**, in sequential chunks, with the question written down first.
+  Re-reading the same file repeatedly is the actual waste, not the first read.
+
+If a targeted read leaves you inferring rather than confirming, widen the read. Guessing to
+save tokens is how a wrong fix ships — that costs far more than the read did.
+
+## Verifying a change (these are hard rules, not cost defaults)
+
+The reading guidance above is about money. The rules here are about being **wrong** — each has
+already cost a real cycle or shipped a stale build to a tester. Follow them.
 
 - **The test suite has 15 known failures** — path/CWD-dependent and WIP tests, listed in
   `docs/KNOWN-TEST-FAILURES.md`. Compare against that list; do **not** re-derive a baseline
