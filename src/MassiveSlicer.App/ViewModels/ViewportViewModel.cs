@@ -438,6 +438,39 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _activePreset, value);
     }
 
+    private float _touchpadPanSpeed = 9f;
+    private float _touchpadOrbitSpeed = 2f;
+    private float _touchpadZoomSpeed = 1f;
+    private bool  _touchpadInvertPan;
+
+    /// <summary>Two-finger pan speed (Touchpad preset). Mirrors the preference; applied in OnPointerWheelChanged.</summary>
+    public float TouchpadPanSpeed
+    {
+        get => _touchpadPanSpeed;
+        set => SetField(ref _touchpadPanSpeed, value);
+    }
+
+    /// <summary>Cmd + two-finger rotate speed (Touchpad preset).</summary>
+    public float TouchpadOrbitSpeed
+    {
+        get => _touchpadOrbitSpeed;
+        set => SetField(ref _touchpadOrbitSpeed, value);
+    }
+
+    /// <summary>Shift + two-finger zoom speed (Touchpad preset).</summary>
+    public float TouchpadZoomSpeed
+    {
+        get => _touchpadZoomSpeed;
+        set => SetField(ref _touchpadZoomSpeed, value);
+    }
+
+    /// <summary>When true, two-finger pan direction is inverted ("game style").</summary>
+    public bool TouchpadInvertPan
+    {
+        get => _touchpadInvertPan;
+        set => SetField(ref _touchpadInvertPan, value);
+    }
+
     /// <summary>Plasticity live-bridge state, surfaced as a collapsible section in the N-key HUD.</summary>
     public PlasticityViewModel Plasticity { get; } = new();
 

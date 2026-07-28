@@ -3329,6 +3329,26 @@ public partial class ViewportView : UserControl
         }
     }
 
+    // Touchpad gesture tuning (Preferences → Navigation; mirrored onto ViewportViewModel).
+    private float TouchpadPanSpeed   => (_vm as ViewportViewModel)?.TouchpadPanSpeed   ?? 9f;
+    private float TouchpadOrbitSpeed => (_vm as ViewportViewModel)?.TouchpadOrbitSpeed ?? 2f;
+    private float TouchpadZoomSpeed  => (_vm as ViewportViewModel)?.TouchpadZoomSpeed  ?? 1f;
+    private bool  TouchpadInvertPan  => (_vm as ViewportViewModel)?.TouchpadInvertPan  ?? false;
+
+    /// <summary>
+    /// Two-finger pan. Default (InvertPan off) drags the part WITH your fingers; the old
+    /// hard-coded signs were the inverted "game style" and are what InvertPan restores.
+    /// </summary>
+    private void PanFromTouchpad(float dx, float dy)
+    {
+        float s = TouchpadPanSpeed * (TouchpadInvertPan ? 1f : -1f);
+        _renderer.Camera.Pan(
+            deltaX:          dx * s,
+            deltaY:         -dy * s,
+            viewportWidth:  (float)GlCanvas.Bounds.Width,
+            viewportHeight: (float)GlCanvas.Bounds.Height);
+    }
+
     private void OnPointerWheelChanged(object? sender, PointerWheelEventArgs e)
     {
         var mods = e.KeyModifiers;
@@ -3343,16 +3363,13 @@ public partial class ViewportView : UserControl
             {
                 // Touchpad: plain two fingers → pan, same as the unlocked view. Cmd would
                 // orbit, which this mode forbids, so it also falls through to pan here.
-                _renderer.Camera.Pan(
-                    deltaX:         dx * 4f,
-                    deltaY:        -dy * 4f,
-                    viewportWidth:  (float)GlCanvas.Bounds.Width,
-                    viewportHeight: (float)GlCanvas.Bounds.Height);
+                PanFromTouchpad(dx, dy);
             }
             else
             {
                 // Mouse presets: plain scroll → zoom. Touchpad: Shift + two fingers → zoom.
                 float zoom = (MathF.Abs(dy) >= MathF.Abs(dx) ? dy : dx) / 3f;
+                if (ActivePreset == NavigationPresetId.Touchpad) zoom *= TouchpadZoomSpeed;
                 _renderer.Camera.Zoom(zoom);
             }
 
@@ -3377,20 +3394,17 @@ public partial class ViewportView : UserControl
         else if (mods.HasFlag(KeyModifiers.Meta))
         {
             // Cmd + two fingers → orbit/rotate
+            float o = TouchpadOrbitSpeed;
             _renderer.Camera.Orbit(
-                deltaAzimuth:   -dx * 2f,
-                deltaElevation:  dy * 2f);
+                deltaAzimuth:   -dx * o,
+                deltaElevation:  dy * o);
         }
         else
         {
-            // Two fingers (no modifier) → pan/reposition. This is the macOS convention
-            // (plain two-finger scroll moves content) and what the shop asked for; rotate
-            // moved to Cmd. Keep NavigationPreset.All's Touchpad labels in sync.
-            _renderer.Camera.Pan(
-                deltaX:         dx * 4f,
-                deltaY:        -dy * 4f,
-                viewportWidth:  (float)GlCanvas.Bounds.Width,
-                viewportHeight: (float)GlCanvas.Bounds.Height);
+            // Two fingers (no modifier) → pan/reposition (macOS convention: plain
+            // two-finger scroll moves content). Speeds and direction are user prefs;
+            // keep NavigationPreset.All's Touchpad labels in sync with these bindings.
+            PanFromTouchpad(dx, dy);
         }
 
         GlCanvas.RequestNextFrameRendering();

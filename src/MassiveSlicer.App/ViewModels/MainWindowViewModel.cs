@@ -3147,6 +3147,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         vp.ShowAxes     = p.ShowAxes;
         vp.ShowBedGrid  = p.ShowBedGrid;
         vp.ActivePreset = p.ActivePreset;
+        vp.TouchpadPanSpeed   = p.TouchpadPanSpeed;
+        vp.TouchpadOrbitSpeed = p.TouchpadOrbitSpeed;
+        vp.TouchpadZoomSpeed  = p.TouchpadZoomSpeed;
+        vp.TouchpadInvertPan  = p.TouchpadInvertPan;
 
         // Toolpath colors
         vp.BeadColor               = HexToVec3(p.ToolpathBeadColor);

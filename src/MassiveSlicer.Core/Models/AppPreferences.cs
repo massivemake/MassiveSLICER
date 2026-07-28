@@ -24,6 +24,23 @@ public sealed class AppPreferences
     /// <summary>Active mouse-button navigation preset.</summary>
     public NavigationPresetId ActivePreset { get; set; } = NavigationPresetId.Rhino;
 
+    // ── Touchpad gestures (Touchpad preset only; see ViewportView.OnPointerWheelChanged) ──
+
+    /// <summary>Two-finger pan speed multiplier. Higher = the part moves further per swipe.</summary>
+    public float TouchpadPanSpeed { get; set; } = 9f;
+
+    /// <summary>Cmd + two-finger rotate speed multiplier.</summary>
+    public float TouchpadOrbitSpeed { get; set; } = 2f;
+
+    /// <summary>Shift + two-finger zoom speed multiplier.</summary>
+    public float TouchpadZoomSpeed { get; set; } = 1f;
+
+    /// <summary>
+    /// When true, two-finger pan is inverted (drag right → part moves left, "game style").
+    /// Default false = the part follows your fingers.
+    /// </summary>
+    public bool TouchpadInvertPan { get; set; }
+
     // ── Performance ───────────────────────────────────────────────────────
 
     /// <summary>Enable multi-sample anti-aliasing in the OpenGL viewport.</summary>

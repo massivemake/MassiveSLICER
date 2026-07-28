@@ -40,11 +40,49 @@ public sealed class PreferencesViewModel : ViewModelBase
     public NavigationPresetId ActivePreset
     {
         get => _activePreset;
-        set { if (SetField(ref _activePreset, value)) Commit(() => _prefs.ActivePreset = value); }
+        set
+        {
+            if (!SetField(ref _activePreset, value)) return;
+            OnPropertyChanged(nameof(IsTouchpadPreset));   // show/hide the gesture controls live
+            Commit(() => _prefs.ActivePreset = value);
+        }
     }
 
     /// <summary>All available navigation presets for display in the list.</summary>
     public IReadOnlyList<NavigationPreset> NavigationPresets { get; } = NavigationPreset.All;
+
+    // -- Touchpad gestures (only affect the Touchpad preset) ----------------
+
+    private float _touchpadPanSpeed;
+    public float TouchpadPanSpeed
+    {
+        get => _touchpadPanSpeed;
+        set { if (SetField(ref _touchpadPanSpeed, value)) Commit(() => _prefs.TouchpadPanSpeed = value); }
+    }
+
+    private float _touchpadOrbitSpeed;
+    public float TouchpadOrbitSpeed
+    {
+        get => _touchpadOrbitSpeed;
+        set { if (SetField(ref _touchpadOrbitSpeed, value)) Commit(() => _prefs.TouchpadOrbitSpeed = value); }
+    }
+
+    private float _touchpadZoomSpeed;
+    public float TouchpadZoomSpeed
+    {
+        get => _touchpadZoomSpeed;
+        set { if (SetField(ref _touchpadZoomSpeed, value)) Commit(() => _prefs.TouchpadZoomSpeed = value); }
+    }
+
+    private bool _touchpadInvertPan;
+    public bool TouchpadInvertPan
+    {
+        get => _touchpadInvertPan;
+        set { if (SetField(ref _touchpadInvertPan, value)) Commit(() => _prefs.TouchpadInvertPan = value); }
+    }
+
+    /// <summary>True when the Touchpad preset is active, so its gesture controls are relevant.</summary>
+    public bool IsTouchpadPreset => ActivePreset == NavigationPresetId.Touchpad;
 
     // -- Performance -------------------------------------------------------
 
@@ -158,6 +196,10 @@ public sealed class PreferencesViewModel : ViewModelBase
         AutoDepth               = _prefs.AutoDepth;
         OrbitAroundSelection    = _prefs.OrbitAroundSelection;
         ActivePreset            = _prefs.ActivePreset;
+        TouchpadPanSpeed        = _prefs.TouchpadPanSpeed;
+        TouchpadOrbitSpeed      = _prefs.TouchpadOrbitSpeed;
+        TouchpadZoomSpeed       = _prefs.TouchpadZoomSpeed;
+        TouchpadInvertPan       = _prefs.TouchpadInvertPan;
         AntiAliasing            = _prefs.AntiAliasing;
         ActiveTheme             = Enum.TryParse<AppTheme>(_prefs.ActiveTheme, out var t) ? t : AppTheme.MassiveMake;
         ToolpathExtrudeColor    = HexToColor(_prefs.ToolpathExtrudeColor);

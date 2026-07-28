@@ -4,10 +4,11 @@
         x:Class="MassiveSlicer.App.Views.PreferencesWindow"
         x:CompileBindings="False"
         Title="Preferences"
-        Width="620" Height="480"
+        Width="620" Height="640"
+        MinWidth="520" MinHeight="360" MaxHeight="1100"
         WindowStartupLocation="CenterOwner"
         WindowDecorations="None"
-        CanResize="False"
+        CanResize="True"
         ShowInTaskbar="False"
         Background="{DynamicResource Bg0}">
 
@@ -104,6 +105,45 @@
                                       Margin="0,0,0,10"/>
 
                             <Border Height="1" Background="{DynamicResource Border1}" Margin="0,6,0,16"/>
+
+                            <!-- Touchpad gesture tuning; only meaningful on the Touchpad preset. -->
+                            <StackPanel IsVisible="{Binding IsTouchpadPreset}">
+                                <TextBlock Text="TOUCHPAD GESTURES"
+                                           Classes="SectionHeader"
+                                           Margin="0,0,0,4"/>
+                                <TextBlock Text="Two-finger drag = reposition · Shift = zoom · Cmd = rotate"
+                                           Opacity="0.65" FontSize="11" Margin="0,0,0,12"/>
+
+                                <Grid ColumnDefinitions="150,*,52" Margin="0,0,0,8">
+                                    <TextBlock Grid.Column="0" Text="Reposition speed" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Minimum="1" Maximum="30"
+                                            Value="{Binding TouchpadPanSpeed}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding TouchpadPanSpeed, StringFormat={}{0:0.#}}"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.8"/>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="150,*,52" Margin="0,0,0,8">
+                                    <TextBlock Grid.Column="0" Text="Rotate speed" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Minimum="0.5" Maximum="8"
+                                            Value="{Binding TouchpadOrbitSpeed}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding TouchpadOrbitSpeed, StringFormat={}{0:0.#}}"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.8"/>
+                                </Grid>
+
+                                <Grid ColumnDefinitions="150,*,52" Margin="0,0,0,8">
+                                    <TextBlock Grid.Column="0" Text="Zoom speed" VerticalAlignment="Center"/>
+                                    <Slider Grid.Column="1" Minimum="0.2" Maximum="4"
+                                            Value="{Binding TouchpadZoomSpeed}" VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding TouchpadZoomSpeed, StringFormat={}{0:0.#}}"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center" Opacity="0.8"/>
+                                </Grid>
+
+                                <CheckBox Content="Invert reposition direction  —  &quot;game style&quot;, part moves against your fingers"
+                                          IsChecked="{Binding TouchpadInvertPan}"
+                                          Margin="0,2,0,10"/>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,6,0,16"/>
+                            </StackPanel>
 
                             <TextBlock Text="NAVIGATION PRESET"
                                        Classes="SectionHeader"
