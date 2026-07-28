@@ -44,6 +44,56 @@ Two ways to make broad reading cheap, so cost never becomes a reason to skip it:
 If a targeted read leaves you inferring rather than confirming, widen the read. Guessing to
 save tokens is how a wrong fix ships — that costs far more than the read did.
 
+## Escalating to a deep dive — surface it, price it, let the developer choose
+
+Default to fast. But when one of these fires, **say so and offer the deep dive with a cost
+estimate** instead of either guessing or silently spending 178k tokens:
+
+**Triggers — name the one that fired:**
+
+1. **Two targeted attempts have missed.** Stop trying a third grep.
+2. **The symptom has no name.** Intermittent, timing-, ordering-, lifecycle-, or
+   disposal-related. These live between functions and grep cannot see them.
+3. **You are about to write "probably" / "likely" / "should"** about behavior that reaches
+   the robot, KRL output, or a customer print.
+4. **The report contradicts your model** — the user says something is broken that the code
+   you've read says can't break. Your model is wrong; find out where.
+5. **A cross-cutting change** — rename, refactor, file split, or auditing a whole class of
+   problem (thread safety, error handling, silent failure).
+6. **The fix would be a guess.** You cannot point at the line that causes the behavior.
+
+**How to ask** — one short paragraph, no ceremony:
+
+> This needs a deeper look: *<what you'd examine and the trigger that fired>*. That's about
+> *<N>*k tokens and *<M>* minutes. It would tell us *<the specific thing you'd learn>*.
+> Faster alternative: *<narrower option, or "ship the likely fix and verify on the machine">*.
+> Want me to?
+
+**Don't ask when it's cheap.** Under ~25k tokens (see the table), just read it — asking is
+friction. Ask above that, and for anything that would run many files or many rounds.
+
+**Real read costs in this repo** (measured 2026-07-27; ≈ bytes ÷ 3.7):
+
+| Target | Tokens | Note |
+|---|---|---|
+| `SliceSettings.cs` | ~7k | just read it |
+| `PlanarSlicer.cs` | ~18k | just read it |
+| `SceneRenderer.cs` | ~31k | ask if combined with others |
+| `MainWindowViewModel.cs` | ~46k | ask |
+| `LightningPlanner.cs` | ~55k | ask |
+| `RightPanelView.axaml` | ~76k | ask |
+| `ViewportViewModel.cs` | ~86k | ask |
+| **`ViewportView.axaml.cs`** | **~178k** | ask — nearly a whole context window |
+| all of `Core/Slicing/` | ~223k | ask; better delegated to a subagent |
+| all of `App/ViewModels/` | ~261k | ask; better delegated to a subagent |
+
+Tokens are the objective number; convert to credits for whatever plan you're on. A cheaper
+shape for the big ones: hand the pass to a subagent and keep only the findings.
+
+**When the stakes are high, recommend it — don't present it neutrally.** For KRL/export
+correctness, robot motion, or anything that could scrap a print, the honest answer is "we
+should read this properly," and say so.
+
 ## Verifying a change (these are hard rules, not cost defaults)
 
 The reading guidance above is about money. The rules here are about being **wrong** — each has
