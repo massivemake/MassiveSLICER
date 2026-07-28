@@ -1,0 +1,32 @@
+{
+  "$comment": "Shared team settings. Allowlists routine read-only, build and test commands so nobody gets prompted for them. Anything that writes to the remote, deletes, or installs is deliberately NOT here and stays a prompt. Personal overrides go in settings.local.json (git-ignored).",
+  "permissions": {
+    "allow": [
+      "Bash(dotnet build*)",
+      "Bash(dotnet test*)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(dotnet --version)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git fetch*)",
+      "Bash(git branch*)",
+      "Bash(git blame*)",
+      "Bash(git ls-files*)",
+      "Bash(git rev-parse*)",
+      "Bash(git rev-list*)",
+      "Bash(git stash list*)",
+      "Bash(grep*)",
+      "Bash(rg*)",
+      "Bash(find*)",
+      "Bash(ls*)",
+      "Bash(wc*)",
+      "Bash(file*)",
+      "Bash(stat*)",
+      "Bash(du*)",
+      "Bash(open MassiveSlicer.app)",
+      "Bash(tools/make_macos_app.sh)"
+    ]
+  }
+}

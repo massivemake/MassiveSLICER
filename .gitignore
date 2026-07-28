@@ -72,6 +72,9 @@ assets/KukaData/*
 assets/development_assets/*
 
 .claude/*
+# ...except the shared team settings (permission allowlist). Personal overrides belong in
+# .claude/settings.local.json, which stays ignored by the rule above.
+!.claude/settings.json
 
 # Reference repos — local only, not pushed to GitHub
 reference/
