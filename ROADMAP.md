@@ -370,3 +370,9 @@ upload.
 - Spindle RPM display (KUKA `$ANOUT` polling or ATV340 Modbus).
 - PBR polish (prefiltered-env IBL, alpha blend ordering, UV panel).
 - Obsolete build-folder cleanup.
+- Outliner: long item names overflow under the lock/eye/trash icons instead of
+  truncating (`OutlinerItemView.axaml` name column is a `StackPanel`, which
+  doesn't constrain width, so the existing `CharacterEllipsis` trimming never
+  triggers). Fix: make the name column a `Grid` (Auto icon + `*` text) so it
+  clips properly, and add `ToolTip.Tip="{Binding Name}"` so hovering an item
+  reveals the full name. Quick fix (~10 min), just not now.
