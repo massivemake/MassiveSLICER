@@ -17,7 +17,11 @@ public enum NavigationPresetId
     Max3ds,
     /// <summary>Fusion 360-style: middle = pan, Shift+middle = orbit, scroll = zoom.</summary>
     Fusion360,
-    /// <summary>Touchpad optimised: two-finger = pan, two-finger+Ctrl = orbit.</summary>
+    /// <summary>
+    /// Touchpad optimised, no mouse buttons needed: two-finger = orbit,
+    /// Cmd + two-finger = pan, Shift + two-finger = zoom.
+    /// (Authoritative mapping is <c>ViewportView.OnPointerWheelChanged</c>.)
+    /// </summary>
     Touchpad
 }
 
@@ -43,6 +47,9 @@ public sealed record NavigationPreset(
         new(NavigationPresetId.Mol3D,      "Mol3D",      "Left drag",        "Middle drag",       "Scroll"),
         new(NavigationPresetId.Max3ds,     "3ds Max",    "Alt + Middle",     "Middle drag",       "Scroll"),
         new(NavigationPresetId.Fusion360,  "Fusion 360", "Shift + Middle",   "Middle drag",       "Scroll"),
-        new(NavigationPresetId.Touchpad,   "Touchpad",   "Two-finger + Ctrl","Two-finger pan",    "Pinch"),
+        // Must match ViewportView.OnPointerWheelChanged. These three labels were all wrong
+        // (advertised Ctrl-orbit / plain-two-finger-pan / pinch-zoom), so anyone who did find
+        // this preset tried the wrong gestures and concluded it was broken.
+        new(NavigationPresetId.Touchpad,   "Touchpad",   "Two-finger drag",  "Cmd + two-finger",  "Shift + two-finger"),
     ];
 }
