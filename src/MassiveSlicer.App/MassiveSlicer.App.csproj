@@ -142,7 +142,25 @@
       <Output TaskParameter="ConsoleOutput" PropertyName="GitShortSha"/>
       <Output TaskParameter="ExitCode" PropertyName="GitShaExit"/>
     </Exec>
-    <Exec Command="git rev-list --count origin/main" ConsoleToMSBuild="true"
+    <!--
+      Baseline used to be a live rev-list count of origin/main — main's commit count
+      on this machine, at this exact instant. That's wrong: origin/main is a shared,
+      mutable bookmark that moves on any fetch (a plain `git fetch`, or this very app's own
+      BuildFreshnessChecker auto-fetching on every launch), completely independent of
+      whether this branch has actually synced with any of it. A build from an untouched,
+      self-contained feature branch could silently inherit a number bumped by someone
+      else's background fetch on the same machine, with no real sync ever happening.
+      Baseline should instead answer "what did main look like the last time this branch's
+      own history actually touched it" — exactly git's merge-base: it only moves on a real
+      merge/rebase of main in (or, on main itself, a genuine push/pull), never a passive
+      fetch. Same reference point Delta uses below, computed once here and reused there.
+    -->
+    <Exec Command="git merge-base HEAD origin/main" ConsoleToMSBuild="true"
+          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
+      <Output TaskParameter="ConsoleOutput" PropertyName="GitMergeBase"/>
+      <Output TaskParameter="ExitCode" PropertyName="GitMergeBaseExit"/>
+    </Exec>
+    <Exec Command="git rev-list --count $(GitMergeBase)" ConsoleToMSBuild="true"
           ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitBaselineCount"/>
       <Output TaskParameter="ExitCode" PropertyName="GitBaselineExit"/>
@@ -165,11 +183,6 @@
           ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
       <Output TaskParameter="ConsoleOutput" PropertyName="GitLandedSha"/>
       <Output TaskParameter="ExitCode" PropertyName="GitLandedExit"/>
-    </Exec>
-    <Exec Command="git merge-base HEAD origin/main" ConsoleToMSBuild="true"
-          ContinueOnError="true" StandardOutputImportance="low" WorkingDirectory="$(MSBuildProjectDirectory)">
-      <Output TaskParameter="ConsoleOutput" PropertyName="GitMergeBase"/>
-      <Output TaskParameter="ExitCode" PropertyName="GitMergeBaseExit"/>
     </Exec>
     <PropertyGroup>
       <!--
@@ -223,7 +236,7 @@
       <BuildInfoLine Include="namespace MassiveSlicer.App%3B"/>
       <BuildInfoLine Include="public static class BuildInfo"/>
       <BuildInfoLine Include="{"/>
-      <BuildInfoLine Include="    /// &lt;summary&gt;origin/main's commit count at build time — the baseline this build sits on.&lt;/summary&gt;"/>
+      <BuildInfoLine Include="    /// &lt;summary&gt;Main's commit count as of this branch's merge-base with origin/main — the foundation this build sits on. Fixed across ordinary fetches%3B only moves on a real merge/rebase of main in (or a genuine push/pull, on main itself).&lt;/summary&gt;"/>
       <BuildInfoLine Include="    public const int Baseline = $(GitBaselineCount)%3B"/>
       <BuildInfoLine Include="    /// &lt;summary&gt;Commits on HEAD not yet on origin/main — save points on a branch, or unpushed commits on main.&lt;/summary&gt;"/>
       <BuildInfoLine Include="    public const int Delta = $(GitDeltaCount)%3B"/>
