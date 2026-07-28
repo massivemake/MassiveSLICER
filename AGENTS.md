@@ -1,4 +1,4 @@
-# MassiveSLICER — assistant instructions (same content as CLAUDE.md; keep in sync)
+# MassiveSlicer — assistant instructions (same content as CLAUDE.md; keep in sync)
 
 Product definition and backlog live in **`ROADMAP.md`**. Past work lives in
 **`memory.md`**. This file only carries the rules that must load automatically.
@@ -138,9 +138,62 @@ Build identity is auto-generated: build number = git commit count
 
 - `main` = the ONLY shared branch (GitHub default; `master` was deleted 2026-07 —
   the old master/main split is gone).
-- Risky or experimental work goes on a `feature/<name>` branch; merge `main` into
-  it regularly, and merge it back to `main` only after real-machine testing.
 - Sync = `git pull` on `main` (or merge `origin/main` into your feature branch).
 - If a fetch reports **forced update**, history was rewritten upstream —
   verify content (`git diff HEAD origin/<branch>`) before adopting; never
   blind-merge rewritten history.
+
+## Keeping 5 developers out of each other's way (prompt the developer)
+
+Four or five of us work on this repo at once. Don't silently start editing — run these checks
+and **tell the developer what you found and what you recommend**. They decide; you just make
+sure the decision is deliberate.
+
+**1. Before the first edit of a session — check sync.**
+
+```bash
+git fetch -q && git log --oneline HEAD..origin/main | head
+```
+
+If anything comes back, say so before editing:
+
+> You're *N* commits behind `origin/main` (*newest: "…"*). Recommend pulling first so we're not
+> building on stale code. Want me to pull?
+
+Escalate the wording if the incoming commits touch the same files as the request — that's a
+merge conflict you can see coming. Pull first, then work.
+
+**2. Before a big change — recommend a branch.**
+
+Treat it as **big** if any of these are true, and say so up front:
+
+- Touches the shared high-traffic files (`ViewportView.axaml.cs`, `ViewportViewModel.cs`,
+  `MainWindowViewModel.cs`, `RightPanelView.axaml`) in more than a localized way
+- Changes **slicer output, KRL/export, or robot motion** — anything that reaches hardware
+- Changes the `.mass` schema or a shared settings model
+- Is multi-file or won't finish in this session
+- Is unproven on real hardware (see the Cut Modifier warning at the top of `memory.md`)
+
+> This is a big one — it changes *<what>*. Recommend a `feature/<name>` branch so `main` stays
+> shippable for the others until it's tested on the machine. Want me to branch?
+
+Small and safe — single-file bug fix, a label or copy fix, docs, a contained UI tweak — just
+commit to `main` and push. Branching those adds ceremony and merge cost for no benefit.
+
+**3. Before moving to a different feature — land or park the current one.**
+
+If a feature branch has work on it and the developer changes subject, stop and say so:
+
+> `feature/<name>` still has *N* unmerged commits. Before starting something new, either merge
+> it to `main` (if it's tested) or park it deliberately. Starting a second feature on the same
+> branch tangles both and makes either one hard to ship or revert.
+
+**4. Keep branches fresh, and push at every stopping point.**
+
+- Merge `main` into any live feature branch **daily**. Branches rot fast here: as of
+  2026-07-27 `feature/presets` was **80 commits behind** and `feature/cut-modifier` was 18
+  behind while already fully merged (i.e. dead and should be deleted).
+- **Push at every natural stopping point.** Unpushed work is invisible to the other four and
+  lives on one laptop; this repo already grew a `save.sh` because code got lost.
+- When a branch is merged, say so and offer to delete it — stale branches are read by everyone
+  as work in progress.
