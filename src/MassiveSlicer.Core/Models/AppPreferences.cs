@@ -409,6 +409,10 @@ public sealed class AppPreferences
     ///  centerX, centerY, width, depth, rotationDeg, enabled].</summary>
     public List<float[]> StructuralSupports { get; set; } = [];
 
+    /// <summary>Structural Support names, index-parallel to <see cref="StructuralSupports"/>
+    /// (names can't ride in the float array). Shorter/missing = fall back to "Support N".</summary>
+    public List<string> StructuralSupportNames { get; set; } = [];
+
     /// <summary>Curved slicing boundary source: Auto, Viewport Pick, JSON Import.</summary>
     public string CurvedBoundarySource { get; set; } = "Auto";
 

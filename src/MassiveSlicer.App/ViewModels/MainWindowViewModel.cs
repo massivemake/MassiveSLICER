@@ -3351,17 +3351,28 @@ public sealed class MainWindowViewModel : ViewModelBase
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
         add.StructuralSupports.Clear();
-        add.StructuralSupports.AddRange(p.StructuralSupports
-            .Where(a => a is { Length: >= 12 })
-            .Select(a => new StructuralSupportSpec
+        // Indexed loop (not Where+Select): names live in a parallel list, so a filtered
+        // spec must skip its name too or every later support gets the wrong one.
+        for (int si = 0; si < p.StructuralSupports.Count; si++)
+        {
+            var a = p.StructuralSupports[si];
+            if (a is not { Length: >= 12 }) continue;
+            string name = si < p.StructuralSupportNames.Count
+                ? p.StructuralSupportNames[si] ?? ""
+                : "";
+            if (string.IsNullOrWhiteSpace(name))
+                name = $"Support {add.StructuralSupports.Count + 1}";
+            add.StructuralSupports.Add(new StructuralSupportSpec
             {
+                Name = name,
                 Shape = a[0] >= 1f ? SupportShapeKind.Circle : SupportShapeKind.Rectangle,
                 AnchorX = a[1], AnchorY = a[2], AnchorLayer = (int)a[3],
                 LayersUp = (int)a[4], LayersDown = (int)a[5],
                 CenterX = a[6], CenterY = a[7],
                 WidthMm = a[8], DepthMm = a[9], RotationDeg = a[10],
                 Enabled = a[11] >= 0.5f,
-            }));
+            });
+        }
         add.SelectedSupportIndex = add.StructuralSupports.Count > 0 ? 0 : -1;
         add.SetPaintMarks(p.PaintMarks
             .Where(a => a is { Length: >= 5 })
@@ -3666,6 +3677,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 s.CenterX, s.CenterY, s.WidthMm, s.DepthMm, s.RotationDeg,
                 s.Enabled ? 1f : 0f })
             .ToList();
+        p.StructuralSupportNames = add.StructuralSupports.Select(s => s.Name).ToList();
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
         p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;

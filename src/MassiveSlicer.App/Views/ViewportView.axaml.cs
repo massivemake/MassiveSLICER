@@ -1623,7 +1623,21 @@ public partial class ViewportView : UserControl
             && _vm is ViewportViewModel { Robot: not null } tcpVm)
             SyncTcpReadout(tcpVm);
 
-        if (_vm is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
+        // Edit-mode Structural Support: the gizmo sits on the selected pocket's centre and
+        // drives its fields. Nothing needs to be selected in the outliner for this — the
+        // support IS the selection, which is what makes an orphaned one reachable again.
+        TkMatrix4? supportAxisBasis = null;
+        if (ActiveGizmoSupport(_vm) is { } gizmoSupport && _vm is { } supportVm)
+        {
+            var centre = SupportCentreWorld(supportVm, gizmoSupport);
+            _renderer.GizmoPivotWorld = new Vector3(centre.X, centre.Y, centre.Z);
+            _renderer.GizmoEnabled = true;
+            _renderer.GizmoMode = supportVm.ActiveGizmoModeInternal is GizmoMode.None or GizmoMode.Scale
+                ? GizmoMode.Translate   // Scale has no meaning for a fixed-size pocket
+                : supportVm.ActiveGizmoModeInternal;
+            supportAxisBasis = SupportAxisBasis(gizmoSupport);
+        }
+        else if (_vm is ViewportViewModel cutVm && cutVm.IsCutToolActive && cutVm.CutToolSession is { } cutS)
         {
             _renderer.GizmoPivotWorld = new Vector3(
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
@@ -1635,7 +1649,7 @@ public partial class ViewportView : UserControl
                 : null;
         }
 
-        _renderer.GizmoAxisBasis = GetModifierAxisBasis(_renderer.SelectedNode);
+        _renderer.GizmoAxisBasis = supportAxisBasis ?? GetModifierAxisBasis(_renderer.SelectedNode);
 
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
@@ -2734,6 +2748,36 @@ public partial class ViewportView : UserControl
                 if (pbVm.PaintHandActive)
                     return;
 
+                // Structural Support gets the click before any bead pick: grabbing its
+                // gizmo, or clicking inside a pocket footprint to make it the live one.
+                {
+                    float sMx  = (float)pos.X;
+                    float sMy  = (float)pos.Y;
+                    float sVpW = (float)GlCanvas.Bounds.Width;
+                    float sVpH = (float)GlCanvas.Bounds.Height;
+
+                    if (_renderer.GizmoEnabled && ActiveGizmoSupport(pbVm) is not null)
+                    {
+                        var sAxis = _renderer.HitTestGizmo(sMx, sMy, sVpW, sVpH);
+                        if (sAxis != GizmoAxis.None)
+                        {
+                            StartGizmoDrag(sAxis, sMx, sMy, sVpW, sVpH);
+                            e.Pointer.Capture(this);
+                            _capturedPointer = e.Pointer;
+                            e.Handled = true;
+                            return;
+                        }
+                    }
+
+                    int supportPick = PickStructuralSupportUnderCursor(pbVm, sMx, sMy, sVpW, sVpH);
+                    if (supportPick >= 0)
+                    {
+                        SelectStructuralSupport(pbVm, supportPick);
+                        e.Handled = true;
+                        return;
+                    }
+                }
+
                 // Region select (square marquee or lasso) — start drag, not a click-pick.
                 if (pbVm.PaintBoxSelectActive)
                 {
@@ -3154,6 +3198,23 @@ public partial class ViewportView : UserControl
 
         if (kind == PointerUpdateKind.LeftButtonReleased)
         {
+            if (_gizmoDragAxis != GizmoAxis.None && _structSupportGizmoDrag)
+            {
+                // Support pocket drag: no node transform, no transform-undo entry — the
+                // spec is the state. Bake with one re-slice, same as creating a support.
+                _gizmoDragAxis           = GizmoAxis.None;
+                _renderer.ActiveDragAxis = GizmoAxis.None;
+                _capturedPointer?.Capture(null);
+                _capturedPointer = null;
+                _leftDragged = false;
+                if (DataContext is ViewportViewModel ssUpVm)
+                    FinishStructuralSupportGizmoDrag(ssUpVm);
+                else
+                    _structSupportGizmoDrag = false;
+                GlCanvas.RequestNextFrameRendering();
+                return;
+            }
+
             if (_gizmoDragAxis != GizmoAxis.None)
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
@@ -5018,6 +5079,7 @@ public partial class ViewportView : UserControl
         vm.OnPaintModificationSelectRequested = id => ReselectPaintModification(vm, id);
         vm.OnPaintModificationDeleteRequested = id => DeletePaintModification(vm, id);
         vm.OnPaintModificationsClearRequested = () => ClearAllPaintModifications(vm);
+        vm.OnDeleteSelectedStructuralSupportRequested = () => DeleteSelectedStructuralSupport(vm);
         vm.OnPaintModificationPickBridgeRequested = id => BeginPickBridgeTarget(vm, id);
         vm.OnPaintModificationClearBridgeRequested = id => ClearBridgeTarget(vm, id);
         vm.OnPaintModificationToggleExpandRequested = id => TogglePaintModificationExpand(vm, id);
@@ -7094,6 +7156,8 @@ public partial class ViewportView : UserControl
             WidthMm = 92f, DepthMm = depth,
             LayersUp = 9999, LayersDown = 0,
         });
+        int newSpecIdx = add.StructuralSupports.Count - 1;
+        string newSpecName = add.SupportNameAt(newSpecIdx);
 
         // The applied group stays in MODIFICATIONS as a Structural card — the
         // pocket helper settings live on the card itself.
@@ -7107,17 +7171,20 @@ public partial class ViewportView : UserControl
             Wt = sel.Wt,
             World = sel.World,
             MarkCenters = [],
-            Title = $"Structural Support · layer {layerIdx + 1}",
+            Title = $"{newSpecName} · layer {layerIdx + 1}",
             Detail = $"anchor ({mid.X:F0}, {mid.Y:F0}) · Update Slice to bake",
             SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural,
-            StructuralIndex = add.StructuralSupports.Count - 1,
+            StructuralIndex = newSpecIdx,
             IsExpanded = true,
         });
         SyncPaintModificationsUi(vm);
         vm.MarkWorkspaceDirty?.Invoke();
+        // New support becomes the gizmo target immediately — drag it, don't type at it.
+        if (vm.ActiveGizmoModeInternal is GizmoMode.None or GizmoMode.Scale)
+            vm.ActiveGizmoModeInternal = GizmoMode.Translate;
 
-        LogPaintConsole($"[support] structural support @ L{layerIdx} anchor ({mid.X:F0}, {mid.Y:F0}) — " +
-            "tune the shape on its MODIFICATIONS card, then Update Slice.");
+        LogPaintConsole($"[support] {newSpecName} @ L{layerIdx} anchor ({mid.X:F0}, {mid.Y:F0}) — " +
+            "drag its gizmo to place it, or tune the shape on its MODIFICATIONS card.");
         vm.UpdateSliceCommand?.Execute(null);
     }
 
@@ -8174,6 +8241,8 @@ public partial class ViewportView : UserControl
             }
             rec.SupportType = Core.Models.PaintSupportStyleUtil.LabelStructural;
             rec.StructuralIndex = specIdx;
+            if (vm.AdditiveSettings is { } addName)
+                rec.Title = addName.SupportNameAt(specIdx);
             rec.Detail = "pocket settings below · Update Slice to bake";
             rec.IsExpanded = true;
             vm.MarkWorkspaceDirty?.Invoke();
@@ -8670,6 +8739,10 @@ public partial class ViewportView : UserControl
             vm.PaintSupportType = rec.SupportType;
             vm.ApplyPaintSupportTypeToSettings();
         }
+        // Structural card: reselecting it also makes its pocket the live support, so the
+        // STRUCTURAL SUPPORT panel and the gizmo both follow the card you just clicked.
+        if (rec.StructuralIndex >= 0)
+            SelectStructuralSupport(vm, rec.StructuralIndex);
 
         // Jump timeline / LAYERS dual-slider to the anchor layer(s) so the
         // reselected paths are inside the visible layer window.
@@ -12848,6 +12921,227 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
+    // ── Structural Support: viewport pick + move/rotate gizmo ─────────────────
+    // A Structural Support is not a SceneNode — it's a spec on AdditiveSettings that
+    // the slicer re-applies to every affected layer. So it gets the same treatment as
+    // the Cut tool's ghost plane: the real RGB gizmo drives the spec's own fields
+    // (branches in StartGizmoDrag / ProcessGizmoDrag), never a node transform.
+
+    /// <summary>True while the gizmo is driving a Structural Support spec.</summary>
+    private bool _structSupportGizmoDrag;
+    /// <summary>Pocket centre (sliced XY, mm) captured at drag start.</summary>
+    private System.Numerics.Vector2 _structDragStartCenter;
+    private float _structDragStartRotationDeg;
+
+    /// <summary>
+    /// The Structural Support the gizmo currently drives, or null. Safe to call from
+    /// OnRender: takes the view-model explicitly so it never touches DataContext.
+    /// </summary>
+    private static Core.Models.StructuralSupportSpec? ActiveGizmoSupport(ViewportViewModel? vm)
+    {
+        if (vm is not { IsPaintEditOpen: true }) return null;
+        if (vm.ViewMode != "Preview") return null;
+        if (vm.AdditiveSettings is not { } add) return null;
+        int i = add.SelectedSupportIndex;
+        return i >= 0 && i < add.StructuralSupports.Count ? add.StructuralSupports[i] : null;
+    }
+
+    /// <summary>Sliced-space → world frame for support helpers. Mirrors
+    /// <see cref="UpdatePaintOverlay"/> exactly (first visible toolpath node, its
+    /// WorldTransform) so the gizmo lands on the outline that's actually drawn.</summary>
+    private void GetSupportFrame(out NVec3 origin, out TkMatrix4 wt)
+    {
+        origin = default;
+        wt = TkMatrix4.Identity;
+        foreach (var (node, _) in _toolpathByNode)
+        {
+            if (!node.Visible) continue;
+            _toolpathOriginByNode.TryGetValue(node, out origin);
+            wt = node.WorldTransform;
+            return;
+        }
+    }
+
+    /// <summary>Z (sliced space) the helper outlines are drawn at — the current scrub
+    /// layer, same as the overlay, so grabbing matches what you see.</summary>
+    private float GetSupportHelperZ(ViewportViewModel vm)
+    {
+        if (_activeScrubNode is { } hn
+            && _toolpathByNode.TryGetValue(hn, out var htp)
+            && htp.Layers.Count > 0)
+        {
+            int li = Math.Clamp(vm.CurrentScrubLayerIndex, 0, htp.Layers.Count - 1);
+            return htp.Layers[li].Z;
+        }
+        return 0f;
+    }
+
+    /// <summary>World position of a support's pocket centre (the gizmo pivot).</summary>
+    private NVec3 SupportCentreWorld(ViewportViewModel vm, Core.Models.StructuralSupportSpec spec)
+    {
+        GetSupportFrame(out var origin, out var wt);
+        float z = GetSupportHelperZ(vm);
+        return TransformPoint(
+            new TkVector3(spec.CenterX - origin.X, spec.CenterY - origin.Y, z - origin.Z), wt);
+    }
+
+    /// <summary>Pocket-local axis basis: X/Y follow the rectangle's own rotation, Z stays
+    /// world-up. Same shape as <see cref="GetModifierAxisBasis"/> (rotation about Z only).</summary>
+    private static TkMatrix4 SupportAxisBasis(Core.Models.StructuralSupportSpec spec)
+        => TkMatrix4.CreateRotationZ(MathHelper.DegreesToRadians(spec.RotationDeg));
+
+    /// <summary>World → sliced XY, for turning a gizmo drag back into CenterX/CenterY.</summary>
+    private System.Numerics.Vector2 SupportWorldToSliceXY(Vector3 world)
+    {
+        GetSupportFrame(out var origin, out var wt);
+        TkMatrix4.Invert(wt, out var inv);
+        var local = TransformPoint(new TkVector3(world.X, world.Y, world.Z), inv);
+        return new System.Numerics.Vector2(local.X + origin.X, local.Y + origin.Y);
+    }
+
+    /// <summary>
+    /// Index of the Structural Support pocket under the cursor, or -1. Pick is the
+    /// pocket footprint only — deliberately NOT the anchor tick, which sits on the wall
+    /// and would steal bead clicks from the very selection workflow that places it.
+    /// </summary>
+    private int PickStructuralSupportUnderCursor(
+        ViewportViewModel vm, float mx, float my, float vpW, float vpH)
+    {
+        if (vm.AdditiveSettings is not { } add || add.StructuralSupports.Count == 0) return -1;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        GetSupportFrame(out var origin, out var wt);
+        float zSlice = GetSupportHelperZ(vm);
+        // Helpers are drawn on one plane; a toolpath node only ever rotates about Z
+        // (rotary bed), so that plane stays horizontal in world space too.
+        var probe = TransformPoint(new TkVector3(-origin.X, -origin.Y, zSlice - origin.Z), wt);
+        if (!SceneRenderer.TryPickHorizontalPlane(ray, probe.Z, out var worldHit)) return -1;
+
+        TkMatrix4.Invert(wt, out var inv);
+        var local = TransformPoint(worldHit, inv);
+        var q = new System.Numerics.Vector2(local.X + origin.X, local.Y + origin.Y);
+
+        int best = -1;
+        float bestDist = float.MaxValue;
+        for (int i = 0; i < add.StructuralSupports.Count; i++)
+        {
+            var spec = add.StructuralSupports[i];
+            if (!spec.Enabled) continue;                 // hidden helpers can't be grabbed
+            if (!spec.ContainsPoint(q)) continue;
+            // Overlapping pockets: whichever centre is nearer the cursor wins.
+            float d = System.Numerics.Vector2.Distance(q, new(spec.CenterX, spec.CenterY));
+            if (d < bestDist) { bestDist = d; best = i; }
+        }
+        return best;
+    }
+
+    /// <summary>Makes a support the live one: its settings drive the panel, its outline
+    /// goes cyan, and the gizmo appears on it. Also expands its MODIFICATIONS card when
+    /// it has one — a support created in an earlier session won't.</summary>
+    private void SelectStructuralSupport(ViewportViewModel vm, int index)
+    {
+        if (vm.AdditiveSettings is not { } add) return;
+        if (index < 0 || index >= add.StructuralSupports.Count) return;
+
+        add.SelectedSupportIndex = index;
+        // The gizmo needs an active mode to draw in; a fresh edit session has none.
+        if (vm.ActiveGizmoModeInternal is GizmoMode.None or GizmoMode.Scale)
+            vm.ActiveGizmoModeInternal = GizmoMode.Translate;
+
+        foreach (var m in _paintModifications)
+            if (m.StructuralIndex == index) m.IsExpanded = true;
+        SyncPaintModificationsUi(vm);
+
+        var spec = add.StructuralSupports[index];
+        LogPaintConsole($"[support] selected {add.SupportNameAt(index)} · "
+            + $"centre ({spec.CenterX:F0}, {spec.CenterY:F0}) · {spec.RotationDeg:F0}° · "
+            + "drag the gizmo to move, Rotate tool for the ring");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Deletes the live support plus any MODIFICATIONS card bound to it, repairs
+    /// the remaining cards' spec indices, and re-slices without it.</summary>
+    private void DeleteSelectedStructuralSupport(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is not { } add) return;
+        int idx = add.SelectedSupportIndex;
+        if (idx < 0 || idx >= add.StructuralSupports.Count) return;
+
+        string name = add.SupportNameAt(idx);
+        // A structural card without its spec is a support with no marks and no shape —
+        // drop it, then let RemoveStructuralSpec re-link every card pointing past it.
+        _paintModifications.RemoveAll(m => m.StructuralIndex == idx);
+        RemoveStructuralSpec(vm, add, idx);
+        SyncPaintModificationsUi(vm);
+        vm.MarkWorkspaceDirty?.Invoke();
+        LogPaintConsole($"[support] deleted {name} — reslicing");
+        vm.UpdateSliceCommand?.Execute(null);
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Gizmo drag → pocket centre / rotation. Z is deliberately ignored: the
+    /// pocket is a per-layer 2D footprint, so there is no height field to drive.</summary>
+    private void ProcessStructuralSupportGizmoDrag(ViewportViewModel vm, float mx, float my)
+    {
+        if (vm.AdditiveSettings is not { } add) return;
+        if (ActiveGizmoSupport(vm) is null) return;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        float denom = Vector3.Dot(ray.Direction, _gizmoDragPlaneNormal);
+        if (MathF.Abs(denom) < 1e-5f) return;
+        float t = Vector3.Dot(_gizmoDragPlanePoint - ray.Origin, _gizmoDragPlaneNormal) / denom;
+        var hitWorld = ray.At(t);
+
+        var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+        if (dragOp == GizmoMode.Rotate)
+        {
+            // Only the Z ring means anything — tipping the footprint out of the layer
+            // plane has no field to land in (same constraint as a Vertical cut plane).
+            if (_gizmoDragAxis != GizmoAxis.Z) return;
+            var rel = hitWorld - _gizmoDragPlanePoint;
+            float angle = AxisAngle(_gizmoDragAxis, rel);
+            float deltaDeg = MathHelper.RadiansToDegrees(angle - _gizmoDragStartAngle);
+            add.SupportRotationDeg = _structDragStartRotationDeg + deltaDeg;
+        }
+        else if (dragOp == GizmoMode.Translate)
+        {
+            // Absolute from drag start (never incremental) so the pocket can't drift
+            // away from the cursor over a long drag.
+            float along = Vector3.Dot(hitWorld - _gizmoDragStartHit, _gizmoDragAxisDir);
+            var sliced = SupportWorldToSliceXY(_gizmoDragPlanePoint + _gizmoDragAxisDir * along);
+            add.SupportCenterX = sliced.X;
+            add.SupportCenterY = sliced.Y;
+        }
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Ends a support gizmo drag and bakes it — one re-slice on release, matching
+    /// what creating a support already does (never per pixel).</summary>
+    private void FinishStructuralSupportGizmoDrag(ViewportViewModel vm)
+    {
+        if (!_structSupportGizmoDrag) return;
+        _structSupportGizmoDrag = false;
+        if (vm.AdditiveSettings is { } add)
+        {
+            int i = add.SelectedSupportIndex;
+            if (i >= 0 && i < add.StructuralSupports.Count)
+            {
+                var s = add.StructuralSupports[i];
+                bool moved =
+                    System.Numerics.Vector2.Distance(
+                        _structDragStartCenter, new(s.CenterX, s.CenterY)) > 0.05f
+                    || MathF.Abs(s.RotationDeg - _structDragStartRotationDeg) > 0.05f;
+                if (!moved) return;                     // a click that didn't drag — no reslice
+                LogPaintConsole($"[support] {add.SupportNameAt(i)} → centre "
+                    + $"({s.CenterX:F1}, {s.CenterY:F1}) · {s.RotationDeg:F0}° — reslicing");
+            }
+        }
+        vm.MarkWorkspaceDirty?.Invoke();
+        vm.UpdateSliceCommand?.Execute(null);
+    }
+
 
     // ── Frame / orbit-on-selection (F key + double-click) ────────────────────
 
@@ -13569,6 +13863,9 @@ public partial class ViewportView : UserControl
         _renderer.ActiveDragAxis = axis;
         _gizmoDragStartScreenX   = mx;
         _gizmoDragCurrScreenX    = mx;
+        // Every drag starts clean: a support drag that ended by anything other than a
+        // normal pointer-release must not make the NEXT mesh drag take the support path.
+        _structSupportGizmoDrag  = false;
         if (axis == GizmoAxis.All)
         {
             var camFwdAll = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
@@ -13599,7 +13896,33 @@ public partial class ViewportView : UserControl
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
             _toolIsDragging = false;
             _transformLinkFollowers = null;
-            SetupCutPlaneGizmoDrag(mx, my, vpW, vpH);
+            SetupPivotGizmoDrag(mx, my, vpW, vpH);
+            return;
+        }
+
+        // Structural Support: gizmo drives the spec's pocket, not a node transform.
+        if (DataContext is ViewportViewModel sgVm && ActiveGizmoSupport(sgVm) is { } sgSpec)
+        {
+            // Axis dir follows the pocket's own rotation, so the X arrow slides along the
+            // rectangle's own long edge instead of needing a diagonal X+Y combination.
+            if (axis != GizmoAxis.All)
+            {
+                var basis = SupportAxisBasis(sgSpec);
+                _gizmoDragAxisDir = axis switch
+                {
+                    GizmoAxis.X => basis.Row0.Xyz,
+                    GizmoAxis.Y => basis.Row1.Xyz,
+                    _           => basis.Row2.Xyz,
+                };
+            }
+            var centre = SupportCentreWorld(sgVm, sgSpec);
+            _gizmoDragPlanePoint = new Vector3(centre.X, centre.Y, centre.Z);
+            _structSupportGizmoDrag = true;
+            _structDragStartCenter = new System.Numerics.Vector2(sgSpec.CenterX, sgSpec.CenterY);
+            _structDragStartRotationDeg = sgSpec.RotationDeg;
+            _toolIsDragging = false;
+            _transformLinkFollowers = null;
+            SetupPivotGizmoDrag(mx, my, vpW, vpH);
             return;
         }
 
@@ -13647,7 +13970,9 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private void SetupCutPlaneGizmoDrag(float mx, float my, float vpW, float vpH)
+    /// <summary>Gizmo drag setup for anything driven by a bare pivot point rather than a
+    /// SceneNode transform (the Cut tool's ghost plane, a Structural Support pocket).</summary>
+    private void SetupPivotGizmoDrag(float mx, float my, float vpW, float vpH)
     {
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
         switch (dragOp)
@@ -13686,6 +14011,13 @@ public partial class ViewportView : UserControl
         if (DataContext is ViewportViewModel { IsCutToolActive: true, CutToolSession: { } cutS })
         {
             ProcessCutPlaneGizmoDrag(cutS, mx, my);
+            return;
+        }
+
+        // Structural Support pocket: drives spec fields, no node involved.
+        if (_structSupportGizmoDrag && DataContext is ViewportViewModel ssVm)
+        {
+            ProcessStructuralSupportGizmoDrag(ssVm, mx, my);
             return;
         }
 

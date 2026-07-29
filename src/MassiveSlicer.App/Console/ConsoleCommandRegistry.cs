@@ -702,6 +702,137 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "support",
+            Aliases = ["struct"],
+            Description = "Structural Supports: list, select/rename, move/rotate/resize, delete "
+                + "— drives the same fields as the panel and the viewport gizmo",
+            Usage = "support list | support select <name|#> | support rename <name> | "
+                + "support move <x> <y> | support nudge <dx> <dy> | support rotate <deg> | "
+                + "support size <width> [depth] | support layers <up> <down> | "
+                + "support shape <rect|circle> | support enable <on|off> | support delete",
+            Execute = (ctx, args) =>
+            {
+                var add = ctx.Main.RightPanel.Additive;
+                var vp = ctx.Main.Viewport;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                var specs = add.StructuralSupports;
+
+                bool HasSelection()
+                {
+                    if (add.SelectedSupportIndex >= 0 && add.SelectedSupportIndex < specs.Count)
+                        return true;
+                    ctx.LogError("[support] no support selected — 'support list' then 'support select <name|#>'");
+                    return false;
+                }
+
+                void LogSelected(string what)
+                {
+                    int i = add.SelectedSupportIndex;
+                    var s = specs[i];
+                    ctx.Log($"[support] {add.SupportNameAt(i)} {what} → centre "
+                        + $"({s.CenterX:0.#}, {s.CenterY:0.#}) · {s.WidthMm:0}×{s.DepthMm:0} mm · "
+                        + $"{s.RotationDeg:0}° · anchor ({s.AnchorX:0.#}, {s.AnchorY:0.#}) L{s.AnchorLayer} · "
+                        + $"layers +{s.LayersUp}/-{s.LayersDown} · {(s.Enabled ? "enabled" : "disabled")}");
+                }
+
+                switch (parts.FirstOrDefault()?.ToLowerInvariant())
+                {
+                    case "select" when parts.Length >= 2:
+                    {
+                        // Accept a name ("Support 2", or just "2"/"support2") or a 1-based index.
+                        string want = string.Join(' ', parts.Skip(1));
+                        int found = -1;
+                        for (int i = 0; i < specs.Count; i++)
+                            if (add.SupportNameAt(i).Replace(" ", "")
+                                    .Equals(want.Replace(" ", ""), StringComparison.OrdinalIgnoreCase))
+                            { found = i; break; }
+                        if (found < 0 && int.TryParse(want, out int oneBased)
+                            && oneBased >= 1 && oneBased <= specs.Count)
+                            found = oneBased - 1;
+                        if (found < 0) { ctx.LogError($"[support] no support matching '{want}'"); return; }
+                        add.SelectedSupportIndex = found;
+                        LogSelected("selected");
+                        break;
+                    }
+                    case "rename" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SelectedSupportName = string.Join(' ', parts.Skip(1));
+                        ctx.Log($"[support] renamed to {add.SelectedSupportName}");
+                        break;
+                    case "move" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportCenterX = double.Parse(parts[1]);
+                        add.SupportCenterY = double.Parse(parts[2]);
+                        LogSelected("moved");
+                        break;
+                    case "nudge" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportCenterX += double.Parse(parts[1]);
+                        add.SupportCenterY += double.Parse(parts[2]);
+                        LogSelected("nudged");
+                        break;
+                    case "rotate" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportRotationDeg = double.Parse(parts[1]);
+                        LogSelected("rotated");
+                        break;
+                    case "size" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportWidthMm = double.Parse(parts[1]);
+                        if (parts.Length >= 3) add.SupportDepthMm = double.Parse(parts[2]);
+                        LogSelected("resized");
+                        break;
+                    case "layers" when parts.Length >= 3:
+                        if (!HasSelection()) return;
+                        add.SupportLayersUp = int.Parse(parts[1]);
+                        add.SupportLayersDown = int.Parse(parts[2]);
+                        LogSelected("layer range set");
+                        break;
+                    case "shape" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportShape = parts[1].StartsWith("c", StringComparison.OrdinalIgnoreCase)
+                            ? "Circle" : "Rectangle";
+                        LogSelected($"shape={add.SupportShape}");
+                        break;
+                    case "enable" when parts.Length >= 2:
+                        if (!HasSelection()) return;
+                        add.SupportEnabled = parts[1] is "on" or "true" or "1" or "yes";
+                        LogSelected("toggled");
+                        break;
+                    case "delete" or "remove":
+                    {
+                        if (!HasSelection()) return;
+                        string gone = add.SupportNameAt(add.SelectedSupportIndex);
+                        // Same path as the panel's trash icon: repairs card links + re-slices.
+                        vp.DeleteSelectedStructuralSupportCommand.Execute(null);
+                        ctx.Log($"[support] deleted {gone} ({specs.Count} left)");
+                        break;
+                    }
+                    default:
+                        if (specs.Count == 0)
+                        {
+                            ctx.Log("[support] no structural supports "
+                                + "(edit mode → click a bead → type 'Structural Support')");
+                            return;
+                        }
+                        for (int i = 0; i < specs.Count; i++)
+                        {
+                            var s = specs[i];
+                            ctx.Log($"[support] {(i == add.SelectedSupportIndex ? "*" : " ")}"
+                                + $"{i + 1}. {add.SupportNameAt(i)} · {s.Shape} "
+                                + $"{s.WidthMm:0}×{s.DepthMm:0} mm @ ({s.CenterX:0.#}, {s.CenterY:0.#}) "
+                                + $"{s.RotationDeg:0}° · anchor ({s.AnchorX:0.#}, {s.AnchorY:0.#}) "
+                                + $"L{s.AnchorLayer} · layers +{s.LayersUp}/-{s.LayersDown}"
+                                + $"{(s.Enabled ? "" : " · DISABLED")}");
+                        }
+                        ctx.Log($"[support] {specs.Count} support(s) · * = live (panel + gizmo target)");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>

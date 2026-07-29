@@ -1980,6 +1980,15 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
+    /// <summary>Deletes the live Structural Support (and its card, if it still has one).
+    /// Routed through the viewport so card ↔ spec index links are repaired on the way out.</summary>
+    internal Action? OnDeleteSelectedStructuralSupportRequested;
+
+    public RelayCommand DeleteSelectedStructuralSupportCommand =>
+        _deleteSelectedSupport ??= new RelayCommand(() =>
+            OnDeleteSelectedStructuralSupportRequested?.Invoke());
+    private RelayCommand? _deleteSelectedSupport;
+
     // ── Quick-add modifier (autocomplete in the MODIFICATIONS panel) ─────────
 
     /// <summary>Type-to-find modifier names — replaces the CREATE MODIFICATION card.</summary>
