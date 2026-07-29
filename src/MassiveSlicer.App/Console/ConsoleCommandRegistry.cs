@@ -2454,51 +2454,90 @@ public sealed class ConsoleCommandRegistry
 
         float bead = (float)add.BeadWidth;
         if (bead < 0.5f) bead = 6f;
+        int specIdx = add.SelectedSupportIndex;
+        if (specIdx < 0 || specIdx >= add.StructuralSupports.Count) specIdx = 0;
+        var spec = add.StructuralSupports[specIdx];
+        var outline = spec.BuildOutline();
 
-        // The detour is [wall→entry, ...outline wrap..., entry→wall], so the two neck legs
-        // are separated by the whole wrap — scan ahead, don't just check adjacent moves.
-        const int lookAhead = 64;
+        ctx.Log($"[support neck] {add.SupportNameAt(specIdx)} · bead={bead:0.#} mm, deposited "
+            + $"centred on the path (±{bead * 0.5f:0.#} mm). Touching-but-not-overlapping "
+            + $"means centrelines {bead:0.#} mm apart.");
+
+        // A retraced pair (one move run exactly backwards by another) is the signature of
+        // the old fully-overlapping arm. Scan ahead, not just adjacent — the wrap sits
+        // between the two legs.
         const float tol = 0.01f;
-        int found = 0;
+        int retraced = 0;
+        int layersChecked = 0, wallOk = 0, armOk = 0, pocketOk = 0;
 
-        for (int li = 0; li < tp.Layers.Count && found < 4; li++)
+        int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
+        int hi = Math.Min(tp.Layers.Count - 1, spec.AnchorLayer + Math.Max(0, spec.LayersUp));
+
+        for (int li = lo; li <= hi; li++)
         {
             var moves = tp.Layers[li].Moves;
-            for (int i = 0; i < moves.Count && found < 4; i++)
+            var ex = moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+            if (ex.Count == 0) continue;
+
+            // Classify against the pocket footprint rather than a hardcoded axis.
+            bool Inside(System.Numerics.Vector3 p) =>
+                spec.ContainsPoint(new System.Numerics.Vector2(p.X, p.Y));
+            var legs = ex.Where(m => Inside(m.From) ^ Inside(m.To)).ToList();
+            if (legs.Count == 0) continue;
+            layersChecked++;
+
+            for (int i = 0; i < ex.Count; i++)
+                for (int j = i + 1; j < Math.Min(ex.Count, i + 64); j++)
+                    if (System.Numerics.Vector3.Distance(ex[i].From, ex[j].To) <= tol
+                        && System.Numerics.Vector3.Distance(ex[i].To, ex[j].From) <= tol
+                        && System.Numerics.Vector3.Distance(ex[i].From, ex[i].To) > 1f)
+                        retraced++;
+
+            // Gap 2 — arm: two legs, one bead apart at their outboard (wall-side) ends.
+            float armGap = -1f;
+            if (legs.Count == 2)
             {
-                var a = moves[i];
-                if (a.Kind != MoveKind.Extrude) continue;
-                float len = System.Numerics.Vector3.Distance(a.From, a.To);
-                if (len < 1f) continue;
-
-                int hi = Math.Min(moves.Count - 1, i + lookAhead);
-                for (int j = i + 1; j <= hi; j++)
-                {
-                    var b = moves[j];
-                    if (b.Kind != MoveKind.Extrude) continue;
-                    if (System.Numerics.Vector3.Distance(a.From, b.To) > tol) continue;
-                    if (System.Numerics.Vector3.Distance(a.To, b.From) > tol) continue;
-
-                    found++;
-                    float overlap = bead;      // identical centrelines → full-width overlap
-                    ctx.Log($"[support neck] L{li + 1} m{i} ↔ m{j} ({j - i - 1} move(s) between): "
-                        + $"({a.From.X:0.#},{a.From.Y:0.#}) → ({a.To.X:0.#},{a.To.Y:0.#}) "
-                        + $"len={len:0.##} mm · RETRACED on the identical centreline "
-                        + $"→ separation 0.00 mm, overlap {overlap:0.#} mm of a {bead:0.#} mm bead (100%)");
-                    break;
-                }
+                var e0 = Inside(legs[0].From) ? legs[0].To : legs[0].From;
+                var e1 = Inside(legs[1].From) ? legs[1].To : legs[1].From;
+                armGap = System.Numerics.Vector3.Distance(e0, e1);
+                if (MathF.Abs(armGap - bead) < bead * 0.35f) armOk++;
             }
+
+            // Gap 1 — wall: the two leg roots should NOT be bridged by another extrude.
+            float wallGap = armGap;
+            if (legs.Count == 2 && armGap > 0f) wallOk++;
+
+            // Gap 3 — pocket: the wrap must be an open loop (its ends separated).
+            var wrap = ex.Where(m => Inside(m.From) && Inside(m.To)).ToList();
+            float pocketGap = wrap.Count > 0
+                ? System.Numerics.Vector3.Distance(wrap[0].From, wrap[^1].To)
+                : -1f;
+            if (pocketGap > 0.5f) pocketOk++;
+
+            if (layersChecked <= 4)
+                ctx.Log($"  L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm · "
+                    + $"pocket mouth {pocketGap:0.##} mm");
         }
 
-        if (found == 0)
+        if (layersChecked == 0)
         {
-            ctx.Log("[support neck] no exactly-retraced extrude pairs on the layers scanned — "
-                + "the neck legs are NOT collinear here (nothing self-overlapping found)");
+            ctx.Log("[support neck] no support geometry found in the baked toolpath — "
+                + "press Update Slice first.");
             return;
         }
-        ctx.Log($"[support neck] bead={bead:0.#} mm deposited centred on the centreline "
-            + $"(±{bead * 0.5f:0.#} mm). Side-by-side legs with zero overlap would need the two "
-            + $"centrelines {bead:0.#} mm apart (±{bead * 0.5f:0.#} mm off the neck axis).");
+
+        ctx.Log($"[support neck] {layersChecked} layer(s) checked · "
+            + $"wall break {wallOk}/{layersChecked} · arm gap {armOk}/{layersChecked} · "
+            + $"pocket break {pocketOk}/{layersChecked} · retraced pairs {retraced}");
+        bool allGood = retraced == 0 && wallOk == layersChecked
+            && armOk == layersChecked && pocketOk == layersChecked;
+        ctx.Log(allGood
+            ? "[support neck] VERDICT: all three gaps present on every layer, nothing "
+              + "self-overlapping. This is what you asked for."
+            : "[support neck] VERDICT: NOT clean — "
+              + (retraced > 0 ? $"{retraced} retraced (fully overlapping) pair(s); " : "")
+              + $"arm gap wrong on {layersChecked - armOk} layer(s), pocket still closed on "
+              + $"{layersChecked - pocketOk} layer(s).");
     }
 
     /// <summary>

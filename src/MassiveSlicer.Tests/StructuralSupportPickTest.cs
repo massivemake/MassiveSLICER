@@ -111,30 +111,24 @@ public sealed class StructuralSupportPickTest
         StructuralSupportPlanner.Apply(tp, new SliceSettings { StructuralSupports = [spec] });
 
         var outline = spec.BuildOutline();
-        // The entry vertex is the first outline point the neck reaches. Collect, per layer,
-        // which outline vertex the detour starts at.
-        var entries = new List<int>();
+        // Per layer, find the outgoing leg (exactly one endpoint on the wall line y≈0) and
+        // record BOTH where it leaves the wall and where it lands on the pocket. The pocket
+        // landing point must be identical on every layer; the wall end is free to move.
+        var entries = new List<string>();
         var splitXs = new List<float>();
         foreach (var layer in tp.Layers)
         {
             foreach (var mv in layer.Moves)
             {
                 if (mv.Kind != MoveKind.Extrude) continue;
-                int idx = -1;
-                for (int i = 0; i < outline.Length; i++)
-                {
-                    float dx = mv.To.X - outline[i].X, dy = mv.To.Y - outline[i].Y;
-                    if (dx * dx + dy * dy < 0.01f) { idx = i; break; }
-                }
-                // First move whose END is an outline vertex and whose START is not = the neck.
-                if (idx < 0) continue;
-                bool startOnOutline = outline.Any(v =>
-                    (mv.From.X - v.X) * (mv.From.X - v.X)
-                    + (mv.From.Y - v.Y) * (mv.From.Y - v.Y) < 0.01f);
-                if (startOnOutline) continue;
-                entries.Add(idx);
-                splitXs.Add(mv.From.X);   // where the neck leaves the wall
-                break;
+                bool fromWall = MathF.Abs(mv.From.Y) < 0.01f;
+                bool toWall   = MathF.Abs(mv.To.Y) < 0.01f;
+                if (fromWall == toWall) continue;          // wall piece or pocket edge
+                var wallEnd   = fromWall ? mv.From : mv.To;
+                var pocketEnd = fromWall ? mv.To : mv.From;
+                entries.Add($"{pocketEnd.X:0.###},{pocketEnd.Y:0.###}");
+                splitXs.Add(wallEnd.X);
+                break;                                     // first leg on this layer
             }
         }
 
@@ -168,18 +162,17 @@ public sealed class StructuralSupportPickTest
             + "the pocket midline");
 
         Assert.True(entries.Distinct().Count() == 1,
-            "neck must enter the same pocket corner on every layer; got entry vertices ["
-            + string.Join(", ", entries) + "] across " + entries.Count + " layers");
+            "arm must land on the same point of the pocket on every layer; got ["
+            + string.Join(" | ", entries) + "] across " + entries.Count + " layers");
     }
 
     /// <summary>
-    /// Pins CURRENT behaviour, which is not necessarily desired: the neck out and the neck
-    /// back run along the identical centreline, so with the bead deposited centred on the
-    /// path the two passes overlap 100% rather than sitting side by side. If we offset the
-    /// legs by half a bead each way, this test SHOULD fail — update it then, deliberately.
+    /// The neck legs must NOT retrace one centreline any more — they are a duct, offset so
+    /// the deposited beads touch without overlapping. This replaces the old test that
+    /// pinned the retracing behaviour.
     /// </summary>
     [Fact]
-    public void Neck_legs_currently_retrace_the_identical_centreline()
+    public void Neck_legs_do_not_retrace_the_same_centreline()
     {
         // One straight wall run at Z=0 so the planner has something to split.
         var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
@@ -214,8 +207,76 @@ public sealed class StructuralSupportPickTest
             }
         }
 
-        Assert.True(pairs >= 1,
-            "expected the neck out and neck back to be exact reverses of each other "
-            + $"(current planner behaviour), found {pairs} retraced pair(s) in {moves.Count} moves");
+        Assert.Equal(0, pairs);
+    }
+
+    /// <summary>
+    /// The three gaps Jeff specified: a break in the WALL at the anchor, a gap ALONG the
+    /// arm (the two legs one bead apart, not stacked), and a break in the RECTANGLE's own
+    /// surface where the arm meets it. All three are one bead width, because the bead is
+    /// deposited centred on the path — so touching-but-not-overlapping means the two
+    /// centrelines sit a full bead apart.
+    /// </summary>
+    [Fact]
+    public void Wall_arm_and_pocket_each_get_a_one_bead_gap()
+    {
+        const float bead = 6f;
+        var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(0f, 0f, 0f), new Vector3(400f, 0f, 0f), MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var spec = new StructuralSupportSpec
+        {
+            AnchorX = 200f, AnchorY = 0f, AnchorLayer = 0,
+            CenterX = 200f, CenterY = 80f,
+            WidthMm = 92f, DepthMm = 42f,
+            LayersUp = 0, LayersDown = 0,
+        };
+        StructuralSupportPlanner.Apply(tp, new SliceSettings
+        {
+            BeadWidth = bead,
+            StructuralSupports = [spec],
+        });
+
+        var extrudes = layer.Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+        // Classify by how many endpoints sit on the wall line (y ≈ 0). A pocket edge that
+        // happens to run in Y is NOT a leg — the earlier naive "big ΔY" filter caught the
+        // rectangle's own side and reported three legs.
+        static bool OnWall(Vector3 p) => MathF.Abs(p.Y) < 0.01f;
+        var wallPieces = extrudes.Where(m => OnWall(m.From) && OnWall(m.To)).ToList();
+        var legs       = extrudes.Where(m => OnWall(m.From) ^ OnWall(m.To)).ToList();
+        var pocket     = extrudes.Where(m => !OnWall(m.From) && !OnWall(m.To)).ToList();
+
+        // ── Gap 1: the WALL is broken at the anchor ──────────────────────────────────
+        Assert.Equal(2, wallPieces.Count);
+        float innerLeft  = wallPieces.SelectMany(m => new[] { m.From.X, m.To.X })
+                                     .Where(x => x < spec.AnchorX).Max();
+        float innerRight = wallPieces.SelectMany(m => new[] { m.From.X, m.To.X })
+                                     .Where(x => x > spec.AnchorX).Min();
+        float wallGap = innerRight - innerLeft;
+        Assert.True(MathF.Abs(wallGap - bead) < 0.51f,
+            $"wall break should be ~{bead} mm, measured {wallGap:0.###} mm");
+        // ...and centred on the anchor, so the mouth doesn't creep along the wall.
+        Assert.Equal(spec.AnchorX, (innerLeft + innerRight) * 0.5f, 1);
+
+        // ── Gap 2: the two legs run a bead apart, not stacked ────────────────────────
+        Assert.Equal(2, legs.Count);
+        float leg0X = OnWall(legs[0].From) ? legs[0].From.X : legs[0].To.X;
+        float leg1X = OnWall(legs[1].From) ? legs[1].From.X : legs[1].To.X;
+        float legSeparation = MathF.Abs(leg0X - leg1X);
+        Assert.True(MathF.Abs(legSeparation - bead) < 0.51f,
+            $"the two arm legs should be ~{bead} mm apart (touching, not overlapping), "
+            + $"measured {legSeparation:0.###} mm");
+
+        // ── Gap 3: the RECTANGLE's own surface is broken where the arm meets it ──────
+        // Take the wrap's open ends in PATH order: where the first pocket move starts and
+        // where the last one ends. A closed loop would put these at the same point.
+        Assert.NotEmpty(pocket);
+        float pocketGap = Vector3.Distance(pocket[0].From, pocket[^1].To);
+        Assert.True(pocketGap > 0.5f,
+            "the rectangle's surface must be broken where the arm meets it — the wrap "
+            + $"start and end are only {pocketGap:0.###} mm apart (still a closed loop)");
     }
 }

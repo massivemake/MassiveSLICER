@@ -41,13 +41,24 @@ public static class StructuralSupportPlanner
                 if (d2 < entryD2) { entryD2 = d2; entryIdx = i; }
             }
 
+            // Wrap direction is ALSO fixed per spec, for the same reason as entryIdx.
+            // Deciding it per layer (by whichever leg pairing was shorter) made the
+            // traversal flip partway up the stack as the wall moved, so the outgoing and
+            // returning legs swapped mouths mid-print.
+            int nOut = outline.Length;
+            float hMouth = MathF.Max(0.05f, settings.BeadWidth * 0.5f);
+            var cMouth = StepAlong(outline[entryIdx], outline[(entryIdx + 1) % nOut], hMouth);
+            var dMouth = StepAlong(outline[entryIdx], outline[(entryIdx - 1 + nOut) % nOut], hMouth);
+            bool ccw = Vector2.Distance(anchor2, cMouth) <= Vector2.Distance(anchor2, dMouth);
+
             for (int li = lo; li <= hi; li++)
-                ApplyToLayer(toolpath.Layers[li], spec, outline, entryIdx);
+                ApplyToLayer(toolpath.Layers[li], spec, outline, entryIdx, settings.BeadWidth, ccw);
         }
     }
 
     static void ApplyToLayer(
-        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int entryIdx)
+        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int entryIdx,
+        float bead, bool ccw)
     {
         var anchor = new Vector2(spec.AnchorX, spec.AnchorY);
 
@@ -77,22 +88,52 @@ public static class StructuralSupportPlanner
         // 2) Outline entry vertex is supplied by the caller — resolved once from the spec's
         //    fixed anchor so the neck lands on the SAME corner on every layer.
 
-        // 3) Build the detour: P → entry → full CCW wrap → entry → P.
-        //    NOTE: the two neck legs run along the IDENTICAL centreline in opposite
-        //    directions, so with the bead deposited centred on the path they overlap 100%
-        //    (one bead width, double-extruded) — NOT a "double-wide" neck. Making them sit
-        //    side by side would need each leg offset half a bead off the neck axis. That is
-        //    a deliberate open decision, not an oversight: it changes deposited geometry.
-        //    `StructuralSupportPickTest.Neck_legs_currently_retrace_the_identical_centreline`
-        //    pins today's behaviour and will fail when that changes.
-        var detour = new List<ToolpathMove>(outline.Length + 3);
+        // 3) Build the detour as a real DUCT with three one-bead gaps, so nothing is
+        //    deposited on top of anything else. The bead is laid centred on the path
+        //    (renderer: pt ± beadWidth/2), so two centrelines must sit a full bead width
+        //    apart to touch without overlapping — half a bead either side of the axis.
+        //
+        //      wall ──A          C────┐  <- pocket mouth (gap ≈ 1 bead, straddles `entry`)
+        //             │  leg 1   │    │
+        //             │          │  pocket wrap (OPEN loop, C → … → D)
+        //             │  leg 2   │    │
+        //      wall ──B          D────┘
+        //             ^ wall mouth (gap ≈ 1 bead, centred on the anchor)
+        //
+        //    Previously all of this collapsed onto two points: the wall ran straight
+        //    through the anchor, both legs retraced one identical centreline, and the wrap
+        //    opened and closed at the same vertex — four beads piled on each junction.
+        float h = MathF.Max(0.05f, bead * 0.5f);
         Vector3 At(Vector2 v) => new(v.X, v.Y, z);
-        var entry = At(outline[entryIdx]);
 
-        var prev = bestP;
+        // Wall mouth: stop short of the anchor and resume past it, measured along the wall.
+        var wallDir2 = new Vector2(wall.To.X - wall.From.X, wall.To.Y - wall.From.Y);
+        float wallLen = wallDir2.Length();
+        var wallDir = wallLen > 1e-6f ? wallDir2 / wallLen : new Vector2(1f, 0f);
+        // Never eat more than the segment can spare, or a short wall move would vanish.
+        float wallHalf = wallLen > 1e-6f ? MathF.Min(h, wallLen * 0.45f) : 0f;
+        var aWall = new Vector3(bestP.X - wallDir.X * wallHalf, bestP.Y - wallDir.Y * wallHalf, bestP.Z);
+        var bWall = new Vector3(bestP.X + wallDir.X * wallHalf, bestP.Y + wallDir.Y * wallHalf, bestP.Z);
+
+        // Pocket mouth: open the outline loop either side of the entry vertex.
+        int n = outline.Length;
+        var entryV = outline[entryIdx];
+        var nextV  = outline[(entryIdx + 1) % n];
+        var prevV  = outline[(entryIdx - 1 + n) % n];
+        var cPocket = At(StepAlong(entryV, nextV, h));   // wrap START (CCW from entry)
+        var dPocket = At(StepAlong(entryV, prevV, h));   // wrap END   (CW  from entry)
+
+        // The duct ALWAYS leaves from the wall.From-side root and returns to the wall.To-side
+        // root, so the two wall pieces can never overlap. Wrap direction comes from the
+        // caller (fixed per spec) so it cannot flip between layers.
+        var mouthIn  = ccw ? cPocket : dPocket;
+        var mouthOut = ccw ? dPocket : cPocket;
+
+        var detour = new List<ToolpathMove>(n + 4);
+        var prev = aWall;
         void Emit(Vector3 to)
         {
-            if (Vector3.DistanceSquared(prev, to) < 1e-6f) return;
+            if (Vector3.DistanceSquared(prev, to) < 1e-6f) { prev = to; return; }
             detour.Add(new ToolpathMove(prev, to, MoveKind.Extrude)
             {
                 Normal = wall.Normal,
@@ -101,20 +142,23 @@ public static class StructuralSupportPlanner
             prev = to;
         }
 
-        Emit(entry);                                  // neck out
-        for (int k = 1; k <= outline.Length; k++)     // wrap (back to entry)
-            Emit(At(outline[(entryIdx + k) % outline.Length]));
-        Emit(bestP);                                  // neck back
+        Emit(mouthIn);                                  // leg 1: wall mouth → pocket mouth
+        for (int k = 1; k <= n - 1; k++)                // open wrap, in the chosen direction
+            Emit(At(outline[ccw ? (entryIdx + k) % n : (entryIdx - k + n) % n]));
+        Emit(mouthOut);                                 // finish the wrap at the far mouth
+        Emit(bWall);                                    // leg 2: pocket mouth → wall mouth
 
         if (detour.Count == 0) return;
 
-        // 4) Splice: wall segment splits at P; detour goes between the halves.
+        // 4) Splice: the wall ENDS at aWall and RESUMES at bWall — a real break in the
+        //    surface, one bead wide and centred on the anchor, instead of running
+        //    continuously beneath the neck. The path stays one unbroken extrusion.
         var replaced = new List<ToolpathMove>(detour.Count + 2);
-        if (bestT > 1e-4f)
-            replaced.Add(wall with { To = bestP });
+        if (Vector3.Distance(wall.From, aWall) > 1e-4f)
+            replaced.Add(wall with { To = aWall });
         replaced.AddRange(detour);
-        if (bestT < 1f - 1e-4f)
-            replaced.Add(wall with { From = bestP });
+        if (Vector3.Distance(bWall, wall.To) > 1e-4f)
+            replaced.Add(wall with { From = bWall });
         if (replaced.Count == 0) return;
 
         layer.Moves.RemoveAt(bestMove);
@@ -122,6 +166,19 @@ public static class StructuralSupportPlanner
 
         // Recorded contour spans (if any) are index-based — they no longer match.
         layer.Contours.Clear();
+    }
+
+    /// <summary>
+    /// Point <paramref name="dist"/> along the edge <paramref name="from"/> →
+    /// <paramref name="to"/>. Capped at 45% of the edge so opening a pocket mouth can
+    /// never swallow a whole short edge (small pockets, fine circle facets).
+    /// </summary>
+    static Vector2 StepAlong(Vector2 from, Vector2 to, float dist)
+    {
+        var d = to - from;
+        float len = d.Length();
+        if (len < 1e-6f) return from;
+        return from + d / len * MathF.Min(dist, len * 0.45f);
     }
 
     static (Vector3 p, float t, float d2) ClosestOnSegmentXY(Vector2 q, Vector3 a, Vector3 b)
