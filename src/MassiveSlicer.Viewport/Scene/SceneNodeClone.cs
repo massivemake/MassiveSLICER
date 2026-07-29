@@ -16,6 +16,7 @@ public static class SceneNodeClone
             Visible        = src.Visible,
             LayerPreview   = src.LayerPreview,
             IsAuthoringOverlay = src.IsAuthoringOverlay,
+            AlwaysOnTop        = src.AlwaysOnTop,
             LocalTransform = src.LocalTransform,
             PendingMesh    = src.PendingMesh,
         };

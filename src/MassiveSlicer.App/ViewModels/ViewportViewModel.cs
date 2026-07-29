@@ -7302,6 +7302,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 Visible            = cut.PreviewVisible,
                 PendingMesh        = BuildModifierCornerMarkerMesh(cut),
                 IsAuthoringOverlay = true,
+                AlwaysOnTop        = true,
             };
             node.AddChild(markerNode);
             PendingModelRefresh.Enqueue(markerNode);

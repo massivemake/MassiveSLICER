@@ -1389,7 +1389,13 @@ public sealed class SceneRenderer : IDisposable
             // did, so anything both translucent and double-sided (e.g. a modifier's cut plane)
             // silently vanished when viewed from its back side regardless of the flag.
             if (!n.CullFaces) GL.Disable(EnableCap.CullFace);
+            // A small precise indicator (e.g. a modifier's corner markers) reads as broken --
+            // half shaded/outlined differently from the other half -- if real geometry it
+            // happens to overlap partially occludes it; draw those always-on-top instead, same
+            // as the cylinder/spine/guide-gizmo previews below already do for the same reason.
+            if (n.AlwaysOnTop) GL.Disable(EnableCap.DepthTest);
             n.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
+            if (n.AlwaysOnTop) GL.Enable(EnableCap.DepthTest);
             if (!n.CullFaces) GL.Enable(EnableCap.CullFace);
         }
         GL.DepthMask(true);
@@ -1482,7 +1488,13 @@ public sealed class SceneRenderer : IDisposable
                         if (n.Mesh is null) continue;
                         var nodeMvp = n.WorldTransform * mvp;
                         _maskShader.SetMatrix4("uMVP", ref nodeMvp);
+                        // Same always-on-top exemption as the main draw above -- otherwise the
+                        // mask (and thus the selection outline) would still only cover whichever
+                        // part of the marker isn't occluded by real geometry behind it, even
+                        // though the marker itself now renders fully visible on top of it.
+                        if (n.AlwaysOnTop) GL.Disable(EnableCap.DepthTest);
                         n.Mesh.DrawRaw();
+                        if (n.AlwaysOnTop) GL.Enable(EnableCap.DepthTest);
                     }
                 }
                 GL.DepthMask(true);
