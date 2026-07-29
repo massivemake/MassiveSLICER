@@ -76,6 +76,18 @@ public sealed class SceneNode
     public bool IsAuthoringOverlay { get; set; } = false;
 
     /// <summary>
+    /// Drawn (and mask-tested for the selection outline) with depth testing disabled, so it
+    /// always renders fully on top rather than being partially occluded by real scene geometry
+    /// it happens to overlap -- for small precise UI indicators (e.g. a modifier's Infinite/
+    /// Restricted corner markers) where a partial occlusion reads as a rendering glitch (half
+    /// shaded/outlined differently from the other half) rather than legible depth cueing, unlike
+    /// a large flat surface (e.g. the modifier's own plane fill) where partial occlusion by real
+    /// geometry is expected and fine. Deliberately separate from IsAuthoringOverlay, which the
+    /// plane fill also sets for an unrelated reason (excluding it from mesh-collection utilities).
+    /// </summary>
+    public bool AlwaysOnTop { get; set; } = false;
+
+    /// <summary>
     /// When <c>false</c> this node and its entire subtree are skipped during rendering.
     /// Toggle to show or hide geometry without removing it from the scene graph.
     /// </summary>

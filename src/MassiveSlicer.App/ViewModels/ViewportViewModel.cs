@@ -6949,12 +6949,44 @@ public sealed class ViewportViewModel : ViewModelBase
     /// Adds a new Cut modifier to <paramref name="ownerItem"/>'s stack — real geometry, its own
     /// outliner row nested under (creating, if needed) the mesh's Modifiers group, from the
     /// moment it's created (see GetOrCreateModifierGizmoNode). Must be called on the UI thread.
+    /// The name (whether a freshly-computed "Cut NN" or a saved name being restored) is resolved
+    /// and assigned BEFORE the node/outliner row are built, so both the SceneNode's own name and
+    /// the outliner row's display name are correct from the very first frame — assigning it
+    /// after creation (the previous approach) left every Cut showing as literally "Cut" in the
+    /// outliner forever, since the row's display name is captured once at construction and never
+    /// re-bound to the modifier's own Name afterward.
     /// </summary>
-    internal CutModifier AddCutModifier(OutlinerItemViewModel ownerItem)
+    internal CutModifier AddCutModifier(OutlinerItemViewModel ownerItem, string? name = null)
     {
-        var modifier = new CutModifier();
+        var modifier = new CutModifier { Name = name ?? NextCutName(GetModifiers(ownerItem)) };
         GetOrCreateModifierGizmoNode(modifier, ownerItem);
         return modifier;
+    }
+
+    /// <summary>"Cut 01" if free, else the lowest "Cut NN" not already used by a sibling Cut modifier.</summary>
+    private static string NextCutName(IReadOnlyList<IModifier> siblings)
+    {
+        var used = new HashSet<int>();
+        foreach (var m in siblings)
+            if (m is CutModifier && m.Name.StartsWith("Cut ", StringComparison.Ordinal)
+                && int.TryParse(m.Name.AsSpan(4), out var n))
+                used.Add(n);
+
+        int next = 1;
+        while (used.Contains(next)) next++;
+        return $"Cut {next:D2}";
+    }
+
+    /// <summary>The real, currently-sliced toolpath layers belonging to <paramref name="cut"/>'s
+    /// owner mesh, or null if the owner has no toolpath yet (never sliced) or isn't resolvable.
+    /// Backs the Cut modifier's "Layer" field — converting a layer index into the same world-Z
+    /// space Offset already uses for Horizontal cuts (see CutModifierNodeSync).</summary>
+    internal IReadOnlyList<ToolpathLayer>? GetOwnerToolpathLayers(CutModifier cut)
+    {
+        if (!_modifierOutlinerItems.TryGetValue(cut, out var cutItem)) return null;
+        if (OwningModelItem(cutItem) is not { } ownerItem) return null;
+        if (ownerItem.Children.FirstOrDefault(c => c.IsToolpath) is not { } tpItem) return null;
+        return GetToolpathSnapshot?.Invoke(tpItem.Node)?.Raw.Layers;
     }
 
     /// <summary>Removes a modifier — deletes its plane object and outliner row outright
@@ -7270,6 +7302,7 @@ public sealed class ViewportViewModel : ViewModelBase
                 Visible            = cut.PreviewVisible,
                 PendingMesh        = BuildModifierCornerMarkerMesh(cut),
                 IsAuthoringOverlay = true,
+                AlwaysOnTop        = true,
             };
             node.AddChild(markerNode);
             PendingModelRefresh.Enqueue(markerNode);
@@ -7392,6 +7425,14 @@ public sealed class ViewportViewModel : ViewModelBase
             cut.PositionTangent = positionTangent;
         }
         SyncModifierGizmoNodeFromFields(cut);
+
+        // The fields above are plain data on CutModifier (no INotifyPropertyChanged of its
+        // own), so the settings panel -- if it's the one currently showing this exact cut --
+        // needs an explicit nudge to know Offset/RotationDegrees/LayerNumber just changed from
+        // under it. Without this, a gizmo drag updates the real cut correctly but the panel's
+        // displayed numbers go stale until the next selection change.
+        if (ModifiersPanel?.SelectedSettings is { } settings && ReferenceEquals(settings.Cut, cut))
+            settings.NotifyAllFieldsChanged();
     }
 
     /// <summary>

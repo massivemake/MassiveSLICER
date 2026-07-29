@@ -1158,7 +1158,8 @@ public sealed class ConsoleCommandRegistry
                 var cut = panel.SelectedSettings?.Cut;
                 ctx.Log($"[debug] SelectedSettings.Cut is CutModifier: {cut is not null}");
                 if (cut is not null)
-                    ctx.Log($"[debug] Cut: Enabled={cut.Enabled} PreviewVisible={cut.PreviewVisible} Orientation={cut.Orientation} Offset={cut.Offset}");
+                    ctx.Log($"[debug] Cut: Enabled={cut.Enabled} PreviewVisible={cut.PreviewVisible} Orientation={cut.Orientation} Offset={cut.Offset} SizeX={cut.SizeX} SizeY={cut.SizeY}");
+                ctx.Log($"[debug] SelectedSettings.LayerNumber: {panel.SelectedSettings?.LayerNumber?.ToString() ?? "null"}");
                 ctx.Log($"[debug] Viewport.SelectedOutlinerItem: {ctx.Main.Viewport.SelectedOutlinerItem?.Name ?? "null"}");
                 ctx.Log($"[debug] Viewport.SelectedModifierOwner: {ctx.Main.Viewport.SelectedModifierOwner?.Name ?? "null"}");
                 ctx.Log($"[debug] IsCutToolActive={ctx.Main.Viewport.IsCutToolActive} AdditiveMethod={ctx.Main.Viewport.AdditiveSettings?.Method}");
@@ -1178,6 +1179,21 @@ public sealed class ConsoleCommandRegistry
                 if (!float.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-offset <value>"); return; }
                 settings.Offset = value;
                 ctx.Log($"[modifier] {settings.Name} Offset -> {settings.Offset}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "modifier-set-layer",
+            Description = "Diagnostic: set the selected Horizontal modifier's LayerNumber directly (snaps Offset to that real toolpath layer's Z)",
+            Usage = "modifier-set-layer <1-based layer number>",
+            Execute = (ctx, args) =>
+            {
+                var settings = ctx.Main.RightPanel.Modifiers.SelectedSettings;
+                if (settings is null) { ctx.LogError("[modifier] nothing selected."); return; }
+                if (!int.TryParse(args.Trim(), out var value)) { ctx.LogError("usage: modifier-set-layer <1-based layer number>"); return; }
+                settings.LayerNumber = value;
+                ctx.Log($"[modifier] {settings.Name} LayerNumber -> {settings.LayerNumber} (Offset now {settings.Offset})");
             },
         });
 

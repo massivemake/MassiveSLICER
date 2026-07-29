@@ -53,6 +53,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsVertical));
+            OnPropertyChanged(nameof(LayerNumber)); // Horizontal-only -- flips between a real value and null
         }
     }
 
@@ -98,6 +99,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             _viewport.SyncModifierGizmoNodeFromFields(Cut);
             _viewport.NotifyRenderNeeded();
             OnPropertyChanged();
+            OnPropertyChanged(nameof(LayerNumber)); // Layer is a reverse-lookup of Offset -- keep it in step
         }
     }
 
@@ -135,6 +137,60 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             if (!Cut.Infinite) _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
         }
+    }
+
+    /// <summary>1-based index of whichever real toolpath layer sits nearest the plane's current
+    /// world height — an alternate way to place a Horizontal cut by layer instead of raw height,
+    /// reusing the exact same Offset the height field writes to. Null (and the field disabled)
+    /// for Vertical, whose Offset is a distance along the plane's own rotated facing direction,
+    /// not a height at all — "layer" has no meaning there. Null also when the owner mesh hasn't
+    /// been sliced yet (no layers to snap to). Always reflects the plane's real current position,
+    /// same as Offset/RotationDegrees — including right after a gizmo drag (see
+    /// ViewportViewModel.SyncModifierAfterGizmoEdit, which calls NotifyAllFieldsChanged below).</summary>
+    public int? LayerNumber
+    {
+        get
+        {
+            if (Cut is null || Cut.Orientation != CutOrientation.Horizontal) return null;
+            var layers = _viewport.GetOwnerToolpathLayers(Cut);
+            if (layers is null || layers.Count == 0) return null;
+
+            var worldZ = _viewport.ResolveBedCenterXYZ().Z + Cut.Offset;
+            int nearest = 0;
+            float bestDist = float.MaxValue;
+            for (int i = 0; i < layers.Count; i++)
+            {
+                var dist = Math.Abs(layers[i].Z - worldZ);
+                if (dist < bestDist) { bestDist = dist; nearest = i; }
+            }
+            return nearest + 1;
+        }
+        set
+        {
+            if (Cut is null || Cut.Orientation != CutOrientation.Horizontal || value is not { } layerNumber) return;
+            var layers = _viewport.GetOwnerToolpathLayers(Cut);
+            if (layers is null || layers.Count == 0) return;
+
+            var index = Math.Clamp(layerNumber - 1, 0, layers.Count - 1);
+            var newOffset = layers[index].Z - _viewport.ResolveBedCenterXYZ().Z;
+            if (Cut.Offset == newOffset) return;
+            Cut.Offset = newOffset;
+            _viewport.SyncModifierGizmoNodeFromFields(Cut);
+            _viewport.NotifyRenderNeeded();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(Offset));
+        }
+    }
+
+    /// <summary>Re-raises every field a gizmo drag can change, so the panel stays live-accurate
+    /// while dragging instead of only refreshing on the next selection change. Called by
+    /// ViewportViewModel.SyncModifierAfterGizmoEdit whenever this settings VM is the one
+    /// currently showing the cut being dragged.</summary>
+    internal void NotifyAllFieldsChanged()
+    {
+        OnPropertyChanged(nameof(Offset));
+        OnPropertyChanged(nameof(RotationDegrees));
+        OnPropertyChanged(nameof(LayerNumber));
     }
 
     internal ModifierSettingsViewModel(IModifier modifier, ViewportViewModel viewport)

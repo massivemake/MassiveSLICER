@@ -2893,11 +2893,25 @@
                                                  TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
 
-                                    <Grid ColumnDefinitions="*,80">
-                                        <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center"
-                                                   ToolTip.Tip="Horizontal: height above the bed (Z). Vertical: distance from the plane's own position along its current facing direction — not the same axis, since the two orientations cut along different directions."/>
+                                    <Grid ColumnDefinitions="*,*,60">
+                                        <TextBlock Grid.Column="0" Text="Offset (mm)" Classes="LabelMuted" VerticalAlignment="Center" TextWrapping="Wrap"
+                                                   ToolTip.Tip="Horizontal: height above the bed (Z). Vertical: distance from the plane's own position along its current facing direction — not the same axis, since the two orientations cut along different directions. Double-click the slider to type an exact value."/>
+                                        <Slider Grid.Column="1" Minimum="0" Maximum="3000"
+                                                Value="{Binding Modifiers.SelectedSettings.Offset}"
+                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                                 Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                    </Grid>
+
+                                    <!-- Horizontal only — Vertical's Offset is a distance along the plane's own
+                                         rotated facing direction, not a height, so "layer" has no meaning there.
+                                         Needs the owner mesh to already be sliced (no toolpath = nothing to snap to). -->
+                                    <Grid ColumnDefinitions="*,80" IsEnabled="{Binding Modifiers.SelectedSettings.IsHorizontal}">
+                                        <TextBlock Grid.Column="0" Text="Layer" Classes="LabelMuted" VerticalAlignment="Center"
+                                                   ToolTip.Tip="Snap the cut to a real toolpath layer instead of typing a height — sets the Offset above to that layer's real Z. Needs the model already sliced."/>
                                         <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit"
-                                                 Text="{Binding Modifiers.SelectedSettings.Offset, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.LayerNumber, UpdateSourceTrigger=LostFocus}"/>
                                     </Grid>
 
                                     <Grid ColumnDefinitions="*,Auto">
@@ -2906,12 +2920,23 @@
                                     </Grid>
 
                                     <!-- Always shown — enabled only when Infinite is off (rectangular restricted extent). -->
-                                    <Grid ColumnDefinitions="*,70,70" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
-                                        <TextBlock Grid.Column="0" Text="Size X / Y (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                        <TextBox Grid.Column="1" Classes="PanelTextBox NumericCommit" Margin="0,0,4,0"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
+                                    <Grid ColumnDefinitions="*,*,60" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
+                                        <TextBlock Grid.Column="0" Text="Size X (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <Slider Grid.Column="1" Minimum="0" Maximum="3000"
+                                                Value="{Binding Modifiers.SelectedSettings.SizeX}"
+                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
                                         <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
-                                                 Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"/>
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeX, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
+                                    </Grid>
+                                    <Grid ColumnDefinitions="*,*,60" IsEnabled="{Binding !Modifiers.SelectedSettings.Infinite}">
+                                        <TextBlock Grid.Column="0" Text="Size Y (mm)" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <Slider Grid.Column="1" Minimum="0" Maximum="3000"
+                                                Value="{Binding Modifiers.SelectedSettings.SizeY}"
+                                                VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                        <TextBox Grid.Column="2" Classes="PanelTextBox NumericCommit"
+                                                 Text="{Binding Modifiers.SelectedSettings.SizeY, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                 TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
                             </StackPanel>
