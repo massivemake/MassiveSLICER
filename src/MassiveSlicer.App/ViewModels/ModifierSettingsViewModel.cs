@@ -53,6 +53,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             _viewport.RebuildModifierPlaneMesh(Cut);
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsVertical));
+            OnPropertyChanged(nameof(LayerNumber)); // Horizontal-only -- flips between a real value and null
         }
     }
 
@@ -98,6 +99,7 @@ public sealed class ModifierSettingsViewModel : ViewModelBase
             _viewport.SyncModifierGizmoNodeFromFields(Cut);
             _viewport.NotifyRenderNeeded();
             OnPropertyChanged();
+            OnPropertyChanged(nameof(LayerNumber)); // Layer is a reverse-lookup of Offset -- keep it in step
         }
     }
 
