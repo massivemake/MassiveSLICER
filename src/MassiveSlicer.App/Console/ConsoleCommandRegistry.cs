@@ -710,7 +710,7 @@ public sealed class ConsoleCommandRegistry
                 + "support move <x> <y> | support nudge <dx> <dy> | support rotate <deg> | "
                 + "support size <width> [depth] | support layers <up> <down> | "
                 + "support shape <rect|circle> | support enable <on|off> | support neck | "
-                + "support delete",
+                + "support where | support trace | support delete",
             Execute = (ctx, args) =>
             {
                 var add = ctx.Main.RightPanel.Additive;
@@ -802,6 +802,16 @@ public sealed class ConsoleCommandRegistry
                         break;
                     case "neck":
                         EvalSupportNeck(ctx);
+                        break;
+                    case "where":
+                        foreach (var line in (vp.DescribeSupportPick?.Invoke()
+                                ?? "[support where] viewport not wired").Split('\n'))
+                            ctx.Log(line);
+                        break;
+                    case "trace":
+                        if (!HasSelection()) return;
+                        EvalSupportTrace(ctx, specs[add.SelectedSupportIndex],
+                            add.SupportNameAt(add.SelectedSupportIndex));
                         break;
                     case "delete" or "remove":
                     {
@@ -2318,6 +2328,104 @@ public sealed class ConsoleCommandRegistry
             Description = command.Description,
             Usage = string.IsNullOrWhiteSpace(command.Usage) ? command.Name : command.Usage,
         };
+
+    /// <summary>
+    /// Traces one support's baked pocket layer by layer: where the wrap actually landed,
+    /// and how long the neck is. Answers "is the pocket staying put as the wall builds?"
+    /// with numbers — the pocket footprint is fixed data, so the wrap centroid should be
+    /// identical on every affected layer while only the NECK length varies to reach a
+    /// wandering wall. Any drift in the centroid is a real bug, not a perception.
+    /// </summary>
+    private static void EvalSupportTrace(
+        ConsoleCommandContext ctx, StructuralSupportSpec spec, string name)
+    {
+        var vp = ctx.Main.Viewport;
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[support trace] no active toolpath — slice, then select the toolpath");
+            return;
+        }
+
+        var outline = spec.BuildOutline();
+        if (outline.Length < 3) { ctx.LogError("[support trace] degenerate outline"); return; }
+        // Match tolerance against the pocket size, not an absolute — a circle's facets sit
+        // slightly inside the ideal outline.
+        float tol = MathF.Max(1.0f, MathF.Min(spec.WidthMm, spec.DepthMm) * 0.05f);
+
+        bool NearOutline(System.Numerics.Vector3 p)
+        {
+            foreach (var v in outline)
+            {
+                float dx = p.X - v.X, dy = p.Y - v.Y;
+                if (dx * dx + dy * dy <= tol * tol) return true;
+            }
+            return false;
+        }
+
+        int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
+        int hi = Math.Min(tp.Layers.Count - 1, spec.AnchorLayer + Math.Max(0, spec.LayersUp));
+        ctx.Log($"[support trace] {name} · expected on layers L{lo + 1}..L{hi + 1} "
+            + $"({hi - lo + 1} layer(s)) · pocket centre ({spec.CenterX:0.#}, {spec.CenterY:0.#}) "
+            + $"· vertex match tol {tol:0.#} mm");
+
+        int layersHit = 0, shown = 0;
+        float cxMin = float.MaxValue, cxMax = float.MinValue;
+        float cyMin = float.MaxValue, cyMax = float.MinValue;
+        float neckMin = float.MaxValue, neckMax = float.MinValue;
+
+        for (int li = lo; li <= hi; li++)
+        {
+            var moves = tp.Layers[li].Moves;
+            double sx = 0, sy = 0;
+            int n = 0;
+            float neck = -1f;
+            foreach (var mv in moves)
+            {
+                if (mv.Kind != MoveKind.Extrude) continue;
+                bool a = NearOutline(mv.From), b = NearOutline(mv.To);
+                if (a && b) { sx += mv.To.X; sy += mv.To.Y; n++; }
+                // Neck: exactly one end on the outline, the other out on the wall.
+                else if (a ^ b)
+                {
+                    float len = System.Numerics.Vector3.Distance(mv.From, mv.To);
+                    if (len > neck) neck = len;
+                }
+            }
+            if (n == 0) continue;
+
+            layersHit++;
+            float cx = (float)(sx / n), cy = (float)(sy / n);
+            cxMin = MathF.Min(cxMin, cx); cxMax = MathF.Max(cxMax, cx);
+            cyMin = MathF.Min(cyMin, cy); cyMax = MathF.Max(cyMax, cy);
+            if (neck > 0f) { neckMin = MathF.Min(neckMin, neck); neckMax = MathF.Max(neckMax, neck); }
+
+            if (shown < 8)
+            {
+                shown++;
+                ctx.Log($"  L{li + 1}: wrap centroid ({cx:0.##}, {cy:0.##}) · {n} wrap move(s) · "
+                    + (neck > 0f ? $"neck {neck:0.#} mm" : "no neck move found"));
+            }
+        }
+
+        if (layersHit == 0)
+        {
+            ctx.Log("[support trace] pocket NOT FOUND in the baked toolpath on any expected "
+                + "layer — either the slice predates this support (press Update Slice) or the "
+                + "planner never spliced it.");
+            return;
+        }
+
+        float driftX = cxMax - cxMin, driftY = cyMax - cyMin;
+        ctx.Log($"[support trace] {layersHit}/{hi - lo + 1} layer(s) carry the pocket · "
+            + $"centroid drift X={driftX:0.###} mm Y={driftY:0.###} mm");
+        if (neckMin <= neckMax)
+            ctx.Log($"[support trace] neck length range {neckMin:0.#}..{neckMax:0.#} mm "
+                + $"(varies by {neckMax - neckMin:0.#} mm — this SHOULD vary as the wall moves)");
+        ctx.Log(driftX + driftY < 0.05f
+            ? "[support trace] VERDICT: pocket is rock-steady across layers (drift ~0)."
+            : $"[support trace] VERDICT: pocket DRIFTS {driftX:0.##}/{driftY:0.##} mm across "
+              + "layers — that is a real bug, the footprint is fixed data and must not move.");
+    }
 
     /// <summary>
     /// Measures the Structural Support neck in the LIVE toolpath: finds each pair of

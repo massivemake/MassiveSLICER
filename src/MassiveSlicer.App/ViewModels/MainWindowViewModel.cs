@@ -2866,10 +2866,25 @@ public sealed class MainWindowViewModel : ViewModelBase
     private string CapturePrefsJson()
         => JsonSerializer.Serialize(AppPreferences, PrefsJsonOptions);
 
+    /// <summary>Order-sensitive signature of the live structural support set — used to
+    /// detect whether an undo/redo actually changed it (a re-slice is only worth firing
+    /// when it did).</summary>
+    private string DescribeStructuralSupportSet()
+        => string.Join("|", RightPanel.Additive.StructuralSupports.Select(s =>
+            $"{s.Name}:{s.Shape}:{s.AnchorX:0.###},{s.AnchorY:0.###},{s.AnchorLayer}:"
+            + $"{s.CenterX:0.###},{s.CenterY:0.###}:{s.WidthMm:0.###}x{s.DepthMm:0.###}:"
+            + $"{s.RotationDeg:0.###}:{s.LayersUp}/{s.LayersDown}:{s.Enabled}"));
+
     private void ApplyPrefsFromJson(string json)
     {
         var copy = JsonSerializer.Deserialize<AppPreferences>(json, PrefsJsonOptions);
         if (copy is null) return;
+
+        // Structural Supports are baked INTO the toolpath by the slicer, so restoring them
+        // in settings is invisible until a re-slice. Undoing a support delete used to look
+        // like it had failed for exactly this reason: the panel came back, the geometry
+        // didn't. Compare before/after and re-slice when the set actually changed.
+        string supportsBefore = DescribeStructuralSupportSet();
 
         _applyingUndoRedo = true;
         try
@@ -2883,6 +2898,13 @@ public sealed class MainWindowViewModel : ViewModelBase
         finally
         {
             _applyingUndoRedo = false;
+        }
+
+        if (DescribeStructuralSupportSet() != supportsBefore)
+        {
+            Console.Log("[support] undo/redo changed the structural supports — re-slicing so "
+                + "the toolpath matches what the panel now shows.");
+            Viewport.UpdateSliceCommand?.Execute(null);
         }
     }
 

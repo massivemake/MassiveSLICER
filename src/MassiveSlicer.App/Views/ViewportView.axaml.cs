@@ -2751,10 +2751,10 @@ public partial class ViewportView : UserControl
                 // Structural Support gets the click before any bead pick: grabbing its
                 // gizmo, or clicking inside a pocket footprint to make it the live one.
                 {
-                    float sMx  = (float)pos.X;
-                    float sMy  = (float)pos.Y;
-                    float sVpW = (float)GlCanvas.Bounds.Width;
-                    float sVpH = (float)GlCanvas.Bounds.Height;
+                    // MUST go through GetGlPickViewport, like the bead picker does — the
+                    // GL canvas can be inset/scaled inside this control, and using raw
+                    // pointer coords offsets the ray enough to miss the pocket entirely.
+                    var (sMx, sMy, sVpW, sVpH) = GetGlPickViewport(pos);
 
                     if (_renderer.GizmoEnabled && ActiveGizmoSupport(pbVm) is not null)
                     {
@@ -5080,6 +5080,7 @@ public partial class ViewportView : UserControl
         vm.OnPaintModificationDeleteRequested = id => DeletePaintModification(vm, id);
         vm.OnPaintModificationsClearRequested = () => ClearAllPaintModifications(vm);
         vm.OnDeleteSelectedStructuralSupportRequested = () => DeleteSelectedStructuralSupport(vm);
+        vm.DescribeSupportPick = () => DescribeSupportPickState(vm);
         vm.OnPaintModificationPickBridgeRequested = id => BeginPickBridgeTarget(vm, id);
         vm.OnPaintModificationClearBridgeRequested = id => ClearBridgeTarget(vm, id);
         vm.OnPaintModificationToggleExpandRequested = id => TogglePaintModificationExpand(vm, id);
@@ -13057,6 +13058,82 @@ public partial class ViewportView : UserControl
             + $"centre ({spec.CenterX:F0}, {spec.CenterY:F0}) · {spec.RotationDeg:F0}° · "
             + "drag the gizmo to move, Rotate tool for the ring");
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Reports the frame the support helpers are drawn/picked in. Exists because a
+    /// failed pick has several indistinguishable causes from the outside: no visible
+    /// toolpath node, a helper Z that doesn't match the toolpath, or a Local/World
+    /// transform mismatch (the toolpath itself is drawn with LocalTransform, while the
+    /// paint overlay uses WorldTransform — if those differ, the outline you see is not
+    /// where the toolpath is).
+    /// </summary>
+    private string DescribeSupportPickState(ViewportViewModel vm)
+    {
+        if (vm.AdditiveSettings is not { } add)
+            return "[support where] no additive settings";
+        if (add.StructuralSupports.Count == 0)
+            return "[support where] no structural supports";
+
+        var lines = new List<string>();
+        SceneNode? frameNode = null;
+        int visibleToolpaths = 0;
+        foreach (var (node, _) in _toolpathByNode)
+        {
+            if (!node.Visible) continue;
+            visibleToolpaths++;
+            frameNode ??= node;
+        }
+
+        lines.Add($"[support where] editOpen={vm.IsPaintEditOpen} view={vm.ViewMode} "
+            + $"2d={vm.IsSlicePlaneViewerActive} gizmoMode={vm.ActiveGizmoModeInternal} "
+            + $"gizmoEnabled={_renderer.GizmoEnabled}");
+        lines.Add($"[support where] toolpath nodes={_toolpathByNode.Count} visible={visibleToolpaths} "
+            + $"activeScrubNode={(_activeScrubNode is null ? "none" : _activeScrubNode.Name)}");
+
+        if (frameNode is null)
+        {
+            lines.Add("[support where] NO VISIBLE TOOLPATH NODE → helpers fall back to raw "
+                + "sliced coords at Z=0; that is almost certainly not where you're clicking.");
+        }
+        else
+        {
+            var lt = frameNode.LocalTransform;
+            var wt = frameNode.WorldTransform;
+            float dt = (lt.Row3.Xyz - wt.Row3.Xyz).Length;
+            _toolpathOriginByNode.TryGetValue(frameNode, out var origin);
+            lines.Add($"[support where] frame node='{frameNode.Name}' "
+                + $"origin=({origin.X:0.#},{origin.Y:0.#},{origin.Z:0.#})");
+            lines.Add($"[support where] localT translation=({lt.Row3.X:0.#},{lt.Row3.Y:0.#},{lt.Row3.Z:0.#}) "
+                + $"worldT translation=({wt.Row3.X:0.#},{wt.Row3.Y:0.#},{wt.Row3.Z:0.#}) "
+                + $"→ delta {dt:0.##} mm "
+                + (dt > 0.5f
+                    ? "*** MISMATCH: the pocket outline is drawn offset from the toolpath ***"
+                    : "(match — transform is not the problem)"));
+        }
+
+        float helperZ = GetSupportHelperZ(vm);
+        lines.Add($"[support where] helper Z (sliced) = {helperZ:0.##} · "
+            + $"scrubLayerIndex={vm.CurrentScrubLayerIndex}");
+
+        float vpW = (float)Math.Max(1.0, GlCanvas.Bounds.Width);
+        float vpH = (float)Math.Max(1.0, GlCanvas.Bounds.Height);
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        for (int i = 0; i < add.StructuralSupports.Count; i++)
+        {
+            var spec = add.StructuralSupports[i];
+            var cw = SupportCentreWorld(vm, spec);
+            var clip = new Vector4(cw.X, cw.Y, cw.Z, 1f) * viewProj;
+            string screen = clip.W > 1e-4f
+                ? $"screen=({(clip.X / clip.W * 0.5f + 0.5f) * vpW:0}, "
+                  + $"{(1f - (clip.Y / clip.W * 0.5f + 0.5f)) * vpH:0}) of {vpW:0}x{vpH:0}"
+                : "OFF-SCREEN / behind camera";
+            lines.Add($"[support where] {add.SupportNameAt(i)}: sliced centre "
+                + $"({spec.CenterX:0.#},{spec.CenterY:0.#}) → world "
+                + $"({cw.X:0.#},{cw.Y:0.#},{cw.Z:0.#}) · {screen}");
+        }
+        return string.Join("\n", lines);
     }
 
     /// <summary>Deletes the live support plus any MODIFICATIONS card bound to it, repairs

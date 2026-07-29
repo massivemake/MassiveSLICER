@@ -1980,6 +1980,10 @@ public sealed class ViewportViewModel : ViewModelBase
         OnPaintModificationsClearRequested?.Invoke());
     private RelayCommand? _clearPaintMods;
 
+    /// <summary>Diagnostic: describes the frame the Structural Support helpers are drawn
+    /// and picked in (set by the viewport; read by the `support where` console command).</summary>
+    internal Func<string>? DescribeSupportPick;
+
     /// <summary>Deletes the live Structural Support (and its card, if it still has one).
     /// Routed through the viewport so card ↔ spec index links are repaired on the way out.</summary>
     internal Action? OnDeleteSelectedStructuralSupportRequested;
