@@ -1,5 +1,6 @@
 using System.Numerics;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 using Xunit;
 
 namespace MassiveSlicer.Tests;
@@ -73,5 +74,52 @@ public sealed class StructuralSupportPickTest
         // The anchor sits on the wall; picking it would steal bead clicks in edit mode.
         var p = Pocket();
         Assert.False(p.ContainsPoint(new Vector2(p.AnchorX, p.AnchorY)));
+    }
+
+    /// <summary>
+    /// Pins CURRENT behaviour, which is not necessarily desired: the neck out and the neck
+    /// back run along the identical centreline, so with the bead deposited centred on the
+    /// path the two passes overlap 100% rather than sitting side by side. If we offset the
+    /// legs by half a bead each way, this test SHOULD fail — update it then, deliberately.
+    /// </summary>
+    [Fact]
+    public void Neck_legs_currently_retrace_the_identical_centreline()
+    {
+        // One straight wall run at Z=0 so the planner has something to split.
+        var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(0f, 0f, 0f), new Vector3(400f, 0f, 0f), MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var spec = new StructuralSupportSpec
+        {
+            AnchorX = 200f, AnchorY = 0f, AnchorLayer = 0,
+            CenterX = 200f, CenterY = 80f,          // pocket sits off the wall in +Y
+            WidthMm = 92f, DepthMm = 42f,
+            LayersUp = 0, LayersDown = 0,
+        };
+        StructuralSupportPlanner.Apply(tp, new SliceSettings { StructuralSupports = [spec] });
+
+        var moves = layer.Moves;
+        // Find a pair of extrude moves that run exactly back along one another.
+        int pairs = 0;
+        for (int i = 0; i < moves.Count; i++)
+        {
+            if (moves[i].Kind != MoveKind.Extrude) continue;
+            if (Vector3.Distance(moves[i].From, moves[i].To) < 1f) continue;
+            for (int j = i + 1; j < moves.Count; j++)
+            {
+                if (moves[j].Kind != MoveKind.Extrude) continue;
+                if (Vector3.Distance(moves[i].From, moves[j].To) > 0.01f) continue;
+                if (Vector3.Distance(moves[i].To, moves[j].From) > 0.01f) continue;
+                pairs++;
+                break;
+            }
+        }
+
+        Assert.True(pairs >= 1,
+            "expected the neck out and neck back to be exact reverses of each other "
+            + $"(current planner behaviour), found {pairs} retraced pair(s) in {moves.Count} moves");
     }
 }

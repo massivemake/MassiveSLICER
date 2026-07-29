@@ -709,7 +709,8 @@ public sealed class ConsoleCommandRegistry
             Usage = "support list | support select <name|#> | support rename <name> | "
                 + "support move <x> <y> | support nudge <dx> <dy> | support rotate <deg> | "
                 + "support size <width> [depth] | support layers <up> <down> | "
-                + "support shape <rect|circle> | support enable <on|off> | support delete",
+                + "support shape <rect|circle> | support enable <on|off> | support neck | "
+                + "support delete",
             Execute = (ctx, args) =>
             {
                 var add = ctx.Main.RightPanel.Additive;
@@ -729,7 +730,7 @@ public sealed class ConsoleCommandRegistry
                 {
                     int i = add.SelectedSupportIndex;
                     var s = specs[i];
-                    ctx.Log($"[support] {add.SupportNameAt(i)} {what} → centre "
+                    ctx.Log($"[support] {add.SupportNameAt(i)} {what} → {s.Shape} centre "
                         + $"({s.CenterX:0.#}, {s.CenterY:0.#}) · {s.WidthMm:0}×{s.DepthMm:0} mm · "
                         + $"{s.RotationDeg:0}° · anchor ({s.AnchorX:0.#}, {s.AnchorY:0.#}) L{s.AnchorLayer} · "
                         + $"layers +{s.LayersUp}/-{s.LayersDown} · {(s.Enabled ? "enabled" : "disabled")}");
@@ -799,6 +800,9 @@ public sealed class ConsoleCommandRegistry
                         add.SupportEnabled = parts[1] is "on" or "true" or "1" or "yes";
                         LogSelected("toggled");
                         break;
+                    case "neck":
+                        EvalSupportNeck(ctx);
+                        break;
                     case "delete" or "remove":
                     {
                         if (!HasSelection()) return;
@@ -828,6 +832,50 @@ public sealed class ConsoleCommandRegistry
                         ctx.Log($"[support] {specs.Count} support(s) · * = live (panel + gizmo target)");
                         break;
                 }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "edit",
+            Description = "Toolpath edit mode (the pencil): open/close it, and toggle the 2D "
+                + "slice plane viewer — makes the edit-mode-only UI reachable without clicking",
+            Usage = "edit | edit on | edit off | edit 2d on | edit 2d off",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                bool On(string s) => s is "on" or "true" or "1" or "yes";
+
+                if (parts.Length >= 2 && parts[0].Equals("2d", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!vp.IsPaintEditOpen)
+                    {
+                        ctx.LogError("[edit] open edit mode first ('edit on') — "
+                            + "the 2D viewer only exists inside it");
+                        return;
+                    }
+                    vp.IsSlicePlaneViewerActive = On(parts[1].ToLowerInvariant());
+                    ctx.Log($"[edit] 2D slice plane viewer {(vp.IsSlicePlaneViewerActive ? "on" : "off")}");
+                    return;
+                }
+
+                if (parts.Length >= 1)
+                {
+                    // Edit mode only exists in Preview — take the user there rather than
+                    // silently doing nothing (the pencil button is Preview-only too).
+                    bool want = On(parts[0].ToLowerInvariant());
+                    if (want && vp.ViewMode != "Preview")
+                    {
+                        vp.ViewMode = "Preview";
+                        ctx.Log("[edit] switched to Preview (edit mode is Preview-only)");
+                    }
+                    vp.IsPaintEditOpen = want;
+                }
+
+                ctx.Log($"[edit] edit mode {(vp.IsPaintEditOpen ? "OPEN" : "closed")} · "
+                    + $"2D viewer {(vp.IsSlicePlaneViewerActive ? "on" : "off")} · "
+                    + $"view={vp.ViewMode} · granularity={vp.PaintSelectGranularity}");
             },
         });
 
@@ -2270,6 +2318,80 @@ public sealed class ConsoleCommandRegistry
             Description = command.Description,
             Usage = string.IsNullOrWhiteSpace(command.Usage) ? command.Name : command.Usage,
         };
+
+    /// <summary>
+    /// Measures the Structural Support neck in the LIVE toolpath: finds each pair of
+    /// extrude moves that run exactly back along each other (the neck out / neck back)
+    /// and reports their centreline separation against the bead width. Answers "do the
+    /// two neck passes overlap?" numerically instead of by eye — the bead is drawn
+    /// centred on the centreline (half the bead width each side), so a separation below
+    /// one bead width means the passes overlap by the difference.
+    /// </summary>
+    private static void EvalSupportNeck(ConsoleCommandContext ctx)
+    {
+        var vp = ctx.Main.Viewport;
+        var add = ctx.Main.RightPanel.Additive;
+
+        if (add.StructuralSupports.Count == 0)
+        {
+            ctx.LogError("[support neck] no structural supports to measure");
+            return;
+        }
+        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+        {
+            ctx.LogError("[support neck] no active toolpath — slice, then select the toolpath "
+                + "(or enter edit mode) so a scrub is armed");
+            return;
+        }
+
+        float bead = (float)add.BeadWidth;
+        if (bead < 0.5f) bead = 6f;
+
+        // The detour is [wall→entry, ...outline wrap..., entry→wall], so the two neck legs
+        // are separated by the whole wrap — scan ahead, don't just check adjacent moves.
+        const int lookAhead = 64;
+        const float tol = 0.01f;
+        int found = 0;
+
+        for (int li = 0; li < tp.Layers.Count && found < 4; li++)
+        {
+            var moves = tp.Layers[li].Moves;
+            for (int i = 0; i < moves.Count && found < 4; i++)
+            {
+                var a = moves[i];
+                if (a.Kind != MoveKind.Extrude) continue;
+                float len = System.Numerics.Vector3.Distance(a.From, a.To);
+                if (len < 1f) continue;
+
+                int hi = Math.Min(moves.Count - 1, i + lookAhead);
+                for (int j = i + 1; j <= hi; j++)
+                {
+                    var b = moves[j];
+                    if (b.Kind != MoveKind.Extrude) continue;
+                    if (System.Numerics.Vector3.Distance(a.From, b.To) > tol) continue;
+                    if (System.Numerics.Vector3.Distance(a.To, b.From) > tol) continue;
+
+                    found++;
+                    float overlap = bead;      // identical centrelines → full-width overlap
+                    ctx.Log($"[support neck] L{li + 1} m{i} ↔ m{j} ({j - i - 1} move(s) between): "
+                        + $"({a.From.X:0.#},{a.From.Y:0.#}) → ({a.To.X:0.#},{a.To.Y:0.#}) "
+                        + $"len={len:0.##} mm · RETRACED on the identical centreline "
+                        + $"→ separation 0.00 mm, overlap {overlap:0.#} mm of a {bead:0.#} mm bead (100%)");
+                    break;
+                }
+            }
+        }
+
+        if (found == 0)
+        {
+            ctx.Log("[support neck] no exactly-retraced extrude pairs on the layers scanned — "
+                + "the neck legs are NOT collinear here (nothing self-overlapping found)");
+            return;
+        }
+        ctx.Log($"[support neck] bead={bead:0.#} mm deposited centred on the centreline "
+            + $"(±{bead * 0.5f:0.#} mm). Side-by-side legs with zero overlap would need the two "
+            + $"centrelines {bead:0.#} mm apart (±{bead * 0.5f:0.#} mm off the neck axis).");
+    }
 
     /// <summary>
     /// Report support coverage for edit selection (or every island on the current scrub
