@@ -71,23 +71,10 @@ public sealed class ModifierPanelViewModel : ViewModelBase
     private void AddCutModifier()
     {
         if (_viewport?.SelectedModifierOwner is not { } owner) return;
-        var modifier = _viewport.AddCutModifier(owner);
-        modifier.Name = NextCutName(_viewport.GetModifiers(owner));
+        // Naming (a fresh "Cut NN") now happens inside AddCutModifier itself, before the node
+        // and outliner row are built -- see ViewportViewModel.AddCutModifier's own doc comment.
+        _viewport.AddCutModifier(owner);
         _viewport.NotifyRenderNeeded();
-    }
-
-    /// <summary>"Cut 01" if free, else the lowest "Cut NN" not already used by a sibling Cut modifier.</summary>
-    private static string NextCutName(IReadOnlyList<IModifier> siblings)
-    {
-        var used = new HashSet<int>();
-        foreach (var m in siblings)
-            if (m is CutModifier && m.Name.StartsWith("Cut ", StringComparison.Ordinal)
-                && int.TryParse(m.Name.AsSpan(4), out var n))
-                used.Add(n);
-
-        int next = 1;
-        while (used.Contains(next)) next++;
-        return $"Cut {next:D2}";
     }
 
     private void Apply()

@@ -355,8 +355,7 @@ internal static class WorkspaceService
             // Restore non-destructive modifiers (Cut planes)
             foreach (var modEntry in entry.Modifiers)
             {
-                var cut = viewport.AddCutModifier(parentItem);
-                cut.Name            = modEntry.Name;
+                var cut = viewport.AddCutModifier(parentItem, modEntry.Name);
                 cut.Enabled         = modEntry.Enabled;
                 cut.PreviewVisible  = modEntry.PreviewVisible;
                 cut.Cut             = modEntry.Cut;
