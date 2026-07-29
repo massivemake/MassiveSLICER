@@ -47,9 +47,40 @@ public static class BuildFreshnessChecker
     private static int? RunGitCount(params string[] args)
         => int.TryParse(RunGit(args)?.Trim(), out var n) ? n : null;
 
+    private static string? _resolvedGitExe;
+
+    // Explorer-launched processes (a desktop shortcut, or the exe double-clicked directly)
+    // can inherit a system/user PATH that never included git, even though an interactive dev
+    // shell's PATH does -- confirmed on this exact machine (system/user PATH has no git entry
+    // at all). Same root cause LaunchLatest.bat's build-time git invocation already had to
+    // work around. Resolved once per process and cached: prefer plain "git" (respects
+    // whatever PATH this process actually has), fall back to the well-known Git for Windows
+    // install location if that's not resolvable at all.
+    private static string ResolveGitExe()
+    {
+        if (_resolvedGitExe is not null) return _resolvedGitExe;
+        try
+        {
+            using var probe = Process.Start(new ProcessStartInfo("git", "--version")
+            {
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            });
+            probe?.WaitForExit(2000);
+            _resolvedGitExe = "git";
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            const string fallback = @"C:\Program Files\Git\cmd\git.exe";
+            _resolvedGitExe = File.Exists(fallback) ? fallback : "git";
+        }
+        return _resolvedGitExe;
+    }
+
     private static string? RunGit(params string[] args)
     {
-        var psi = new ProcessStartInfo("git")
+        var psi = new ProcessStartInfo(ResolveGitExe())
         {
             WorkingDirectory = AppContext.BaseDirectory,
             RedirectStandardOutput = true,
