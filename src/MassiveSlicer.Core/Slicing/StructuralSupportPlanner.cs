@@ -106,14 +106,13 @@ public static class StructuralSupportPlanner
         float h = MathF.Max(0.05f, bead * 0.5f);
         Vector3 At(Vector2 v) => new(v.X, v.Y, z);
 
-        // Wall mouth: stop short of the anchor and resume past it, measured along the wall.
-        var wallDir2 = new Vector2(wall.To.X - wall.From.X, wall.To.Y - wall.From.Y);
-        float wallLen = wallDir2.Length();
-        var wallDir = wallLen > 1e-6f ? wallDir2 / wallLen : new Vector2(1f, 0f);
-        // Never eat more than the segment can spare, or a short wall move would vanish.
-        float wallHalf = wallLen > 1e-6f ? MathF.Min(h, wallLen * 0.45f) : 0f;
-        var aWall = new Vector3(bestP.X - wallDir.X * wallHalf, bestP.Y - wallDir.Y * wallHalf, bestP.Z);
-        var bWall = new Vector3(bestP.X + wallDir.X * wallHalf, bestP.Y + wallDir.Y * wallHalf, bestP.Z);
+        // Wall mouth: consume half a bead of wall either side of the anchor, walking ACROSS
+        // adjacent moves as needed. Trimming only the one split move was wrong — a curved
+        // wall is chopped into chords and the closest one to the anchor is frequently a
+        // sliver (measured 0.02 mm on a real bendy wall), which collapsed the mouth to
+        // nothing on those layers while the rest of the stack looked fine.
+        var (headIdx, aWall) = WalkWall(layer, bestMove, bestP, h, -1);
+        var (tailIdx, bWall) = WalkWall(layer, bestMove, bestP, h, +1);
 
         // Pocket mouth: open the outline loop either side of the entry vertex.
         int n = outline.Length;
@@ -153,19 +152,64 @@ public static class StructuralSupportPlanner
         // 4) Splice: the wall ENDS at aWall and RESUMES at bWall — a real break in the
         //    surface, one bead wide and centred on the anchor, instead of running
         //    continuously beneath the neck. The path stays one unbroken extrusion.
+        //    Every move from headIdx..tailIdx is consumed by the mouth, so the whole run is
+        //    replaced (not just the single split move).
+        var head = layer.Moves[headIdx];
+        var tail = layer.Moves[tailIdx];
         var replaced = new List<ToolpathMove>(detour.Count + 2);
-        if (Vector3.Distance(wall.From, aWall) > 1e-4f)
-            replaced.Add(wall with { To = aWall });
+        if (Vector3.Distance(head.From, aWall) > 1e-4f)
+            replaced.Add(head with { To = aWall });
         replaced.AddRange(detour);
-        if (Vector3.Distance(bWall, wall.To) > 1e-4f)
-            replaced.Add(wall with { From = bWall });
+        if (Vector3.Distance(bWall, tail.To) > 1e-4f)
+            replaced.Add(tail with { From = bWall });
         if (replaced.Count == 0) return;
 
-        layer.Moves.RemoveAt(bestMove);
-        layer.Moves.InsertRange(bestMove, replaced);
+        layer.Moves.RemoveRange(headIdx, tailIdx - headIdx + 1);
+        layer.Moves.InsertRange(headIdx, replaced);
 
         // Recorded contour spans (if any) are index-based — they no longer match.
         layer.Contours.Clear();
+    }
+
+    /// <summary>
+    /// Walks the contiguous extrude run away from <paramref name="fromPoint"/> on move
+    /// <paramref name="idx"/> — backwards for <paramref name="dir"/> = -1, forwards for +1 —
+    /// consuming <paramref name="dist"/> mm of wall, and returns the move the cut lands in
+    /// plus the cut point. Crossing move boundaries is the whole point: on a curved wall the
+    /// segment nearest the anchor is often far shorter than a bead, so a mouth confined to
+    /// that one move would collapse. Stops at a travel, a wipe, a resume ramp, a
+    /// disconnected joint, or the end of the layer, returning the furthest point reached.
+    /// </summary>
+    static (int idx, Vector3 pt) WalkWall(
+        ToolpathLayer layer, int idx, Vector3 fromPoint, float dist, int dir)
+    {
+        int i = idx;
+        var p = fromPoint;
+        float remaining = dist;
+        while (true)
+        {
+            var mv = layer.Moves[i];
+            var target = dir < 0 ? mv.From : mv.To;
+            float avail = Vector3.Distance(p, target);
+            if (avail >= remaining)
+            {
+                var d = target - p;
+                float len = d.Length();
+                return (i, len > 1e-9f ? p + d / len * remaining : target);
+            }
+
+            remaining -= avail;
+            int next = i + dir;
+            if (next < 0 || next >= layer.Moves.Count) return (i, target);
+            var nm = layer.Moves[next];
+            if (nm.Kind != MoveKind.Extrude || nm.IsWipe || nm.IsResumeRamp) return (i, target);
+            // Only continue through a joint that actually connects — never jump a gap.
+            var joint = dir < 0 ? nm.To : nm.From;
+            if (Vector3.Distance(joint, target) > 0.05f) return (i, target);
+
+            i = next;
+            p = target;
+        }
     }
 
     /// <summary>

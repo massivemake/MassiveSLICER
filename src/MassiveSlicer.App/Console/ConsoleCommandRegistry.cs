@@ -706,7 +706,8 @@ public sealed class ConsoleCommandRegistry
             Aliases = ["struct"],
             Description = "Structural Supports: list, select/rename, move/rotate/resize, delete "
                 + "— drives the same fields as the panel and the viewport gizmo",
-            Usage = "support list | support select <name|#> | support rename <name> | "
+            Usage = "support add <x> <y> [layer] | "
+                + "support list | support select <name|#> | support rename <name> | "
                 + "support move <x> <y> | support nudge <dx> <dy> | support rotate <deg> | "
                 + "support size <width> [depth] | support layers <up> <down> | "
                 + "support shape <rect|circle> | support enable <on|off> | support neck | "
@@ -800,6 +801,59 @@ public sealed class ConsoleCommandRegistry
                         add.SupportEnabled = parts[1] is "on" or "true" or "1" or "yes";
                         LogSelected("toggled");
                         break;
+                    case "add" when parts.Length >= 3:
+                    {
+                        // Mirrors AddStructuralSupportFromSelection's geometry choices so
+                        // verifying through this path actually means something: snap the
+                        // anchor to the nearest bead, put the pocket one bead-pair inboard.
+                        if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } atp)
+                        {
+                            ctx.LogError("[support add] no active toolpath — slice, then select "
+                                + "the toolpath so a scrub is armed");
+                            return;
+                        }
+                        float wx = float.Parse(parts[1]), wy = float.Parse(parts[2]);
+                        int layerIdx = parts.Length >= 4
+                            ? Math.Clamp(int.Parse(parts[3]) - 1, 0, atp.Layers.Count - 1)
+                            : Math.Clamp(vp.CurrentScrubLayerIndex, 0, atp.Layers.Count - 1);
+
+                        var layer = atp.Layers[layerIdx];
+                        float bestD2 = float.MaxValue;
+                        System.Numerics.Vector3 mid = default, dirFrom = default, dirTo = default;
+                        foreach (var mv in layer.Moves)
+                        {
+                            if (mv.Kind != MoveKind.Extrude) continue;
+                            var m = (mv.From + mv.To) * 0.5f;
+                            float d2 = (m.X - wx) * (m.X - wx) + (m.Y - wy) * (m.Y - wy);
+                            if (d2 >= bestD2) continue;
+                            bestD2 = d2; mid = m; dirFrom = mv.From; dirTo = mv.To;
+                        }
+                        if (bestD2 == float.MaxValue)
+                        {
+                            ctx.LogError($"[support add] no extrude moves on layer {layerIdx + 1}");
+                            return;
+                        }
+
+                        var dir = new System.Numerics.Vector2(dirTo.X - dirFrom.X, dirTo.Y - dirFrom.Y);
+                        if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
+                        dir = System.Numerics.Vector2.Normalize(dir);
+                        var left = new System.Numerics.Vector2(-dir.Y, dir.X);
+                        const float depth = 42f;
+                        var centre = new System.Numerics.Vector2(mid.X, mid.Y)
+                            + left * (depth * 0.5f + (float)add.BeadWidth * 2f);
+
+                        add.AddStructuralSupport(new StructuralSupportSpec
+                        {
+                            AnchorX = mid.X, AnchorY = mid.Y, AnchorLayer = layerIdx,
+                            CenterX = centre.X, CenterY = centre.Y,
+                            WidthMm = 92f, DepthMm = depth,
+                            LayersUp = 9999, LayersDown = 0,
+                        });
+                        LogSelected($"added (snapped {MathF.Sqrt(bestD2):0.#} mm to nearest bead "
+                            + $"on L{layerIdx + 1})");
+                        ctx.Log("[support add] press Update Slice (or run `slice`) to bake it.");
+                        break;
+                    }
                     case "neck":
                         EvalSupportNeck(ctx);
                         break;
@@ -2435,6 +2489,26 @@ public sealed class ConsoleCommandRegistry
     /// centred on the centreline (half the bead width each side), so a separation below
     /// one bead width means the passes overlap by the difference.
     /// </summary>
+    /// <summary>Shortest distance from (x,y) to a closed outline polygon's edges.</summary>
+    private static float DistToOutline(System.Numerics.Vector2[] poly, float x, float y)
+    {
+        float best = float.MaxValue;
+        for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+        {
+            var a = poly[j];
+            var b = poly[i];
+            float abx = b.X - a.X, aby = b.Y - a.Y;
+            float len2 = abx * abx + aby * aby;
+            float t = len2 < 1e-12f
+                ? 0f
+                : Math.Clamp(((x - a.X) * abx + (y - a.Y) * aby) / len2, 0f, 1f);
+            float cx = a.X + t * abx, cy = a.Y + t * aby;
+            float d = MathF.Sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
+            if (d < best) best = d;
+        }
+        return best;
+    }
+
     private static void EvalSupportNeck(ConsoleCommandContext ctx)
     {
         var vp = ctx.Main.Viewport;
@@ -2469,6 +2543,7 @@ public sealed class ConsoleCommandRegistry
         const float tol = 0.01f;
         int retraced = 0;
         int layersChecked = 0, wallOk = 0, armOk = 0, pocketOk = 0;
+        int shownBad = 0, shownGood = 0;
 
         int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
         int hi = Math.Min(tp.Layers.Count - 1, spec.AnchorLayer + Math.Max(0, spec.LayersUp));
@@ -2479,10 +2554,13 @@ public sealed class ConsoleCommandRegistry
             var ex = moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
             if (ex.Count == 0) continue;
 
-            // Classify against the pocket footprint rather than a hardcoded axis.
-            bool Inside(System.Numerics.Vector3 p) =>
-                spec.ContainsPoint(new System.Numerics.Vector2(p.X, p.Y));
-            var legs = ex.Where(m => Inside(m.From) ^ Inside(m.To)).ToList();
+            // Classify by PROXIMITY to the outline, not point-in-polygon: every wrap vertex
+            // sits exactly ON the boundary, which a containment test excludes — that made
+            // this report zero wrap moves and an "arm gap" that was really the pocket
+            // diagonal. Same approach `support trace` already uses.
+            float onTol = MathF.Max(0.5f, bead * 0.3f);
+            bool OnPocket(System.Numerics.Vector3 p) => DistToOutline(outline, p.X, p.Y) <= onTol;
+            var legs = ex.Where(m => OnPocket(m.From) ^ OnPocket(m.To)).ToList();
             if (legs.Count == 0) continue;
             layersChecked++;
 
@@ -2497,26 +2575,44 @@ public sealed class ConsoleCommandRegistry
             float armGap = -1f;
             if (legs.Count == 2)
             {
-                var e0 = Inside(legs[0].From) ? legs[0].To : legs[0].From;
-                var e1 = Inside(legs[1].From) ? legs[1].To : legs[1].From;
+                var e0 = OnPocket(legs[0].From) ? legs[0].To : legs[0].From;
+                var e1 = OnPocket(legs[1].From) ? legs[1].To : legs[1].From;
                 armGap = System.Numerics.Vector3.Distance(e0, e1);
                 if (MathF.Abs(armGap - bead) < bead * 0.35f) armOk++;
             }
 
             // Gap 1 — wall: the two leg roots should NOT be bridged by another extrude.
-            float wallGap = armGap;
             if (legs.Count == 2 && armGap > 0f) wallOk++;
 
             // Gap 3 — pocket: the wrap must be an open loop (its ends separated).
-            var wrap = ex.Where(m => Inside(m.From) && Inside(m.To)).ToList();
+            var wrap = ex.Where(m => OnPocket(m.From) && OnPocket(m.To)).ToList();
             float pocketGap = wrap.Count > 0
                 ? System.Numerics.Vector3.Distance(wrap[0].From, wrap[^1].To)
                 : -1f;
             if (pocketGap > 0.5f) pocketOk++;
 
-            if (layersChecked <= 4)
-                ctx.Log($"  L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm · "
+            // Report FAILING layers by preference — a sample of passing ones proves nothing
+            // about the ones that don't.
+            bool layerOk = legs.Count == 2 && MathF.Abs(armGap - bead) < bead * 0.35f
+                && pocketGap > 0.5f;
+            if (!layerOk && shownBad < 6)
+            {
+                shownBad++;
+                float wallMoveLen = legs.Count == 2
+                    ? ex.Where(m => !OnPocket(m.From) && !OnPocket(m.To))
+                        .Select(m => System.Numerics.Vector3.Distance(m.From, m.To))
+                        .DefaultIfEmpty(-1f).Min()
+                    : -1f;
+                ctx.Log($"  FAIL L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm "
+                    + $"(want {bead:0.#}) · pocket mouth {pocketGap:0.##} mm · shortest wall "
+                    + $"move here {wallMoveLen:0.##} mm");
+            }
+            else if (layerOk && shownGood < 2)
+            {
+                shownGood++;
+                ctx.Log($"  ok   L{li + 1}: legs={legs.Count} · arm/wall mouth {armGap:0.##} mm · "
                     + $"pocket mouth {pocketGap:0.##} mm");
+            }
         }
 
         if (layersChecked == 0)
