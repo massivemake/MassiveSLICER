@@ -95,6 +95,28 @@ public sealed record KrlExportSettings
     /// </summary>
     public bool DigitalStartStopEnabled { get; init; }
 
+    /// <summary>
+    /// Re-state the screw speed periodically so the Caracol extruder keeps hearing from the
+    /// robot. The extruder treats prolonged silence as "robot stopped", drops its heaters to
+    /// idle, and then reports not-ready — which stops the print at <c>WAIT FOR $IN[6]</c>.
+    /// <para>
+    /// Measured 2026-07-29 across three production files: Caracol's own Eidos output restates
+    /// an unchanging <c>RPM = 96.4115</c> 826 times in one 5.4 h print, worst gap 34.4 s. A
+    /// stop/start-heavy panel of ours incidentally stayed under 55.6 s and survived. A smooth
+    /// continuous loop (Scene 08) emitted only 6 screw commands in 3.65 h — 58 min of silence
+    /// starting 2 s in — and died at 8:48. Our normal change-detection suppresses identical
+    /// commands (correctly, for path continuity), so a seam-free part can go silent forever.
+    /// </para>
+    /// </summary>
+    public bool ExtruderKeepAliveEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Longest silence permitted between extruder commands (sec). Default 30 — under Caracol's
+    /// own measured 34.4 s worst case rather than just inside it. Emitted commands are exact
+    /// restatements of the current screw speed: no motion, flow, or timing change.
+    /// </summary>
+    public float MaxExtruderSilenceSec { get; init; } = 30f;
+
     /// <summary>Caracol S&amp;S: wait after screw-off before travel motion (sec). Default 0.5.</summary>
     public float SsPreTravelWaitSec { get; init; } = 0.5f;
 
@@ -529,6 +551,13 @@ public static class KrlExporter
         float lastExtrudeRpmScale = -1f;
         string? lastExtrudeAnoutText = null;
         string? lastExtrudeVelText = null;
+        // Seconds of extrusion emitted since the extruder last heard anything. Only extrude
+        // runs can go quiet — travels, wipes, ramps and layer changes all emit commands, so
+        // those paths reset this to 0. See ExtruderKeepAliveEnabled.
+        float silenceSec = 0f;
+        // Set at each layer boundary; cleared by whatever screw command fires first in that
+        // layer, so every layer contains at least one (matching Eidos' per-layer restatement).
+        bool wantLayerKeepAlive = false;
 
         // Pre-smooth per-move normals along each contour with a forward-biased Gaussian
         // kernel before ABC conversion. This prevents the KRL exporter from producing
@@ -544,6 +573,8 @@ public static class KrlExporter
         {
             var layer        = toolpath.Layers[li];
             var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
+            // Every layer gets at least one screw restatement (see wantLayerKeepAlive).
+            if (li > 0) wantLayerKeepAlive = true;
             var smoothedLayer = smoothedByLayer?[li];
 
             // First-layer speed/RPM override: use a per-layer settings copy for the
@@ -630,6 +661,7 @@ public static class KrlExporter
                         sb.AppendLine();
                     }
                     needsRpmOn = true;
+                    silenceSec = 0f;   // travel emitted screw off/on
                 }
                 else
                 {
@@ -669,6 +701,7 @@ public static class KrlExporter
                         lastAbc = (ma, mb, mc);
                         lastPos = to;
                         needsRpmOn = true;
+                        silenceSec = 0f;   // wipe emitted screw off
                         continue;
                     }
 
@@ -745,6 +778,7 @@ public static class KrlExporter
                         needsRpmOn = false;
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeVelText = velText;
+                        silenceSec = 0f; wantLayerKeepAlive = false;
                     }
                     else if (anoutChanged || velChanged)
                     {
@@ -756,7 +790,32 @@ public static class KrlExporter
                             sb.AppendLine($"$VEL.CP = {velText}");
                         lastExtrudeAnoutText = extrudeKey;
                         lastExtrudeVelText = velText;
+                        // Only a screw command counts as the extruder hearing something;
+                        // $VEL.CP is robot feedrate and never reaches it.
+                        if (anoutChanged) { silenceSec = 0f; wantLayerKeepAlive = false; }
                     }
+
+                    // Eidos parity: at least one screw restatement per layer, even when the
+                    // layer is shorter than the silence cap and nothing changed.
+                    if (wantLayerKeepAlive && s.ExtruderKeepAliveEnabled)
+                    {
+                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive (layer)", useTrigger: false));
+                        wantLayerKeepAlive = false;
+                        silenceSec = 0f;
+                    }
+
+                    // Keep-alive: an unbroken extrude run emits no commands (change-detection
+                    // above suppresses identical ones, correctly, for path continuity). Restate
+                    // the screw speed BEFORE the move that would push silence past the cap, so
+                    // the gap can never exceed it. Same value → no motion or flow change.
+                    float moveSec = MoveDurationSec(lastPos, to, extrudeSpeedMps);
+                    if (s.ExtruderKeepAliveEnabled && s.MaxExtruderSilenceSec > 0f
+                        && silenceSec + moveSec > s.MaxExtruderSilenceSec)
+                    {
+                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive", useTrigger: false));
+                        silenceSec = 0f;
+                    }
+                    silenceSec += moveSec;
 
                     sb.AppendLine(FormatLin(to, ma, mb, mc, E1ForMove(move, to, s, ref lastE1)));
                     lastExtrudeSpeedMps = extrudeSpeedMps;
@@ -781,6 +840,18 @@ public static class KrlExporter
     }
 
     // -- Helpers ---------------------------------------------------------------
+
+    /// <summary>
+    /// Wall-clock seconds for a straight move at <paramref name="speedMps"/>. Ignores
+    /// acceleration and $APO blending, so it slightly UNDER-estimates real time — the
+    /// keep-alive therefore fires a little early rather than a little late.
+    /// </summary>
+    private static float MoveDurationSec(Vector3 fromMm, Vector3 toMm, float speedMps)
+    {
+        if (speedMps <= 1e-6f) return 0f;
+        float mm = Vector3.Distance(fromMm, toMm);
+        return (mm / 1000f) / speedMps;
+    }
 
     private static void WriteHeader(StringBuilder sb, string name, KrlExportSettings s)
     {
