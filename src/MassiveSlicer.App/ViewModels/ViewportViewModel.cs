@@ -2036,6 +2036,18 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Applies a modifier by catalog name to the current edit selection.</summary>
     internal void ApplyNamedModifier(string label)
     {
+        // Reject anything that isn't an exact catalog entry. PaintSupportStyleUtil.FromLabel
+        // falls back to Formbound Buttress for ANY unrecognised string, so a partial commit
+        // ("struct", a typo) silently produced a Buttress card instead of what was asked
+        // for — and then correcting it via the card's dropdown minted a brand new spec,
+        // which is how a handful of unwanted supports accumulate.
+        if (!ModifierQuickAddCatalog.Any(c => string.Equals(c, label, StringComparison.OrdinalIgnoreCase)))
+        {
+            OnDevLog?.Invoke($"[edit] '{label}' is not a modifier — pick one of: "
+                + string.Join(", ", ModifierQuickAddCatalog));
+            return;
+        }
+
         if (string.Equals(label, "Offset path", StringComparison.OrdinalIgnoreCase))
         {
             // Show the Offset path settings inline (Apply lives on that block).

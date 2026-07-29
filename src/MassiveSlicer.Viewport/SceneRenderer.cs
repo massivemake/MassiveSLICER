@@ -1716,8 +1716,7 @@ public sealed class SceneRenderer : IDisposable
         if (_gizmo is not null && (SelectedNode is not null || GizmoPivotWorld is not null))
         {
             var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
-            float dist  = (Camera.Eye - nodePos).Length;
-            float scale = MathF.Max(dist * 0.12f, 1f);
+            float scale = GizmoScaleAt(nodePos);
 
             GL.Clear(ClearBufferMask.DepthBufferBit);
             GL.Disable(EnableCap.CullFace);
@@ -2176,6 +2175,30 @@ public sealed class SceneRenderer : IDisposable
     /// Returns which gizmo axis is under the given screen position,
     /// or <see cref="GizmoAxis.None"/> if no axis is hit or nothing is selected.
     /// </summary>
+    /// <summary>
+    /// World-space gizmo size that reads as a constant on-screen size.
+    /// <para>
+    /// Perspective: apparent size ∝ scale/distance, so scaling by eye distance is
+    /// self-cancelling — the long-standing behaviour.
+    /// </para>
+    /// <para>
+    /// Orthographic: apparent size is set by the frustum height, which tracks
+    /// <see cref="OrbitCamera.Radius"/> (zoom). <see cref="OrbitCamera.EyeDistance"/> is
+    /// deliberately INDEPENDENT of Radius there so close zoom never clips Z — so eye
+    /// distance stays large while the frustum shrinks, and scaling by it produced a gizmo
+    /// hundreds of times too big. In the top-down 2D slice viewer that rendered as a
+    /// screen-filling blue polygon that read as a mystery object rather than a gizmo.
+    /// Matching the perspective ratio works out to exactly Radius × the same factor.
+    /// </para>
+    /// </summary>
+    private float GizmoScaleAt(Vector3 nodePos)
+    {
+        float reference = Camera.IsOrthographic
+            ? MathF.Max(Camera.Radius, 1f)
+            : (Camera.Eye - nodePos).Length;
+        return MathF.Max(reference * 0.12f, 1f);
+    }
+
     public GizmoAxis HitTestGizmo(float mx, float my, float vpW, float vpH)
     {
         if (_gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
@@ -2186,8 +2209,9 @@ public sealed class SceneRenderer : IDisposable
             return GizmoAxis.None;
 
         var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
-        float dist  = (Camera.Eye - nodePos).Length;
-        float scale = MathF.Max(dist * 0.12f, 1f);
+        // MUST match the draw pass exactly, or the handles you see are not the handles
+        // you can grab.
+        float scale = GizmoScaleAt(nodePos);
 
         float aspect = vpW / vpH;
         var viewProj = Camera.GetViewMatrix() * Camera.GetProjectionMatrix(aspect);
