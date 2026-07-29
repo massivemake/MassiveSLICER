@@ -1709,9 +1709,13 @@ public sealed class SceneRenderer : IDisposable
         // appears on top of the selection outline.
         // Axis highlight renders whenever a drag/keyboard transform has an active axis
         // (even when gizmo handles are hidden). Handles only render when GizmoEnabled.
-        if (SelectedNode is { } sel && _gizmo is not null)
+        // A gizmo can also be driven by a bare pivot with NOTHING selected in the scene —
+        // a Structural Support pocket is a spec, not a SceneNode. Requiring SelectedNode
+        // here (and in HitTestGizmo) meant such a gizmo silently never drew and never
+        // hit-tested; the Cut tool only worked around it by force-selecting the mesh.
+        if (_gizmo is not null && (SelectedNode is not null || GizmoPivotWorld is not null))
         {
-            var nodePos = GizmoPivotWorld ?? sel.WorldTransform.Row3.Xyz;
+            var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
             float dist  = (Camera.Eye - nodePos).Length;
             float scale = MathF.Max(dist * 0.12f, 1f);
 
@@ -2174,10 +2178,14 @@ public sealed class SceneRenderer : IDisposable
     /// </summary>
     public GizmoAxis HitTestGizmo(float mx, float my, float vpW, float vpH)
     {
-        if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
+        if (_gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
+            return GizmoAxis.None;
+        // Pivot-only gizmos (Structural Support pockets) have no SelectedNode — see the
+        // matching note in the gizmo draw pass.
+        if (SelectedNode is null && GizmoPivotWorld is null)
             return GizmoAxis.None;
 
-        var nodePos = GizmoPivotWorld ?? SelectedNode.WorldTransform.Row3.Xyz;
+        var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
         float dist  = (Camera.Eye - nodePos).Length;
         float scale = MathF.Max(dist * 0.12f, 1f);
 

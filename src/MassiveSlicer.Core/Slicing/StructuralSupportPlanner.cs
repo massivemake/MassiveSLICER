@@ -26,12 +26,28 @@ public static class StructuralSupportPlanner
             var outline = spec.BuildOutline();
             if (outline.Length < 3) continue;
 
+            // Outline entry vertex is resolved ONCE, from the spec's fixed anchor — never
+            // per layer from that layer's own split point. Deriving it per layer let the
+            // neck attach to a different corner of the pocket as the wall wandered
+            // underneath it, which reads as the whole rectangle jumping around even though
+            // the footprint itself never moved. The anchor is fixed data, so this is too.
+            var anchor2 = new Vector2(spec.AnchorX, spec.AnchorY);
+            int entryIdx = 0;
+            float entryD2 = float.MaxValue;
+            for (int i = 0; i < outline.Length; i++)
+            {
+                float dx = outline[i].X - anchor2.X, dy = outline[i].Y - anchor2.Y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 < entryD2) { entryD2 = d2; entryIdx = i; }
+            }
+
             for (int li = lo; li <= hi; li++)
-                ApplyToLayer(toolpath.Layers[li], spec, outline);
+                ApplyToLayer(toolpath.Layers[li], spec, outline, entryIdx);
         }
     }
 
-    static void ApplyToLayer(ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline)
+    static void ApplyToLayer(
+        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int entryIdx)
     {
         var anchor = new Vector2(spec.AnchorX, spec.AnchorY);
 
@@ -58,19 +74,17 @@ public static class StructuralSupportPlanner
         var wall = layer.Moves[bestMove];
         float z = bestP.Z;
 
-        // 2) Outline entry: vertex nearest the split point (keeps the neck short).
-        int entryIdx = 0;
-        float entryD2 = float.MaxValue;
-        for (int i = 0; i < outline.Length; i++)
-        {
-            float dx = outline[i].X - bestP.X, dy = outline[i].Y - bestP.Y;
-            float d2 = dx * dx + dy * dy;
-            if (d2 < entryD2) { entryD2 = d2; entryIdx = i; }
-        }
+        // 2) Outline entry vertex is supplied by the caller — resolved once from the spec's
+        //    fixed anchor so the neck lands on the SAME corner on every layer.
 
         // 3) Build the detour: P → entry → full CCW wrap → entry → P.
-        //    (Neck legs retrace the same centreline; at bead scale the two passes
-        //    fuse into one double-wide neck — same as the hand-modeled version.)
+        //    NOTE: the two neck legs run along the IDENTICAL centreline in opposite
+        //    directions, so with the bead deposited centred on the path they overlap 100%
+        //    (one bead width, double-extruded) — NOT a "double-wide" neck. Making them sit
+        //    side by side would need each leg offset half a bead off the neck axis. That is
+        //    a deliberate open decision, not an oversight: it changes deposited geometry.
+        //    `StructuralSupportPickTest.Neck_legs_currently_retrace_the_identical_centreline`
+        //    pins today's behaviour and will fail when that changes.
         var detour = new List<ToolpathMove>(outline.Length + 3);
         Vector3 At(Vector2 v) => new(v.X, v.Y, z);
         var entry = At(outline[entryIdx]);

@@ -13088,6 +13088,12 @@ public partial class ViewportView : UserControl
         lines.Add($"[support where] editOpen={vm.IsPaintEditOpen} view={vm.ViewMode} "
             + $"2d={vm.IsSlicePlaneViewerActive} gizmoMode={vm.ActiveGizmoModeInternal} "
             + $"gizmoEnabled={_renderer.GizmoEnabled}");
+        // SelectedNode used to be a hard gate on both the gizmo draw and its hit test, so
+        // a pocket gizmo silently did not exist with nothing selected in the outliner.
+        // Report it: "selected=none + pivot set" must now still give a live gizmo.
+        lines.Add($"[support where] renderer.SelectedNode="
+            + $"{(_renderer.SelectedNode is null ? "none" : _renderer.SelectedNode.Name)} "
+            + $"gizmoPivot={(_renderer.GizmoPivotWorld is { } gp ? $"({gp.X:0.#},{gp.Y:0.#},{gp.Z:0.#})" : "null")}");
         lines.Add($"[support where] toolpath nodes={_toolpathByNode.Count} visible={visibleToolpaths} "
             + $"activeScrubNode={(_activeScrubNode is null ? "none" : _activeScrubNode.Name)}");
 
