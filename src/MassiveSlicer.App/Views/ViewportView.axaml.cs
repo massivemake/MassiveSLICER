@@ -5571,11 +5571,9 @@ public partial class ViewportView : UserControl
     private void DropToPlate()
     {
         if (_renderer.SelectedNode is not { } node) return;
-        float minZ = LayFlatMinZ(node);
-        if (minZ >= float.MaxValue) return;
+        if (LayFlatMinZ(node) >= float.MaxValue) return;
         var old = node.LocalTransform;
-        node.LocalTransform = node.LocalTransform
-            * TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
+        DropNodeToBed(node, _renderer.BedZ);
         // A one-shot transform edit, same category as a typed coordinate change — mesh and
         // toolpath are scene-graph siblings, not real parent/child, so nothing carries the
         // toolpath along unless explicitly told to (same mechanism OnSelectionTranslated
@@ -6428,20 +6426,46 @@ public partial class ViewportView : UserControl
         }
 
         // Rotate around the world-space bounding-box centre so the object doesn't drift.
+        // center and rot are both WORLD quantities, so they must be conjugated into the
+        // parent frame — see ApplyWorldTransformToNode.
         var center = LayFlatWorldCenter(node);
-        // Row-vector: p_new = p_old * M  ->  W_new = W_old * M
         var M = TkMatrix4.CreateTranslation(-center) * rot * TkMatrix4.CreateTranslation(center);
-        node.LocalTransform = node.LocalTransform * M;
+        ApplyWorldTransformToNode(node, M);
 
         // Drop the object so its lowest point sits exactly on the bed surface.
+        DropNodeToBed(node, bedZ);
+    }
+
+    /// <summary>
+    /// Applies <paramref name="world"/> — a transform expressed in WORLD space — to
+    /// <paramref name="node"/>, converting it into the node's parent frame.
+    /// <para>
+    /// Row-vector convention: p_world = p_local · L · P. Wanting p_world' = p_world · W gives
+    /// L' = L · P · W · P⁻¹. Post-multiplying L by W directly (the old code) silently assumes
+    /// P is identity. It is a pure translation on LFAM 1/2 (so only the rotation pivot drifted)
+    /// but on LFAM 3 user models hang off the rotary pivot, whose frame carries
+    /// baseAbc C = −90° — mapping local +Z onto world ±Y. That turned Drop to Plate into a
+    /// sideways slide of a foot or two instead of a drop (reported 2026-07-29).
+    /// </para>
+    /// </summary>
+    internal static void ApplyWorldTransformToNode(SceneNode node, TkMatrix4 world)
+    {
+        var parent = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+        node.LocalTransform = node.LocalTransform * parent * world * parent.Inverted();
+    }
+
+    /// <summary>Drops <paramref name="node"/> straight down (world −Z) until its lowest
+    /// point rests on <paramref name="bedZ"/>. No-op when the node has no geometry.</summary>
+    internal static void DropNodeToBed(SceneNode node, float bedZ)
+    {
         float minZ = LayFlatMinZ(node);
-        if (minZ < float.MaxValue)
-            node.LocalTransform = node.LocalTransform * TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ);
+        if (minZ >= float.MaxValue) return;
+        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ));
     }
 
     private static TkVector3 LayFlatWorldCenter(SceneNode node)
     {
-        var mesh = node.Mesh?.PickingData;
+        var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
         if (mesh is null) return node.WorldTransform.Row3.Xyz;
         var lo = mesh.LocalBounds.Min;
         var hi = mesh.LocalBounds.Max;
@@ -6458,7 +6482,7 @@ public partial class ViewportView : UserControl
         float minZ = float.MaxValue;
         foreach (var n in node.SelfAndDescendants())
         {
-            var mesh = n.Mesh?.PickingData;
+            var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;
             var m = n.WorldTransform;
             foreach (var p in mesh.Positions)
