@@ -50,9 +50,44 @@ public static class StructuralSupportPlanner
             var cMouth = StepAlong(onEdge, outline[(edgeIdx + 1) % nOut], hMouth);  // toward next vertex
             var dMouth = StepAlong(onEdge, outline[edgeIdx], hMouth);               // toward this vertex
 
-            for (int li = lo; li <= hi; li++)
+            // ── Reach gate + one-way termination ─────────────────────────────────────
+            // A break only means anything if THIS layer's wall actually passes through it.
+            // Walk outward from the anchor layer and stop the first time the wall has
+            // receded out of reach — and do NOT resume higher up even if the wall comes
+            // back, because a column cannot restart in mid-air. Without this the planner
+            // took the globally closest segment no matter how far away it was, so on a
+            // filleted top the arm stretched after the receding wall and produced an
+            // overhang it could never print.
+            float reach = MathF.Max(settings.BeadWidth, 0.01f);
+            int start = Math.Clamp(spec.AnchorLayer, 0, toolpath.Layers.Count - 1);
+            int appliedCount = 0;
+            int endedUpAt = -1, endedDownAt = -1;
+
+            for (int li = start; li <= hi; li++)
+            {
+                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor2) > reach)
+                { endedUpAt = li; break; }
                 ApplyToLayer(toolpath.Layers[li], spec, outline, edgeIdx,
                     cMouth, dMouth, settings.BeadWidth);
+                appliedCount++;
+            }
+            for (int li = start - 1; li >= lo; li--)
+            {
+                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor2) > reach)
+                { endedDownAt = li; break; }
+                ApplyToLayer(toolpath.Layers[li], spec, outline, edgeIdx,
+                    cMouth, dMouth, settings.BeadWidth);
+                appliedCount++;
+            }
+
+            string name = string.IsNullOrWhiteSpace(spec.Name) ? "support" : spec.Name;
+            System.Console.WriteLine(
+                $"[support] {name}: {appliedCount} layer(s) built"
+                + (endedUpAt >= 0
+                    ? $", topped out at L{endedUpAt + 1} (wall receded past {reach:0.#} mm — "
+                      + "arm ends there and does not resume)"
+                    : ", reached the top of its range")
+                + (endedDownAt >= 0 ? $", bottomed out at L{endedDownAt + 1}" : ""));
         }
     }
 
@@ -225,6 +260,23 @@ public static class StructuralSupportPlanner
     /// <paramref name="to"/>. Capped at 45% of the edge so opening a pocket mouth can
     /// never swallow a whole short edge (small pockets, fine circle facets).
     /// </summary>
+    /// <summary>
+    /// XY distance from the anchor to the nearest printable extrude segment on a layer —
+    /// i.e. "does this layer's wall still pass through the break?". <see cref="float.MaxValue"/>
+    /// when the layer has no eligible extrusion at all.
+    /// </summary>
+    static float ClosestWallDistanceXY(ToolpathLayer layer, Vector2 anchor)
+    {
+        float best = float.MaxValue;
+        foreach (var mv in layer.Moves)
+        {
+            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            var (_, _, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
+            if (d2 < best) best = d2;
+        }
+        return best == float.MaxValue ? float.MaxValue : MathF.Sqrt(best);
+    }
+
     /// <summary>Closest point to <paramref name="q"/> on the segment a→b, in 2D.</summary>
     static Vector2 ClosestOnSegment2D(Vector2 q, Vector2 a, Vector2 b)
     {

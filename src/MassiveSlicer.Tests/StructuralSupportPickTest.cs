@@ -91,19 +91,19 @@ public sealed class StructuralSupportPickTest
     [Fact]
     public void Arm_meets_the_pocket_at_the_same_two_points_on_every_layer()
     {
-        // Short wall segments that SLIDE ALONG X as the stack rises. The split point is
-        // clamped to each segment, so it sweeps from x~40 to x~340 — crossing the pocket's
-        // midline, which is what makes the nearest-corner choice actually flip. (A wall
-        // that only shifts in Y keeps the two near corners equidistant and the test would
-        // pass without the fix.)
+        // A wall that always passes THROUGH the anchor (so the reach gate never terminates
+        // it) but ROTATES as the stack rises. Rotation is what drives the per-layer
+        // non-crossing decision, so this is the geometry that would flip the leg pairing.
         var tp = new Toolpath();
         for (int li = 0; li < 6; li++)
         {
             float z = li * 3f;
-            float x0 = li * 60f;
+            float a = (-60f + li * 24f) * MathF.PI / 180f;   // -60° … +60°
+            float dx = MathF.Cos(a) * 100f, dy = MathF.Sin(a) * 100f;
             var layer = new ToolpathLayer(li, z) { PlaneNormal = Vector3.UnitZ, Height = 3f };
             layer.Moves.Add(new ToolpathMove(
-                new Vector3(x0, 0f, z), new Vector3(x0 + 40f, 0f, z), MoveKind.Extrude));
+                new Vector3(200f - dx, 0f - dy, z), new Vector3(200f + dx, 0f + dy, z),
+                MoveKind.Extrude));
             tp.Layers.Add(layer);
         }
 
@@ -117,26 +117,45 @@ public sealed class StructuralSupportPickTest
         StructuralSupportPlanner.Apply(tp, new SliceSettings { StructuralSupports = [spec] });
 
         var outline = spec.BuildOutline();
-        // Per layer, find the outgoing leg (exactly one endpoint on the wall line y≈0) and
-        // record BOTH where it leaves the wall and where it lands on the pocket. The pocket
-        // landing point must be identical on every layer; the wall end is free to move.
-        // Per layer, collect BOTH legs' pocket-side endpoints as an order-independent set,
-        // plus where the legs leave the wall.
+        // A leg is a move with exactly one endpoint on the pocket outline. Collect both
+        // legs' pocket-side endpoints per layer as an order-independent set, plus where
+        // each leg leaves the wall.
+        // Distance to the outline's EDGES, not its vertices — the mouth points sit mid-edge,
+        // so a vertex-proximity test misclassifies them and picks up wrap moves as legs.
+        static float DistToEdges(Vector2[] poly, Vector3 p)
+        {
+            float best = float.MaxValue;
+            for (int i = 0, j = poly.Length - 1; i < poly.Length; j = i++)
+            {
+                var a = poly[j];
+                var b = poly[i];
+                var ab = b - a;
+                float len2 = ab.LengthSquared();
+                float t = len2 < 1e-12f
+                    ? 0f
+                    : Math.Clamp(Vector2.Dot(new Vector2(p.X, p.Y) - a, ab) / len2, 0f, 1f);
+                var c = a + ab * t;
+                float d = Vector2.Distance(c, new Vector2(p.X, p.Y));
+                if (d < best) best = d;
+            }
+            return best;
+        }
+        bool OnOutline(Vector3 p) => DistToEdges(outline, p) < 1f;
         var entries = new List<string>();
-        var splitXs = new List<float>();
+        var wallRoots = new List<Vector3>();
         foreach (var layer in tp.Layers)
         {
             var pocketEnds = new List<string>();
             foreach (var mv in layer.Moves)
             {
                 if (mv.Kind != MoveKind.Extrude) continue;
-                bool fromWall = MathF.Abs(mv.From.Y) < 0.01f;
-                bool toWall   = MathF.Abs(mv.To.Y) < 0.01f;
-                if (fromWall == toWall) continue;          // wall piece or pocket edge
-                var wallEnd   = fromWall ? mv.From : mv.To;
-                var pocketEnd = fromWall ? mv.To : mv.From;
-                pocketEnds.Add($"{pocketEnd.X:0.##},{pocketEnd.Y:0.##}");
-                splitXs.Add(wallEnd.X);
+                bool fromPocket = OnOutline(mv.From);
+                bool toPocket   = OnOutline(mv.To);
+                if (fromPocket == toPocket) continue;      // wall piece or pocket edge
+                pocketEnds.Add(fromPocket
+                    ? $"{mv.From.X:0.##},{mv.From.Y:0.##}"
+                    : $"{mv.To.X:0.##},{mv.To.Y:0.##}");
+                wallRoots.Add(fromPocket ? mv.To : mv.From);
             }
             if (pocketEnds.Count == 0) continue;
             pocketEnds.Sort();                             // order-independent
@@ -144,33 +163,12 @@ public sealed class StructuralSupportPickTest
         }
 
         Assert.Equal(tp.Layers.Count, entries.Count);
-        // Guard against a vacuous pass: the wall split point MUST actually move across
-        // layers, otherwise the corner choice was never under pressure to change.
-        Assert.True(splitXs.Max() - splitXs.Min() > spec.WidthMm,
-            "test geometry is not exercising the bug — wall split point only moved "
-            + $"{splitXs.Max() - splitXs.Min():0.#} mm, needs to exceed the pocket width "
-            + $"({spec.WidthMm:0.#} mm) to make the nearest corner flip");
-        // Second vacuity guard, and the real point of the test: replay the OLD rule
-        // (nearest outline vertex to THIS layer's split point). It must produce more than
-        // one distinct corner on this geometry — that is exactly the bug being fixed. If
-        // this ever collapses to one corner, the scenario has stopped covering the
-        // regression and the assertion below would be meaningless.
-        var oldRuleEntries = splitXs.Select(sx =>
-        {
-            int best = 0;
-            float bestD2 = float.MaxValue;
-            for (int i = 0; i < outline.Length; i++)
-            {
-                float dx = outline[i].X - sx, dy = outline[i].Y - 0f;
-                float d2 = dx * dx + dy * dy;
-                if (d2 < bestD2) { bestD2 = d2; best = i; }
-            }
-            return best;
-        }).ToList();
-        Assert.True(oldRuleEntries.Distinct().Count() > 1,
-            "vacuous test: the pre-fix per-layer rule would have picked a single corner "
-            + $"anyway ([{string.Join(", ", oldRuleEntries)}]) — geometry needs to straddle "
-            + "the pocket midline");
+        // Vacuity guard: the wall must actually have rotated, or the per-layer direction
+        // decision was never under pressure and this proves nothing.
+        float rootSpread = wallRoots.Max(p => p.Y) - wallRoots.Min(p => p.Y);
+        Assert.True(rootSpread > 1f,
+            "test geometry isn't exercising wall rotation — the leg roots only spread "
+            + $"{rootSpread:0.##} mm in Y");
 
         Assert.True(entries.Distinct().Count() == 1,
             "arm must land on the same point of the pocket on every layer; got ["
@@ -219,6 +217,59 @@ public sealed class StructuralSupportPickTest
         }
 
         Assert.Equal(0, pairs);
+    }
+
+    /// <summary>
+    /// The arm ends where the wall stops passing through the break, and does NOT come back
+    /// if the wall returns higher up — a column can't restart in mid-air. Models a filleted
+    /// top: the wall is in reach for a few layers, recedes far away, then comes back.
+    /// </summary>
+    [Fact]
+    public void Arm_terminates_when_the_wall_recedes_and_never_resumes()
+    {
+        const float bead = 6f;
+        var tp = new Toolpath();
+        for (int li = 0; li < 12; li++)
+        {
+            // In reach on layers 0-3 and again on 8-11; far away on 4-7.
+            float y = li is >= 4 and <= 7 ? 400f : 0f;
+            var layer = new ToolpathLayer(li, li * 3f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+            layer.Moves.Add(new ToolpathMove(
+                new Vector3(0f, y, li * 3f), new Vector3(400f, y, li * 3f), MoveKind.Extrude));
+            tp.Layers.Add(layer);
+        }
+
+        var spec = new StructuralSupportSpec
+        {
+            AnchorX = 200f, AnchorY = 0f, AnchorLayer = 0,
+            CenterX = 200f, CenterY = 80f,
+            WidthMm = 92f, DepthMm = 42f,
+            LayersUp = 9999, LayersDown = 0,
+        };
+        StructuralSupportPlanner.Apply(tp, new SliceSettings
+        {
+            BeadWidth = bead,
+            StructuralSupports = [spec],
+        });
+
+        // A layer "has the pocket" if any extrude endpoint lands on an outline VERTEX (the
+        // wrap visits them all). Testing "y past the pocket centre" would false-positive on
+        // the receded wall itself, which sits at y = 400.
+        var outlineV = spec.BuildOutline();
+        bool HasPocket(int li) => tp.Layers[li].Moves.Any(m =>
+            m.Kind == MoveKind.Extrude
+            && outlineV.Any(v =>
+                (MathF.Abs(m.To.X - v.X) < 1f && MathF.Abs(m.To.Y - v.Y) < 1f)
+                || (MathF.Abs(m.From.X - v.X) < 1f && MathF.Abs(m.From.Y - v.Y) < 1f)));
+
+        for (int li = 0; li <= 3; li++)
+            Assert.True(HasPocket(li), $"L{li + 1} is in reach and should carry the pocket");
+        for (int li = 4; li <= 7; li++)
+            Assert.False(HasPocket(li), $"L{li + 1} is out of reach and must NOT carry it");
+        // The wall returns here, but the arm was already terminated below.
+        for (int li = 8; li <= 11; li++)
+            Assert.False(HasPocket(li),
+                $"L{li + 1} must stay empty — the arm ended at L5 and cannot restart in mid-air");
     }
 
     /// <summary>
