@@ -318,9 +318,17 @@ public sealed partial class ViewportViewModel
     /// </remarks>
     internal void ConstrainModifierPlanesUnder(SceneNode meshNode)
     {
-        foreach (var node in meshNode.SelfAndDescendants())
+        // Runs on every mouse-move of a drag, so it walks the (usually empty) modifier list and
+        // checks parentage upward, rather than walking the mesh's descendants and asking
+        // FindModifierForNode who owns each one — that scans every modifier's whole subtree per
+        // node, so the cost was descendants x modifiers x modifier-subtree, with a fresh iterator
+        // allocated each time, at mouse-poll rate. Suspected cause of the stutter Jeff hit when
+        // dragging hard back and forth.
+        if (_modifierGizmoNodes.Count == 0) return;
+
+        foreach (var (cut, node) in _modifierGizmoNodes)
         {
-            if (FindModifierForNode(node) is not { } cut) continue;
+            if (!IsDescendantOf(node, meshNode)) continue;
 
             var w = node.WorldTransform;
 
@@ -346,6 +354,14 @@ public sealed partial class ViewportViewModel
                 ? levelled * parent.Inverted()
                 : levelled;
         }
+    }
+
+    /// <summary>Walks up from <paramref name="node"/> — a short chain — rather than scanning down.</summary>
+    private static bool IsDescendantOf(SceneNode node, SceneNode ancestor)
+    {
+        for (var p = node.Parent; p is not null; p = p.Parent)
+            if (ReferenceEquals(p, ancestor)) return true;
+        return false;
     }
 
     /// <summary>

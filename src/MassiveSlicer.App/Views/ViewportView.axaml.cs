@@ -10684,7 +10684,7 @@ public partial class ViewportView : UserControl
         // Same live readout as a gizmo drag — a G/R/S move is the same interaction by another route.
         if (DataContext is ViewportViewModel vmKbLive)
         {
-            SyncSelectionTransformDisplay(vmKbLive, remember: false);
+            SyncSelectionTransformDisplayThrottled(vmKbLive);
             vmKbLive.ConstrainModifierPlanesUnder(node);
         }
 
@@ -11111,6 +11111,26 @@ public partial class ViewportView : UserControl
     /// and TCP need, so that path is untouched below.
     /// </para>
     /// </remarks>
+    /// <summary>Last live readout refresh, used to keep drag updates to roughly frame rate.</summary>
+    private long _lastLiveReadoutTicks;
+
+    /// <summary>
+    /// Live readout during a drag, rate-limited to about 60 Hz.
+    /// </summary>
+    /// <remarks>
+    /// A full refresh pushes nine bound values, each of which re-renders a text box and measures it.
+    /// Mouse-move events arrive far faster than the screen updates, so without a gate the drag spent
+    /// its time laying out text nobody saw. The final value is never lost: the drag's release does an
+    /// ungated refresh.
+    /// </remarks>
+    private void SyncSelectionTransformDisplayThrottled(ViewportViewModel vm)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastLiveReadoutTicks < 16) return;
+        _lastLiveReadoutTicks = now;
+        SyncSelectionTransformDisplay(vm, remember: false);
+    }
+
     private void SyncSelectionTransformDisplay(ViewportViewModel vm, bool remember = true)
     {
         if (_renderer.SelectedNode is not { } node) return;
@@ -14036,7 +14056,7 @@ public partial class ViewportView : UserControl
         // the whole drag into nothing to undo.
         if (DataContext is ViewportViewModel vmLive)
         {
-            SyncSelectionTransformDisplay(vmLive, remember: false);
+            SyncSelectionTransformDisplayThrottled(vmLive);
             // Keep this node's cut planes obeying their own Horizontal/Vertical tag as it turns,
             // rather than letting them ride the tilt. Live, so the plane never visibly leans.
             if (modifierCut is null) vmLive.ConstrainModifierPlanesUnder(node);
