@@ -72,7 +72,14 @@ public partial class MainWindow : Window
 
         var cellsRoot = MassiveSlicer.Core.IO.CellPaths.PreferredCellsDirectory();
         if (cellsRoot is not null)
+        {
             vm.Console.Log($"[cell] using cells directory: {cellsRoot}");
+            if (MassiveSlicer.Core.IO.CellPaths.IsNasCellsDirectory(cellsRoot))
+                vm.Console.LogError(
+                    "[cell] WARNING: cell geometry is coming from the shared NAS share, not this build. " +
+                    "Bed and robot positions may differ from what is committed. " +
+                    "Unset MASSIVE_SLICER_CELLS_NAS to use this build's own cells.");
+        }
 
         var smbSeeds = new List<(string Name, string BridgeIp)>();
         var cells = CellLoader.FindAll()
