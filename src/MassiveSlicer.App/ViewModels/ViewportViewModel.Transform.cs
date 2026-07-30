@@ -365,21 +365,71 @@ public sealed partial class ViewportViewModel
     }
 
     /// <summary>
-    /// Rotates a clean, additive 90° about the part's own <paramref name="axisIndex"/>. Backs both
-    /// clicking an axis letter in the transform toolbar and the <c>step</c> console command.
+    /// Snaps the part onto the next clean 90° stop about world <paramref name="axisIndex"/>. Backs
+    /// both clicking an axis letter in the transform toolbar and the <c>step</c> console command.
     /// </summary>
     /// <remarks>
-    /// Additive on purpose: clicking four times returns the part to exactly where it started, because
-    /// the turn is applied to the stored orientation rather than reconstructed from displayed degrees.
-    /// <paramref name="reverse"/> (Alt-click) goes the other way.
+    /// <para>
+    /// This is a straighten-up button, not a nudge. The point is to get a flat face back down onto
+    /// the bed, so an off-angle part is corrected rather than carried along: at 37° a click lands on
+    /// 90°, not 127°. Already on a stop, it advances a full 90° — so repeated clicks cycle
+    /// 0 / 90 / 180 / 270 exactly. <paramref name="reverse"/> (Alt-click) goes the other way, taking
+    /// 37° down to 0°.
+    /// </para>
+    /// <para>
+    /// The other two axes are snapped to their nearest stop as well. Snapping one axis alone would
+    /// not produce a flat face if the other two were off-grid, which is the whole reason for the
+    /// button. A composition of quarter turns about the coordinate axes maps axes onto axes, so the
+    /// result always has a face square to the bed.
+    /// </para>
+    /// <para>
+    /// Deliberately not <see cref="NodeTransform.RotateLocal"/>: that turns about the part's own
+    /// axes, which is right for dragging a rotate ring but would leave an off-angle part off-angle.
+    /// </para>
     /// </remarks>
     public string StepRotation(int axisIndex, bool reverse)
         => WithPlacement("step", t =>
         {
-            float deg = reverse ? -90f : 90f;
-            t.RotateLocal(axisIndex, MathHelper.DegreesToRadians(deg));
-            return (t, $"stepped {deg:+0;-0}° about its own {"XYZ"[axisIndex]}; now {V(t.EulerDegrees)}°.");
+            var e = t.EulerDegrees;
+            var snapped = new Vector3(NearestStop(e.X), NearestStop(e.Y), NearestStop(e.Z));
+
+            float current = axisIndex switch { 0 => e.X, 1 => e.Y, _ => e.Z };
+            float stepped = Wrap360(NextStop(current, reverse));
+
+            t.EulerDegrees = axisIndex switch
+            {
+                0 => new Vector3(stepped, Wrap360(snapped.Y), Wrap360(snapped.Z)),
+                1 => new Vector3(Wrap360(snapped.X), stepped, Wrap360(snapped.Z)),
+                _ => new Vector3(Wrap360(snapped.X), Wrap360(snapped.Y), stepped),
+            };
+
+            return (t, $"snapped to {V(t.EulerDegrees)}° about world {"XYZ"[axisIndex]}.");
         });
+
+    private const float StopTolerance = 0.5f;
+
+    /// <summary>Nearest multiple of 90°.</summary>
+    private static float NearestStop(float deg) => MathF.Round(deg / 90f) * 90f;
+
+    /// <summary>
+    /// The next 90° stop in the chosen direction. Already sitting on one, it moves a full quarter
+    /// turn; off-grid, it lands on the next stop that way rather than adding to the odd angle.
+    /// </summary>
+    private static float NextStop(float deg, bool reverse)
+    {
+        bool onStop = MathF.Abs(deg - NearestStop(deg)) < StopTolerance;
+        if (onStop) return NearestStop(deg) + (reverse ? -90f : 90f);
+        return reverse ? MathF.Floor(deg / 90f) * 90f : MathF.Ceiling(deg / 90f) * 90f;
+    }
+
+    /// <summary>Keeps reported angles in a tidy 0-359 rather than drifting to 450 or -270.</summary>
+    private static float Wrap360(float deg)
+    {
+        deg %= 360f;
+        if (deg < 0f) deg += 360f;
+        // 360 and -0 both read as 0.
+        return MathF.Abs(deg - 360f) < 1e-3f ? 0f : deg + 0f;
+    }
 
     /// <summary>Backs the <c>step</c> command.</summary>
     public string StepCommand(string args)

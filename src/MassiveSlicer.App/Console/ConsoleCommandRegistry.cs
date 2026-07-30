@@ -1698,7 +1698,7 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "step",
             Aliases = ["step-rotate"],
-            Description = "Rotate a clean additive 90° about the part's own axis (what clicking an axis letter does)",
+            Description = "Snap to the next 90° stop about a world axis (what clicking an axis letter does)",
             Usage = "step <x|y|z> [-]     '-' goes the other way, same as Alt-clicking the letter",
             Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.StepCommand(args)),
         });
