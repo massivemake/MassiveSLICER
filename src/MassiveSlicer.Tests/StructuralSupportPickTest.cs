@@ -220,6 +220,51 @@ public sealed class StructuralSupportPickTest
     }
 
     /// <summary>
+    /// A support placed at the END of an open wall run still gets a full one-bead mouth.
+    /// The anchor has no wall on one side, so half-from-each-side produced a half-bead
+    /// opening with the two legs overlapping — the mangled arm seen on end-placed supports.
+    /// The mouth must shift inboard rather than shrink.
+    /// </summary>
+    [Fact]
+    public void Mouth_at_an_open_path_end_is_still_a_full_bead()
+    {
+        const float bead = 6f;
+        var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        // Open run ending at x = 400. Anchor sits exactly on that endpoint.
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(0f, 0f, 0f), new Vector3(400f, 0f, 0f), MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        var spec = new StructuralSupportSpec
+        {
+            AnchorX = 400f, AnchorY = 0f, AnchorLayer = 0,
+            CenterX = 400f, CenterY = 80f,
+            WidthMm = 92f, DepthMm = 42f,
+            LayersUp = 0, LayersDown = 0,
+        };
+        StructuralSupportPlanner.Apply(tp, new SliceSettings
+        {
+            BeadWidth = bead,
+            StructuralSupports = [spec],
+        });
+
+        var ex = layer.Moves.Where(m => m.Kind == MoveKind.Extrude).ToList();
+        static bool OnWall(Vector3 p) => MathF.Abs(p.Y) < 0.01f;
+        var legs = ex.Where(m => OnWall(m.From) ^ OnWall(m.To)).ToList();
+        Assert.Equal(2, legs.Count);
+
+        float r0 = OnWall(legs[0].From) ? legs[0].From.X : legs[0].To.X;
+        float r1 = OnWall(legs[1].From) ? legs[1].From.X : legs[1].To.X;
+        float mouth = MathF.Abs(r0 - r1);
+        Assert.True(MathF.Abs(mouth - bead) < 0.51f,
+            $"mouth at an open end should still be ~{bead} mm, measured {mouth:0.###} mm");
+        // Both roots must lie ON the run, not past its end.
+        Assert.True(MathF.Max(r0, r1) <= 400.01f,
+            $"a leg root ran past the end of the wall (x={MathF.Max(r0, r1):0.##})");
+    }
+
+    /// <summary>
     /// The arm ends where the wall stops passing through the break, and does NOT come back
     /// if the wall returns higher up — a column can't restart in mid-air. Models a filleted
     /// top: the wall is in reach for a few layers, recedes far away, then comes back.

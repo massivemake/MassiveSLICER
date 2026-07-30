@@ -146,8 +146,20 @@ public static class StructuralSupportPlanner
         // wall is chopped into chords and the closest one to the anchor is frequently a
         // sliver (measured 0.02 mm on a real bendy wall), which collapsed the mouth to
         // nothing on those layers while the rest of the stack looked fine.
-        var (headIdx, aWall) = WalkWall(layer, bestMove, bestP, h, -1);
-        var (tailIdx, bWall) = WalkWall(layer, bestMove, bestP, h, +1);
+        var (headIdx, aWall, gotBack) = WalkWall(layer, bestMove, bestP, h, -1);
+        var (tailIdx, bWall, gotFwd) = WalkWall(layer, bestMove, bestP, h, +1);
+
+        // Re-balance at the END of an open path. The anchor can sit at (or within half a
+        // bead of) a run's endpoint — very common when a support is placed on the end of a
+        // wall — and then one side simply has no wall to give. Taking half from each side
+        // left a 3 mm mouth with the two legs only half a bead apart, so they overlapped:
+        // Jeff's "no gap to invent or make", which showed up as a mangled arm on end-placed
+        // supports. Take the shortfall from whichever side still has wall, so the opening is
+        // a full bead wherever the run is long enough to hold one.
+        if (gotBack < h - 1e-4f)
+            (tailIdx, bWall, gotFwd) = WalkWall(layer, bestMove, bestP, h + (h - gotBack), +1);
+        else if (gotFwd < h - 1e-4f)
+            (headIdx, aWall, gotBack) = WalkWall(layer, bestMove, bestP, h + (h - gotFwd), -1);
 
         // Pocket mouth: fixed per spec by the caller, both points on the SAME outline edge.
         int n = outline.Length;
@@ -223,12 +235,13 @@ public static class StructuralSupportPlanner
     /// that one move would collapse. Stops at a travel, a wipe, a resume ramp, a
     /// disconnected joint, or the end of the layer, returning the furthest point reached.
     /// </summary>
-    static (int idx, Vector3 pt) WalkWall(
+    static (int idx, Vector3 pt, float consumed) WalkWall(
         ToolpathLayer layer, int idx, Vector3 fromPoint, float dist, int dir)
     {
         int i = idx;
         var p = fromPoint;
         float remaining = dist;
+        float consumed = 0f;
         while (true)
         {
             var mv = layer.Moves[i];
@@ -238,17 +251,19 @@ public static class StructuralSupportPlanner
             {
                 var d = target - p;
                 float len = d.Length();
-                return (i, len > 1e-9f ? p + d / len * remaining : target);
+                return (i, len > 1e-9f ? p + d / len * remaining : target, consumed + remaining);
             }
 
             remaining -= avail;
+            consumed  += avail;
             int next = i + dir;
-            if (next < 0 || next >= layer.Moves.Count) return (i, target);
+            if (next < 0 || next >= layer.Moves.Count) return (i, target, consumed);
             var nm = layer.Moves[next];
-            if (nm.Kind != MoveKind.Extrude || nm.IsWipe || nm.IsResumeRamp) return (i, target);
+            if (nm.Kind != MoveKind.Extrude || nm.IsWipe || nm.IsResumeRamp)
+                return (i, target, consumed);
             // Only continue through a joint that actually connects — never jump a gap.
             var joint = dir < 0 ? nm.To : nm.From;
-            if (Vector3.Distance(joint, target) > 0.05f) return (i, target);
+            if (Vector3.Distance(joint, target) > 0.05f) return (i, target, consumed);
 
             i = next;
             p = target;
