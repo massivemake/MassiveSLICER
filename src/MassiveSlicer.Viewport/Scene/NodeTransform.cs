@@ -181,6 +181,24 @@ public struct NodeTransform
     /// <summary>The pivot's position in the parent's space (same as <see cref="Position"/>).</summary>
     public Vector3 PivotInParent => Position;
 
+    // -- Pivot edits -----------------------------------------------------------
+
+    /// <summary>
+    /// Moves the pivot to <paramref name="newOrigin"/> (a point in the mesh's own coordinate space)
+    /// without the geometry moving at all. Every vertex composes to exactly the same place as
+    /// before; only the point that rotation and scale work about has changed.
+    /// </summary>
+    /// <remarks>
+    /// This one operation is the whole of Recenter Origin and every Move Origin snap: the tool
+    /// moves to the mesh, never the mesh to the tool.
+    /// </remarks>
+    public void SetOrigin(Vector3 newOrigin)
+    {
+        // Wherever the new pivot point currently sits in the parent's space is where it must stay.
+        Position = Vector3.TransformPosition(newOrigin, ToMatrix());
+        Origin   = newOrigin;
+    }
+
     // -- Rotation edits --------------------------------------------------------
 
     /// <summary>

@@ -205,6 +205,51 @@ public class NodeTransformTest
     }
 
     [Fact]
+    public void Moving_the_pivot_never_moves_the_geometry()
+    {
+        // Recenter Origin and every Move Origin snap are this one operation. Tested from an
+        // already rotated and unevenly scaled state, since that is where a naive implementation
+        // would shift the part.
+        var t = new NodeTransform(
+            position: new Vector3(300f, 40f, -12f),
+            rotation: Quaternion.FromAxisAngle(Vector3.Normalize(new Vector3(2f, -1f, 4f)), 1.1f),
+            scale:    new Vector3(1.7f, 0.6f, 2.3f),
+            origin:   new Vector3(11f, 22f, 33f));
+
+        var probes = new[]
+        {
+            Vector3.Zero, new Vector3(100f, 0f, 0f), new Vector3(-40f, 65f, 210f), t.Origin,
+        };
+        var before = probes.Select(p => Vector3.TransformPosition(p, t.ToMatrix())).ToArray();
+
+        // Snap the pivot to a bounding-box corner, then a face centre, then back to the middle.
+        foreach (var newOrigin in new[]
+                 {
+                     new Vector3(-50f, -50f, -50f), new Vector3(0f, 0f, 120f), Vector3.Zero,
+                 })
+        {
+            t.SetOrigin(newOrigin);
+            Assert.Equal(newOrigin, t.Origin);
+            for (int i = 0; i < probes.Length; i++)
+                AssertClose(before[i], Vector3.TransformPosition(probes[i], t.ToMatrix()), 1e-2f);
+        }
+    }
+
+    [Fact]
+    public void A_moved_pivot_becomes_the_point_rotation_turns_about()
+    {
+        // Snapping the origin to a corner and rotating must swing the part around that corner.
+        var t = NodeTransform.PivotedAt(Vector3.Zero);
+        t.SetOrigin(new Vector3(100f, 0f, 0f));
+        t.RotateLocal(2, MathHelper.DegreesToRadians(90f));
+
+        var m = t.ToMatrix();
+        AssertClose(new Vector3(100f, 0f, 0f), Vector3.TransformPosition(new Vector3(100f, 0f, 0f), m));
+        // A point 100mm further out along X swings onto +Y about that corner.
+        AssertClose(new Vector3(100f, 100f, 0f), Vector3.TransformPosition(new Vector3(200f, 0f, 0f), m));
+    }
+
+    [Fact]
     public void Scale_grows_away_from_the_pivot()
     {
         // Why snapping the origin to a face matters: scaling from a corner grows the part away

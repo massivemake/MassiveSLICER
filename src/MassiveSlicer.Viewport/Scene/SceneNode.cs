@@ -110,8 +110,56 @@ public sealed class SceneNode
 
     // -- Transform -------------------------------------------------------------
 
+    private Matrix4        _localTransform = Matrix4.Identity;
+    private NodeTransform? _placement;
+
     /// <summary>Transform relative to the parent (or world if no parent).</summary>
-    public Matrix4 LocalTransform { get; set; } = Matrix4.Identity;
+    /// <remarks>
+    /// Still the single thing every reader consumes. When <see cref="Placement"/> is set, writing a
+    /// raw matrix here re-derives the separated values from it rather than leaving them stale — so
+    /// the two can never disagree, and code paths that legitimately hand over a finished matrix
+    /// (undo/redo restore, workspace load, the robot and cell rigs) keep working untouched.
+    /// </remarks>
+    public Matrix4 LocalTransform
+    {
+        get => _localTransform;
+        set
+        {
+            _localTransform = value;
+            // Keep the pivot; re-read position/rotation/scale from whatever was just written.
+            if (_placement is { } p)
+                _placement = NodeTransform.FromMatrix(value, p.Origin);
+        }
+    }
+
+    /// <summary>
+    /// The node's placement as separated position / rotation / scale / pivot values, or
+    /// <c>null</c> for nodes that are driven straight from a matrix (the robot rig, cell fixtures,
+    /// the tool) and have no user-facing transform tools.
+    /// </summary>
+    /// <remarks>
+    /// Set this via <see cref="SetPlacement"/> so the composed matrix is rebuilt with it. Reading
+    /// is free; the getter does no work.
+    /// </remarks>
+    public NodeTransform? Placement => _placement;
+
+    /// <summary>Replaces <see cref="Placement"/> and rebuilds <see cref="LocalTransform"/> from it.</summary>
+    public void SetPlacement(NodeTransform placement)
+    {
+        _placement      = placement;
+        _localTransform = placement.ToMatrix();
+    }
+
+    /// <summary>
+    /// Gives this node a <see cref="Placement"/> if it has none, decomposed from its current
+    /// matrix and pivoting about <paramref name="origin"/> in mesh space. The composed transform is
+    /// unchanged either way, so adopting a placement never moves anything.
+    /// </summary>
+    public NodeTransform EnsurePlacement(Vector3 origin)
+    {
+        _placement ??= NodeTransform.FromMatrix(_localTransform, origin);
+        return _placement.Value;
+    }
 
     /// <summary>Accumulated world-space transform, computed from the parent chain.</summary>
     public Matrix4 WorldTransform
