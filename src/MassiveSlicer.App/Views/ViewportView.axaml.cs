@@ -5929,10 +5929,23 @@ public partial class ViewportView : UserControl
         RememberCommittedTransform(vm, node);
     }
 
+    /// <summary>
+    /// Copies a mesh, vertex arrays included.
+    /// </summary>
+    /// <remarks>
+    /// This used to hand the same <c>Positions</c> array to the copy, so the undo snapshot, the
+    /// editable working copy and the live GPU mesh's PickingData were all one array. Recenter's bake
+    /// mutates positions in place, which therefore rewrote the "before" snapshot as it went — undo
+    /// had nothing original left to restore — and left every MeshData's LocalBounds, computed once at
+    /// construction, describing vertices it no longer held.
+    /// </remarks>
     private static MeshData CloneMeshData(MeshData mesh) =>
-        new(mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
+        new((Vector3[])mesh.Positions.Clone(),
+            (Vector3[])mesh.Normals.Clone(),
+            mesh.Indices?.ToArray(),
+            mesh.Name,
             mesh.BaseColor, mesh.Metallic, mesh.Roughness,
-            mesh.Uvs, mesh.Tangents, mesh.Material);
+            mesh.Uvs?.ToArray(), mesh.Tangents?.ToArray(), mesh.Material);
 
     private static bool HasExplodableMeshes(SceneNode root)
     {
