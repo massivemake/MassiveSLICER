@@ -708,8 +708,13 @@
                 </StackPanel>
             </Border>
 
-            <!-- Axis values -->
-                <Border Background="#F2262626"
+            <!-- Axis values.
+                 x:Name on each row so the code-behind can stop a pointer press reaching the
+                 viewport underneath: ViewportView subscribes PointerPressed on itself and calls
+                 Focus(), so any press that falls through here steals focus from the field and runs
+                 the viewport's own click logic, which deselects on a miss. -->
+                <Border x:Name="MoveValuesRow"
+                        Background="#F2262626"
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -718,23 +723,24 @@
                         IsVisible="{Binding IsMoveActive}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Position along world X. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Position along world Y. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"
+                                       ToolTip.Tip="Position along world Z. Accepts maths: 45+90, 90/2, 30x3"/>
                     </StackPanel>
                 </Border>
-                <Border Background="#F2262626"
+                <Border x:Name="RotateValuesRow"
+                        Background="#F2262626"
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -742,21 +748,34 @@
                         Margin="0,-3,0,0"
                         IsVisible="{Binding IsRotateActive}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <!-- The axis letters are buttons: click steps a clean additive 90 degrees. -->
+                        <Border x:Name="StepAxisX" Tag="0" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Rotate 90° about the part's own X. Click again to keep going; hold Alt to go the other way.">
+                            <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Rotation about the part's own X axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                        <Border x:Name="StepAxisY" Tag="1" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Rotate 90° about the part's own Y. Click again to keep going; hold Alt to go the other way.">
+                            <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Rotation about the part's own Y axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                        <Border x:Name="StepAxisZ" Tag="2" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Rotate 90° about the part's own Z. Click again to keep going; hold Alt to go the other way.">
+                            <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"
+                                       ToolTip.Tip="Rotation about the part's own Z axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
                     </StackPanel>
                 </Border>
         </StackPanel>

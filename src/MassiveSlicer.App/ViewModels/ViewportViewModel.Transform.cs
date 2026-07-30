@@ -291,6 +291,34 @@ public sealed partial class ViewportViewModel
     }
 
     /// <summary>
+    /// Rotates a clean, additive 90° about the part's own <paramref name="axisIndex"/>. Backs both
+    /// clicking an axis letter in the transform toolbar and the <c>step</c> console command.
+    /// </summary>
+    /// <remarks>
+    /// Additive on purpose: clicking four times returns the part to exactly where it started, because
+    /// the turn is applied to the stored orientation rather than reconstructed from displayed degrees.
+    /// <paramref name="reverse"/> (Alt-click) goes the other way.
+    /// </remarks>
+    public string StepRotation(int axisIndex, bool reverse)
+        => WithPlacement("step", t =>
+        {
+            float deg = reverse ? -90f : 90f;
+            t.RotateLocal(axisIndex, MathHelper.DegreesToRadians(deg));
+            return (t, $"stepped {deg:+0;-0}° about its own {"XYZ"[axisIndex]}; now {V(t.EulerDegrees)}°.");
+        });
+
+    /// <summary>Backs the <c>step</c> command.</summary>
+    public string StepCommand(string args)
+    {
+        var p = (args ?? string.Empty).Split((char[])[' ', ','],
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (p.Length < 1 || AxisOf(p[0]) is not { } axis)
+            return "[step] usage: step <x|y|z> [-]   e.g. `step z` or `step z -` for the other way";
+        bool reverse = p.Length > 1 && (p[1] == "-" || p[1].Equals("rev", StringComparison.OrdinalIgnoreCase));
+        return StepRotation(axis, reverse);
+    }
+
+    /// <summary>
     /// Backs the <c>gizmo</c> command: reads or sets which transform tool is active, so a headless
     /// run can put the viewport into Move, Rotate or Scale before exercising a handle.
     /// </summary>

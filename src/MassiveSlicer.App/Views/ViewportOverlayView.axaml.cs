@@ -50,10 +50,47 @@ public partial class ViewportOverlayView : UserControl
             UpdateBottomDockMargin();
         };
 
+        // Transform toolbar: swallow every press so none of it can reach the viewport underneath.
+        // ViewportView subscribes PointerPressed on itself and calls Focus(), so a press falling
+        // through this row takes focus back off the number field and then runs the viewport's own
+        // click logic — which deselects when the ray misses the model. That is what made clicking a
+        // number box feel like it "went through the window", and it depended on whether the hit
+        // landed on the text or on the few pixels of padding around it.
+        foreach (Control row in new Control[] { MoveValuesRow, RotateValuesRow })
+            row.AddHandler(PointerPressedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+
+        // Clicking an axis letter steps a clean additive 90°; Alt reverses.
+        foreach (Control label in new Control[] { StepAxisX, StepAxisY, StepAxisZ })
+            label.AddHandler(PointerPressedEvent, OnStepAxisPointerPressed, handledEventsToo: true);
+
         // Long-press region-select icon → toggle Square ↔ Lasso.
         RegionSelectButton.AddHandler(PointerPressedEvent, OnRegionSelectPointerPressed, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerReleasedEvent, OnRegionSelectPointerReleased, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerCaptureLostEvent, OnRegionSelectCaptureLost, handledEventsToo: true);
+    }
+
+    /// <summary>
+    /// Marks any press inside a transform value row handled, so it never reaches the viewport's own
+    /// pointer handler. Deliberately blanket rather than per-control: the row's padding, the axis
+    /// letters and the gaps between fields are all dead space that would otherwise fall through.
+    /// </summary>
+    private static void OnTransformRowPointerPressed(object? sender, PointerPressedEventArgs e)
+        => e.Handled = true;
+
+    /// <summary>
+    /// Clicking an axis letter rotates a clean additive 90° about the part's own axis; holding Alt
+    /// goes the other way. Additive so four clicks land back exactly where they started.
+    /// </summary>
+    private void OnStepAxisPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        e.Handled = true;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+        if (sender is not Control { Tag: string tag } || !int.TryParse(tag, out int axis)) return;
+        if (DataContext is not ViewportViewModel vm) return;
+
+        // The result string is for the console command; here the refreshed number boxes are the
+        // feedback, so it is deliberately dropped.
+        _ = vm.StepRotation(axis, e.KeyModifiers.HasFlag(KeyModifiers.Alt));
     }
 
     /// <summary>Snap-to-error: Alt-click or double-click within ±6 px of a validation
