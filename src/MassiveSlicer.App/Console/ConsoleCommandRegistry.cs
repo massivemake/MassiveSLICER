@@ -1705,6 +1705,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "bounds",
+            Aliases = ["bbox"],
+            Description = "Read-only world bounds, pivot and subtree shape of the selection — changes nothing",
+            Usage = "bounds     run before and after a GUI action to measure what it did",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BoundsCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "recenter",
+            Aliases = ["recentre"],
+            Description = "Recenter the pivot to bottom-centre, reporting world bounds and subtree shape",
+            Usage = "recenter     run again after a frame to see the result",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.RecenterCommandDiag()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "drop",
             Aliases = ["drop-to-plate"],
             Description = "Drop the selected part onto the bed, reporting its lowest point before and after",

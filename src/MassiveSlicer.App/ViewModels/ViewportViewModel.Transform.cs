@@ -502,6 +502,23 @@ public sealed partial class ViewportViewModel
     public string DropCommand()
         => OnDropToPlateDiagnostic?.Invoke() ?? "[drop] viewport not ready.";
 
+    /// <summary>Invoked by the <c>recenter</c> command; reports world bounds before and after.</summary>
+    internal Func<string>? OnRecenterDiagnostic { get; set; }
+
+    /// <summary>Backs the <c>recenter</c> command.</summary>
+    public string RecenterCommandDiag()
+        => OnRecenterDiagnostic?.Invoke() ?? "[recenter] viewport not ready.";
+
+    /// <summary>Read-only world bounds report; changes nothing.</summary>
+    internal Func<string>? OnBoundsDiagnostic { get; set; }
+
+    /// <summary>
+    /// Backs the <c>bounds</c> command — a read-only snapshot for sandwiching around a GUI action,
+    /// so a misbehaving button can be measured without a second mutating call muddying the evidence.
+    /// </summary>
+    public string BoundsCommand()
+        => OnBoundsDiagnostic?.Invoke() ?? "[bounds] viewport not ready.";
+
     /// <summary>Backs the <c>step</c> command.</summary>
     public string StepCommand(string args)
     {

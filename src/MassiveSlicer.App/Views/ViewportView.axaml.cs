@@ -414,6 +414,45 @@ public partial class ViewportView : UserControl
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
+            vm.OnBoundsDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[bounds] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+                var size = bMax - bMin;
+                var pivot = n.Placement is { } pl
+                    ? Vector3.TransformPosition(pl.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
+                return string.Format(inv,
+                    "[bounds] \"{0}\" min=({1:F1},{2:F1},{3:F1}) max=({4:F1},{5:F1},{6:F1}) "
+                    + "size=({7:F1},{8:F1},{9:F1}) pivotWorld=({10:F1},{11:F1},{12:F1}) "
+                    + "nodes={13} meshes={14} meshOnRoot={15} overlays={16}",
+                    n.Name, bMin.X, bMin.Y, bMin.Z, bMax.X, bMax.Y, bMax.Z,
+                    size.X, size.Y, size.Z, pivot.X, pivot.Y, pivot.Z,
+                    n.SelfAndDescendants().Count(),
+                    n.SelfAndDescendants().Count(d => d.Mesh?.PickingData is not null || d.PendingMesh is not null),
+                    n.Mesh?.PickingData is not null || n.PendingMesh is not null,
+                    n.SelfAndDescendants().Count(d => d.IsAuthoringOverlay));
+            };
+            vm.OnRecenterDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[recenter] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+                int nodes = n.SelfAndDescendants().Count();
+                int meshes = n.SelfAndDescendants().Count(d => d.Mesh?.PickingData is not null || d.PendingMesh is not null);
+                bool onRoot = n.Mesh?.PickingData is not null || n.PendingMesh is not null;
+
+                RecenterSelected();
+                // The real work happens on the render thread via PendingRecenterJobs, so report the
+                // pre-state plus enough shape to tell what path it will take; run `recenter` again
+                // after a frame to see the result.
+                return string.Format(inv,
+                    "[recenter] before: worldMin=({0:F1},{1:F1},{2:F1}) worldMax=({3:F1},{4:F1},{5:F1}) "
+                    + "nodes={6} meshes={7} meshOnRoot={8} placement={9} — job queued",
+                    bMin.X, bMin.Y, bMin.Z, bMax.X, bMax.Y, bMax.Z,
+                    nodes, meshes, onRoot, n.Placement is not null);
+            };
             vm.OnMoveOriginModeChanged = SetMoveOriginOverlay;
             vm.OnDropToPlateRequested = DropToPlate;
             vm.OnDropToPlateDiagnostic = () =>
