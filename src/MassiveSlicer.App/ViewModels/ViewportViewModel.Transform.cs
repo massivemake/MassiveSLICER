@@ -374,6 +374,13 @@ public sealed partial class ViewportViewModel
         set
         {
             if (!SetField(ref _isMoveOriginActive, value)) return;
+
+            // Turning it on with no tool active would leave nothing on screen once a point is
+            // picked, so the pivot appears to have moved nowhere and there is no reference for
+            // where it went. Show the move handle, which is the thing that sits on the pivot.
+            if (value && _activeGizmoMode == GizmoMode.None)
+                ActiveGizmoModeInternal = GizmoMode.Translate;
+
             OnMoveOriginModeChanged?.Invoke(value);
             NotifyRenderNeeded();
         }

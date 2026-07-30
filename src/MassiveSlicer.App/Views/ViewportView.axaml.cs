@@ -92,6 +92,8 @@ public partial class ViewportView : UserControl
     /// basis. Measuring the sweep against these instead of against world X/Y/Z is what makes a ring
     /// turn the part about the axis it is drawn around.</summary>
     private Vector3  _gizmoRingU, _gizmoRingV;
+    /// <summary>Shift held during the current drag — rotation lands on whole 5° steps.</summary>
+    private bool     _gizmoDragSnap;
     private float    _gizmoDragStartAngle;
     private float    _gizmoDragStartScreenX;
     private float    _gizmoDragCurrScreenX;
@@ -3088,6 +3090,7 @@ public partial class ViewportView : UserControl
         if (_gizmoDragAxis != GizmoAxis.None)
         {
             _leftDragged = true;
+            _gizmoDragSnap = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             ProcessGizmoDrag((float)pos.X, (float)pos.Y);
             if (_toolIsDragging)
                 RunIkForToolDrag();
@@ -13979,6 +13982,7 @@ public partial class ViewportView : UserControl
     {
         _gizmoDragAxis           = axis;
         _renderer.ActiveDragAxis = axis;
+        _gizmoDragSnap           = false;   // never inherit the last drag's modifier state
         _gizmoDragStartScreenX   = mx;
         _gizmoDragCurrScreenX    = mx;
         if (axis == GizmoAxis.All)
@@ -14424,6 +14428,16 @@ public partial class ViewportView : UserControl
     {
         var rel     = hitWorld - _gizmoDragPlanePoint;
         float delta = WrapPi(RingAngle(rel) - _gizmoDragStartAngle);
+
+        // Shift snaps to whole 5° steps. Applied to the sweep since the drag began, not to each
+        // frame's increment, so the part sits on an exact multiple of 5 from where it started
+        // rather than accumulating rounding as the cursor moves.
+        if (_gizmoDragSnap)
+        {
+            const float StepDeg = 5f;
+            float deg = MathHelper.RadiansToDegrees(delta);
+            delta = MathHelper.DegreesToRadians(MathF.Round(deg / StepDeg) * StepDeg);
+        }
 
         if (_toolIsDragging)
         {
