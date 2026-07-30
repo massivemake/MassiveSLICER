@@ -26,39 +26,39 @@ public static class StructuralSupportPlanner
             var outline = spec.BuildOutline();
             if (outline.Length < 3) continue;
 
-            // Outline entry vertex is resolved ONCE, from the spec's fixed anchor — never
-            // per layer from that layer's own split point. Deriving it per layer let the
-            // neck attach to a different corner of the pocket as the wall wandered
-            // underneath it, which reads as the whole rectangle jumping around even though
-            // the footprint itself never moved. The anchor is fixed data, so this is too.
+            // The mouth is resolved ONCE from the spec's fixed anchor — never per layer from
+            // that layer's own split point, which made the neck hop between corners as the
+            // wall wandered underneath it.
+            //
+            // It sits on the outline EDGE nearest the anchor, NOT the nearest vertex. A
+            // vertex mouth puts the two legs on two PERPENDICULAR edges, so they converge
+            // and cross on the way in — visible in the viewport as an X at the pocket. An
+            // edge mouth is a flat opening facing the wall, with parallel legs.
             var anchor2 = new Vector2(spec.AnchorX, spec.AnchorY);
-            int entryIdx = 0;
-            float entryD2 = float.MaxValue;
-            for (int i = 0; i < outline.Length; i++)
+            int nOut = outline.Length;
+            int edgeIdx = 0;
+            float bestEd2 = float.MaxValue;
+            var onEdge = outline[0];
+            for (int i = 0; i < nOut; i++)
             {
-                float dx = outline[i].X - anchor2.X, dy = outline[i].Y - anchor2.Y;
-                float d2 = dx * dx + dy * dy;
-                if (d2 < entryD2) { entryD2 = d2; entryIdx = i; }
+                var p = ClosestOnSegment2D(anchor2, outline[i], outline[(i + 1) % nOut]);
+                float d2 = Vector2.DistanceSquared(p, anchor2);
+                if (d2 < bestEd2) { bestEd2 = d2; edgeIdx = i; onEdge = p; }
             }
 
-            // Wrap direction is ALSO fixed per spec, for the same reason as entryIdx.
-            // Deciding it per layer (by whichever leg pairing was shorter) made the
-            // traversal flip partway up the stack as the wall moved, so the outgoing and
-            // returning legs swapped mouths mid-print.
-            int nOut = outline.Length;
             float hMouth = MathF.Max(0.05f, settings.BeadWidth * 0.5f);
-            var cMouth = StepAlong(outline[entryIdx], outline[(entryIdx + 1) % nOut], hMouth);
-            var dMouth = StepAlong(outline[entryIdx], outline[(entryIdx - 1 + nOut) % nOut], hMouth);
-            bool ccw = Vector2.Distance(anchor2, cMouth) <= Vector2.Distance(anchor2, dMouth);
+            var cMouth = StepAlong(onEdge, outline[(edgeIdx + 1) % nOut], hMouth);  // toward next vertex
+            var dMouth = StepAlong(onEdge, outline[edgeIdx], hMouth);               // toward this vertex
 
             for (int li = lo; li <= hi; li++)
-                ApplyToLayer(toolpath.Layers[li], spec, outline, entryIdx, settings.BeadWidth, ccw);
+                ApplyToLayer(toolpath.Layers[li], spec, outline, edgeIdx,
+                    cMouth, dMouth, settings.BeadWidth);
         }
     }
 
     static void ApplyToLayer(
-        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int entryIdx,
-        float bead, bool ccw)
+        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int edgeIdx,
+        Vector2 cMouth, Vector2 dMouth, float bead)
     {
         var anchor = new Vector2(spec.AnchorX, spec.AnchorY);
 
@@ -114,17 +114,21 @@ public static class StructuralSupportPlanner
         var (headIdx, aWall) = WalkWall(layer, bestMove, bestP, h, -1);
         var (tailIdx, bWall) = WalkWall(layer, bestMove, bestP, h, +1);
 
-        // Pocket mouth: open the outline loop either side of the entry vertex.
+        // Pocket mouth: fixed per spec by the caller, both points on the SAME outline edge.
         int n = outline.Length;
-        var entryV = outline[entryIdx];
-        var nextV  = outline[(entryIdx + 1) % n];
-        var prevV  = outline[(entryIdx - 1 + n) % n];
-        var cPocket = At(StepAlong(entryV, nextV, h));   // wrap START (CCW from entry)
-        var dPocket = At(StepAlong(entryV, prevV, h));   // wrap END   (CW  from entry)
+        var cPocket = At(cMouth);
+        var dPocket = At(dMouth);
 
         // The duct ALWAYS leaves from the wall.From-side root and returns to the wall.To-side
-        // root, so the two wall pieces can never overlap. Wrap direction comes from the
-        // caller (fixed per spec) so it cannot flip between layers.
+        // root, so the two wall pieces can never overlap.
+        //
+        // Which mouth the OUTGOING leg uses must be decided per layer, from the actual wall
+        // roots: it is a non-crossing test, and the wall's direction rotates as the stack
+        // rises. Pinning it per spec (an earlier attempt at determinism) is what made the
+        // legs cross. The mouth POINTS stay fixed either way — only the traversal direction
+        // adapts, so the deposited geometry is identical and nothing drifts.
+        bool ccw = Vector3.Distance(aWall, cPocket) + Vector3.Distance(dPocket, bWall)
+                <= Vector3.Distance(aWall, dPocket) + Vector3.Distance(cPocket, bWall);
         var mouthIn  = ccw ? cPocket : dPocket;
         var mouthOut = ccw ? dPocket : cPocket;
 
@@ -142,8 +146,12 @@ public static class StructuralSupportPlanner
         }
 
         Emit(mouthIn);                                  // leg 1: wall mouth → pocket mouth
-        for (int k = 1; k <= n - 1; k++)                // open wrap, in the chosen direction
-            Emit(At(outline[ccw ? (entryIdx + k) % n : (entryIdx - k + n) % n]));
+        // Open wrap. Both mouths sit on edge `edgeIdx`, so a full lap visits every vertex
+        // exactly once: CCW starts at the edge's far vertex, CW starts at its near one.
+        if (ccw)
+            for (int k = 1; k <= n; k++) Emit(At(outline[(edgeIdx + k) % n]));
+        else
+            for (int k = 0; k <= n - 1; k++) Emit(At(outline[(edgeIdx - k + n) % n]));
         Emit(mouthOut);                                 // finish the wrap at the far mouth
         Emit(bWall);                                    // leg 2: pocket mouth → wall mouth
 
@@ -217,6 +225,16 @@ public static class StructuralSupportPlanner
     /// <paramref name="to"/>. Capped at 45% of the edge so opening a pocket mouth can
     /// never swallow a whole short edge (small pockets, fine circle facets).
     /// </summary>
+    /// <summary>Closest point to <paramref name="q"/> on the segment a→b, in 2D.</summary>
+    static Vector2 ClosestOnSegment2D(Vector2 q, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        if (len2 < 1e-12f) return a;
+        float t = Math.Clamp(Vector2.Dot(q - a, ab) / len2, 0f, 1f);
+        return a + ab * t;
+    }
+
     static Vector2 StepAlong(Vector2 from, Vector2 to, float dist)
     {
         var d = to - from;

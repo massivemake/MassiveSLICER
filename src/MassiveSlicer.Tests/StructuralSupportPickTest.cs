@@ -77,13 +77,19 @@ public sealed class StructuralSupportPickTest
     }
 
     /// <summary>
-    /// The neck must attach to the SAME pocket corner on every layer. Previously the entry
-    /// vertex was re-picked per layer from that layer's own split point, so on a wall that
-    /// wanders in XY the neck hopped between corners — the rectangle appeared to move even
-    /// though its footprint is fixed data.
+    /// The arm must meet the pocket at the SAME two mouth points on every layer. Originally
+    /// the attachment was re-picked per layer from that layer's own split point, so on a
+    /// wall that wanders in XY it hopped between corners and the rectangle looked like it
+    /// was moving.
+    /// <para>
+    /// Note this asserts the mouth POINT SET, not which leg is outgoing. Pinning the
+    /// traversal direction as well was over-strict and is what made the legs cross — the
+    /// direction has to adapt per layer because it is a non-crossing test and the wall
+    /// rotates as the stack rises. Same deposited geometry either way.
+    /// </para>
     /// </summary>
     [Fact]
-    public void Neck_attaches_to_the_same_pocket_corner_on_every_layer()
+    public void Arm_meets_the_pocket_at_the_same_two_points_on_every_layer()
     {
         // Short wall segments that SLIDE ALONG X as the stack rises. The split point is
         // clamped to each segment, so it sweeps from x~40 to x~340 — crossing the pocket's
@@ -114,10 +120,13 @@ public sealed class StructuralSupportPickTest
         // Per layer, find the outgoing leg (exactly one endpoint on the wall line y≈0) and
         // record BOTH where it leaves the wall and where it lands on the pocket. The pocket
         // landing point must be identical on every layer; the wall end is free to move.
+        // Per layer, collect BOTH legs' pocket-side endpoints as an order-independent set,
+        // plus where the legs leave the wall.
         var entries = new List<string>();
         var splitXs = new List<float>();
         foreach (var layer in tp.Layers)
         {
+            var pocketEnds = new List<string>();
             foreach (var mv in layer.Moves)
             {
                 if (mv.Kind != MoveKind.Extrude) continue;
@@ -126,10 +135,12 @@ public sealed class StructuralSupportPickTest
                 if (fromWall == toWall) continue;          // wall piece or pocket edge
                 var wallEnd   = fromWall ? mv.From : mv.To;
                 var pocketEnd = fromWall ? mv.To : mv.From;
-                entries.Add($"{pocketEnd.X:0.###},{pocketEnd.Y:0.###}");
+                pocketEnds.Add($"{pocketEnd.X:0.##},{pocketEnd.Y:0.##}");
                 splitXs.Add(wallEnd.X);
-                break;                                     // first leg on this layer
             }
+            if (pocketEnds.Count == 0) continue;
+            pocketEnds.Sort();                             // order-independent
+            entries.Add(string.Join(" & ", pocketEnds));
         }
 
         Assert.Equal(tp.Layers.Count, entries.Count);
