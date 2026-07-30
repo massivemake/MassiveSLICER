@@ -1678,6 +1678,33 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "origin",
+            Aliases = ["pivot"],
+            Description = "Inspect or move the selected part's pivot (the point the gizmo sits on)",
+            Usage = "origin [show|box|points|center|set <x> <y> <z>|snap <±x±y±z>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.OriginCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "xform",
+            Aliases = ["transform", "placement"],
+            Description = "Inspect or set the selected part's position, rotation and scale",
+            Usage = "xform [show|pos <x y z>|rot <x y z>|rotate <x|y|z> <deg>|scale <s|x y z>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.XformCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "basis",
+            Aliases = ["gizmo-basis", "axes"],
+            Description = "Report the gizmo pivot and which way each coloured handle points",
+            Usage = "basis",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BasisCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "sync",
             Aliases = ["connect", "sync-robot"],
             Description = "Sync (connect) the robot over C3Bridge",

@@ -79,6 +79,14 @@ public partial class ViewportView : UserControl
     private Vector3  _gizmoDragPlanePoint;
     private Vector3  _gizmoDragStartHit;
     private Matrix4  _gizmoDragInitialLocal;
+    private NodeTransform? _gizmoDragInitialPlacement;
+    /// <summary>The basis the active handle was drawn and hit-tested in — the object's own axes for
+    /// a part, so a drag moves along the arrow the user actually grabbed.</summary>
+    private Matrix4  _gizmoDragBasis = Matrix4.Identity;
+    /// <summary>In-plane reference directions for a rotate-ring drag, taken from the ring's own
+    /// basis. Measuring the sweep against these instead of against world X/Y/Z is what makes a ring
+    /// turn the part about the axis it is drawn around.</summary>
+    private Vector3  _gizmoRingU, _gizmoRingV;
     private float    _gizmoDragStartAngle;
     private float    _gizmoDragStartScreenX;
     private float    _gizmoDragCurrScreenX;
@@ -673,9 +681,22 @@ public partial class ViewportView : UserControl
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old = node.LocalTransform;
-            var lt = node.LocalTransform;
-            lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
-            node.LocalTransform = lt;
+            if (node.Placement is { } p)
+            {
+                // The typed numbers are where the pivot goes, which is also where the gizmo is —
+                // so what the boxes say and what the handle sits on are the same point.
+                var target = new Vector3((float)x, (float)y, (float)z);
+                var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+                Matrix4.Invert(parentWorld, out var invParent);
+                p.Position = Vector3.TransformPosition(target, invParent);
+                node.SetPlacement(p);
+            }
+            else
+            {
+                var lt = node.LocalTransform;
+                lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
+                node.LocalTransform = lt;
+            }
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -685,19 +706,52 @@ public partial class ViewportView : UserControl
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old  = node.LocalTransform;
-            var lt   = node.LocalTransform;
-            float sX = lt.Row0.Xyz.Length;
-            float sY = lt.Row1.Xyz.Length;
-            float sZ = lt.Row2.Xyz.Length;
-            var rt = MassiveSlicer.Core.Kinematics.KukaIkSolver.AbcToMatrix((float)a, (float)b, (float)c);
-            lt.Row0 = new Vector4(rt.M11 * sX, rt.M12 * sX, rt.M13 * sX, 0f);
-            lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
-            lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
-            node.LocalTransform = lt;
+            if (node.Placement is { } p)
+            {
+                // Absolute set, about the part's own X/Y/Z — the same axes as the coloured handles.
+                p.EulerDegrees = new Vector3((float)a, (float)b, (float)c);
+                node.SetPlacement(p);
+            }
+            else
+            {
+                // No placement: the tool/TCP frame, where A/B/C really are KUKA angles.
+                var lt   = node.LocalTransform;
+                float sX = lt.Row0.Xyz.Length;
+                float sY = lt.Row1.Xyz.Length;
+                float sZ = lt.Row2.Xyz.Length;
+                var rt = MassiveSlicer.Core.Kinematics.KukaIkSolver.AbcToMatrix((float)a, (float)b, (float)c);
+                lt.Row0 = new Vector4(rt.M11 * sX, rt.M12 * sX, rt.M13 * sX, 0f);
+                lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
+                lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
+                node.LocalTransform = lt;
+            }
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Rotate");
+        };
+        // Console/bridge-driven transform edits get the same follow-up a typed field edit does, so a
+        // headless test exercises the real path rather than a shortcut around it.
+        vm.OnExternalNodeTransform = (node, oldLocal, label) =>
+        {
+            MirrorTypedTransformDelta(vm, node, oldLocal);
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+            SyncSelectionTransformDisplay(vm);
+            SchedulePanelTransformUndo(vm, node, label);
+        };
+        vm.OnSelectionScaled = (sx, sy, sz) =>
+        {
+            if (_renderer.SelectedNode is not { } node) return;
+            if (node.Placement is not { } p) return;
+            var old = node.LocalTransform;
+            p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
+            p.ClampScale();
+            node.SetPlacement(p);
+            MirrorTypedTransformDelta(vm, node, old);
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+            SchedulePanelTransformUndo(vm, node, "Scale");
         };
 
         vm.GetToolWorldPose = ComputeToolWorldPose;
@@ -1663,7 +1717,7 @@ public partial class ViewportView : UserControl
                 : null;
         }
 
-        _renderer.GizmoAxisBasis = GetModifierAxisBasis(_renderer.SelectedNode);
+        _renderer.GizmoAxisBasis = GetGizmoAxisBasis(_renderer.SelectedNode);
 
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
@@ -6231,6 +6285,10 @@ public partial class ViewportView : UserControl
                     CullFaces      = false,
                     Visible        = true,
                 };
+                // A cut piece is a brand-new object, so it gets its own centred pivot rather than
+                // inheriting the whole part's — otherwise every piece would rotate about a point
+                // that made sense only for the uncut original, often outside the piece entirely.
+                ImportHelper.CenterOrigin(node);
                 firstNode ??= node;
                 vm.PendingNodes.Enqueue(node);
 
@@ -6757,29 +6815,75 @@ public partial class ViewportView : UserControl
 
     // -- Toolhead selection check ----------------------------------------------
 
+    /// <summary>
+    /// Where the gizmo sits, and the point every rotation and scale works about.
+    /// </summary>
+    /// <remarks>
+    /// For a node with a <see cref="SceneNode.Placement"/> this is its pivot run out to world
+    /// space — centred at import, or wherever Move Origin last snapped it. The old behaviour of
+    /// reading the matrix's translation column is kept for nodes driven straight from a matrix (the
+    /// robot rig, cell fixtures), and is also why the gizmo used to appear detached from a mesh:
+    /// that column is the file's own origin, which for most exports is nowhere near the geometry.
+    /// </remarks>
     private Vector3 GetGizmoPivotWorld(SceneNode node)
     {
         if (IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp)
             return tcp.Row3.Xyz;
+        if (node.Placement is { } p)
+            return Vector3.TransformPosition(p.Origin, node.WorldTransform);
         return node.WorldTransform.Row3.Xyz;
     }
 
-    /// <summary>Rotation-only basis (no translation) the gizmo should be drawn/hit-tested/dragged
-    /// in for <paramref name="node"/> — a Vertical Cut modifier's own RotationDegrees around Z
-    /// (X/Y follow the plane, Z stays world-up since RotationDegrees only ever rotates about Z
-    /// anyway), or null (world-axis-aligned, every other selectable object's existing behavior)
-    /// for anything else. Scoped to Cut modifiers only — see feedback from Jeff 2026-07-22.</summary>
-    private Matrix4? GetModifierAxisBasis(SceneNode? node)
+    /// <summary>
+    /// Rotation-only basis (no translation) the gizmo is drawn, hit-tested and dragged in for
+    /// <paramref name="node"/>, or <c>null</c> for world-axis-aligned.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For any node with a <see cref="SceneNode.Placement"/> this is the node's own orientation, so
+    /// the red, green and blue handles stay stuck to the object: rotate a part 90° and its red arrow
+    /// now points 90° round with it. That may look "wrong" against the room, but it is what makes
+    /// the tool predictable — the handle you grab is always the object's own axis. World position is
+    /// unaffected and remains the single source of truth for where the part actually is.
+    /// </para>
+    /// <para>
+    /// Read from the node's <em>world</em> transform, not its local one, so a part parented under a
+    /// rotated frame (a rotary cell's table) still gets handles that match what is on screen. Rows
+    /// are normalised because non-uniform scale lengthens them; the placement guarantees they stay
+    /// mutually perpendicular, so normalising is enough to recover clean axes.
+    /// </para>
+    /// <para>
+    /// A Vertical Cut modifier keeps its existing special case (X/Y follow the plane's own
+    /// RotationDegrees, Z stays world-up) — its plane is not a placement-bearing part.
+    /// </para>
+    /// </remarks>
+    private Matrix4? GetGizmoAxisBasis(SceneNode? node)
     {
         // Called from OnRender (GL thread) every frame — must use the cached _vm field, never
         // DataContext (an Avalonia dispatcher-verified property that throws
         // InvalidOperationException off the UI thread). See the GL-thread DataContext audit
         // referenced in project memory; this exact mistake crashed on the very next model import.
         if (node is null) return null;
-        if (_vm is not { } vm) return null;
-        if (vm.FindModifierForNode(node) is not { Orientation: CutOrientation.Vertical } cut) return null;
-        return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        if (_vm is { } vm && vm.FindModifierForNode(node) is { Orientation: CutOrientation.Vertical } cut)
+            return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        if (node.Placement is null) return null;
+        return WorldAxisBasis(node);
     }
+
+    /// <summary>The node's own X/Y/Z directions in world space as a rotation-only matrix.</summary>
+    private static Matrix4 WorldAxisBasis(SceneNode node)
+    {
+        var w = node.WorldTransform;
+        var x = SafeNormalize(w.Row0.Xyz, Vector3.UnitX);
+        var y = SafeNormalize(w.Row1.Xyz, Vector3.UnitY);
+        var z = SafeNormalize(w.Row2.Xyz, Vector3.UnitZ);
+        return new Matrix4(
+            new Vector4(x, 0f), new Vector4(y, 0f), new Vector4(z, 0f),
+            new Vector4(0f, 0f, 0f, 1f));
+    }
+
+    private static Vector3 SafeNormalize(Vector3 v, Vector3 fallback)
+        => v.LengthSquared > 1e-12f ? Vector3.Normalize(v) : fallback;
 
     private void BeginToolIkDrag(SceneNode node)
     {
@@ -10937,15 +11041,54 @@ public partial class ViewportView : UserControl
         RecordTransformUndo(vm, node, before, node.LocalTransform, description);
     }
 
+    /// <summary>
+    /// Refreshes the three position and three rotation boxes from the selection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a part, the numbers come straight from its stored placement: the position shown is the
+    /// pivot the gizmo is sitting on, and the degrees are rotations about the part's own X, Y and Z
+    /// — the same axes as the red, green and blue handles.
+    /// </para>
+    /// <para>
+    /// Two bugs are gone from this method. It used to normalise the matrix by dividing all three
+    /// axis rows by the length of the <em>first</em> one, so any part scaled unevenly handed a
+    /// non-rotation matrix to the angle extractor and got meaningless degrees back — which the user
+    /// could then type straight back in. And it reported KUKA A/B/C, whose first value turns about
+    /// Z, while the field beside it was coloured red for X. The KUKA readout is still what the tool
+    /// and TCP need, so that path is untouched below.
+    /// </para>
+    /// </remarks>
     private void SyncSelectionTransformDisplay(ViewportViewModel vm)
     {
         if (_renderer.SelectedNode is not { } node) return;
 
-        var w = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp
-            ? tcp
-            : node.WorldTransform;
+        if (IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp)
+        {
+            SyncKukaAbcDisplay(vm, node, tcp);
+            return;
+        }
 
-        var pos = w.Row3.Xyz;
+        if (node.Placement is { } p)
+        {
+            var pivot = Vector3.TransformPosition(p.Origin, node.WorldTransform);
+            var e     = p.EulerDegrees;
+            vm.SyncSelectionDisplay(
+                Math.Round(pivot.X, 2), Math.Round(pivot.Y, 2), Math.Round(pivot.Z, 2),
+                Math.Round(e.X, 2),     Math.Round(e.Y, 2),     Math.Round(e.Z, 2));
+            vm.SyncSelectionScaleDisplay(p.Scale.X, p.Scale.Y, p.Scale.Z);
+            RememberCommittedTransform(vm, node);
+            return;
+        }
+
+        SyncKukaAbcDisplay(vm, node, node.WorldTransform);
+    }
+
+    /// <summary>Readout for nodes with no placement of their own (the tool/TCP frame), in the KUKA
+    /// A/B/C convention the robot side genuinely uses.</summary>
+    private void SyncKukaAbcDisplay(ViewportViewModel vm, SceneNode node, Matrix4 w)
+    {
+        var pos  = w.Row3.Xyz;
         float sc = w.Row0.Xyz.Length;
         if (sc < 1e-6f) return;
         var nm = new System.Numerics.Matrix4x4(
@@ -13638,13 +13781,13 @@ public partial class ViewportView : UserControl
         }
         else
         {
-            // Every other gizmo (meshes, effectors, etc.) stays world-axis-aligned — this is
-            // scoped to Cut modifiers only. A Vertical cut's X/Y axes follow its own
-            // RotationDegrees so dragging "sideways" moves along the plane's own line instead of
-            // requiring a diagonal X+Y combination; Z stays world-up always (RotationDegrees only
-            // ever rotates about Z for a Vertical cut, so Z was never tilting anyway — this just
-            // makes that explicit rather than accidental).
-            var basis = GetModifierAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
+            // The basis a handle is dragged along must be the same one it was drawn and hit-tested
+            // in, or the arrow you grabbed and the direction the part travels disagree. For a part
+            // that is its own orientation (handles stuck to the object); for a Vertical cut, the
+            // plane's own RotationDegrees so dragging "sideways" runs along the plane's line rather
+            // than needing a diagonal X+Y; world axes for anything else.
+            var basis = GetGizmoAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
+            _gizmoDragBasis   = basis;
             _gizmoDragAxisDir = axis switch
             {
                 GizmoAxis.X => basis.Row0.Xyz,
@@ -13669,8 +13812,9 @@ public partial class ViewportView : UserControl
         // A modifier plane isn't a solid part — scaling it means nothing (no field for it).
         if (DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
             && _renderer.GizmoMode == GizmoMode.Scale) return;
-        _gizmoDragInitialLocal = node.LocalTransform;
-        _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
+        _gizmoDragInitialLocal     = node.LocalTransform;
+        _gizmoDragInitialPlacement = node.Placement;
+        _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
         BeginTransformLink(node);
         BeginToolIkDrag(node);
 
@@ -13694,6 +13838,7 @@ public partial class ViewportView : UserControl
             case GizmoMode.Rotate:
             {
                 _gizmoDragPlaneNormal = _gizmoDragAxisDir;
+                SetRingPlane(axis, _gizmoDragBasis);
 
                 var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
                 float denom  = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
@@ -13702,11 +13847,39 @@ public partial class ViewportView : UserControl
                     : _gizmoDragPlanePoint;
 
                 var rel = _gizmoDragStartHit - _gizmoDragPlanePoint;
-                _gizmoDragStartAngle = AxisAngle(axis, rel);
+                _gizmoDragStartAngle = RingAngle(rel);
                 break;
             }
         }
     }
+
+    /// <summary>
+    /// Picks the two in-plane reference directions for a rotate-ring drag, from the same basis the
+    /// ring was drawn in.
+    /// </summary>
+    /// <remarks>
+    /// Taking them as the other two axes of that basis, in cyclic order, means a positive measured
+    /// sweep is a positive right-hand-rule rotation about the dragged axis — so the part follows the
+    /// cursor round the ring, at the ring's own tilt, with no per-axis sign table to get wrong.
+    /// The old code measured every ring against fixed world planes (atan2 of world Y over X and so
+    /// on), which only lines up while the object is world-aligned.
+    /// </remarks>
+    private void SetRingPlane(GizmoAxis axis, Matrix4 basis)
+    {
+        var ax = SafeNormalize(basis.Row0.Xyz, Vector3.UnitX);
+        var ay = SafeNormalize(basis.Row1.Xyz, Vector3.UnitY);
+        var az = SafeNormalize(basis.Row2.Xyz, Vector3.UnitZ);
+        (_gizmoRingU, _gizmoRingV) = axis switch
+        {
+            GizmoAxis.X => (ay, az),
+            GizmoAxis.Y => (az, ax),
+            _           => (ax, ay),
+        };
+    }
+
+    /// <summary>Angle of <paramref name="rel"/> within the active ring's plane.</summary>
+    private float RingAngle(Vector3 rel)
+        => MathF.Atan2(Vector3.Dot(rel, _gizmoRingV), Vector3.Dot(rel, _gizmoRingU));
 
     private void SetupCutPlaneGizmoDrag(float mx, float my, float vpW, float vpH)
     {
@@ -13932,6 +14105,14 @@ public partial class ViewportView : UserControl
         Matrix4.Invert(parentWorld, out var invParent);
         var localDelta = TransformDir(worldDelta, invParent);
 
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            t.Position += localDelta;
+            node.SetPlacement(t);
+            return;
+        }
+
         var lt = _gizmoDragInitialLocal;
         lt.M41 += localDelta.X; lt.M42 += localDelta.Y; lt.M43 += localDelta.Z;
         node.LocalTransform = lt;
@@ -13958,6 +14139,25 @@ public partial class ViewportView : UserControl
             if (ratio <= 0f) return;
         }
 
+        // Scaling a part multiplies its stored scale about its own pivot, so growing a part that has
+        // had its origin snapped to a face pushes it away from that face rather than out of a point
+        // somewhere in space. Applied to the pose the drag started from, so the total is the sweep.
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            var s = t.Scale;
+            t.Scale = _gizmoDragAxis switch
+            {
+                GizmoAxis.X => new Vector3(s.X * ratio, s.Y, s.Z),
+                GizmoAxis.Y => new Vector3(s.X, s.Y * ratio, s.Z),
+                GizmoAxis.Z => new Vector3(s.X, s.Y, s.Z * ratio),
+                _           => s * ratio,
+            };
+            t.ClampScale();
+            node.SetPlacement(t);
+            return;
+        }
+
         var lt = _gizmoDragInitialLocal;
         switch (_gizmoDragAxis)
         {
@@ -13982,8 +14182,7 @@ public partial class ViewportView : UserControl
     private void ProcessRotateDrag(SceneNode node, Vector3 hitWorld)
     {
         var rel     = hitWorld - _gizmoDragPlanePoint;
-        float angle = AxisAngle(_gizmoDragAxis, rel);
-        float delta = angle - _gizmoDragStartAngle;
+        float delta = WrapPi(RingAngle(rel) - _gizmoDragStartAngle);
 
         if (_toolIsDragging)
         {
@@ -13991,6 +14190,17 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // A part turns about its own axis, from the pose it had when the drag began, so the total
+        // rotation always matches the total sweep and repeated small deltas cannot accumulate drift.
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            t.RotateLocal(AxisIndex(_gizmoDragAxis), delta);
+            node.SetPlacement(t);
+            return;
+        }
+
+        // No placement (a modifier plane, an effector): unchanged world-axis behaviour.
         var rot = _gizmoDragAxis switch
         {
             GizmoAxis.X => Matrix4.CreateRotationX(delta),
@@ -14004,6 +14214,22 @@ public partial class ViewportView : UserControl
         lt.M41 = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
         node.LocalTransform = lt;
     }
+
+    /// <summary>Wraps to [-π, π] so a sweep across the ring's ±180° seam is a small step, not a
+    /// near-full-turn jump.</summary>
+    private static float WrapPi(float a)
+    {
+        while (a >  MathF.PI) a -= MathF.Tau;
+        while (a < -MathF.PI) a += MathF.Tau;
+        return a;
+    }
+
+    private static int AxisIndex(GizmoAxis axis) => axis switch
+    {
+        GizmoAxis.X => 0,
+        GizmoAxis.Y => 1,
+        _           => 2,
+    };
 
     private static float AxisAngle(GizmoAxis axis, Vector3 v) => axis switch
     {

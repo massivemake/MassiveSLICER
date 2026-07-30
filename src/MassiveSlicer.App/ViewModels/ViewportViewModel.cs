@@ -25,7 +25,7 @@ namespace MassiveSlicer.ViewModels;
 /// and overlay visibility flags. The actual OpenGL rendering lives in
 /// <c>MassiveSlicer.Viewport</c>; this ViewModel only holds bindable state.
 /// </summary>
-public sealed class ViewportViewModel : ViewModelBase
+public sealed partial class ViewportViewModel : ViewModelBase
 {
     private SelectionMode _selectionMode = SelectionMode.Object;
 
@@ -1465,8 +1465,17 @@ public sealed class ViewportViewModel : ViewModelBase
     public double SelectionB { get => _selB; set { if (SetField(ref _selB, value)) FireSelRotated(); } }
     public double SelectionC { get => _selC; set { if (SetField(ref _selC, value)) FireSelRotated(); } }
 
+    private double _selSx = 1, _selSy = 1, _selSz = 1;
+
+    /// <summary>Per-axis scale of the selection. Displayed as real millimetre dimensions or as a
+    /// percentage of the imported size depending on the scale tool's own mm/% toggle.</summary>
+    public double SelectionScaleX { get => _selSx; set { if (SetField(ref _selSx, value)) FireSelScaled(); } }
+    public double SelectionScaleY { get => _selSy; set { if (SetField(ref _selSy, value)) FireSelScaled(); } }
+    public double SelectionScaleZ { get => _selSz; set { if (SetField(ref _selSz, value)) FireSelScaled(); } }
+
     internal Action<double, double, double>? OnSelectionTranslated { get; set; }
     internal Action<double, double, double>? OnSelectionRotated    { get; set; }
+    internal Action<double, double, double>? OnSelectionScaled     { get; set; }
 
     /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
     internal UndoRedoService? UndoRedo { get; set; }
@@ -1476,6 +1485,15 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
+    private void FireSelScaled()     { if (!_suppressTransformCb) OnSelectionScaled?.Invoke(_selSx, _selSy, _selSz); }
+
+    /// <summary>Syncs the displayed per-axis scale without triggering the apply callback.</summary>
+    internal void SyncSelectionScaleDisplay(double x, double y, double z)
+    {
+        _suppressTransformCb = true;
+        SelectionScaleX = x; SelectionScaleY = y; SelectionScaleZ = z;
+        _suppressTransformCb = false;
+    }
 
     /// <summary>Syncs the displayed transform values without triggering apply callbacks.</summary>
     internal void SyncSelectionDisplay(double x, double y, double z, double a, double b, double c)

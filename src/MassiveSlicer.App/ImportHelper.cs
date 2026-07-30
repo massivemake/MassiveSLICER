@@ -37,7 +37,36 @@ internal static class ImportHelper
 
         NormalizeUnitScale(node, log);
         PlaceOnBed(node, activeCell);
+        CenterOrigin(node);
         return node;
+    }
+
+    /// <summary>
+    /// Gives <paramref name="node"/> a pivot at the centre of its own bounding box, once, without
+    /// the geometry moving. Applied to every fresh import and to every piece a cut creates.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this the pivot is wherever the exporting package left its origin — frequently far
+    /// outside the part — so the gizmo appeared detached from the mesh and every rotation swung the
+    /// part around a distant point. Toolpath nodes have always centred their own origin on their
+    /// centroid (<c>SceneRenderer.AddToolpath</c>); this brings meshes in line with that.
+    /// </para>
+    /// <para>
+    /// Deliberately a one-time move at creation rather than a value recomputed as the part changes:
+    /// a pivot that silently followed the geometry would shift under the user mid-edit. Re-centring
+    /// later is an explicit Recenter Origin press.
+    /// </para>
+    /// <para>
+    /// Called after <see cref="PlaceOnBed"/> so the pivot's recorded position already accounts for
+    /// bed placement and any unit-scale correction. Does nothing to a node that already carries a
+    /// placement, so restoring a saved workspace keeps whatever pivot that file specified.
+    /// </para>
+    /// </remarks>
+    internal static void CenterOrigin(SceneNode node)
+    {
+        if (NodeBounds.LocalCenter(node) is not { } center) return;
+        node.EnsurePlacement(center);
     }
 
     /// <summary>

@@ -521,9 +521,23 @@ public sealed class SceneRenderer : IDisposable
     public Vector3? GizmoPivotWorld { get; set; }
 
     /// <summary>Optional rotation-only basis (no translation) the gizmo is drawn/hit-tested in,
-    /// instead of always being world-axis-aligned — set when the selection is a Vertical Cut
-    /// modifier so its gizmo's X/Y follow the plane's own RotationDegrees.</summary>
+    /// instead of always being world-axis-aligned — set from the selection's own rotation so the
+    /// arrows stay stuck to the object, or from a Vertical Cut modifier's own RotationDegrees.</summary>
     public Matrix4? GizmoAxisBasis { get; set; }
+
+    /// <summary>
+    /// Where a node's gizmo belongs: its own pivot, in world space.
+    /// </summary>
+    /// <remarks>
+    /// Nodes driven straight from a matrix (the robot rig, cell fixtures) have no pivot of their
+    /// own and fall back to the matrix's translation column — which is also what every node used to
+    /// do, and why the gizmo appeared unrelated to the mesh: that column holds the file's own
+    /// origin, and most exports leave it nowhere near the geometry.
+    /// </remarks>
+    private static Vector3 PivotWorldOf(SceneNode node)
+        => node.Placement is { } p
+            ? Vector3.TransformPosition(p.Origin, node.WorldTransform)
+            : node.WorldTransform.Row3.Xyz;
 
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
@@ -1714,7 +1728,7 @@ public sealed class SceneRenderer : IDisposable
         // (even when gizmo handles are hidden). Handles only render when GizmoEnabled.
         if (SelectedNode is { } sel && _gizmo is not null)
         {
-            var nodePos = GizmoPivotWorld ?? sel.WorldTransform.Row3.Xyz;
+            var nodePos = GizmoPivotWorld ?? PivotWorldOf(sel);
             float dist  = (Camera.Eye - nodePos).Length;
             float scale = MathF.Max(dist * 0.12f, 1f);
 
@@ -2180,7 +2194,7 @@ public sealed class SceneRenderer : IDisposable
         if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
             return GizmoAxis.None;
 
-        var nodePos = GizmoPivotWorld ?? SelectedNode.WorldTransform.Row3.Xyz;
+        var nodePos = GizmoPivotWorld ?? PivotWorldOf(SelectedNode);
         float dist  = (Camera.Eye - nodePos).Length;
         float scale = MathF.Max(dist * 0.12f, 1f);
 
