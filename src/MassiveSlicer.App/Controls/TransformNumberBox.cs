@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Data;
 using Avalonia.Input;
 using Avalonia.Interactivity;
+using Avalonia.Threading;
 using MassiveSlicer.Core.Utils;
 
 namespace MassiveSlicer.Controls;
@@ -81,19 +82,25 @@ public class TransformNumberBox : TextBox
 
     // -- Click behaviour -------------------------------------------------------
 
+    /// <summary>Set while the opening click of a focus-in gesture is still in flight, so its
+    /// release can be suppressed too.</summary>
+    private bool _openingClick;
+
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         // First click into the box selects everything, so the next keystroke overwrites — the same
         // thing that happens in a text editor.
         //
-        // base is deliberately NOT called on that first click. Letting it run places a caret and
-        // arms a drag-selection anchored at the click point, which then fights the SelectAll: the
-        // selection collapses back toward that anchor, so clicking to the right of the decimal left
-        // only the fractional digits highlighted. Skipping base means there is no anchor to fight.
+        // base is deliberately NOT called for that gesture, on press OR release. Its press handler
+        // places a caret and arms a drag-selection anchored at the click point; its release handler
+        // then finishes that drag against the anchor. Either one collapses the SelectAll — with base
+        // on press the selection shrank to the digits after the decimal, and suppressing only the
+        // press left the release to clear it entirely.
         if (!IsFocused)
         {
+            _openingClick = true;
             Focus();
-            SelectAll();
+            SelectAllDeferred();
             e.Handled = true;
             return;
         }
@@ -106,6 +113,28 @@ public class TransformNumberBox : TextBox
         // the box was hit. Without this the viewport takes focus back and deselects the part.
         e.Handled = true;
     }
+
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        if (_openingClick)
+        {
+            _openingClick = false;
+            SelectAllDeferred();
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPointerReleased(e);
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Selects everything once the current input pass has finished. Posting rather than calling
+    /// directly means the selection is applied last, after any focus bookkeeping the base control
+    /// does on its way in, which would otherwise reset it.
+    /// </summary>
+    private void SelectAllDeferred()
+        => Dispatcher.UIThread.Post(SelectAll, DispatcherPriority.Input);
 
     // -- Commit / revert -------------------------------------------------------
 
@@ -135,17 +164,15 @@ public class TransformNumberBox : TextBox
     /// </summary>
     private void Commit()
     {
-        if (NumericEntryExpression.TryEvaluate(Text, Value, out double evaluated))
-        {
-            if (Math.Abs(evaluated - Value) > 1e-9)
-                Value = evaluated;
-            else
-                SyncTextFromValue();   // same number, but re-render "45+0" as "45.00"
-        }
-        else
-        {
-            SyncTextFromValue();
-        }
+        if (NumericEntryExpression.TryEvaluate(Text, Value, out double evaluated)
+            && Math.Abs(evaluated - Value) > 1e-9)
+            Value = evaluated;
+
+        // Always re-render, whether the value changed, stayed the same, or the entry was rejected.
+        // The property-changed path deliberately skips a focused box so a drag cannot overwrite
+        // something half-typed — which meant that after pressing Enter the box went on showing the
+        // expression ("100+50") until focus left, even though the part had already moved to 150.
+        SyncTextFromValue();
     }
 
     // -- Keeping the text in step ---------------------------------------------
