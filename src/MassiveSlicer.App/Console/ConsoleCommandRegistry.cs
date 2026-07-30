@@ -1696,6 +1696,15 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "gizmo",
+            Aliases = ["gizmo-mode"],
+            Description = "Read or set the active transform tool (Move / Rotate / Scale)",
+            Usage = "gizmo [move|rotate|scale|none]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.GizmoCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "basis",
             Aliases = ["gizmo-basis", "axes"],
             Description = "Report the gizmo pivot and which way each coloured handle points",

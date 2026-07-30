@@ -290,6 +290,31 @@ public sealed partial class ViewportViewModel
              + $"Z(blue)={V(az)} worldAligned={worldAligned}";
     }
 
+    /// <summary>
+    /// Backs the <c>gizmo</c> command: reads or sets which transform tool is active, so a headless
+    /// run can put the viewport into Move, Rotate or Scale before exercising a handle.
+    /// </summary>
+    public string GizmoCommand(string args)
+    {
+        string verb = (args ?? string.Empty).Trim().ToLowerInvariant();
+        if (verb.Length == 0)
+            return $"[gizmo] mode={_activeGizmoMode}";
+
+        var mode = verb switch
+        {
+            "move" or "translate" or "t" => GizmoMode.Translate,
+            "rotate" or "rot" or "r"     => GizmoMode.Rotate,
+            "scale" or "s"               => GizmoMode.Scale,
+            "none" or "off"              => GizmoMode.None,
+            _                            => (GizmoMode?)null,
+        };
+        if (mode is null)
+            return "[gizmo] usage: gizmo [move|rotate|scale|none]";
+
+        ActiveGizmoModeInternal = mode.Value;
+        return $"[gizmo] mode={_activeGizmoMode}";
+    }
+
     private static bool Triple(string[] p, out Vector3 v)
     {
         v = Vector3.Zero;
