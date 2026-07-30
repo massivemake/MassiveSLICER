@@ -3366,11 +3366,22 @@
                             ToolTip.Tip="Export spindle finish program (uses global home and orientation above)"
                             Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"/>
 
+                    <ComboBox Margin="8,0,8,4"
+                              HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
+                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
+                              ToolTip.Tip="Robot (KRL) or MassiveDRIVE (package)">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Label}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                     <Button Margin="8,0,8,4"
-                            Content="Send to Robot"
+                            Content="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
                             Classes="SecondaryButton"
                             HorizontalAlignment="Stretch"
-                            ToolTip.Tip="Save mill KRL to the cell robot"
+                            ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}"
                             Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"/>
                 </StackPanel>
             </ScrollViewer>

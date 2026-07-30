@@ -1115,87 +1115,15 @@ public static class KrlExporter
 
     /// <summary>
     /// Computes KUKA A/B/C (ZYX Euler, degrees) for the given slice plane normal.
-    ///
-    /// Algorithm:
-    ///   1. Build base perpendicular frame: xBase = −normal (nozzle into surface).
-    ///      yBase/zBase come from Rodrigues-rotating the canonical (0,1,0)/(1,0,0)
-    ///      by the same rotation that takes (0,0,−1) onto xBase.
-    ///   2. Apply the toolhead offsets as a local KUKA ZYX rotation in that base frame:
-    ///      R_final = R_base · Rz(A)·Ry(B)·Rx(C).
-    ///      Zero offset → pure perpendicular pose (same output as before).
-    ///      Non-zero offset → physically tilts/rolls the nozzle from perpendicular.
-    ///   3. Extract ZYX Euler from R_final.
+    /// Delegates to <see cref="KukaOrientation.AbcFromNormal"/> (shared with MassiveDRIVE export).
     /// </summary>
     private static (float a, float b, float c) KukaAbc(Vector3 normal, KrlExportSettings s, float tcpYawDeg = 0f)
-    {
-        normal = Vector3.Normalize(normal);
-
-        // Step 1: base perpendicular frame via Rodrigues (0,0,−1) → xBase = −normal
-        var xBase = -normal;
-        var xDef  = new Vector3(0f, 0f, -1f);
-        float cosT = Math.Clamp(Vector3.Dot(xDef, xBase), -1f, 1f);
-        Vector3 yBase, zBase;
-        if (MathF.Abs(cosT - 1f) < 1e-6f)
-        {
-            yBase = new Vector3(0f, 1f, 0f); zBase = new Vector3(1f, 0f, 0f);
-        }
-        else if (MathF.Abs(cosT + 1f) < 1e-6f)
-        {
-            yBase = new Vector3(0f, 1f, 0f); zBase = new Vector3(-1f, 0f, 0f);
-        }
-        else
-        {
-            var   axis = Vector3.Normalize(Vector3.Cross(xDef, xBase));
-            float sinT = MathF.Sqrt(1f - cosT * cosT);
-            yBase = Rodrigues(new Vector3(0f, 1f, 0f), axis, sinT, cosT);
-            zBase = Rodrigues(new Vector3(1f, 0f, 0f), axis, sinT, cosT);
-        }
-
-        // Step 2: local KUKA ZYX offset applied in the base frame
-        // R_final = R_base · Rz(A)·Ry(B)·Rx(C)
-        float ca = MathF.Cos(s.ToolheadOffsetA * D2R), sa = MathF.Sin(s.ToolheadOffsetA * D2R);
-        float cb = MathF.Cos(s.ToolheadOffsetB * D2R), sb = MathF.Sin(s.ToolheadOffsetB * D2R);
-        float cc = MathF.Cos(s.ToolheadOffsetC * D2R), sc = MathF.Sin(s.ToolheadOffsetC * D2R);
-
-        var xF = xBase * (ca * cb)                 + yBase * (sa * cb)                 + zBase * (-sb);
-        var yF = xBase * (ca * sb * sc - sa * cc)   + yBase * (sa * sb * sc + ca * cc)   + zBase * (cb * sc);
-        var zF = xBase * (ca * sb * cc + sa * sc)   + yBase * (sa * sb * cc - ca * sc)   + zBase * (cb * cc);
-
-        // Optional print-neutral spin about the nozzle (approach) axis — used by the
-        // singularity-avoidance repair pass.  The nozzle is rotationally symmetric, so
-        // this changes only the wrist configuration, never the deposited bead.
-        if (MathF.Abs(tcpYawDeg) > 1e-4f)
-        {
-            float cy = MathF.Cos(tcpYawDeg * D2R), sy = MathF.Sin(tcpYawDeg * D2R);
-            var y2 = yF * cy + zF * sy;
-            var z2 = zF * cy - yF * sy;
-            yF = y2; zF = z2;
-        }
-
-        // Step 3: extract ZYX Euler from R_final
-        float bRad = MathF.Atan2(-xF.Z, MathF.Sqrt(xF.X * xF.X + xF.Y * xF.Y));
-        float aRad, cRad;
-        // Threshold 0.05 rad ≈ cos(87°). Near B = ±90° the A and C axes are collinear
-        // (gimbal lock): tiny XY noise in the normal produces huge atan2 swings that force
-        // the KUKA to interpolate through spurious wrist rotations at reduced speed.
-        // In that regime only (A − C) is physical: derive it from the y-axis (stable —
-        // no atan2 blowup) so a deliberate TCP yaw survives; without yaw this yields the
-        // same A = 0, C = 0 as before for clean vertical normals.
-        if (MathF.Abs(MathF.Abs(bRad) - MathF.PI / 2f) < 0.05f)
-        {
-            // Gimbal lock (tool ~vertical): A and C are collinear. Recover the true azimuth
-            // from the (stable) y-axis so a deliberate toolhead offset / singularity-repair yaw
-            // survives; for a clean vertical normal with no yaw this yields A = 0 as before.
-            aRad = MathF.Atan2(-yF.X, yF.Y);
-            cRad = 0f;
-        }
-        else
-        {
-            aRad = MathF.Atan2(xF.Y, xF.X);
-            cRad = MathF.Atan2(yF.Z, zF.Z);
-        }
-        return (aRad * R2D, bRad * R2D, cRad * R2D);
-    }
+        => KukaOrientation.AbcFromNormal(
+            normal,
+            s.ToolheadOffsetA,
+            s.ToolheadOffsetB,
+            s.ToolheadOffsetC,
+            tcpYawDeg);
 
 
     // -- Line formatting -------------------------------------------------------

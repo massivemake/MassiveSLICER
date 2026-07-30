@@ -59,6 +59,16 @@ public sealed record CellConfig
     public string BridgeIp { get; init; } = "192.168.0.1";
     public int BridgePort { get; init; } = 7000;
 
+    /// <summary>
+    /// MassiveDRIVE HTTP base URL for this cell (e.g. <c>http://192.168.0.233:8080</c>).
+    /// When set, "Send to MassiveDRIVE" uploads a job package and starts the path executor.
+    /// Null/empty = MassiveDRIVE send disabled for this cell.
+    /// </summary>
+    public string? MassiveDriveUrl { get; init; }
+
+    /// <summary>Cell id for MassiveDRIVE configs (<c>lfam3</c>, <c>lfam2</c>, …).</summary>
+    public string? MassiveDriveCellId { get; init; }
+
     /// <summary>Extruder RevPi lfam-monitor bridge host (LFAM 3: 192.168.0.196).</summary>
     public string? ExtIp { get; init; }
 
