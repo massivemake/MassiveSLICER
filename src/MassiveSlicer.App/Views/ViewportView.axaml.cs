@@ -14679,6 +14679,10 @@ public partial class ViewportView : UserControl
             ReverseMs = 200f,
             ReversePercent = 40f,
             TravelReverse = true,
+            // Same toolhead offsets as KRL export — ABC must match viewport / KukaAbc
+            ToolheadOffsetA = (float)settings.ToolheadA,
+            ToolheadOffsetB = (float)settings.ToolheadB,
+            ToolheadOffsetC = (float)settings.ToolheadC,
             WorkspacePath = mvm?.AppPreferences.LastWorkspacePath,
             SourceNote = $"cell={cell.Name}",
         };

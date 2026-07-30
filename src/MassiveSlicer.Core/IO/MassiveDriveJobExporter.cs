@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using MassiveSlicer.Core.Kinematics;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.IO;
@@ -25,6 +26,13 @@ public sealed record MassiveDriveExportSettings
     public float ReversePercent { get; init; } = 40f;
     /// <summary>When true, travel segments request suck-back reverse on Drive.</summary>
     public bool TravelReverse { get; init; } = true;
+    /// <summary>
+    /// Toolhead orientation offsets (deg) applied in the approach frame — same as KRL export
+    /// <see cref="KrlExportSettings.ToolheadOffsetA"/> / B / C (from additive settings / cell default).
+    /// </summary>
+    public float ToolheadOffsetA { get; init; }
+    public float ToolheadOffsetB { get; init; }
+    public float ToolheadOffsetC { get; init; }
     /// <summary>Optional workspace / provenance fields.</summary>
     public string? WorkspacePath { get; init; }
     public string? SourceNote { get; init; }
@@ -80,9 +88,9 @@ public static class MassiveDriveJobExporter
                 bool layerChange = move.IsLayerChange || (prevLayer >= 0 && layer.Index != prevLayer && kind == "print");
                 prevLayer = layer.Index;
 
-                // Pose: XYZ + default ABC for Z-up planar (B=90). Per-move normal can refine later.
-                var from = PoseArray(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg);
-                var to = PoseArray(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg);
+                // Pose: XYZ + KUKA ABC from surface normal (same math as KRL export / viewport)
+                var from = PoseArray(move.From, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
+                var to = PoseArray(move.To, layer.PlaneNormal, move.Normal, move.TcpYawDeg, s);
 
                 var seg = new Dictionary<string, object?>
                 {
@@ -169,19 +177,31 @@ public static class MassiveDriveJobExporter
     }
 
     /// <summary>
-    /// Pose as [x,y,z,a,b,c]. ABC is a simple Z-up default (B=90) when normal ~ +Z;
-    /// otherwise leaves A=0,B=90,C=0 as a stable Drive default (orientation polish later).
+    /// Pose as [x,y,z,a,b,c] with ABC from <see cref="KukaOrientation.AbcFromNormal"/>.
+    /// Uses per-move normal when set, else layer plane normal (same priority as KRL export).
     /// </summary>
-    static float[] PoseArray(Vector3 p, Vector3 layerNormal, Vector3 moveNormal, float tcpYawDeg)
+    static float[] PoseArray(
+        Vector3 p,
+        Vector3 layerNormal,
+        Vector3 moveNormal,
+        float tcpYawDeg,
+        MassiveDriveExportSettings s)
     {
-        // Drive primarily uses XYZ for path following today; ABC kept stable for planar LFAM.
-        _ = layerNormal;
-        _ = moveNormal;
-        _ = tcpYawDeg;
+        var n = moveNormal.LengthSquared() > 1e-12f ? moveNormal : layerNormal;
+        if (n.LengthSquared() < 1e-12f)
+            n = Vector3.UnitZ;
+
+        var (a, b, c) = KukaOrientation.AbcFromNormal(
+            n,
+            s.ToolheadOffsetA,
+            s.ToolheadOffsetB,
+            s.ToolheadOffsetC,
+            tcpYawDeg);
+
         return
         [
             p.X, p.Y, p.Z,
-            0f, 90f, 0f,
+            a, b, c,
         ];
     }
 }
