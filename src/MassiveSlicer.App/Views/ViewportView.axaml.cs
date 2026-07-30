@@ -13840,12 +13840,18 @@ public partial class ViewportView : UserControl
             // than needing a diagonal X+Y; world axes for anything else.
             var basis = GetGizmoAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
             _gizmoDragBasis   = basis;
-            _gizmoDragAxisDir = axis switch
+            Vector3 BasisRow(int i) => i switch
             {
-                GizmoAxis.X => basis.Row0.Xyz,
-                GizmoAxis.Y => basis.Row1.Xyz,
-                _           => basis.Row2.Xyz,
+                0 => basis.Row0.Xyz,
+                1 => basis.Row1.Xyz,
+                _ => basis.Row2.Xyz,
             };
+            // For a band, the "axis dir" is the direction it does NOT move along — its normal. The
+            // drag plane is then the band itself, and the motion is whatever the cursor traces
+            // across it rather than a projection onto one arrow.
+            _gizmoDragAxisDir = axis.IsPlane()
+                ? BasisRow(axis.PlaneAxes().Normal)
+                : BasisRow(AxisIndex(axis));
         }
 
         // Cut tool: gizmo drives the cut plane, not the mesh transform.
@@ -13876,9 +13882,19 @@ public partial class ViewportView : UserControl
             case GizmoMode.Translate:
             case GizmoMode.Scale:
             {
-                var camFwd = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
-                var n      = camFwd - Vector3.Dot(camFwd, _gizmoDragAxisDir) * _gizmoDragAxisDir;
-                _gizmoDragPlaneNormal = n.LengthSquared > 1e-6f ? Vector3.Normalize(n) : Vector3.UnitZ;
+                // A band drags in its own plane, so that plane IS the drag surface. A single axis
+                // has no plane of its own, so one is improvised facing the camera and the motion is
+                // projected back onto the arrow afterwards.
+                if (axis.IsPlane())
+                {
+                    _gizmoDragPlaneNormal = _gizmoDragAxisDir;
+                }
+                else
+                {
+                    var camFwd = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+                    var n      = camFwd - Vector3.Dot(camFwd, _gizmoDragAxisDir) * _gizmoDragAxisDir;
+                    _gizmoDragPlaneNormal = n.LengthSquared > 1e-6f ? Vector3.Normalize(n) : Vector3.UnitZ;
+                }
 
                 var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
                 float denom  = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
@@ -14162,8 +14178,13 @@ public partial class ViewportView : UserControl
 
     private void ProcessTranslateDrag(SceneNode node, Vector3 hitWorld)
     {
-        float proj     = Vector3.Dot(hitWorld - _gizmoDragStartHit, _gizmoDragAxisDir);
-        var worldDelta = _gizmoDragAxisDir * proj;
+        // A band drag already happens inside its own plane, so the cursor's whole travel is the
+        // movement. A single-axis drag happens on an improvised camera-facing plane, so it has to be
+        // projected back down onto the one arrow being held.
+        var travel = hitWorld - _gizmoDragStartHit;
+        var worldDelta = _gizmoDragAxis.IsPlane()
+            ? travel
+            : _gizmoDragAxisDir * Vector3.Dot(travel, _gizmoDragAxisDir);
 
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);
