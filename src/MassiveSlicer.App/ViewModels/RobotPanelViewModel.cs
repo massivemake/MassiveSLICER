@@ -463,6 +463,43 @@ public sealed class RobotPanelViewModel : ViewModelBase
     /// <summary>Flange Z position in ROBROOT frame (mm) -- from scene graph FK.</summary>
     public double FlangeZ { get => _flangeZ; set => SetField(ref _flangeZ, value); }
 
+    // -- Rendered TCP readout (scene world frame, from scene graph FK) --------
+    // TcpX/Y/Z above are overwritten by the controller's BASE-frame pose while
+    // synced, so they cannot be used to check where the app actually DRAWS the
+    // nozzle. These hold the scene-graph answer and are never overwritten by the
+    // live sync -- `cal-check` diffs them against the controller to measure the
+    // cell calibration error.
+
+    private double _sceneTcpX, _sceneTcpY, _sceneTcpZ;
+
+    /// <summary>Rendered nozzle-tip X in scene world mm -- never overwritten by live sync.</summary>
+    public double SceneTcpX { get => _sceneTcpX; set => SetField(ref _sceneTcpX, value); }
+    /// <summary>Rendered nozzle-tip Y in scene world mm.</summary>
+    public double SceneTcpY { get => _sceneTcpY; set => SetField(ref _sceneTcpY, value); }
+    /// <summary>Rendered nozzle-tip Z in scene world mm.</summary>
+    public double SceneTcpZ { get => _sceneTcpZ; set => SetField(ref _sceneTcpZ, value); }
+
+    // -- Controller TCP readout (BASE frame, straight off the controller) ------
+    // TcpX/Y/Z are written by BOTH the live sync and SyncTcpReadout, so while the
+    // robot is moving they race and whichever ran last wins. These are written by
+    // the sync handler ONLY, so `cal-check` always compares two genuinely
+    // independent answers instead of the scene against itself.
+
+    private double _ctlTcpX, _ctlTcpY, _ctlTcpZ, _ctlTcpA, _ctlTcpB, _ctlTcpC;
+
+    /// <summary>Controller-reported TCP X in BASE-frame mm.</summary>
+    public double CtlTcpX { get => _ctlTcpX; set => SetField(ref _ctlTcpX, value); }
+    /// <summary>Controller-reported TCP Y in BASE-frame mm.</summary>
+    public double CtlTcpY { get => _ctlTcpY; set => SetField(ref _ctlTcpY, value); }
+    /// <summary>Controller-reported TCP Z in BASE-frame mm.</summary>
+    public double CtlTcpZ { get => _ctlTcpZ; set => SetField(ref _ctlTcpZ, value); }
+    /// <summary>Controller-reported TCP A (deg).</summary>
+    public double CtlTcpA { get => _ctlTcpA; set => SetField(ref _ctlTcpA, value); }
+    /// <summary>Controller-reported TCP B (deg).</summary>
+    public double CtlTcpB { get => _ctlTcpB; set => SetField(ref _ctlTcpB, value); }
+    /// <summary>Controller-reported TCP C (deg).</summary>
+    public double CtlTcpC { get => _ctlTcpC; set => SetField(ref _ctlTcpC, value); }
+
     // -- Solver FK readout (ROBROOT frame, from solver FK) --------------------
     // Updated by GoToBedCenter to show what the solver thinks the position is.
     // Should match FlangeX/Y/Z; a mismatch reveals an FK discrepancy.
@@ -815,6 +852,10 @@ public sealed class RobotPanelViewModel : ViewModelBase
             TcpA = Math.Round(pos.A, 3);
             TcpB = Math.Round(pos.B, 3);
             TcpC = Math.Round(pos.C, 3);
+
+            // Uncontested copy for calibration comparisons -- see CtlTcpX.
+            CtlTcpX = TcpX; CtlTcpY = TcpY; CtlTcpZ = TcpZ;
+            CtlTcpA = TcpA; CtlTcpB = TcpB; CtlTcpC = TcpC;
         });
 
         _sync.IoSnapshotUpdated += (_, snapshot) =>

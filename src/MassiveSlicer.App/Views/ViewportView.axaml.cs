@@ -1621,6 +1621,11 @@ public partial class ViewportView : UserControl
                         _robotHomePos.Y + off.Y,
                         _robotHomePos.Z + off.Z);
                     RefreshIkSceneKinematics();
+
+                    // The rail moves ROBROOT without touching A1-A6, so the joint-change
+                    // guard above skips the readout. Refresh it here or the flange/TCP
+                    // numbers (and `cal-check`) stay stale after a rail-only move.
+                    SyncTcpReadout(vm);
                 }
 
                 // LFAM 3 rotary: spin the turntable about the vertical axis through its centre.
@@ -1731,6 +1736,12 @@ public partial class ViewportView : UserControl
         vm.Robot!.FlangeX = Math.Round(pos.X - robroot.X, 1);
         vm.Robot.FlangeY  = Math.Round(pos.Y - robroot.Y, 1);
         vm.Robot.FlangeZ  = Math.Round(pos.Z - robroot.Z, 1);
+
+        // Scene-world nozzle tip, kept separate from TcpX/Y/Z because the live sync
+        // overwrites those with the controller's BASE-frame pose (see `cal-check`).
+        vm.Robot.SceneTcpX = Math.Round(tcp.X, 1);
+        vm.Robot.SceneTcpY = Math.Round(tcp.Y, 1);
+        vm.Robot.SceneTcpZ = Math.Round(tcp.Z, 1);
 
         vm.Robot.TcpX = Math.Round(tcp.X, 1);
         vm.Robot.TcpY = Math.Round(tcp.Y, 1);
@@ -2257,7 +2268,10 @@ public partial class ViewportView : UserControl
 
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
-        _robotHomePos      = _robrootWorldPos;
+        // The rail rewrites the robot node's transform every frame from _robotHomePos, so the
+        // render-only ModelOffset has to be folded in here too or the rail would undo it.
+        var mp = swap.Config.Robot.ModelWorldPosition;
+        _robotHomePos      = new Vector3(mp.X, mp.Y, mp.Z);
         _robotRail         = swap.Config.RobotRail;
         _flangeDisplayRoll = swap.Config.Robot.FlangeDisplayRoll * MathF.PI / 180f;
 
