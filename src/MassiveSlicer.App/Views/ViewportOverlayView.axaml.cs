@@ -66,6 +66,11 @@ public partial class ViewportOverlayView : UserControl
             row.AddHandler(PointerReleasedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
         }
 
+        // Toggling Move Origin has to survive the viewport stealing the click, so it goes through
+        // the same swallow-the-press treatment as the value rows rather than a plain Command.
+        MoveOriginButton.AddHandler(PointerPressedEvent, OnMoveOriginPointerPressed, handledEventsToo: true);
+        MoveOriginButton.AddHandler(PointerReleasedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+
         // Clicking an axis letter steps a clean additive 90°; Alt reverses.
         foreach (Control label in new Control[] { StepAxisX, StepAxisY, StepAxisZ })
             label.AddHandler(PointerPressedEvent, OnStepAxisPointerPressed, handledEventsToo: true);
@@ -84,9 +89,16 @@ public partial class ViewportOverlayView : UserControl
     private static void OnTransformRowPointerPressed(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => e.Handled = true;
 
+    private void OnMoveOriginPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        e.Handled = true;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+        (DataContext as ViewportViewModel)?.ToggleMoveOrigin();
+    }
+
     /// <summary>
-    /// Clicking an axis letter rotates a clean additive 90° about the part's own axis; holding Alt
-    /// goes the other way. Additive so four clicks land back exactly where they started.
+    /// Clicking an axis letter snaps to the next 90° stop about a world axis; holding Alt goes the
+    /// other way.
     /// </summary>
     private void OnStepAxisPointerPressed(object? sender, PointerPressedEventArgs e)
     {

@@ -576,6 +576,11 @@ public sealed class GizmoRenderer : IDisposable
         return !(anyNeg && anyPos);
     }
 
+    /// <summary>Projects a world point to viewport pixels — shared so overlays that hit-test in
+    /// screen space agree exactly with the gizmo's own projection.</summary>
+    public static Vector2 WorldToScreen(Vector3 world, Matrix4 vp, float vpW, float vpH)
+        => ToScreen(world, vp, vpW, vpH);
+
     private static Vector2 ToScreen(Vector3 world, Matrix4 vp, float vpW, float vpH)
     {
         float cx = world.X * vp.M11 + world.Y * vp.M21 + world.Z * vp.M31 + vp.M41;

@@ -412,7 +412,24 @@ public partial class ViewportView : UserControl
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
+            vm.OnMoveOriginModeChanged = SetMoveOriginOverlay;
             vm.OnDropToPlateRequested = DropToPlate;
+            vm.OnDropToPlateDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[drop] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                float before = LayFlatMinZ(n);
+                var posBefore = n.WorldTransform.Row3.Xyz;
+                DropToPlate();
+                float after = LayFlatMinZ(n);
+                var posAfter = n.WorldTransform.Row3.Xyz;
+                return string.Format(inv,
+                    "[drop] bedZ={0:F2} lowestBefore={1:F2} lowestAfter={2:F2} (want bedZ) "
+                    + "originBefore=({3:F1},{4:F1},{5:F1}) originAfter=({6:F1},{7:F1},{8:F1})",
+                    _renderer.BedZ, before, after,
+                    posBefore.X, posBefore.Y, posBefore.Z,
+                    posAfter.X, posAfter.Y, posAfter.Z);
+            };
             vm.OnRecenterRequested    = RecenterSelected;
             vm.OnUngroupRequested     = UngroupSelected;
             vm.OnExplodeRequested     = ExplodeSelected;
@@ -1400,6 +1417,15 @@ public partial class ViewportView : UserControl
                 if (_renderer.SelectedNode is not null &&
                     removing.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
                     _renderer.Select(null);
+            }
+
+            // Overlay meshes upload here rather than through PendingNodes, which also re-parents to
+            // the scene root, marks the subtree as a user import and steals the selection.
+            if (_pendingOverlayUpload is { } overlayUpload)
+            {
+                _pendingOverlayUpload = null;
+                UploadPendingMeshes(overlayUpload);
+                _renderer.InvalidateShaderAppearance();
             }
 
             while (vm.PendingNodes.TryDequeue(out var incoming))
@@ -2910,6 +2936,16 @@ public partial class ViewportView : UserControl
             }
         }
 
+        // Move Origin mode owns the next left click: it is a chooser, so a click either lands on a
+        // snap marker or dismisses it, and must never fall through to selection or a gizmo drag.
+        if (kind == PointerUpdateKind.LeftButtonPressed
+            && DataContext is ViewportViewModel { IsMoveOriginActive: true } moVm)
+        {
+            if (!TryPickOrigin(pos)) moVm.IsMoveOriginActive = false;
+            e.Handled = true;
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonPressed)
         {
             _leftDownPos  = pos;
@@ -3585,6 +3621,14 @@ public partial class ViewportView : UserControl
         // in the app rather than just the transform boxes, and leaves the shortcuts themselves
         // untouched for when the viewport genuinely has focus.
         if (IsTextEntryFocused()) return;
+
+        // Esc backs out of the Move Origin chooser without picking anything.
+        if (e.Key == Key.Escape && DataContext is ViewportViewModel { IsMoveOriginActive: true } moCancelVm)
+        {
+            moCancelVm.IsMoveOriginActive = false;
+            e.Handled = true;
+            return;
+        }
 
         if (_kbTransformActive)
         {
@@ -11111,6 +11155,98 @@ public partial class ViewportView : UserControl
     /// and TCP need, so that path is untouched below.
     /// </para>
     /// </remarks>
+    // -- Move Origin mode ------------------------------------------------------
+
+    private SceneNode? _originOverlay;
+    private SceneNode? _originOverlayTarget;
+    private Vector3[]  _originSnapPoints = [];
+    private SceneNode? _pendingOverlayUpload;
+
+    /// <summary>How near the cursor must be to a marker, in pixels.</summary>
+    private const float OriginPickRadiusPx = 16f;
+
+    /// <summary>
+    /// Shows or hides the bounding box and its 26 snap markers for the current selection.
+    /// </summary>
+    private void SetMoveOriginOverlay(bool on)
+    {
+        TearDownOriginOverlay();
+
+        if (!on) { GlCanvas.RequestNextFrameRendering(); return; }
+        if (_renderer.SelectedNode is not { } node) return;
+        if (NodeBounds.LocalAabb(node) is not { } box) return;
+
+        // Parented to the part, so the box tracks it as it moves and turns with nothing having to
+        // re-place it, and a marker's local position is directly the pivot value it will set.
+        var overlay = OriginPickOverlay.Build(box, out var points);
+        node.AddChild(overlay);
+
+        _originOverlay        = overlay;
+        _originOverlayTarget  = node;
+        _originSnapPoints     = points;
+        _pendingOverlayUpload = overlay;
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void TearDownOriginOverlay()
+    {
+        if (_originOverlay is { } old)
+            (old.Parent ?? _renderer.SceneRoot).RemoveChild(old);
+        _originOverlay       = null;
+        _originOverlayTarget = null;
+        _originSnapPoints    = [];
+    }
+
+    /// <summary>
+    /// Picks the snap marker nearest the cursor and moves the pivot there. Screen-space rather than
+    /// a ray cast: the markers are deliberately tiny, and what the user is aiming at is the dot they
+    /// can see, not a volume in space.
+    /// </summary>
+    private bool TryPickOrigin(Point pos)
+    {
+        if (_originOverlayTarget is not { } node || _originSnapPoints.Length == 0) return false;
+        if (node.Placement is not { } placement) return false;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW <= 0 || vpH <= 0) return false;
+
+        var world    = node.WorldTransform;
+        var viewProj = _renderer.Camera.GetViewMatrix()
+                     * _renderer.Camera.GetProjectionMatrix(vpW / vpH);
+
+        var    mouse = new Vector2((float)pos.X, (float)pos.Y);
+        float  best  = OriginPickRadiusPx;
+        Vector3? hit = null;
+
+        foreach (var local in _originSnapPoints)
+        {
+            var screen = GizmoRenderer.WorldToScreen(
+                Vector3.TransformPosition(local, world), viewProj, vpW, vpH);
+            float d = (screen - mouse).Length;
+            if (d < best) { best = d; hit = local; }
+        }
+
+        if (hit is not { } chosen) return false;
+
+        var before = node.LocalTransform;
+        var t = placement;
+        t.SetOrigin(chosen);
+        node.SetPlacement(t);
+
+        if (DataContext is ViewportViewModel vm)
+        {
+            // Only the pivot moved, so there is no world delta to mirror onto the toolpath.
+            SyncSelectionTransformDisplay(vm);
+            vm.IsMoveOriginActive = false;   // one pick and the chooser is done
+            RecordTransformUndo(vm, node, before, node.LocalTransform, "Move Origin");
+        }
+
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
     /// <summary>Last live readout refresh, used to keep drag updates to roughly frame rate.</summary>
     private long _lastLiveReadoutTicks;
 

@@ -1696,6 +1696,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "move-origin",
+            Aliases = ["origin-mode"],
+            Description = "Show the bounding box and its snap points so a click can reposition the pivot",
+            Usage = "move-origin [on|off]     bare toggles",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.MoveOriginCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drop",
+            Aliases = ["drop-to-plate"],
+            Description = "Drop the selected part onto the bed, reporting its lowest point before and after",
+            Usage = "drop",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.DropCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "step",
             Aliases = ["step-rotate"],
             Description = "Snap to the next 90° stop about a world axis (what clicking an axis letter does)",

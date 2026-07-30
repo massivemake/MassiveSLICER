@@ -699,6 +699,12 @@
                         <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
                     </Button>
                     <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
+                    <Button x:Name="MoveOriginButton" Classes="ToolbarButton" Padding="12,4"
+                            Classes.active="{Binding IsMoveOriginActive}"
+                            IsEnabled="{Binding HasMeshSelected}"
+                            ToolTip.Tip="Move Origin — show the part's bounding box and click a corner, edge midpoint or face centre to put the handle there. The part does not move. Esc to cancel.">
+                        <ia:Icon Value="mdi-vector-point" FontSize="14"/>
+                    </Button>
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"

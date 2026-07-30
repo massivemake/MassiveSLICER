@@ -356,6 +356,48 @@ public sealed partial class ViewportViewModel
         }
     }
 
+    // -- Move Origin mode ------------------------------------------------------
+
+    private bool _isMoveOriginActive;
+
+    /// <summary>
+    /// True while the Move Origin chooser is up: the part's bounding box is shown with its 26 snap
+    /// points, and the next viewport click picks one.
+    /// </summary>
+    /// <remarks>
+    /// Reachable from Translate, Rotate and Scale — it changes where the handle sits, not what the
+    /// handle does, so it is not a fourth transform mode.
+    /// </remarks>
+    public bool IsMoveOriginActive
+    {
+        get => _isMoveOriginActive;
+        set
+        {
+            if (!SetField(ref _isMoveOriginActive, value)) return;
+            OnMoveOriginModeChanged?.Invoke(value);
+            NotifyRenderNeeded();
+        }
+    }
+
+    internal Action<bool>? OnMoveOriginModeChanged { get; set; }
+
+    /// <summary>Toggles the Move Origin chooser.</summary>
+    public void ToggleMoveOrigin() => IsMoveOriginActive = !IsMoveOriginActive;
+
+    /// <summary>Backs the <c>move-origin</c> command.</summary>
+    public string MoveOriginCommand(string args)
+    {
+        string verb = (args ?? string.Empty).Trim().ToLowerInvariant();
+        IsMoveOriginActive = verb switch
+        {
+            "on"  => true,
+            "off" => false,
+            ""    => !IsMoveOriginActive,
+            _     => IsMoveOriginActive,
+        };
+        return $"[move-origin] {(IsMoveOriginActive ? "on — click a snap point on the box" : "off")}";
+    }
+
     /// <summary>Walks up from <paramref name="node"/> — a short chain — rather than scanning down.</summary>
     private static bool IsDescendantOf(SceneNode node, SceneNode ancestor)
     {
@@ -430,6 +472,16 @@ public sealed partial class ViewportViewModel
         // 360 and -0 both read as 0.
         return MathF.Abs(deg - 360f) < 1e-3f ? 0f : deg + 0f;
     }
+
+    /// <summary>
+    /// Invoked by the <c>drop</c> command; reports the part's lowest point before and after so a
+    /// misbehaving drop can be measured rather than eyeballed.
+    /// </summary>
+    internal Func<string>? OnDropToPlateDiagnostic { get; set; }
+
+    /// <summary>Backs the <c>drop</c> command.</summary>
+    public string DropCommand()
+        => OnDropToPlateDiagnostic?.Invoke() ?? "[drop] viewport not ready.";
 
     /// <summary>Backs the <c>step</c> command.</summary>
     public string StepCommand(string args)
