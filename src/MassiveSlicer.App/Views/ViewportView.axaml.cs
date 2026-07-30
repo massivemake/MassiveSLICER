@@ -9,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using MassiveSlicer.App;
 using MassiveSlicer.App.Enums;
 using MassiveSlicer.App.Undo;
@@ -78,6 +79,10 @@ public partial class ViewportView : UserControl
     private Vector3  _gizmoDragPlaneNormal;
     private Vector3  _gizmoDragPlanePoint;
     private Vector3  _gizmoDragStartHit;
+    /// <summary>Set when the viewport itself saw the left press. Click-to-select runs on release
+    /// against the press position, so without this a press swallowed by overlay chrome would still
+    /// produce a pick — at a stale position — on release.</summary>
+    private bool     _leftPressSeen;
     private Matrix4  _gizmoDragInitialLocal;
     private NodeTransform? _gizmoDragInitialPlacement;
     /// <summary>The basis the active handle was drawn and hit-tested in — the object's own axes for
@@ -2719,9 +2724,28 @@ public partial class ViewportView : UserControl
 
     // -- Pointer input ---------------------------------------------------------
 
+    /// <summary>
+    /// True when keyboard focus is inside a text-entry control, so the viewport's bare-key shortcuts
+    /// should stand down and let the characters through.
+    /// </summary>
+    private bool IsTextEntryFocused()
+    {
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        return focused switch
+        {
+            TextBox => true,
+            // NumericUpDown / AutoCompleteBox focus their own inner TextBox, so walk up as well.
+            Visual v => v.FindAncestorOfType<TextBox>() is not null,
+            _ => false,
+        };
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        this.Focus();
+        // Taking focus here is what makes the viewport's keyboard shortcuts work, but it must not
+        // yank focus out of a field the user just clicked into.
+        if (!IsTextEntryFocused() || e.Source is not Visual src || src.FindAncestorOfType<TextBox>() is null)
+            this.Focus();
         var pt   = e.GetCurrentPoint(this);
         var pos  = pt.Position;
         var mods = e.KeyModifiers;
@@ -2884,8 +2908,9 @@ public partial class ViewportView : UserControl
 
         if (kind == PointerUpdateKind.LeftButtonPressed)
         {
-            _leftDownPos = pos;
-            _leftDragged = false;
+            _leftDownPos  = pos;
+            _leftDragged  = false;
+            _leftPressSeen = true;
 
             float mx  = (float)pos.X;
             float my  = (float)pos.Y;
@@ -3132,6 +3157,9 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+        // Consume the flag up front so every early return below still resets it.
+        bool sawLeftPress = _leftPressSeen;
+        if (kind == PointerUpdateKind.LeftButtonReleased) _leftPressSeen = false;
 
         if (_paintBoxDragging)
         {
@@ -3293,8 +3321,13 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
-            else if (!_leftDragged)
+            else if (!_leftDragged && sawLeftPress)
             {
+                // _leftPressSeen guards click-to-select against a press that overlay chrome
+                // swallowed. Selection runs on RELEASE using the position recorded at PRESS, so a
+                // click on a toolbar the viewport never saw pressed would otherwise pick against a
+                // stale position — deselecting the part and, with it, closing the very toolbar being
+                // clicked. Applies to every overlay control, not just the transform rows.
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay(
@@ -3541,6 +3574,14 @@ public partial class ViewportView : UserControl
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // Single-key shortcuts must not fire while the user is typing. The viewport binds bare keys
+        // — D1-D5 for view presets, G/R/S for transforms — and a TextBox does not mark a digit's
+        // KeyDown handled (text arrives via TextInput), so every digit typed into an overlay field
+        // also snapped the camera to a preset view. Guarding on focus fixes it for every text field
+        // in the app rather than just the transform boxes, and leaves the shortcuts themselves
+        // untouched for when the viewport genuinely has focus.
+        if (IsTextEntryFocused()) return;
+
         if (_kbTransformActive)
         {
             switch (e.Key)

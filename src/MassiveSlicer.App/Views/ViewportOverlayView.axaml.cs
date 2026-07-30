@@ -56,8 +56,15 @@ public partial class ViewportOverlayView : UserControl
         // click logic — which deselects when the ray misses the model. That is what made clicking a
         // number box feel like it "went through the window", and it depended on whether the hit
         // landed on the text or on the few pixels of padding around it.
+        // Both press AND release: click-to-select runs on RELEASE, so swallowing only the press
+        // still let the viewport pick — against the stale press position — and deselect the part,
+        // which closed this very toolbar. That was the "clicking a number box deselects the mesh
+        // about half the time" report, and it happened dead-centre of a field, not just at the edges.
         foreach (Control row in new Control[] { MoveValuesRow, RotateValuesRow })
-            row.AddHandler(PointerPressedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+        {
+            row.AddHandler(PointerPressedEvent,  OnTransformRowPointerPressed, handledEventsToo: true);
+            row.AddHandler(PointerReleasedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+        }
 
         // Clicking an axis letter steps a clean additive 90°; Alt reverses.
         foreach (Control label in new Control[] { StepAxisX, StepAxisY, StepAxisZ })
@@ -74,7 +81,7 @@ public partial class ViewportOverlayView : UserControl
     /// pointer handler. Deliberately blanket rather than per-control: the row's padding, the axis
     /// letters and the gaps between fields are all dead space that would otherwise fall through.
     /// </summary>
-    private static void OnTransformRowPointerPressed(object? sender, PointerPressedEventArgs e)
+    private static void OnTransformRowPointerPressed(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
         => e.Handled = true;
 
     /// <summary>
