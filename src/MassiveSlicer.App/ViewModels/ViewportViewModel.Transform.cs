@@ -365,6 +365,15 @@ public sealed partial class ViewportViewModel
             node.LocalTransform = MathF.Abs(parent.Determinant) > 1e-12f
                 ? levelled * parent.Inverted()
                 : levelled;
+
+            // Write the plane's new world pose back into the modifier's own fields.
+            //
+            // Without this the node and the fields are two sources of truth that drift apart as the
+            // part is moved: the plane rides its parent while Offset still describes where it used
+            // to be. That is what made the panel report a cut at 730mm while it visibly sliced the
+            // top third of the part — and the layer numbers derive from Offset, so they were wrong
+            // too. Same extract-then-rebuild round trip a gizmo drag on the plane already does.
+            SyncModifierAfterGizmoEdit(cut, node);
         }
     }
 

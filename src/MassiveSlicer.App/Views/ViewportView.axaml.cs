@@ -419,6 +419,12 @@ public partial class ViewportView : UserControl
                 if (_renderer.SelectedNode is not { } n) return "[bounds] nothing selected.";
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
                 var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+                // Empty comes back as a float.MaxValue/MinValue sentinel, which printed as a wall of
+                // digits. A selection made entirely of authoring overlays (a cut modifier) now hits
+                // this every time, since those are excluded from the measurement.
+                if (bMin.X > bMax.X)
+                    return $"[bounds] \"{n.Name}\" has no real geometry — "
+                         + $"{n.SelfAndDescendants().Count(d => d.IsAuthoringOverlay)} authoring overlay node(s) only.";
                 var size = bMax - bMin;
                 var pivot = n.Placement is { } pl
                     ? Vector3.TransformPosition(pl.Origin, n.WorldTransform)
@@ -5803,6 +5809,10 @@ public partial class ViewportView : UserControl
         if (LayFlatMinZ(node) >= float.MaxValue) return;
         var old = node.LocalTransform;
         DropNodeToBed(node, _renderer.BedZ);
+        // Drop moves the part, so its cut planes ride along and drift out of step with their own
+        // fields. Every other path that moves a part already re-levels them; this one did not,
+        // which is how a horizontal plane ended up travelling down under the mesh.
+        if (DataContext is ViewportViewModel dropVm) dropVm.ConstrainModifierPlanesUnder(node);
         // A one-shot transform edit, same category as a typed coordinate change — mesh and
         // toolpath are scene-graph siblings, not real parent/child, so nothing carries the
         // toolpath along unless explicitly told to (same mechanism OnSelectionTranslated
