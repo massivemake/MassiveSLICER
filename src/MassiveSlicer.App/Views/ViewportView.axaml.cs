@@ -1421,6 +1421,13 @@ public partial class ViewportView : UserControl
                     _renderer.Select(null);
             }
 
+            // Selecting a different part while the chooser is open would leave the box parented to
+            // the old one, still rendered and still counted by anything that walks that subtree.
+            if (vm.IsMoveOriginActive
+                && _originOverlayTarget is not null
+                && !ReferenceEquals(_originOverlayTarget, _renderer.SelectedNode))
+                SetMoveOriginOverlay(true);
+
             // Overlay meshes upload here rather than through PendingNodes, which also re-parents to
             // the scene root, marks the subtree as a user import and steals the selection.
             if (_pendingOverlayUpload is { } overlayUpload)
@@ -6652,7 +6659,7 @@ public partial class ViewportView : UserControl
 
     private static TkVector3 LayFlatWorldCenter(SceneNode node)
     {
-        var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+        var mesh = node.IsAuthoringOverlay ? null : node.Mesh?.PickingData ?? node.PendingMesh;
         if (mesh is null) return node.WorldTransform.Row3.Xyz;
         var lo = mesh.LocalBounds.Min;
         var hi = mesh.LocalBounds.Max;
@@ -6664,11 +6671,22 @@ public partial class ViewportView : UserControl
             lc.X * m.M13 + lc.Y * m.M23 + lc.Z * m.M33 + m.M43);
     }
 
+    /// <summary>
+    /// Lowest point of the node's real geometry in world Z.
+    /// </summary>
+    /// <remarks>
+    /// Authoring overlays are skipped. A cut modifier's plane and the Move Origin box are both real
+    /// child nodes with real geometry, and both extend past the part — so counting them made Drop to
+    /// Plate measure the overlay's lowest point instead of the model's and shove the part somewhere
+    /// wrong, sometimes upward. <see cref="SceneNode.IsAuthoringOverlay"/> already promises exclusion
+    /// from "slicing, bounding-box, export" measurements; this was missing that.
+    /// </remarks>
     private static float LayFlatMinZ(SceneNode node)
     {
         float minZ = float.MaxValue;
         foreach (var n in node.SelfAndDescendants())
         {
+            if (n.IsAuthoringOverlay) continue;
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;
             var m = n.WorldTransform;

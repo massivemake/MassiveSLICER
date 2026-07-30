@@ -326,6 +326,8 @@ public sealed partial class ViewportViewModel
         // dragging hard back and forth.
         if (_modifierGizmoNodes.Count == 0) return;
 
+        var bedCenter = ResolveBedCenterXYZ();
+
         foreach (var (cut, node) in _modifierGizmoNodes)
         {
             if (!IsDescendantOf(node, meshNode)) continue;
@@ -347,7 +349,17 @@ public sealed partial class ViewportViewModel
                 levelled = Matrix4.CreateRotationZ(MathF.Atan2(n.Y, n.X));
             }
 
-            levelled.Row3 = w.Row3;   // position rides the part untouched
+            // X and Y ride the part, so a cut still travels with the model.
+            //
+            // Z does not, for a Horizontal plane. Its height IS the cut — that is what the Offset
+            // field means — so letting the part's rotation swing it up and down made the cut happen
+            // at a different layer than the panel reported. Not cosmetic: that is a wrong part.
+            // Held at exactly what the fields specify, so panel and geometry always agree.
+            var pos = w.Row3.Xyz;
+            if (cut.Orientation == CutOrientation.Horizontal)
+                pos.Z = bedCenter.Z + cut.Offset;
+
+            levelled.Row3 = new Vector4(pos, 1f);
 
             var parent = node.Parent?.WorldTransform ?? Matrix4.Identity;
             node.LocalTransform = MathF.Abs(parent.Determinant) > 1e-12f
