@@ -1048,6 +1048,58 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "cal-check",
+            Aliases = ["calcheck", "cell-check"],
+            Description = "Cell calibration check: compare where the app DRAWS the nozzle tip against where the controller says it is, both in BASE-frame mm. Jog the real TCP to a known point (e.g. the bed corner), then run this — the reported error is the cell's calibration error.",
+            Execute = (ctx, _) =>
+            {
+                if (ctx.Main.Viewport.Robot is not { } robot) { ctx.LogError("[cal-check] no robot panel"); return; }
+                if (ctx.Main.Viewport.ActiveCell is not { } cell) { ctx.LogError("[cal-check] no active cell"); return; }
+
+                var rp     = cell.Robot.WorldPosition;
+                var marker = cell.Bed.BaseMarkerWorld(rp);
+                var grid   = cell.Bed.VisualGridCorner(rp);
+
+                // Where the scene graph actually draws the tip, converted into BASE frame.
+                double sceneBaseX = robot.SceneTcpX - marker.X;
+                double sceneBaseY = robot.SceneTcpY - marker.Y;
+                double sceneBaseZ = robot.SceneTcpZ - marker.Z;
+
+                // Echo the cells directory and modelOffset: the single most common way to get a
+                // confusing result here is running against a different copy of the cell JSON
+                // (env var -> NAS -> build output, see CellPaths) than you think you are.
+                ctx.Log($"[cal-check] cell '{cell.Name}'  robroot=({rp.X:F1}, {rp.Y:F1}, {rp.Z:F1})"
+                      + $"  modelOffset={(cell.Robot.ModelOffset is { } mo ? $"({mo.X:F2}, {mo.Y:F2}, {mo.Z:F2})" : "none")}");
+                ctx.Log($"[cal-check] cells dir: {MassiveSlicer.Core.IO.CellPaths.PreferredCellsDirectory() ?? "(unresolved)"}");
+                ctx.Log($"[cal-check] BASE marker world=({marker.X:F1}, {marker.Y:F1}, {marker.Z:F1})   visual grid corner world=({grid.X:F1}, {grid.Y:F1}, {grid.Z:F1})");
+                ctx.Log($"[cal-check] visualOffset={(cell.Bed.VisualOffset is { } vo ? $"({vo.X:F1}, {vo.Y:F1})" : "none")}");
+                ctx.Log($"[cal-check] app-drawn tip:  world=({robot.SceneTcpX:F1}, {robot.SceneTcpY:F1}, {robot.SceneTcpZ:F1})  ->  BASE=({sceneBaseX:F1}, {sceneBaseY:F1}, {sceneBaseZ:F1})");
+
+                if (!robot.IsConnected)
+                {
+                    ctx.Log("[cal-check] robot not synced — connect first to compare against the controller.");
+                    return;
+                }
+
+                ctx.Log($"[cal-check] controller tip: BASE=({robot.CtlTcpX:F1}, {robot.CtlTcpY:F1}, {robot.CtlTcpZ:F1})  (tool #1, base #1)");
+                ctx.Log($"[cal-check] ERROR (app − controller) = ({sceneBaseX - robot.CtlTcpX:F1}, {sceneBaseY - robot.CtlTcpY:F1}, {sceneBaseZ - robot.CtlTcpZ:F1}) mm"
+                      + $"   XY magnitude {Math.Sqrt(Math.Pow(sceneBaseX - robot.CtlTcpX, 2) + Math.Pow(sceneBaseY - robot.CtlTcpY, 2)):F1} mm");
+                ctx.Log("[cal-check] A non-zero error means the app's robot model is misplaced relative to the cell, "
+                      + "NOT that the bed needs moving — repeat at a second, far-apart point to tell a constant frame offset from a kinematic error.");
+
+                // Compact machine-readable sample: one line carrying joints, rail, controller
+                // pose and the error, so a poller can build a multi-pose dataset from a live
+                // job without stopping the robot. Classifying the error needs E1 (rail term)
+                // and ABC (tool term) alongside the XYZ, hence all of it on one line.
+                ctx.Log($"[cal-sample] {robot.A1:F2},{robot.A2:F2},{robot.A3:F2},{robot.A4:F2},{robot.A5:F2},{robot.A6:F2},{robot.E1:F2},"
+                      + $"{robot.CtlTcpX:F1},{robot.CtlTcpY:F1},{robot.CtlTcpZ:F1},{robot.CtlTcpA:F3},{robot.CtlTcpB:F3},{robot.CtlTcpC:F3},"
+                      + $"{robot.SceneTcpX:F1},{robot.SceneTcpY:F1},{robot.SceneTcpZ:F1},"
+                      + $"{sceneBaseX - robot.CtlTcpX:F1},{sceneBaseY - robot.CtlTcpY:F1},{sceneBaseZ - robot.CtlTcpZ:F1}");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "joints",
             Aliases = ["axis", "axes", "readjoints"],
             Description = "Print $AXIS_ACT (A1–A6, E1) + move-joints line for joint-space planning",
