@@ -7,8 +7,8 @@ namespace MassiveSlicer.App.Undo;
 public sealed class NodeRecenterAction : IUndoAction
 {
     private readonly SceneNode _root;
-    private readonly Dictionary<SceneNode, Matrix4> _transformsBefore;
-    private readonly Dictionary<SceneNode, Matrix4> _transformsAfter;
+    private readonly Dictionary<SceneNode, NodePose> _transformsBefore;
+    private readonly Dictionary<SceneNode, NodePose> _transformsAfter;
     private readonly Dictionary<SceneNode, MeshData?> _meshesBefore;
     private readonly Dictionary<SceneNode, MeshData?> _meshesAfter;
     private readonly Action? _onApplied;
@@ -17,8 +17,8 @@ public sealed class NodeRecenterAction : IUndoAction
 
     public NodeRecenterAction(
         SceneNode root,
-        Dictionary<SceneNode, Matrix4> transformsBefore,
-        Dictionary<SceneNode, Matrix4> transformsAfter,
+        Dictionary<SceneNode, NodePose> transformsBefore,
+        Dictionary<SceneNode, NodePose> transformsAfter,
         Dictionary<SceneNode, MeshData?> meshesBefore,
         Dictionary<SceneNode, MeshData?> meshesAfter,
         Action? onApplied = null)
@@ -35,7 +35,7 @@ public sealed class NodeRecenterAction : IUndoAction
     public void Undo() => Apply(_transformsBefore, _meshesBefore);
     public void Redo() => Apply(_transformsAfter, _meshesAfter);
 
-    private void Apply(Dictionary<SceneNode, Matrix4> transforms, Dictionary<SceneNode, MeshData?> meshes)
+    private void Apply(Dictionary<SceneNode, NodePose> transforms, Dictionary<SceneNode, MeshData?> meshes)
     {
         ImportHelper.RestoreSubtreeSnapshot(_root, transforms, meshes);
         _onApplied?.Invoke();

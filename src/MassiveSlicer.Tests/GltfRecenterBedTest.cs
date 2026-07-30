@@ -54,12 +54,12 @@ public class GltfRecenterBedTest
         var beforeMeshes     = ImportHelper.SnapshotSubtreeMeshes(root);
 
         Assert.True(ImportHelper.RecenterPivotToBottomCenter(root));
-        Assert.NotEqual(beforeTransforms[root], root.LocalTransform);
+        Assert.NotEqual(beforeTransforms[root].LocalTransform, root.LocalTransform);
 
         ImportHelper.RestoreSubtreeSnapshot(root, beforeTransforms, beforeMeshes);
 
-        foreach (var (node, local) in beforeTransforms)
-            Assert.Equal(local, node.LocalTransform);
+        foreach (var (node, pose) in beforeTransforms)
+            Assert.Equal(pose.LocalTransform, node.LocalTransform);
         foreach (var (node, mesh) in beforeMeshes)
         {
             if (mesh is null) continue;

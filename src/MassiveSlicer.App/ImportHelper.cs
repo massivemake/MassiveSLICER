@@ -262,6 +262,12 @@ internal static class ImportHelper
     /// Moves the node origin to the bottom-center of its mesh bounds while keeping world geometry fixed.
     /// Bakes per-mesh vertex offsets and compensates via the root transform; callers must re-upload GPU meshes.
     /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="CenterOrigin"/> and from a Move Origin snap, both of which move only the
+    /// pivot and leave the model untouched. This rewrites every vertex so the model's own zero point
+    /// genuinely becomes its bottom-center — which is why it needs a GPU re-upload and why undoing it
+    /// has to restore whole vertex arrays.
+    /// </remarks>
     internal static bool RecenterPivotToBottomCenter(SceneNode root)
     {
         if (!TryComputeBottomCenterLocal(root, out var bottomCenter))
@@ -278,24 +284,40 @@ internal static class ImportHelper
         if (moved != expected)
             return false;
 
-        root.LocalTransform = root.LocalTransform * Matrix4.CreateTranslation(bottomCenter);
+        // Pre-multiply, not post-multiply. Row-vector convention means p_parent = p_local · L, so
+        // for baked vertices p' = p − bc the shift has to be undone in the model's own frame,
+        // BEFORE L: (p − bc) · T(bc) · L = p · L exactly, for any rotation or scale.
+        //
+        // Post-multiplying (the old code) applies the shift after the part's own rotation and scale,
+        // leaving a residual of bc − bc·M where M is L's linear part. That is zero only while M is
+        // identity — so the part stayed put on a fresh import and visibly jumped once it had been
+        // rotated or scaled, which is what Jeff reported. Same failure as the Drop-to-Plate frame bug.
+        root.LocalTransform = Matrix4.CreateTranslation(bottomCenter) * root.LocalTransform;
+
+        // The bake shifted the model's coordinates, so a pivot recorded in those coordinates now
+        // points at a different physical spot. Bottom-center is the model's zero from here on, and
+        // that is exactly what this button means the pivot to be, so re-seat it there. Rebuilt from
+        // the already-compensated matrix, so nothing moves on screen.
+        if (root.Placement is not null)
+            root.SetPlacement(NodeTransform.FromMatrix(root.LocalTransform, Vector3.Zero));
+
         return true;
     }
 
-    internal static Dictionary<SceneNode, Matrix4> SnapshotSubtreeTransforms(SceneNode root)
+    internal static Dictionary<SceneNode, NodePose> SnapshotSubtreeTransforms(SceneNode root)
     {
-        var snap = new Dictionary<SceneNode, Matrix4>();
+        var snap = new Dictionary<SceneNode, NodePose>();
         foreach (var n in root.SelfAndDescendants())
-            snap[n] = n.LocalTransform;
+            snap[n] = NodePose.Of(n);
         return snap;
     }
 
-    internal static void RestoreSubtreeTransforms(SceneNode root, Dictionary<SceneNode, Matrix4> transforms)
+    internal static void RestoreSubtreeTransforms(SceneNode root, Dictionary<SceneNode, NodePose> transforms)
     {
         foreach (var n in root.SelfAndDescendants())
         {
-            if (transforms.TryGetValue(n, out var local))
-                n.LocalTransform = local;
+            if (transforms.TryGetValue(n, out var pose))
+                pose.ApplyTo(n);
         }
     }
 
@@ -320,7 +342,7 @@ internal static class ImportHelper
 
     internal static void RestoreSubtreeSnapshot(
         SceneNode root,
-        Dictionary<SceneNode, Matrix4> transforms,
+        Dictionary<SceneNode, NodePose> transforms,
         Dictionary<SceneNode, MeshData?> meshes)
     {
         RestoreSubtreeTransforms(root, transforms);
