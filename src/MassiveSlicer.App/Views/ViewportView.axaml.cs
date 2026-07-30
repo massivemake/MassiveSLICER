@@ -5812,6 +5812,23 @@ public partial class ViewportView : UserControl
         RevalidateSelectedToolpath();
     }
 
+    /// <summary>
+    /// Puts the pivot on the part's bottom centre.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Just a pivot move, exactly like a Move Origin snap — the bottom-centre point of the same
+    /// bounding box the chooser already offers. Nothing is baked, no vertices are touched, no GPU
+    /// upload happens: it changes four numbers and is instant.
+    /// </para>
+    /// <para>
+    /// It used to rewrite every vertex so the model's own zero became its bottom centre, then
+    /// compensate with a transform. That bought nothing visible — slicing works off world transforms
+    /// — while costing a full mesh re-upload, an undo snapshot of every vertex array, and a bug that
+    /// left the part correctly positioned but not drawing at all. Move Origin moves the pivot
+    /// anywhere on the box without any of that, so Recenter now does the same thing.
+    /// </para>
+    /// </remarks>
     private void RecenterSelected()
     {
         if (_renderer.SelectedNode is not { } selected) return;
@@ -5822,8 +5839,24 @@ public partial class ViewportView : UserControl
         if (node != selected)
             _renderer.Select(node);
 
-        vm.PendingRecenterJobs.Enqueue(new ViewportViewModel.PendingRecenterJob(node));
-        vm.NotifyRenderNeeded();
+        if (NodeBounds.LocalAabb(node) is not { } box) return;
+        var bottomCentre = new Vector3(
+            (box.Min.X + box.Max.X) * 0.5f,
+            (box.Min.Y + box.Max.Y) * 0.5f,
+            box.Min.Z);
+
+        var before = NodePose.Of(node);
+        var t = node.EnsurePlacement(bottomCentre);
+        t.SetOrigin(bottomCentre);
+        node.SetPlacement(t);
+
+        SyncSelectionTransformDisplay(vm);
+        UpdateFocusOverlay();
+        vm.UndoRedo?.Push(new NodePlacementAction(
+            node, before, NodePose.Of(node), "Recenter Origin",
+            () => { SyncSelectionTransformDisplay(vm); GlCanvas.RequestNextFrameRendering(); }));
+        vm.MarkWorkspaceDirty?.Invoke();
+        GlCanvas.RequestNextFrameRendering();
     }
 
     private void ProcessRecenterJob(ViewportViewModel vm, ViewportViewModel.PendingRecenterJob job)
@@ -11303,7 +11336,7 @@ public partial class ViewportView : UserControl
 
         if (hit is not { } chosen) return false;
 
-        var before = node.LocalTransform;
+        var before = NodePose.Of(node);
         var t = placement;
         t.SetOrigin(chosen);
         node.SetPlacement(t);
@@ -11313,7 +11346,11 @@ public partial class ViewportView : UserControl
             // Only the pivot moved, so there is no world delta to mirror onto the toolpath.
             SyncSelectionTransformDisplay(vm);
             vm.IsMoveOriginActive = false;   // one pick and the chooser is done
-            RecordTransformUndo(vm, node, before, node.LocalTransform, "Move Origin");
+            // Placement-based, not matrix-based: a pivot move leaves the composed transform
+            // identical on purpose, so a before/after matrix pair records nothing to undo.
+            vm.UndoRedo?.Push(new NodePlacementAction(
+                node, before, NodePose.Of(node), "Move Origin",
+                () => { SyncSelectionTransformDisplay(vm); GlCanvas.RequestNextFrameRendering(); }));
         }
 
         GlCanvas.RequestNextFrameRendering();
