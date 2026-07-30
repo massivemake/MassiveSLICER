@@ -430,6 +430,17 @@ internal static class ImportHelper
             p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
             p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
 
+    /// <summary>
+    /// World-space bounds of the subtree's real geometry.
+    /// </summary>
+    /// <remarks>
+    /// Authoring overlays are excluded, as <see cref="SceneNode.IsAuthoringOverlay"/> promises. A cut
+    /// modifier's plane and the Move Origin box are real child nodes with real geometry extending
+    /// well past the part, so counting them made Recenter measure the overlay's bottom instead of the
+    /// model's and bake a wildly wrong offset. Note this is a <em>measurement</em> fix only — the
+    /// bake itself must still shift every mesh in the subtree, overlays included, or they would be
+    /// left behind in the part's old coordinates.
+    /// </remarks>
     internal static (Vector3 Min, Vector3 Max) ComputeSubtreeWorldAabb(SceneNode root)
     {
         var min = new Vector3(float.MaxValue);
@@ -438,6 +449,7 @@ internal static class ImportHelper
 
         foreach (var n in root.SelfAndDescendants())
         {
+            if (n.IsAuthoringOverlay) continue;
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null || mesh.Positions.Length == 0) continue;
 
@@ -471,6 +483,9 @@ internal static class ImportHelper
 
         foreach (var n in root.SelfAndDescendants())
         {
+            // Overlays out, same reason as ComputeSubtreeWorldAabb — this one drives bed placement
+            // and the metres-as-millimetres check, so a cut plane in the subtree would skew both.
+            if (n.IsAuthoringOverlay) continue;
             if (n.PendingMesh is not { } mesh) continue;
 
             var world        = n.WorldTransform;

@@ -120,6 +120,38 @@ public class RecenterKeepsGeometryTest
     }
 
     [Fact]
+    public void Recenter_measures_the_part_not_an_overlay_hanging_off_it()
+    {
+        // Recenter BAKES vertices by the offset it measures, so measuring an overlay's bottom
+        // instead of the model's bakes a wildly wrong shift — which is what flung a part away after
+        // a session of moves, rotations and origin picks with a cut plane or the Move Origin box in
+        // the subtree. The bake itself still has to move every mesh, overlays included, or they get
+        // left behind; only the measurement excludes them.
+        var node = new SceneNode
+        {
+            PendingMesh    = Box(new Vector3(0f, 0f, 0f), new Vector3(100f, 100f, 100f)),
+            LocalTransform = Matrix4.CreateTranslation(500f, -200f, 400f),
+        };
+        node.AddChild(new SceneNode
+        {
+            PendingMesh        = Box(new Vector3(-4000f, -4000f, -4000f), new Vector3(4000f, 4000f, -3990f)),
+            IsAuthoringOverlay = true,
+        });
+
+        var before = WorldPoints(node);
+
+        Assert.True(ImportHelper.RecenterPivotToBottomCenter(node));
+
+        AssertUnmoved(before, WorldPoints(node));
+
+        // And the pivot really is the part's bottom centre, not somewhere out by the overlay.
+        var pivotWorld = Vector3.TransformPosition(node.Placement?.Origin ?? Vector3.Zero, node.WorldTransform);
+        var pts = WorldPoints(node);
+        Assert.True(MathF.Abs(pivotWorld.Z - pts.Min(p => p.Z)) < 0.01f,
+            $"pivot Z {pivotWorld.Z} should sit at the part's lowest vertex {pts.Min(p => p.Z)}");
+    }
+
+    [Fact]
     public void Recenter_leaves_the_pivot_on_the_parts_bottom_centre()
     {
         // The pivot is stored in the model's own coordinates, and the bake rewrites those — so the
