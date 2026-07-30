@@ -14557,6 +14557,13 @@ public partial class ViewportView : UserControl
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
     {
+        // Destination dropdown: MassiveDRIVE package send vs classic KRL→robot SMB.
+        if (vm.SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive)
+        {
+            await SendToMassiveDriveAsync(vm);
+            return;
+        }
+
         var toolpath = vm.ActiveScrubToolpath;
         var node     = _activeScrubNode;
         var cell     = vm.ActiveCell;
@@ -14571,7 +14578,7 @@ public partial class ViewportView : UserControl
         if (cfg is null || !vm.RobotSmb.IsConfigured)
         {
             mvm?.Console.LogError(
-                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the save button to export .src manually.");
             SetSliceStatus(vm,
                 $"⚠ Send to Robot: {cell.Name} has no robot-network credentials. " +
                 "Set IP/username/password under ROBOT NETWORK in the cell panel, or export the .src manually.",
@@ -14632,6 +14639,105 @@ public partial class ViewportView : UserControl
 
         if (mvm is not null)
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
+    }
+
+    /// <summary>
+    /// Export toolpath as massivedrive.job/v1 and start MassiveDRIVE path executor.
+    /// Does not upload KRL to the robot.
+    /// </summary>
+    private async Task SendToMassiveDriveAsync(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        var target   = vm.SelectedSendTarget;
+
+        if (toolpath is null || node is null || cell is null || settings is null) return;
+        if (target is null || target.Kind != SendTargetKind.MassiveDrive
+            || string.IsNullOrWhiteSpace(target.Url))
+        {
+            SetSliceStatus(vm,
+                "⚠ MassiveDRIVE URL not configured for this cell (massiveDriveUrl in cell JSON).",
+                isError: true);
+            return;
+        }
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
+
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        var mvm = topLevel?.DataContext as MainWindowViewModel;
+
+        var exportSettings = new MassiveDriveExportSettings
+        {
+            Name = string.IsNullOrWhiteSpace(node.Name) ? "print-job" : node.Name,
+            CellId = target.CellId ?? cell.MassiveDriveCellId ?? "lfam3",
+            Tool = settings.ToolDataIndex,
+            Base = settings.BaseDataIndex,
+            PrintSpeedMmS = (float)settings.PrintSpeed,
+            TravelSpeedMmS = (float)settings.TravelSpeed,
+            ReverseMs = 200f,
+            ReversePercent = 40f,
+            TravelReverse = true,
+            WorkspacePath = mvm?.AppPreferences.LastWorkspacePath,
+            SourceNote = $"cell={cell.Name}",
+        };
+
+        Dictionary<string, object?> package;
+        try
+        {
+            package = MassiveDriveJobExporter.ExportDict(toolpath, exportSettings);
+        }
+        catch (Exception ex)
+        {
+            mvm?.Console.LogError($"[drive] Export package failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE export failed: {ex.Message}", isError: true);
+            return;
+        }
+
+        var segCount = (package["segments"] as System.Collections.ICollection)?.Count ?? 0;
+        mvm?.Console.Log(
+            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segments) → {target.Url} …");
+
+        try
+        {
+            using var client = new MassiveDriveClient(target.Url!);
+            // Health check first for clearer errors
+            try
+            {
+                using var health = await client.HealthAsync();
+            }
+            catch (Exception hex)
+            {
+                mvm?.Console.LogError($"[drive] Health check failed at {target.Url}: {hex.Message}");
+                SetSliceStatus(vm,
+                    $"⚠ MassiveDRIVE unreachable at {target.Url} — is serve running?",
+                    isError: true);
+                return;
+            }
+
+            var result = await client.SendAndStartAsync(package);
+            mvm?.Console.Log(
+                $"[drive] Sent package {result.PackageId} to {cell.Name} — path executor started.");
+            if (mvm is not null)
+            {
+                mvm.StatusBar.OperationFeedback =
+                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {result.PackageId} — {segCount} segments";
+            }
+            SetSliceStatus(vm,
+                $"✓ Sent to MassiveDRIVE — {result.PackageId} ({segCount} segs). Robot needs RSI runtime armed.",
+                isError: false);
+        }
+        catch (MassiveDriveClientException ex)
+        {
+            mvm?.Console.LogError($"[drive] Send failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE send failed: {ex.Message}", isError: true);
+        }
+        catch (Exception ex)
+        {
+            mvm?.Console.LogError($"[drive] Send failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE send failed: {ex.Message}", isError: true);
+        }
     }
 
     /// <summary>

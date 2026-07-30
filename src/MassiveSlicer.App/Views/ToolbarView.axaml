@@ -108,23 +108,37 @@
                     </Panel>
                 </ToggleButton>
 
-                <!-- Split export: main = SMB upload straight to the cell's controller,
-                     caret = classic save-.src-to-disk dialog -->
+                <!-- Send destination: Robot (KRL/SMB) or MassiveDRIVE (job package).
+                     Main button sends; chevron still saves .src to disk. -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1">
+                    <ComboBox MinWidth="168" MaxWidth="220" Height="28"
+                              FontSize="11"
+                              VerticalAlignment="Center"
+                              Margin="0,0,2,0"
+                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
+                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
+                              ToolTip.Tip="Where Send delivers the active toolpath: robot share (KRL) or MassiveDRIVE (path + extruder)">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Label}" FontSize="11"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                     <Button Classes="ExportCta" Padding="10,4"
                             CornerRadius="4,0,0,4"
                             Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"
-                            ToolTip.Tip="Send the program to the selected cell's robot (D drive over SMB) and report it to the ERP">
+                            ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}">
                         <StackPanel Orientation="Horizontal" Spacing="5">
                             <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
-                            <TextBlock Text="Export to Robot" FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                            <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
+                                       FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
                         </StackPanel>
                     </Button>
                     <Button Classes="ExportCta" Padding="5,4"
                             CornerRadius="0,4,4,0"
                             Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
                             ToolTip.Tip="Download the KRL program (.src) to a file instead">
-                        <ia:Icon Value="mdi-chevron-down" FontSize="12" Foreground="#242424"/>
+                        <ia:Icon Value="mdi-content-save" FontSize="12" Foreground="#242424"/>
                     </Button>
                 </StackPanel>
 
