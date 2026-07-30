@@ -152,6 +152,29 @@ public class RecenterKeepsGeometryTest
     }
 
     [Fact]
+    public void Recenter_does_not_move_a_mesh_that_sits_on_an_offset_child()
+    {
+        // The bake shifts each mesh in its OWN frame, so the offset has to be rotated into that
+        // frame as a direction. Running it through a point transform folded the child's inverse
+        // translation into the shift, moving the mesh by an unrelated amount that the root's
+        // compensating transform could not cancel — the part flew off.
+        var root = new SceneNode { LocalTransform = Matrix4.CreateTranslation(500f, -200f, 400f) };
+        root.AddChild(new SceneNode
+        {
+            PendingMesh    = Box(Vector3.Zero, new Vector3(100f, 100f, 100f)),
+            LocalTransform = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(25f))
+                           * Matrix4.CreateTranslation(750f, 320f, 60f),
+        });
+
+        var child  = root.Children[0];
+        var before = WorldPoints(child);
+
+        Assert.True(ImportHelper.RecenterPivotToBottomCenter(root));
+
+        AssertUnmoved(before, WorldPoints(child));
+    }
+
+    [Fact]
     public void Recenter_leaves_the_pivot_on_the_parts_bottom_centre()
     {
         // The pivot is stored in the model's own coordinates, and the bake rewrites those — so the

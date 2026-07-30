@@ -280,6 +280,8 @@ internal static class ImportHelper
         if (expected == 0)
             return false;
 
+        // -1 means it worked nothing out and wrote nothing; a count mismatch would mean it wrote
+        // some and not others, which must not be possible now that the plan is built up front.
         int moved = OffsetSubtreeMeshPositionsInRootLocal(root, -bottomCenter);
         if (moved != expected)
             return false;
@@ -377,27 +379,62 @@ internal static class ImportHelper
         return true;
     }
 
+    /// <summary>
+    /// Shifts every mesh in the subtree by <paramref name="rootLocalOffset"/>, expressed in the
+    /// root's space. Returns the number of meshes moved, or -1 if the shift could not be worked out
+    /// for all of them — in which case <em>nothing</em> has been written.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two passes on purpose. This rewrites vertex data, and the caller only applies the
+    /// compensating transform afterwards, so a partial run leaves geometry displaced by an
+    /// uncancelled offset with no undo entry recorded — the mesh flies off and Ctrl+Z brings back
+    /// the wrong thing. Working every shift out before touching anything makes the whole operation
+    /// all-or-nothing.
+    /// </para>
+    /// <para>
+    /// The offset is a <em>direction</em>, so it is rotated into each mesh's frame without the
+    /// frame's translation. Running it through a point transform (the old code) folded the child's
+    /// inverse translation into the shift, so a mesh sitting on a child node with any offset of its
+    /// own moved by a completely unrelated amount that the root's compensation could not cancel.
+    /// </para>
+    /// </remarks>
     private static int OffsetSubtreeMeshPositionsInRootLocal(SceneNode root, Vector3 rootLocalOffset)
     {
         var toRootFromMesh = root.WorldTransform.Inverted();
-        int moved = 0;
+
+        var plan = new List<(MeshData Mesh, SceneNode Node, Vector3 Shift)>();
         foreach (var n in root.SelfAndDescendants())
         {
             var mesh = GetOrCloneEditableMesh(n);
             if (mesh is null) continue;
 
             var meshToRoot = n.WorldTransform * toRootFromMesh;
-            var shift      = TransformPoint(rootLocalOffset, meshToRoot.Inverted());
-            if (!IsFinite(shift)) continue;
+            if (MathF.Abs(meshToRoot.Determinant) < 1e-12f) return -1;
 
+            var shift = TransformDirection(rootLocalOffset, meshToRoot.Inverted());
+            if (!IsFinite(shift)) return -1;
+
+            plan.Add((mesh, n, shift));
+        }
+
+        foreach (var (mesh, node, shift) in plan)
+        {
             for (int i = 0; i < mesh.Positions.Length; i++)
                 mesh.Positions[i] += shift;
 
-            n.PendingMesh = CloneMeshData(mesh);
-            moved++;
+            node.PendingMesh = CloneMeshData(mesh);
         }
-        return moved;
+
+        return plan.Count;
     }
+
+    /// <summary>Rotates/scales a direction by <paramref name="m"/>, ignoring its translation.</summary>
+    private static Vector3 TransformDirection(Vector3 v, Matrix4 m)
+        => new(
+            v.X * m.M11 + v.Y * m.M21 + v.Z * m.M31,
+            v.X * m.M12 + v.Y * m.M22 + v.Z * m.M32,
+            v.X * m.M13 + v.Y * m.M23 + v.Z * m.M33);
 
     private static MeshData? GetOrCloneEditableMesh(SceneNode node)
     {
