@@ -7089,12 +7089,14 @@ public partial class ViewportView : UserControl
         var mv = rec.Layer.Moves[mi];
         var mid = (mv.From + mv.To) * 0.5f;
 
-        int layerIdx = 0;
-        if (vm.ActiveScrubToolpath is { } tp)
-        {
-            int found = tp.Layers.IndexOf(rec.Layer);
-            if (found >= 0) layerIdx = found;
-        }
+        // The layer knows its own index — ask it. Resolving this via ActiveScrubToolpath
+        // silently fell back to layer 0 whenever no scrub was armed, so the support anchored
+        // at the BOTTOM of the model with the XY of wherever you clicked. Combined with the
+        // reach gate that now (correctly) terminates where the wall isn't, that killed the
+        // arm a dozen layers up instead of building it where you asked.
+        int layerIdx = rec.Layer.Index;
+        if (layerIdx < 0 && vm.ActiveScrubToolpath is { } tp)
+            layerIdx = Math.Max(0, tp.Layers.IndexOf(rec.Layer));
 
         var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
         if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);
@@ -7135,12 +7137,12 @@ public partial class ViewportView : UserControl
         var mv = sel.Layer.Moves[mi];
         var mid = (mv.From + mv.To) * 0.5f;
 
-        int layerIdx = 0;
-        if (vm.ActiveScrubToolpath is { } tp)
-        {
-            int found = tp.Layers.IndexOf(sel.Layer);
-            if (found >= 0) layerIdx = found;
-        }
+        // Same as ConvertModificationToStructuralSupport: take the layer's own index rather
+        // than looking it up in ActiveScrubToolpath, which silently anchored to layer 0 when
+        // no scrub was armed.
+        int layerIdx = sel.Layer.Index;
+        if (layerIdx < 0 && vm.ActiveScrubToolpath is { } tp)
+            layerIdx = Math.Max(0, tp.Layers.IndexOf(sel.Layer));
 
         var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
         if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);

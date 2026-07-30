@@ -4,14 +4,33 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.Slicing;
 
 /// <summary>
-/// Applies <see cref="StructuralSupportSpec"/> modifiers to a sliced toolpath:
-/// on every affected layer, the wall path is split at the point nearest the spec's
-/// ANCHOR, and a detour is spliced in — neck out to the helper shape, a full wrap
-/// of the outline, neck back — as continuous extrusion. The anchor and outline are
-/// identical on every layer, so the neck and pocket stack vertically.
+/// Splices <see cref="StructuralSupportSpec"/> pockets into a sliced toolpath as a real
+/// duct: out through a break in the wall, along a two-bead arm, around the pocket, and back.
+/// <para>
+/// The construction is driven by the ARM, not by the toolpath. The arm axis runs from the
+/// spec's fixed anchor to the pocket, and the two legs are fixed lines half a bead either
+/// side of it — so they are exactly parallel and exactly one bead apart along their whole
+/// length, and cannot pinch or cross. Everything else is a consequence of those two lines:
+/// where they cut the pocket is the pocket mouth, where they cut the wall is the surface
+/// break. Nothing is measured after the fact.
+/// </para>
+/// <para>
+/// The bead is deposited centred on the path, so "touching without overlapping" means two
+/// centrelines a full bead apart — that is where the one-bead figure comes from throughout.
+/// Earlier versions measured a bead of ARC LENGTH along the wall or the outline instead,
+/// whose straight-line gap is always smaller and, across a corner, much smaller.
+/// </para>
 /// </summary>
 public static class StructuralSupportPlanner
 {
+    /// <summary>How far the wall may be from the anchor and still count as passing through
+    /// the break, as a multiple of the bead width.</summary>
+    const float ReachBeads = 1f;
+
+    /// <summary>Search radius for wall/leg intersections, as a multiple of the bead width.
+    /// Keeps a leg line from grabbing a different island across the layer.</summary>
+    const float SearchBeads = 8f;
+
     public static void Apply(Toolpath toolpath, SliceSettings settings)
     {
         var specs = settings.StructuralSupports;
@@ -20,69 +39,76 @@ public static class StructuralSupportPlanner
         foreach (var spec in specs)
         {
             if (!spec.Enabled) continue;
-            int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
-            int hi = Math.Min(toolpath.Layers.Count - 1,
-                spec.AnchorLayer + Math.Max(0, spec.LayersUp));
             var outline = spec.BuildOutline();
             if (outline.Length < 3) continue;
 
-            // The mouth is resolved ONCE from the spec's fixed anchor — never per layer from
-            // that layer's own split point, which made the neck hop between corners as the
-            // wall wandered underneath it.
-            //
-            // It sits on the outline EDGE nearest the anchor, NOT the nearest vertex. A
-            // vertex mouth puts the two legs on two PERPENDICULAR edges, so they converge
-            // and cross on the way in — visible in the viewport as an X at the pocket. An
-            // edge mouth is a flat opening facing the wall, with parallel legs.
-            var anchor2 = new Vector2(spec.AnchorX, spec.AnchorY);
-            int nOut = outline.Length;
-            int edgeIdx = 0;
-            float bestEd2 = float.MaxValue;
-            var onEdge = outline[0];
-            for (int i = 0; i < nOut; i++)
-            {
-                var p = ClosestOnSegment2D(anchor2, outline[i], outline[(i + 1) % nOut]);
-                float d2 = Vector2.DistanceSquared(p, anchor2);
-                if (d2 < bestEd2) { bestEd2 = d2; edgeIdx = i; onEdge = p; }
-            }
+            int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
+            int hi = Math.Min(toolpath.Layers.Count - 1,
+                spec.AnchorLayer + Math.Max(0, spec.LayersUp));
 
-            float hMouth = MathF.Max(0.05f, settings.BeadWidth * 0.5f);
-            var cMouth = StepAlong(onEdge, outline[(edgeIdx + 1) % nOut], hMouth);  // toward next vertex
-            var dMouth = StepAlong(onEdge, outline[edgeIdx], hMouth);               // toward this vertex
+            float bead = MathF.Max(0.1f, settings.BeadWidth);
+            float h = bead * 0.5f;
+            int start = Math.Clamp(spec.AnchorLayer, 0, toolpath.Layers.Count - 1);
+
+            // Anchor limit. A duct one bead wide cannot exit centred on a point less than
+            // half a bead from the end of a wall run — half the mouth would hang off the end,
+            // and clamping the stray leg instead just squeezes the arm. So pull the anchor
+            // inboard until the whole mouth lands on wall. Done ONCE, at the anchor layer, so
+            // the arm axis and the pocket mouth stay fixed for the entire stack.
+            var anchor = LimitAnchorToRunInterior(
+                toolpath.Layers[start], new Vector2(spec.AnchorX, spec.AnchorY), h);
+
+            // ── Arm geometry, resolved ONCE from fixed data ───────────────────────────
+            // The axis aims at the pocket's CENTRE, not at its nearest boundary point. Aiming
+            // at the nearest point can put the axis on a corner, and then a leg offset half a
+            // bead to one side passes clean outside the pocket and has no mouth at all.
+            // Through the centre, a miss is geometrically impossible: for a convex outline,
+            // any line offset less than the inradius from an interior point still crosses the
+            // boundary twice (half a bead vs 21 mm on a 2x4, or the radius on a circle).
+            var axis = new Vector2(spec.CenterX, spec.CenterY) - anchor;
+            if (axis.LengthSquared() < 1e-8f) continue;      // anchor sits on the pocket
+            var u = Vector2.Normalize(axis);
+            var perp = new Vector2(-u.Y, u.X);
+
+            // Pocket mouth = where each leg line first meets the outline. Fixed, so the
+            // pocket never drifts; the wall end is free to move as the wall does.
+            if (!TryRayHitOutline(outline, anchor + perp * h, u, out int mouthEdge1, out var mouth1))
+                continue;
+            if (!TryRayHitOutline(outline, anchor - perp * h, u, out int mouthEdge2, out var mouth2))
+                continue;
+
+            // The outbound journey can never head back toward the other arm — that arc is
+            // what the mouth just trimmed away. It follows the pocket AROUND instead. The
+            // "around" arc is simply the one containing the pocket's far side.
+            var wrap = BuildWrapArc(outline, mouthEdge1, mouthEdge2, anchor, u, mouth1, mouth2);
 
             // ── Reach gate + one-way termination ─────────────────────────────────────
-            // A break only means anything if THIS layer's wall actually passes through it.
-            // Walk outward from the anchor layer and stop the first time the wall has
-            // receded out of reach — and do NOT resume higher up even if the wall comes
-            // back, because a column cannot restart in mid-air. Without this the planner
-            // took the globally closest segment no matter how far away it was, so on a
-            // filleted top the arm stretched after the receding wall and produced an
-            // overhang it could never print.
-            float reach = MathF.Max(settings.BeadWidth, 0.01f);
-            int start = Math.Clamp(spec.AnchorLayer, 0, toolpath.Layers.Count - 1);
-            int appliedCount = 0;
+            // A break only means something if THIS layer's wall passes through it. Walk
+            // outward from the anchor layer and stop the first time the wall has receded out
+            // of reach — and never resume higher up even if it comes back, because a column
+            // cannot restart in mid-air.
+            float reach = bead * ReachBeads;
+            int built = 0;
             int endedUpAt = -1, endedDownAt = -1;
 
             for (int li = start; li <= hi; li++)
             {
-                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor2) > reach)
+                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor) > reach)
                 { endedUpAt = li; break; }
-                ApplyToLayer(toolpath.Layers[li], spec, outline, edgeIdx,
-                    cMouth, dMouth, settings.BeadWidth);
-                appliedCount++;
+                if (ApplyToLayer(toolpath.Layers[li], anchor, u, mouth1, mouth2, wrap, bead))
+                    built++;
             }
             for (int li = start - 1; li >= lo; li--)
             {
-                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor2) > reach)
+                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor) > reach)
                 { endedDownAt = li; break; }
-                ApplyToLayer(toolpath.Layers[li], spec, outline, edgeIdx,
-                    cMouth, dMouth, settings.BeadWidth);
-                appliedCount++;
+                if (ApplyToLayer(toolpath.Layers[li], anchor, u, mouth1, mouth2, wrap, bead))
+                    built++;
             }
 
             string name = string.IsNullOrWhiteSpace(spec.Name) ? "support" : spec.Name;
             System.Console.WriteLine(
-                $"[support] {name}: {appliedCount} layer(s) built"
+                $"[support] {name}: {built} layer(s) built"
                 + (endedUpAt >= 0
                     ? $", topped out at L{endedUpAt + 1} (wall receded past {reach:0.#} mm — "
                       + "arm ends there and does not resume)"
@@ -91,157 +117,279 @@ public static class StructuralSupportPlanner
         }
     }
 
-    static void ApplyToLayer(
-        ToolpathLayer layer, StructuralSupportSpec spec, Vector2[] outline, int edgeIdx,
-        Vector2 cMouth, Vector2 dMouth, float bead)
+    /// <summary>Splices the duct into one layer. False when this layer had nothing usable.</summary>
+    static bool ApplyToLayer(
+        ToolpathLayer layer, Vector2 anchor, Vector2 u,
+        Vector2 mouth1, Vector2 mouth2, Vector2[] wrap, float bead)
     {
-        var anchor = new Vector2(spec.AnchorX, spec.AnchorY);
-
-        // 1) Find the extrude segment closest to the anchor (XY) and the split point on it.
-        int bestMove = -1;
-        float bestD2 = float.MaxValue;
-        Vector3 bestP = default;
-        float bestT = 0f;
+        // Reference move: nearest to the anchor. Supplies Z and the move template.
+        int refMove = -1;
+        float refD2 = float.MaxValue;
+        Vector3 refPoint = default;
         for (int i = 0; i < layer.Moves.Count; i++)
         {
             var mv = layer.Moves[i];
             if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
-            var (p, t, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
-            if (d2 < bestD2)
-            {
-                bestD2 = d2;
-                bestMove = i;
-                bestP = p;
-                bestT = t;
-            }
+            var (p, _, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
+            if (d2 < refD2) { refD2 = d2; refMove = i; refPoint = p; }
         }
-        if (bestMove < 0) return;
+        if (refMove < 0) return false;
 
-        var wall = layer.Moves[bestMove];
-        float z = bestP.Z;
+        float z = refPoint.Z;
+        float search = bead * SearchBeads;
 
-        // 2) Outline entry vertex is supplied by the caller — resolved once from the spec's
-        //    fixed anchor so the neck lands on the SAME corner on every layer.
+        // Surface break = where each leg line crosses the wall. Never "half a bead along the
+        // wall either way" — at an oblique arm that gives a gap narrower than a bead, and at
+        // the end of an open run it gives half a gap.
+        if (!TryWallHit(layer, mouth1, u, anchor, search, out int idx1, out var root1)) return false;
+        if (!TryWallHit(layer, mouth2, u, anchor, search, out int idx2, out var root2)) return false;
 
-        // 3) Build the detour as a real DUCT with three one-bead gaps, so nothing is
-        //    deposited on top of anything else. The bead is laid centred on the path
-        //    (renderer: pt ± beadWidth/2), so two centrelines must sit a full bead width
-        //    apart to touch without overlapping — half a bead either side of the axis.
-        //
-        //      wall ──A          C────┐  <- pocket mouth (gap ≈ 1 bead, straddles `entry`)
-        //             │  leg 1   │    │
-        //             │          │  pocket wrap (OPEN loop, C → … → D)
-        //             │  leg 2   │    │
-        //      wall ──B          D────┘
-        //             ^ wall mouth (gap ≈ 1 bead, centred on the anchor)
-        //
-        //    Previously all of this collapsed onto two points: the wall ran straight
-        //    through the anchor, both legs retraced one identical centreline, and the wrap
-        //    opened and closed at the same vertex — four beads piled on each junction.
-        float h = MathF.Max(0.05f, bead * 0.5f);
-        Vector3 At(Vector2 v) => new(v.X, v.Y, z);
+        // Path order: whichever root the wall reaches first is where it stops.
+        bool oneFirst = idx1 < idx2
+            || (idx1 == idx2
+                && Vector3.DistanceSquared(layer.Moves[idx1].From, root1)
+                   <= Vector3.DistanceSquared(layer.Moves[idx1].From, root2));
 
-        // Wall mouth: consume half a bead of wall either side of the anchor, walking ACROSS
-        // adjacent moves as needed. Trimming only the one split move was wrong — a curved
-        // wall is chopped into chords and the closest one to the anchor is frequently a
-        // sliver (measured 0.02 mm on a real bendy wall), which collapsed the mouth to
-        // nothing on those layers while the rest of the stack looked fine.
-        var (headIdx, aWall, gotBack) = WalkWall(layer, bestMove, bestP, h, -1);
-        var (tailIdx, bWall, gotFwd) = WalkWall(layer, bestMove, bestP, h, +1);
+        int headIdx = oneFirst ? idx1 : idx2;
+        int tailIdx = oneFirst ? idx2 : idx1;
+        var headRoot = oneFirst ? root1 : root2;
+        var tailRoot = oneFirst ? root2 : root1;
+        var headMouth = oneFirst ? mouth1 : mouth2;
+        var tailMouth = oneFirst ? mouth2 : mouth1;
+        // The stored arc runs mouth1 → mouth2; entering from the other end reverses it.
+        var arc = oneFirst ? wrap : wrap.Reverse().ToArray();
 
-        // Re-balance at the END of an open path. The anchor can sit at (or within half a
-        // bead of) a run's endpoint — very common when a support is placed on the end of a
-        // wall — and then one side simply has no wall to give. Taking half from each side
-        // left a 3 mm mouth with the two legs only half a bead apart, so they overlapped:
-        // Jeff's "no gap to invent or make", which showed up as a mangled arm on end-placed
-        // supports. Take the shortfall from whichever side still has wall, so the opening is
-        // a full bead wherever the run is long enough to hold one.
-        if (gotBack < h - 1e-4f)
-            (tailIdx, bWall, gotFwd) = WalkWall(layer, bestMove, bestP, h + (h - gotBack), +1);
-        else if (gotFwd < h - 1e-4f)
-            (headIdx, aWall, gotBack) = WalkWall(layer, bestMove, bestP, h + (h - gotFwd), -1);
+        if (tailIdx < headIdx) return false;                       // shouldn't happen; bail safe
+        if (tailIdx - headIdx > 64) return false;                  // sanity: never eat a huge run
 
-        // Pocket mouth: fixed per spec by the caller, both points on the SAME outline edge.
-        int n = outline.Length;
-        var cPocket = At(cMouth);
-        var dPocket = At(dMouth);
+        var template = layer.Moves[refMove];
+        var head = layer.Moves[headIdx];
+        var tail = layer.Moves[tailIdx];
 
-        // The duct ALWAYS leaves from the wall.From-side root and returns to the wall.To-side
-        // root, so the two wall pieces can never overlap.
-        //
-        // Which mouth the OUTGOING leg uses must be decided per layer, from the actual wall
-        // roots: it is a non-crossing test, and the wall's direction rotates as the stack
-        // rises. Pinning it per spec (an earlier attempt at determinism) is what made the
-        // legs cross. The mouth POINTS stay fixed either way — only the traversal direction
-        // adapts, so the deposited geometry is identical and nothing drifts.
-        bool ccw = Vector3.Distance(aWall, cPocket) + Vector3.Distance(dPocket, bWall)
-                <= Vector3.Distance(aWall, dPocket) + Vector3.Distance(cPocket, bWall);
-        var mouthIn  = ccw ? cPocket : dPocket;
-        var mouthOut = ccw ? dPocket : cPocket;
-
-        var detour = new List<ToolpathMove>(n + 4);
-        var prev = aWall;
+        var duct = new List<ToolpathMove>(arc.Length + 4);
+        var prev = headRoot;
         void Emit(Vector3 to)
         {
             if (Vector3.DistanceSquared(prev, to) < 1e-6f) { prev = to; return; }
-            detour.Add(new ToolpathMove(prev, to, MoveKind.Extrude)
+            duct.Add(new ToolpathMove(prev, to, MoveKind.Extrude)
             {
-                Normal = wall.Normal,
-                HeightScale = wall.HeightScale,
+                Normal = template.Normal,
+                HeightScale = template.HeightScale,
             });
             prev = to;
         }
 
-        Emit(mouthIn);                                  // leg 1: wall mouth → pocket mouth
-        // Open wrap. Both mouths sit on edge `edgeIdx`, so a full lap visits every vertex
-        // exactly once: CCW starts at the edge's far vertex, CW starts at its near one.
-        if (ccw)
-            for (int k = 1; k <= n; k++) Emit(At(outline[(edgeIdx + k) % n]));
-        else
-            for (int k = 0; k <= n - 1; k++) Emit(At(outline[(edgeIdx - k + n) % n]));
-        Emit(mouthOut);                                 // finish the wrap at the far mouth
-        Emit(bWall);                                    // leg 2: pocket mouth → wall mouth
+        Vector3 At(Vector2 v) => new(v.X, v.Y, z);
+        Emit(At(headMouth));                       // outbound leg
+        foreach (var v in arc) Emit(At(v));        // around the pocket, away from the mouth
+        Emit(At(tailMouth));                       // close onto the far mouth
+        Emit(tailRoot);                            // return leg
+        if (duct.Count == 0) return false;
 
-        if (detour.Count == 0) return;
-
-        // 4) Splice: the wall ENDS at aWall and RESUMES at bWall — a real break in the
-        //    surface, one bead wide and centred on the anchor, instead of running
-        //    continuously beneath the neck. The path stays one unbroken extrusion.
-        //    Every move from headIdx..tailIdx is consumed by the mouth, so the whole run is
-        //    replaced (not just the single split move).
-        var head = layer.Moves[headIdx];
-        var tail = layer.Moves[tailIdx];
-        var replaced = new List<ToolpathMove>(detour.Count + 2);
-        if (Vector3.Distance(head.From, aWall) > 1e-4f)
-            replaced.Add(head with { To = aWall });
-        replaced.AddRange(detour);
-        if (Vector3.Distance(bWall, tail.To) > 1e-4f)
-            replaced.Add(tail with { From = bWall });
-        if (replaced.Count == 0) return;
+        var replaced = new List<ToolpathMove>(duct.Count + 2);
+        if (Vector3.Distance(head.From, headRoot) > 1e-4f)
+            replaced.Add(head with { To = headRoot });
+        replaced.AddRange(duct);
+        if (Vector3.Distance(tailRoot, tail.To) > 1e-4f)
+            replaced.Add(tail with { From = tailRoot });
 
         layer.Moves.RemoveRange(headIdx, tailIdx - headIdx + 1);
         layer.Moves.InsertRange(headIdx, replaced);
 
-        // Recorded contour spans (if any) are index-based — they no longer match.
+        // Recorded contour spans are index-based — they no longer match.
         layer.Contours.Clear();
+        return true;
+    }
+
+    // ── Pocket-side geometry (all fixed per spec) ────────────────────────────────────
+
+    /// <summary>
+    /// First crossing of the ray (origin, dir) with the outline — the NEAR side. A band of
+    /// one bead cuts clean through a pocket much wider than a bead, so each leg line crosses
+    /// twice; only the near crossing is the mouth.
+    /// </summary>
+    static bool TryRayHitOutline(
+        Vector2[] poly, Vector2 origin, Vector2 dir, out int edgeIdx, out Vector2 hit)
+    {
+        edgeIdx = -1;
+        hit = default;
+        float bestT = float.MaxValue;
+        for (int i = 0; i < poly.Length; i++)
+        {
+            var a = poly[i];
+            var b = poly[(i + 1) % poly.Length];
+            var ab = b - a;
+            float denom = Cross(ab, dir);
+            if (MathF.Abs(denom) < 1e-9f) continue;              // parallel
+            float s = Cross(origin - a, dir) / denom;            // param along the edge
+            if (s < -1e-4f || s > 1f + 1e-4f) continue;
+            var p = a + ab * Math.Clamp(s, 0f, 1f);
+            float t = Vector2.Dot(p - origin, dir);              // param along the ray
+            if (t <= 1e-4f) continue;
+            if (t < bestT) { bestT = t; edgeIdx = i; hit = p; }
+        }
+        return edgeIdx >= 0;
+    }
+
+    /// <summary>
+    /// Vertices to visit going from <paramref name="mouth1"/> AROUND the pocket to
+    /// <paramref name="mouth2"/>. The outbound arm must never head back into the arc the
+    /// mouth just trimmed away, so the arc we want is the one containing the pocket's far
+    /// side (measured along the arm axis).
+    /// </summary>
+    static Vector2[] BuildWrapArc(
+        Vector2[] poly, int e1, int e2, Vector2 anchor, Vector2 u, Vector2 mouth1, Vector2 mouth2)
+    {
+        int n = poly.Length;
+
+        // Forward: v[e1+1], v[e1+2], … , v[e2].
+        var fwd = new List<Vector2>(n);
+        for (int k = 1; ; k++)
+        {
+            int vi = (e1 + k) % n;
+            fwd.Add(poly[vi]);
+            if (vi == e2 || k > n) break;
+        }
+        // Backward: v[e1], v[e1-1], … , v[e2+1].
+        var bwd = new List<Vector2>(n);
+        for (int k = 0; ; k++)
+        {
+            int vi = (e1 - k + n * 2) % n;
+            bwd.Add(poly[vi]);
+            if (vi == (e2 + 1) % n || k > n) break;
+        }
+
+        // The pocket's far vertex along the arm axis can only lie on the way round.
+        int farIdx = 0;
+        float farT = float.MinValue;
+        for (int i = 0; i < n; i++)
+        {
+            float t = Vector2.Dot(poly[i] - anchor, u);
+            if (t > farT) { farT = t; farIdx = i; }
+        }
+        var far = poly[farIdx];
+        bool fwdHasFar = fwd.Contains(far);
+        bool bwdHasFar = bwd.Contains(far);
+
+        if (fwdHasFar != bwdHasFar)
+            return (fwdHasFar ? fwd : bwd).ToArray();
+
+        // Both mouths on the same edge: each candidate is a full lap, so pick the one that
+        // leaves mouth1 heading AWAY from mouth2 — still "never into the trimmed arc".
+        var away = mouth1 - mouth2;
+        float fwdDot = fwd.Count > 0 ? Vector2.Dot(fwd[0] - mouth1, away) : 0f;
+        float bwdDot = bwd.Count > 0 ? Vector2.Dot(bwd[0] - mouth1, away) : 0f;
+        return (fwdDot >= bwdDot ? fwd : bwd).ToArray();
+    }
+
+    // ── Wall-side geometry (per layer) ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Where the leg line (through <paramref name="linePoint"/>, direction
+    /// <paramref name="dir"/>) crosses the wall, nearest the anchor. Falls back to the wall
+    /// point closest to that line — which is what clamps a leg to the end of an open run
+    /// instead of leaving it with no root at all.
+    /// </summary>
+    static bool TryWallHit(
+        ToolpathLayer layer, Vector2 linePoint, Vector2 dir, Vector2 anchor, float maxDist,
+        out int moveIdx, out Vector3 hit)
+    {
+        moveIdx = -1;
+        hit = default;
+        float bestD2 = float.MaxValue;
+        float maxD2 = maxDist * maxDist;
+
+        for (int i = 0; i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[i];
+            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            var a = new Vector2(mv.From.X, mv.From.Y);
+            var b = new Vector2(mv.To.X, mv.To.Y);
+            var ab = b - a;
+            float denom = Cross(ab, dir);
+            if (MathF.Abs(denom) < 1e-9f) continue;
+            float s = Cross(linePoint - a, dir) / denom;
+            if (s < -1e-4f || s > 1f + 1e-4f) continue;
+            s = Math.Clamp(s, 0f, 1f);
+            var p = a + ab * s;
+            float d2 = Vector2.DistanceSquared(p, anchor);
+            if (d2 > maxD2 || d2 >= bestD2) continue;
+            bestD2 = d2;
+            moveIdx = i;
+            hit = mv.From + (mv.To - mv.From) * s;
+        }
+        if (moveIdx >= 0) return true;
+
+        // No crossing (leg line runs off the end of the run): clamp to the nearest wall
+        // point to the line, so the arm still lands on wall instead of vanishing.
+        float bestPerp = float.MaxValue;
+        for (int i = 0; i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[i];
+            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            foreach (var (pt, s) in new[] { (mv.From, 0f), (mv.To, 1f) })
+            {
+                var q = new Vector2(pt.X, pt.Y);
+                if (Vector2.DistanceSquared(q, anchor) > maxD2) continue;
+                var rel = q - linePoint;
+                float perpDist = MathF.Abs(Cross(dir, rel));
+                if (perpDist >= bestPerp) continue;
+                bestPerp = perpDist;
+                moveIdx = i;
+                hit = mv.From + (mv.To - mv.From) * s;
+            }
+        }
+        return moveIdx >= 0;
+    }
+
+    /// <summary>
+    /// Moves the anchor inboard along its wall run so a full one-bead mouth fits on wall.
+    /// Returns it unchanged when there is already room on both sides.
+    /// </summary>
+    static Vector2 LimitAnchorToRunInterior(ToolpathLayer layer, Vector2 anchor, float h)
+    {
+        int refMove = -1;
+        float refD2 = float.MaxValue;
+        Vector3 refPoint = default;
+        for (int i = 0; i < layer.Moves.Count; i++)
+        {
+            var mv = layer.Moves[i];
+            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            var (p, _, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
+            if (d2 < refD2) { refD2 = d2; refMove = i; refPoint = p; }
+        }
+        if (refMove < 0) return anchor;
+
+        var (_, _, back) = WalkRun(layer, refMove, refPoint, h, -1);
+        var (_, _, fwd)  = WalkRun(layer, refMove, refPoint, h, +1);
+
+        if (back < h - 1e-4f)
+        {
+            var (_, pt, _) = WalkRun(layer, refMove, refPoint, h - back, +1);
+            return new Vector2(pt.X, pt.Y);
+        }
+        if (fwd < h - 1e-4f)
+        {
+            var (_, pt, _) = WalkRun(layer, refMove, refPoint, h - fwd, -1);
+            return new Vector2(pt.X, pt.Y);
+        }
+        return anchor;
     }
 
     /// <summary>
     /// Walks the contiguous extrude run away from <paramref name="fromPoint"/> on move
     /// <paramref name="idx"/> — backwards for <paramref name="dir"/> = -1, forwards for +1 —
-    /// consuming <paramref name="dist"/> mm of wall, and returns the move the cut lands in
-    /// plus the cut point. Crossing move boundaries is the whole point: on a curved wall the
-    /// segment nearest the anchor is often far shorter than a bead, so a mouth confined to
-    /// that one move would collapse. Stops at a travel, a wipe, a resume ramp, a
-    /// disconnected joint, or the end of the layer, returning the furthest point reached.
+    /// consuming up to <paramref name="dist"/> mm, and reports how much was actually
+    /// available. Crossing move boundaries matters: a curved wall is chopped into chords far
+    /// shorter than a bead. Stops at a travel, wipe, resume ramp, disconnected joint, or the
+    /// end of the layer.
     /// </summary>
-    static (int idx, Vector3 pt, float consumed) WalkWall(
+    static (int idx, Vector3 pt, float consumed) WalkRun(
         ToolpathLayer layer, int idx, Vector3 fromPoint, float dist, int dir)
     {
         int i = idx;
         var p = fromPoint;
-        float remaining = dist;
-        float consumed = 0f;
+        float remaining = dist, consumed = 0f;
         while (true)
         {
             var mv = layer.Moves[i];
@@ -261,7 +409,6 @@ public static class StructuralSupportPlanner
             var nm = layer.Moves[next];
             if (nm.Kind != MoveKind.Extrude || nm.IsWipe || nm.IsResumeRamp)
                 return (i, target, consumed);
-            // Only continue through a joint that actually connects — never jump a gap.
             var joint = dir < 0 ? nm.To : nm.From;
             if (Vector3.Distance(joint, target) > 0.05f) return (i, target, consumed);
 
@@ -271,14 +418,8 @@ public static class StructuralSupportPlanner
     }
 
     /// <summary>
-    /// Point <paramref name="dist"/> along the edge <paramref name="from"/> →
-    /// <paramref name="to"/>. Capped at 45% of the edge so opening a pocket mouth can
-    /// never swallow a whole short edge (small pockets, fine circle facets).
-    /// </summary>
-    /// <summary>
     /// XY distance from the anchor to the nearest printable extrude segment on a layer —
-    /// i.e. "does this layer's wall still pass through the break?". <see cref="float.MaxValue"/>
-    /// when the layer has no eligible extrusion at all.
+    /// "does this layer's wall still pass through the break?".
     /// </summary>
     static float ClosestWallDistanceXY(ToolpathLayer layer, Vector2 anchor)
     {
@@ -292,22 +433,16 @@ public static class StructuralSupportPlanner
         return best == float.MaxValue ? float.MaxValue : MathF.Sqrt(best);
     }
 
-    /// <summary>Closest point to <paramref name="q"/> on the segment a→b, in 2D.</summary>
+    // ── Small geometry helpers ──────────────────────────────────────────────────────
+
+    static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
+
     static Vector2 ClosestOnSegment2D(Vector2 q, Vector2 a, Vector2 b)
     {
         var ab = b - a;
         float len2 = ab.LengthSquared();
         if (len2 < 1e-12f) return a;
-        float t = Math.Clamp(Vector2.Dot(q - a, ab) / len2, 0f, 1f);
-        return a + ab * t;
-    }
-
-    static Vector2 StepAlong(Vector2 from, Vector2 to, float dist)
-    {
-        var d = to - from;
-        float len = d.Length();
-        if (len < 1e-6f) return from;
-        return from + d / len * MathF.Min(dist, len * 0.45f);
+        return a + ab * Math.Clamp(Vector2.Dot(q - a, ab) / len2, 0f, 1f);
     }
 
     static (Vector3 p, float t, float d2) ClosestOnSegmentXY(Vector2 q, Vector3 a, Vector3 b)
