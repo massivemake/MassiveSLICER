@@ -10677,6 +10677,10 @@ public partial class ViewportView : UserControl
         }
         ApplyTransformLink(node);
 
+        // Same live readout as a gizmo drag — a G/R/S move is the same interaction by another route.
+        if (DataContext is ViewportViewModel vmKbLive)
+            SyncSelectionTransformDisplay(vmKbLive, remember: false);
+
         if (_toolIsDragging)
             RunIkForToolDrag();
 
@@ -11100,7 +11104,7 @@ public partial class ViewportView : UserControl
     /// and TCP need, so that path is untouched below.
     /// </para>
     /// </remarks>
-    private void SyncSelectionTransformDisplay(ViewportViewModel vm)
+    private void SyncSelectionTransformDisplay(ViewportViewModel vm, bool remember = true)
     {
         if (_renderer.SelectedNode is not { } node) return;
 
@@ -11118,7 +11122,7 @@ public partial class ViewportView : UserControl
                 Math.Round(pivot.X, 2), Math.Round(pivot.Y, 2), Math.Round(pivot.Z, 2),
                 Math.Round(e.X, 2),     Math.Round(e.Y, 2),     Math.Round(e.Z, 2));
             vm.SyncSelectionScaleDisplay(p.Scale.X, p.Scale.Y, p.Scale.Z);
-            RememberCommittedTransform(vm, node);
+            if (remember) RememberCommittedTransform(vm, node);
             return;
         }
 
@@ -14002,6 +14006,13 @@ public partial class ViewportView : UserControl
                 break;
         }
         ApplyTransformLink(node);
+
+        // Count the toolbar numbers along with the drag rather than snapping to the answer on
+        // release. remember: false because the undo baseline for a drag is the pose captured at
+        // drag start (_gizmoDragInitialLocal) — re-baselining it on every mouse move would collapse
+        // the whole drag into nothing to undo.
+        if (DataContext is ViewportViewModel vmLive)
+            SyncSelectionTransformDisplay(vmLive, remember: false);
 
         if (modifierCut is { } cut && DataContext is ViewportViewModel vmMod)
             vmMod.SyncModifierAfterGizmoEdit(cut, node);

@@ -83,14 +83,24 @@ public class TransformNumberBox : TextBox
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
-        bool wasFocused = IsFocused;
-        base.OnPointerPressed(e);
-
         // First click into the box selects everything, so the next keystroke overwrites — the same
-        // thing that happens in a text editor. base already placed the caret, so this overrides it.
-        // A second click leaves base's caret placement alone and drops the selection.
-        if (!wasFocused)
+        // thing that happens in a text editor.
+        //
+        // base is deliberately NOT called on that first click. Letting it run places a caret and
+        // arms a drag-selection anchored at the click point, which then fights the SelectAll: the
+        // selection collapses back toward that anchor, so clicking to the right of the decimal left
+        // only the fractional digits highlighted. Skipping base means there is no anchor to fight.
+        if (!IsFocused)
+        {
+            Focus();
             SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        // Already focused: base places the caret where clicked and drops the selection, which is
+        // what makes arithmetic against the visible value possible.
+        base.OnPointerPressed(e);
 
         // Never let a press in the transform toolbar reach the viewport behind it, whichever part of
         // the box was hit. Without this the viewport takes focus back and deselects the part.
