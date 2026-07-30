@@ -12,8 +12,9 @@
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
+                <!-- Send lives here (left of Realtime) so the 309px right strip is not crowded -->
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <!-- ── Left: brand + file menu ──────────────────────────────────── -->
@@ -81,15 +82,46 @@
                 </Menu>
             </StackPanel>
 
-            <!-- ── Right: camera presets + units + toggles ───────────────────── -->
+            <!-- ── Send (left of Realtime): destination + send + save .src ───── -->
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1"
+                        VerticalAlignment="Center" Margin="0,0,10,0">
+                <ComboBox MinWidth="140" MaxWidth="190" Height="28"
+                          FontSize="11"
+                          VerticalAlignment="Center"
+                          Margin="0,0,2,0"
+                          ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
+                          SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
+                          ToolTip.Tip="Where Send delivers the active toolpath: robot share (KRL) or MassiveDRIVE (path + extruder)">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Label}" FontSize="11"/>
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button Classes="ExportCta" Padding="10,4"
+                        CornerRadius="4,0,0,4"
+                        Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"
+                        ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
+                        <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
+                                   FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
+                    </StackPanel>
+                </Button>
+                <Button Classes="ExportCta" Padding="5,4"
+                        CornerRadius="0,4,4,0"
+                        Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
+                        ToolTip.Tip="Download the KRL program (.src) to a file instead">
+                    <ia:Icon Value="mdi-content-save" FontSize="12" Foreground="#242424"/>
+                </Button>
+            </StackPanel>
+
+            <!-- ── Right strip: Realtime + console + settings (aligned to sidebar) ─ -->
             <!-- Width matches the right sidebar host (309 incl. its 9px edge lane) so
                  the Realtime toggle's left edge lines up with the floating step cards. -->
             <Grid Grid.Column="2" Width="309"
                   HorizontalAlignment="Right" VerticalAlignment="Center"
-                  ColumnDefinitions="Auto,Auto,*,Auto,Auto">
-
-                <!-- Frame All lives as a viewport icon (top-right); view presets via the
-                     Ctrl+Space pie menu. -->
+                  ColumnDefinitions="Auto,*,Auto,Auto">
 
                 <ToggleButton Grid.Column="0" Classes="RealtimePause" Width="96" Margin="0,0,8,0"
                               IsChecked="{Binding $parent[Window].DataContext.Viewport.RealtimeSlicingPaused, Mode=TwoWay}"
@@ -108,44 +140,10 @@
                     </Panel>
                 </ToggleButton>
 
-                <!-- Send destination: Robot (KRL/SMB) or MassiveDRIVE (job package).
-                     Main button sends; chevron still saves .src to disk. -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1">
-                    <ComboBox MinWidth="168" MaxWidth="220" Height="28"
-                              FontSize="11"
-                              VerticalAlignment="Center"
-                              Margin="0,0,2,0"
-                              ItemsSource="{Binding $parent[Window].DataContext.Viewport.SendTargets}"
-                              SelectedItem="{Binding $parent[Window].DataContext.Viewport.SelectedSendTarget}"
-                              ToolTip.Tip="Where Send delivers the active toolpath: robot share (KRL) or MassiveDRIVE (path + extruder)">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Label}" FontSize="11"/>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <Button Classes="ExportCta" Padding="10,4"
-                            CornerRadius="4,0,0,4"
-                            Command="{Binding $parent[Window].DataContext.Viewport.SendToRobotCommand}"
-                            ToolTip.Tip="{Binding $parent[Window].DataContext.Viewport.SendActionTip}">
-                        <StackPanel Orientation="Horizontal" Spacing="5">
-                            <ia:Icon Value="mdi-robot-industrial" FontSize="12" Foreground="#242424"/>
-                            <TextBlock Text="{Binding $parent[Window].DataContext.Viewport.SendActionLabel}"
-                                       FontWeight="SemiBold" FontSize="11" Foreground="#242424"/>
-                        </StackPanel>
-                    </Button>
-                    <Button Classes="ExportCta" Padding="5,4"
-                            CornerRadius="0,4,4,0"
-                            Command="{Binding $parent[Window].DataContext.Viewport.ExportKrlCommand}"
-                            ToolTip.Tip="Download the KRL program (.src) to a file instead">
-                        <ia:Icon Value="mdi-content-save" FontSize="12" Foreground="#242424"/>
-                    </Button>
-                </StackPanel>
-
-                <Button Grid.Column="3" Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
+                <Button Grid.Column="2" Classes="ToolbarButton" Command="{Binding ToggleConsoleCommand}" ToolTip.Tip="Toggle Console" Margin="0,0,4,0">
                     <ia:Icon Value="mdi-console" FontSize="13"/>
                 </Button>
-                <Button Grid.Column="4" Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel" Margin="0,0,9,0">
+                <Button Grid.Column="3" Classes="ToolbarButton" Command="{Binding ToggleRightPanelCommand}" ToolTip.Tip="Toggle Settings Panel" Margin="0,0,9,0">
                     <ia:Icon Value="mdi-menu" FontSize="13"/>
                 </Button>
             </Grid>
