@@ -141,6 +141,27 @@ public sealed record RobotCellConfig
     /// <summary>World position of ROBROOT (A1 axis mounting surface) in mm, Z-up.</summary>
     public Float3 WorldPosition { get; init; } = Float3.Zero;
 
+    /// <summary>
+    /// Render-only correction (mm) for a robot GLB whose geometry does not sit where
+    /// <see cref="WorldPosition"/> says ROBROOT is, so the drawn arm lands off the cell.
+    /// Applied to the robot scene node ONLY -- deliberately not to
+    /// <see cref="BedCellConfig.BaseMarkerWorld"/> and not to KRL export, both of which
+    /// stay anchored to <see cref="WorldPosition"/> + <c>bed.baseData</c>. Adjusting it
+    /// therefore moves what is drawn and cannot change a single exported coordinate.
+    /// <para>
+    /// This is a correction for a modelling error, not a machine measurement. Measure it
+    /// with the <c>cal-check</c> console command: it is the reported error vector negated.
+    /// Null = no correction (every cell except LFAM 1 today).
+    /// </para>
+    /// </summary>
+    public Float3? ModelOffset { get; init; }
+
+    /// <summary>Where the robot GLB is actually drawn: ROBROOT plus any render-only correction.</summary>
+    [JsonIgnore]
+    public Float3 ModelWorldPosition => ModelOffset is { } m
+        ? new Float3(WorldPosition.X + m.X, WorldPosition.Y + m.Y, WorldPosition.Z + m.Z)
+        : WorldPosition;
+
     /// <summary>Per-joint axis, sign, KRL offset, and soft limits for A1-A6.</summary>
     public IReadOnlyList<JointConfig> Joints { get; init; } = [];
 

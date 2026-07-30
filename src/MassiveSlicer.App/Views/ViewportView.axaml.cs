@@ -2245,7 +2245,10 @@ public partial class ViewportView : UserControl
 
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
-        _robotHomePos      = _robrootWorldPos;
+        // The rail rewrites the robot node's transform every frame from _robotHomePos, so the
+        // render-only ModelOffset has to be folded in here too or the rail would undo it.
+        var mp = swap.Config.Robot.ModelWorldPosition;
+        _robotHomePos      = new Vector3(mp.X, mp.Y, mp.Z);
         _robotRail         = swap.Config.RobotRail;
         _flangeDisplayRoll = swap.Config.Robot.FlangeDisplayRoll * MathF.PI / 180f;
 

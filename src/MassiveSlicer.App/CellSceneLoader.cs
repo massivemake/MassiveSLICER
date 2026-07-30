@@ -40,7 +40,10 @@ internal static class CellSceneLoader
             try
             {
                 var robot = GltfLoader.Load(AssetPaths.Resolve(cell.Robot.ModelPath));
-                var p     = cell.Robot.WorldPosition;
+                // ModelWorldPosition, not WorldPosition: a render-only correction for a GLB
+                // that doesn't sit where ROBROOT says. The BASE marker and KRL export stay
+                // on WorldPosition, so this cannot move an exported coordinate.
+                var p     = cell.Robot.ModelWorldPosition;
                 robotBaseNode = new SceneNode
                 {
                     Name           = $"{cell.Name}_Robot",
