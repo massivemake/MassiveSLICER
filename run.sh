@@ -3,9 +3,11 @@
 # Usage:  ./run.sh            (from the repo root, or by full path)
 set -u
 
-# The Homebrew dotnet@8 (8.0.127) can't compile this project's .slnx / C#12 syntax,
-# so put the newer .NET SDK first on PATH.
-export PATH="/usr/local/share/dotnet:$PATH"
+# Prefer a user-installed or system .NET SDK on PATH.
+# Linux ARM64 / x64: common install from https://dot.net → $HOME/.dotnet
+# macOS Homebrew: /usr/local/share/dotnet
+export PATH="$HOME/.dotnet:/usr/local/share/dotnet:$PATH"
+export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 
 # Close other slicer instances (app, apphost, or a prior `dotnet run`).
 pkill -f "MassiveSlicer.App" 2>/dev/null || true

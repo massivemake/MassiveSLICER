@@ -6,9 +6,18 @@ A C# desktop CAM application for KUKA robot additive and subtractive manufacturi
 
 | Requirement | Version |
 |-------------|---------|
-| .NET SDK | 8.0 or newer |
-| OS | Windows 10/11 (primary) or macOS 12+ |
-| GPU | OpenGL 4.1+ |
+| .NET SDK | 8.0 or newer (project TFM is `net8.0`; macOS docs may recommend SDK 9+ for `.slnx`) |
+| OS | Windows 10/11 (primary), macOS 12+, **Linux (x64 and ARM64 / aarch64)** |
+| GPU | OpenGL **3.3+** / GLSL 3.30+ for the 3D viewport (see Linux notes) |
+
+### Platform notes
+
+| Platform | Build | Run GUI | STEP import | Notes |
+|----------|-------|---------|-------------|--------|
+| Windows x64 | Yes | Yes | Yes (Occt.NET) | Full feature set |
+| macOS arm64 / x64 | Yes | Yes | No | STEP skipped gracefully |
+| **Linux x64** | Yes | Yes* | No | *Needs desktop OpenGL 3.3+ |
+| **Linux ARM64 (aarch64)** | **Yes** | Yes* | No | Verified build on Revolution Pi (Debian bookworm, .NET 8.0.423). Viewport needs GLSL 3.30; weak/SoC GL (e.g. some RevPi GPUs) may fail at runtime with `GLSL 3.30 is not supported` while the rest of the app still builds and unit tests run. |
 
 ---
 
@@ -109,6 +118,66 @@ dotnet publish src/MassiveSlicer.App -r osx-arm64 --self-contained -c Release
 > Open CASCADE (Occt.NET), which ships Windows-only native libraries. All other import
 > formats (STL, OBJ, 3MF, GLTF/GLB) and the rest of the app work on macOS. Attempting a
 > STEP import on macOS is handled gracefully (the file is skipped, no crash).
+
+---
+
+## Linux (x64 and ARM64)
+
+Verified on **Linux aarch64** (Revolution Pi / Debian 12, .NET SDK 8.0.423):  
+`dotnet build src/MassiveSlicer.App -c Release` succeeds (0 errors).
+
+### Install .NET 8 SDK
+
+```bash
+curl -fsSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 8.0
+export DOTNET_ROOT="$HOME/.dotnet"
+export PATH="$HOME/.dotnet:$PATH"
+dotnet --version   # 8.x
+```
+
+Optional: add the `export` lines to `~/.bashrc`.
+
+### Native packages (Debian / Ubuntu)
+
+```bash
+sudo apt-get install -y libicu72 libssl3 libfontconfig1 \
+  libx11-6 libxext6 libgl1 libglu1-mesa \
+  libxrandr2 libxi6 libxcursor1 libxinerama1
+```
+
+(Package versions may differ on newer distros; install the equivalent ICU, OpenSSL, fontconfig, X11, and OpenGL packages.)
+
+### Clone and build
+
+```bash
+git clone --depth 1 https://github.com/massivemake/MassiveSLICER.git
+cd MassiveSLICER
+
+# Prefer the App project on .NET 8 (avoids requiring SDK 9 for .slnx):
+dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj -c Release
+
+# Or, with SDK 9+:
+# dotnet build MassiveSlicer.slnx -c Release
+```
+
+### Run
+
+```bash
+dotnet run --project src/MassiveSlicer.App -c Release
+# or: ./run.sh
+```
+
+### Tests
+
+```bash
+dotnet test src/MassiveSlicer.Tests/MassiveSlicer.Tests.csproj -c Release
+```
+
+### Linux limitations
+
+- **STEP import** is Windows-only (same as macOS) — Occt.NET natives.
+- **3D viewport** requires a GL context that supports **GLSL 3.30**. Some embedded GPUs only expose older desktop GL / GLES and will log `GLSL 3.30 is not supported` when the viewport initializes.
+- Prefer building `src/MassiveSlicer.App/...csproj` with .NET **8** if `.slnx` is rejected by the SDK.
 
 ---
 

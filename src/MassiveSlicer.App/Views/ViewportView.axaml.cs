@@ -1052,9 +1052,32 @@ public partial class ViewportView : UserControl
     }
 
 
+    /// <summary>True after the GL viewport failed to initialise (e.g. GLSL too old).</summary>
+    private bool _glInitFailed;
+    private string? _glInitError;
+
+    /// <summary>Non-null when the 3D viewport could not start on this GPU.</summary>
+    public string? GlInitError => _glInitError;
+
     private void OnRender(TimeSpan delta, int w, int h)
     {
-        _renderer.Initialise();
+        // Weak / embedded GPUs (some Linux ARM boards) only expose GLSL 1.40 or ES 3.00.
+        // Our shaders require #version 330 core — fail the viewport, not the whole app.
+        if (_glInitFailed)
+            return;
+
+        try
+        {
+            _renderer.Initialise();
+        }
+        catch (Exception ex)
+        {
+            _glInitFailed = true;
+            _glInitError = ex.Message;
+            System.Console.Error.WriteLine(
+                "[MassiveSlicer] 3D viewport disabled (OpenGL/GLSL unsupported on this GPU):\n" + ex.Message);
+            return;
+        }
 
         if (_vm is { } vm)
         {
