@@ -1,4 +1,5 @@
 using System.Globalization;
+using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 
@@ -288,6 +289,63 @@ public sealed partial class ViewportViewModel
 
         return $"[basis] \"{node.Name}\" pivot={V(pivot)} X(red)={V(ax)} Y(green)={V(ay)} "
              + $"Z(blue)={V(az)} worldAligned={worldAligned}";
+    }
+
+    /// <summary>
+    /// Re-levels every cut plane under <paramref name="meshNode"/> so its own Horizontal/Vertical
+    /// tag beats whatever rotation it inherited from the part.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A modifier's plane lives under a "Modifiers" group parented to the mesh
+    /// (<c>GetOrCreateModifiersGroup</c>), and <c>SyncModifierGizmoNodeFromFields</c> divides the
+    /// parent transform out only at the moment it writes the plane. Nothing re-ran when the mesh was
+    /// later rotated, so the plane rode the part's tilt — and a plane tagged Horizontal could stop
+    /// being horizontal, quietly contradicting a setting the user had chosen. Harmless while model
+    /// rotation was world-axis about a distant pivot; visible as soon as it became local.
+    /// </para>
+    /// <para>
+    /// The rule is the tag first, the parent in everything else. Translation is inherited whole, so
+    /// cuts still travel with the part — which Jeff wanted. Orientation is rebuilt: a Horizontal
+    /// plane is forced flat, and a Vertical plane is forced upright while keeping whatever yaw it
+    /// has picked up, so spinning the part carries the cut round with it and it keeps slicing the
+    /// same feature.
+    /// </para>
+    /// <para>
+    /// Deliberately stateless — it reads the plane's current world pose and corrects it, rather than
+    /// remembering some earlier "untilted" pose that could drift out of step with the fields.
+    /// </para>
+    /// </remarks>
+    internal void ConstrainModifierPlanesUnder(SceneNode meshNode)
+    {
+        foreach (var node in meshNode.SelfAndDescendants())
+        {
+            if (FindModifierForNode(node) is not { } cut) continue;
+
+            var w = node.WorldTransform;
+
+            Matrix4 levelled;
+            if (cut.Orientation == CutOrientation.Horizontal)
+            {
+                // Flat, always: normal is world +Z regardless of how the part is tumbled.
+                levelled = Matrix4.Identity;
+            }
+            else
+            {
+                // Upright, always — but keep the yaw the part has handed it, so the cut spins with
+                // the model. Flattening the normal into world XY is what discards pitch and roll.
+                var n = new Vector3(w.Row0.X, w.Row0.Y, 0f);
+                n = n.LengthSquared > 1e-8f ? Vector3.Normalize(n) : Vector3.UnitX;
+                levelled = Matrix4.CreateRotationZ(MathF.Atan2(n.Y, n.X));
+            }
+
+            levelled.Row3 = w.Row3;   // position rides the part untouched
+
+            var parent = node.Parent?.WorldTransform ?? Matrix4.Identity;
+            node.LocalTransform = MathF.Abs(parent.Determinant) > 1e-12f
+                ? levelled * parent.Inverted()
+                : levelled;
+        }
     }
 
     /// <summary>

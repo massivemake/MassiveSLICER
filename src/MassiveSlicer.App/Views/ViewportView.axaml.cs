@@ -702,6 +702,7 @@ public partial class ViewportView : UserControl
                 lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
                 node.LocalTransform = lt;
             }
+            vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -730,6 +731,7 @@ public partial class ViewportView : UserControl
                 lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
                 node.LocalTransform = lt;
             }
+            vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -739,6 +741,7 @@ public partial class ViewportView : UserControl
         // headless test exercises the real path rather than a shortcut around it.
         vm.OnExternalNodeTransform = (node, oldLocal, label) =>
         {
+            vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, oldLocal);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -753,6 +756,7 @@ public partial class ViewportView : UserControl
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
+            vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -10679,7 +10683,10 @@ public partial class ViewportView : UserControl
 
         // Same live readout as a gizmo drag — a G/R/S move is the same interaction by another route.
         if (DataContext is ViewportViewModel vmKbLive)
+        {
             SyncSelectionTransformDisplay(vmKbLive, remember: false);
+            vmKbLive.ConstrainModifierPlanesUnder(node);
+        }
 
         if (_toolIsDragging)
             RunIkForToolDrag();
@@ -14012,7 +14019,12 @@ public partial class ViewportView : UserControl
         // drag start (_gizmoDragInitialLocal) — re-baselining it on every mouse move would collapse
         // the whole drag into nothing to undo.
         if (DataContext is ViewportViewModel vmLive)
+        {
             SyncSelectionTransformDisplay(vmLive, remember: false);
+            // Keep this node's cut planes obeying their own Horizontal/Vertical tag as it turns,
+            // rather than letting them ride the tilt. Live, so the plane never visibly leans.
+            if (modifierCut is null) vmLive.ConstrainModifierPlanesUnder(node);
+        }
 
         if (modifierCut is { } cut && DataContext is ViewportViewModel vmMod)
             vmMod.SyncModifierAfterGizmoEdit(cut, node);
