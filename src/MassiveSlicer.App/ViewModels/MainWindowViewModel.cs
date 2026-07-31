@@ -3372,30 +3372,17 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.SetSeamGuides(p.SeamGuidePoints
             .Where(a => a is { Length: >= 3 })
             .Select(a => new SeamGuidePoint(a[0], a[1], a[2])));
-        add.StructuralSupports.Clear();
-        // Indexed loop (not Where+Select): names live in a parallel list, so a filtered
-        // spec must skip its name too or every later support gets the wrong one.
-        for (int si = 0; si < p.StructuralSupports.Count; si++)
-        {
-            var a = p.StructuralSupports[si];
-            if (a is not { Length: >= 12 }) continue;
-            string name = si < p.StructuralSupportNames.Count
-                ? p.StructuralSupportNames[si] ?? ""
-                : "";
-            if (string.IsNullOrWhiteSpace(name))
-                name = $"Support {add.StructuralSupports.Count + 1}";
-            add.StructuralSupports.Add(new StructuralSupportSpec
-            {
-                Name = name,
-                Shape = a[0] >= 1f ? SupportShapeKind.Circle : SupportShapeKind.Rectangle,
-                AnchorX = a[1], AnchorY = a[2], AnchorLayer = (int)a[3],
-                LayersUp = (int)a[4], LayersDown = (int)a[5],
-                CenterX = a[6], CenterY = a[7],
-                WidthMm = a[8], DepthMm = a[9], RotationDeg = a[10],
-                Enabled = a[11] >= 0.5f,
-            });
-        }
-        add.SelectedSupportIndex = add.StructuralSupports.Count > 0 ? 0 : -1;
+        // Structural Supports are NOT read from preferences any more — they belong to the
+        // workspace (WorkspaceUiSession.StructuralSupports). Reading them here is what made
+        // a support survive app close/reopen and reappear on an unrelated model, invisibly
+        // modifying its toolpath. Meshes do not come back on relaunch; neither should these.
+        // The preferences fields are deliberately LEFT IN PLACE rather than deleted, so
+        // restoring global storage stays a one-line change if it is ever wanted.
+        //
+        // Deliberately NOT clearing add.StructuralSupports here. This method runs on every
+        // settings undo/redo (ApplyPrefsFromJson) and on preset apply, so clearing would
+        // delete the user's pockets whenever they pressed Ctrl+Z on an unrelated setting.
+        // A fresh app already starts with none, and opening a workspace fills them in.
         add.SetPaintMarks(p.PaintMarks
             .Where(a => a is { Length: >= 5 })
             .Select(a => new PaintMark(
@@ -3691,15 +3678,12 @@ public sealed class MainWindowViewModel : ViewModelBase
                 (float)m.Kind, (float)m.BridgeRole, (float)m.SupportStyle,
                 (float)m.SupportSide })
             .ToList();
-        p.StructuralSupports = add.StructuralSupports
-            .Select(s => new[] {
-                s.Shape == SupportShapeKind.Circle ? 1f : 0f,
-                s.AnchorX, s.AnchorY, s.AnchorLayer,
-                s.LayersUp, s.LayersDown,
-                s.CenterX, s.CenterY, s.WidthMm, s.DepthMm, s.RotationDeg,
-                s.Enabled ? 1f : 0f })
-            .ToList();
-        p.StructuralSupportNames = add.StructuralSupports.Select(s => s.Name).ToList();
+        // Supports live in the workspace now. Write these EMPTY rather than skipping them:
+        // skipping would leave whatever the last build wrote sitting in prefs.json forever,
+        // and stale pockets that outlive their own deletion are the whole bug being fixed.
+        // The fields stay in AppPreferences so re-enabling global storage is a one-liner.
+        p.StructuralSupports = [];
+        p.StructuralSupportNames = [];
         p.CurvedBoundarySource       = add.CurvedBoundarySourceDisplay;
         p.CurvedAutoDetectBandMm     = add.CurvedAutoDetectBandMm;
         p.CurvedEnableRegionSplit    = add.CurvedEnableRegionSplit;

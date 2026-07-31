@@ -5600,9 +5600,31 @@ public sealed class ViewportViewModel : ViewModelBase
             IsSlicePlaneViewerActive = false;
         }
 
+        // Support pockets belong to the workspace. Restore BEFORE the cards, because a
+        // structural card carries an index into this list and resolving it needs the specs
+        // to already be there.
+        if (AdditiveSettings is { } addSet)
+        {
+            addSet.StructuralSupports.Clear();
+            foreach (var w in session.StructuralSupports)
+                addSet.StructuralSupports.Add(
+                    w.ToSpec($"Support {addSet.StructuralSupports.Count + 1}"));
+            addSet.SelectedSupportIndex = addSet.StructuralSupports.Count > 0 ? 0 : -1;
+        }
+
         // MODIFICATIONS list — after toolpath is armed (caller may re-invoke with layers ready).
         if (session.PaintModifications is { Count: > 0 } mods)
+        {
+            // A workspace written before support specs moved in here has cards whose
+            // StructuralIndex points into the old app-preferences list, which no longer
+            // exists. Drop the dangling reference so the card opens as a plain card rather
+            // than silently editing whichever pocket happens to occupy that slot.
+            int specCount = AdditiveSettings?.StructuralSupports.Count ?? 0;
+            foreach (var m in mods)
+                if (m.StructuralIndex >= specCount)
+                    m.StructuralIndex = -1;
             RestorePaintModifications?.Invoke(mods);
+        }
     }
 
     /// <summary>

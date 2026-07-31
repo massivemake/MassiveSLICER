@@ -1,3 +1,5 @@
+using Serialization = System.Text.Json.Serialization;
+
 namespace MassiveSlicer.Core.Models;
 
 /// <summary>
@@ -102,6 +104,15 @@ public sealed class WorkspaceUiSession
     /// </summary>
     public List<WorkspacePaintModification> PaintModifications { get; set; } = [];
 
+    /// <summary>
+    /// Structural Support pockets belonging to THIS job. They used to live in
+    /// AppPreferences, which made them app-wide: a support placed on one part came back
+    /// on an unrelated model after a relaunch, still silently modifying the toolpath, and
+    /// the cards above (which index into this list) could point at another workspace's
+    /// specs entirely. A support is job data, not a preference.
+    /// </summary>
+    public List<WorkspaceStructuralSupport> StructuralSupports { get; set; } = [];
+
     /// <summary>Robot joint pose [A1..A6, E1] (KRL degrees) at save time.</summary>
     public double[]? RobotJoints { get; set; }
 
@@ -160,6 +171,70 @@ public sealed class WorkspacePaintModMember
 /// One applied paint modification for workspace save/restore.
 /// Layer spans are re-bound by index/Z after the toolpath reloads.
 /// </summary>
+/// <summary>
+/// One Structural Support pocket as stored in a workspace. Named fields rather than the
+/// float[12] the preferences version used — the name could not ride in that array, so it
+/// needed a second index-parallel list that had to be kept in lockstep by hand.
+/// </summary>
+public sealed class WorkspaceStructuralSupport
+{
+    // The workspace is written with DefaultIgnoreCondition.WhenWritingDefault
+    // (WorkspaceLoader), which drops any property equal to its TYPE's default — not to the
+    // initializer below. So every field whose initializer is NOT the type default has to opt
+    // out of that, or saving the value silently means "use the initializer" on load:
+    // Enabled=false would come back ENABLED, and LayersUp=0 ("this layer only") would come
+    // back as 9999 ("all the way to the top"). Both are exactly the kind of state that
+    // outlives the user's decision.
+    private const Serialization.JsonIgnoreCondition Always =
+        Serialization.JsonIgnoreCondition.Never;
+
+    public string Name { get; set; } = "";
+    /// <summary>"Rectangle" or "Circle" (<see cref="SupportShapeKind"/> name).</summary>
+    public string Shape { get; set; } = "Rectangle";
+    public float AnchorX { get; set; }
+    public float AnchorY { get; set; }
+    public int AnchorLayer { get; set; }
+    [Serialization.JsonIgnore(Condition = Always)]
+    public int LayersUp { get; set; } = 9999;
+    public int LayersDown { get; set; }
+    public float CenterX { get; set; }
+    public float CenterY { get; set; }
+    [Serialization.JsonIgnore(Condition = Always)]
+    public float WidthMm { get; set; } = 92f;
+    [Serialization.JsonIgnore(Condition = Always)]
+    public float DepthMm { get; set; } = 42f;
+    public float RotationDeg { get; set; }
+    [Serialization.JsonIgnore(Condition = Always)]
+    public bool Enabled { get; set; } = true;
+
+    public static WorkspaceStructuralSupport From(StructuralSupportSpec s) => new()
+    {
+        Name = s.Name,
+        Shape = s.Shape.ToString(),
+        AnchorX = s.AnchorX, AnchorY = s.AnchorY, AnchorLayer = s.AnchorLayer,
+        LayersUp = s.LayersUp, LayersDown = s.LayersDown,
+        CenterX = s.CenterX, CenterY = s.CenterY,
+        WidthMm = s.WidthMm, DepthMm = s.DepthMm, RotationDeg = s.RotationDeg,
+        Enabled = s.Enabled,
+    };
+
+    /// <param name="fallbackName">Used when the stored name is blank, so the panel never
+    /// shows an empty label for a support restored from an older file.</param>
+    public StructuralSupportSpec ToSpec(string fallbackName) => new()
+    {
+        Name = string.IsNullOrWhiteSpace(Name) ? fallbackName : Name,
+        Shape = string.Equals(Shape, nameof(SupportShapeKind.Circle),
+            StringComparison.OrdinalIgnoreCase)
+            ? SupportShapeKind.Circle
+            : SupportShapeKind.Rectangle,
+        AnchorX = AnchorX, AnchorY = AnchorY, AnchorLayer = AnchorLayer,
+        LayersUp = LayersUp, LayersDown = LayersDown,
+        CenterX = CenterX, CenterY = CenterY,
+        WidthMm = WidthMm, DepthMm = DepthMm, RotationDeg = RotationDeg,
+        Enabled = Enabled,
+    };
+}
+
 public sealed class WorkspacePaintModification
 {
     public Guid Id { get; set; }
