@@ -121,38 +121,105 @@ public static class StructuralSupportPlanner
             // leaning ~10 degrees, 6 mm of drift is only ~12 layers of height.
             // `track` follows the break up the stack, so a leaning wall is tracked layer to
             // layer instead of being measured against a fixed point hundreds of layers below.
-            int built = 0;
-            int endedUpAt = -1, endedDownAt = -1;
+            // ── Pass 1: survey, don't build ──────────────────────────────────────────
+            // The arm must END on a layer whose legs genuinely CROSS the wall. Stopping at
+            // the last layer that produced *any* attachment ends it on a leg clamped to the
+            // end of a run (TryWallHit's rescue path) — a degenerate join that doubles back
+            // on itself instead of stepping up cleanly. Backing off to the last crossed
+            // layer costs a few layers of pocket height and removes the artifact entirely.
+            //
+            // Surveying the WHOLE range first also makes a wall that dips out of reach and
+            // returns visible as a dip rather than a permanent end. We still stop at the
+            // last clean layer below it — resuming would leave a hole in the pocket column,
+            // which is worse than a short one — but we can now say it happened instead of
+            // silently truncating.
+            int topClean = Survey(toolpath, start, hi, +1, anchor, u, mouth1, mouth2, wrap,
+                bead, out int topAny, out bool recoveredAbove);
+            int botClean = Survey(toolpath, start - 1, lo, -1, anchor, u, mouth1, mouth2, wrap,
+                bead, out int botAny, out bool recoveredBelow);
 
+            // ── Pass 2: build up to the last cleanly-crossed layer ───────────────────
+            int built = 0;
             var track = anchor;
-            for (int li = start; li <= hi; li++)
+            for (int li = start; li <= topClean; li++)
             {
                 if (!ApplyToLayer(toolpath.Layers[li], track, u, mouth1, mouth2, wrap, bead,
-                        out var nextTrack))
-                { endedUpAt = li; break; }
+                        out var nextTrack, out _))
+                    break;
                 track = nextTrack;
                 built++;
             }
             track = anchor;
-            for (int li = start - 1; li >= lo; li--)
+            for (int li = start - 1; li >= botClean; li--)
             {
                 if (!ApplyToLayer(toolpath.Layers[li], track, u, mouth1, mouth2, wrap, bead,
-                        out var nextTrack))
-                { endedDownAt = li; break; }
+                        out var nextTrack, out _))
+                    break;
                 track = nextTrack;
                 built++;
             }
 
+            int heldBack = Math.Max(0, topAny - topClean);
             System.Console.WriteLine(
-                $"[support] {label}: {built} layer(s) built, L{lo + 1}..L{hi + 1} requested"
-                + (endedUpAt >= 0
-                    ? $", topped out at L{endedUpAt + 1} (wall no longer crosses the break — "
-                      + "arm ends there and does not resume)"
-                    : ", reached the top of its range")
-                + (endedDownAt >= 0
-                    ? $", bottomed out at L{endedDownAt + 1}"
+                $"[support] {label}: {built} layer(s) built, L{lo + 1}..L{hi + 1} requested, "
+                + $"top L{topClean + 1}"
+                + (topClean >= hi
+                    ? " (reached the top of its range)"
+                    : heldBack > 0
+                        ? $" (ended {heldBack} layer(s) early — the wall stopped crossing the "
+                          + $"break cleanly above here; last any-attachment layer was L{topAny + 1})"
+                        : " (wall no longer reaches the break — arm ends there and does not resume)")
+                + (botClean > lo ? $", bottom L{botClean + 1}" : "")
+                + (recoveredAbove || recoveredBelow
+                    ? " · NOTE: the wall came back into reach further along, so this arm was "
+                      + "truncated at a dip rather than at the real end of the wall"
                     : ""));
         }
+    }
+
+    /// <summary>
+    /// Walks <paramref name="from"/> toward <paramref name="to"/> in steps of
+    /// <paramref name="step"/> WITHOUT building anything, and reports how far the arm can go.
+    /// <para>
+    /// Returns the last layer whose legs genuinely CROSS the wall — where the arm should end.
+    /// <paramref name="lastAny"/> is the last layer that produced any attachment at all,
+    /// clamped ones included: that is where the arm used to stop, so the difference is how
+    /// many degenerate layers are being dropped. <paramref name="recovered"/> is true when a
+    /// cleanly-crossed layer exists BEYOND a layer that had nothing — i.e. the wall dipped out
+    /// of reach and came back, so the end we are choosing is a dip, not the wall's real end.
+    /// </para>
+    /// <para>
+    /// The tracked break is only advanced on layers that actually attached, so a gap does not
+    /// throw the track away.
+    /// </para>
+    /// </summary>
+    static int Survey(
+        Toolpath toolpath, int from, int to, int step, Vector2 anchor, Vector2 u,
+        Vector2 mouth1, Vector2 mouth2, Vector2[] wrap, float bead,
+        out int lastAny, out bool recovered)
+    {
+        int lastClean = from - step;   // "nothing built" sits one step behind the start
+        lastAny  = from - step;
+        recovered = false;
+        bool sawGap = false;
+
+        var track = anchor;
+        for (int li = from; step > 0 ? li <= to : li >= to; li += step)
+        {
+            if (li < 0 || li >= toolpath.Layers.Count) break;
+            if (!ApplyToLayer(toolpath.Layers[li], track, u, mouth1, mouth2, wrap, bead,
+                    out var nextTrack, out bool clamped, probe: true))
+            {
+                sawGap = true;
+                continue;                       // may come back into reach further along
+            }
+            track   = nextTrack;
+            lastAny = li;
+            if (clamped) continue;              // attached, but on a clamped leg — not an end
+            lastClean = li;
+            if (sawGap) recovered = true;       // clean wall above a gap: we truncated at a dip
+        }
+        return lastClean;
     }
 
     /// <summary>
@@ -164,9 +231,10 @@ public static class StructuralSupportPlanner
     static bool ApplyToLayer(
         ToolpathLayer layer, Vector2 track, Vector2 u,
         Vector2 mouth1, Vector2 mouth2, Vector2[] wrap, float bead,
-        out Vector2 nextTrack)
+        out Vector2 nextTrack, out bool clamped, bool probe = false)
     {
         nextTrack = track;
+        clamped = false;
 
         // Reference move: nearest to the tracked break. Supplies Z and the move template.
         int refMove = -1;
@@ -200,13 +268,20 @@ public static class StructuralSupportPlanner
         // Surface break = where each leg line crosses the wall. Never "half a bead along the
         // wall either way" — at an oblique arm that gives a gap narrower than a bead, and at
         // the end of an open run it gives half a gap.
-        if (!TryWallHit(layer, mouth1, u, track, search, bead, runLo, runHi, out int idx1, out var root1))
+        if (!TryWallHit(layer, mouth1, u, track, search, bead, runLo, runHi,
+                out int idx1, out var root1, out bool clamped1))
             return false;
-        if (!TryWallHit(layer, mouth2, u, track, search, bead, runLo, runHi, out int idx2, out var root2))
+        if (!TryWallHit(layer, mouth2, u, track, search, bead, runLo, runHi,
+                out int idx2, out var root2, out bool clamped2))
             return false;
+        clamped = clamped1 || clamped2;
 
         // Hand the midpoint of this layer's break to the next layer.
         nextTrack = new Vector2((root1.X + root2.X) * 0.5f, (root1.Y + root2.Y) * 0.5f);
+
+        // Probing only wants "could this layer carry the arm, and how cleanly" — the caller
+        // surveys the whole stack before committing, so it must not mutate anything yet.
+        if (probe) return true;
 
         // Path order: whichever root the wall reaches first is where it stops.
         bool oneFirst = idx1 < idx2
@@ -356,10 +431,11 @@ public static class StructuralSupportPlanner
     /// </summary>
     static bool TryWallHit(
         ToolpathLayer layer, Vector2 linePoint, Vector2 dir, Vector2 anchor, float maxDist,
-        float maxPerp, int runLo, int runHi, out int moveIdx, out Vector3 hit)
+        float maxPerp, int runLo, int runHi, out int moveIdx, out Vector3 hit, out bool clamped)
     {
         moveIdx = -1;
         hit = default;
+        clamped = false;
         float bestD2 = float.MaxValue;
         float maxD2 = maxDist * maxDist;
 
@@ -383,6 +459,11 @@ public static class StructuralSupportPlanner
             hit = mv.From + (mv.To - mv.From) * s;
         }
         if (moveIdx >= 0) return true;
+
+        // Past here the leg no longer CROSSES wall — it is being clamped onto the end of a
+        // run. Report that, because an arm whose top layer is clamped is the degenerate
+        // attachment that turns back on itself instead of stepping up cleanly.
+        clamped = true;
 
         // No crossing. The ONLY case worth rescuing is a leg line running just past the end
         // of an open run, where the true root is the run's endpoint a hair off the line.

@@ -2597,22 +2597,45 @@ public sealed class ConsoleCommandRegistry
             + $"({hi - lo + 1} layer(s)) · pocket centre ({spec.CenterX:0.#}, {spec.CenterY:0.#}) "
             + $"· vertex match tol {tol:0.#} mm");
 
+        // Distance from a point to the NEAREST outline vertex. This is the honest test of
+        // "is the pocket where the spec says": the outline is fixed data, so every wrap
+        // corner must sit on it. An earlier version averaged the matched corners into a
+        // centroid and reported its spread as "drift" — but the wrap is an ARC, and which
+        // corners it visits alternates with the side the wall run enters from. Averaging a
+        // changing subset of a stationary rectangle moves the average, so it reported a
+        // rock-steady pocket as drifting by exactly width/3 on every support.
+        float VertexDev(System.Numerics.Vector3 p)
+        {
+            float best = float.MaxValue;
+            foreach (var v in outline)
+            {
+                float dx = p.X - v.X, dy = p.Y - v.Y;
+                best = MathF.Min(best, dx * dx + dy * dy);
+            }
+            return MathF.Sqrt(best);
+        }
+
         int layersHit = 0, shown = 0;
-        float cxMin = float.MaxValue, cxMax = float.MinValue;
-        float cyMin = float.MaxValue, cyMax = float.MinValue;
+        float maxDev = 0f;
+        int nMin = int.MaxValue, nMax = 0;
         float neckMin = float.MaxValue, neckMax = float.MinValue;
 
         for (int li = lo; li <= hi; li++)
         {
             var moves = tp.Layers[li].Moves;
-            double sx = 0, sy = 0;
+            float layerDev = 0f;
             int n = 0;
             float neck = -1f;
             foreach (var mv in moves)
             {
                 if (mv.Kind != MoveKind.Extrude) continue;
                 bool a = NearOutline(mv.From), b = NearOutline(mv.To);
-                if (a && b) { sx += mv.To.X; sy += mv.To.Y; n++; }
+                if (a && b)
+                {
+                    layerDev = MathF.Max(layerDev,
+                        MathF.Max(VertexDev(mv.From), VertexDev(mv.To)));
+                    n++;
+                }
                 // Neck: exactly one end on the outline, the other out on the wall.
                 else if (a ^ b)
                 {
@@ -2623,16 +2646,15 @@ public sealed class ConsoleCommandRegistry
             if (n == 0) continue;
 
             layersHit++;
-            float cx = (float)(sx / n), cy = (float)(sy / n);
-            cxMin = MathF.Min(cxMin, cx); cxMax = MathF.Max(cxMax, cx);
-            cyMin = MathF.Min(cyMin, cy); cyMax = MathF.Max(cyMax, cy);
+            maxDev = MathF.Max(maxDev, layerDev);
+            nMin = Math.Min(nMin, n); nMax = Math.Max(nMax, n);
             if (neck > 0f) { neckMin = MathF.Min(neckMin, neck); neckMax = MathF.Max(neckMax, neck); }
 
             if (shown < 8)
             {
                 shown++;
-                ctx.Log($"  L{li + 1}: wrap centroid ({cx:0.##}, {cy:0.##}) · {n} wrap move(s) · "
-                    + (neck > 0f ? $"neck {neck:0.#} mm" : "no neck move found"));
+                ctx.Log($"  L{li + 1}: {n} wrap move(s) · off-outline {layerDev:0.##} mm · "
+                    + (neck > 0f ? $"arm {neck:0.#} mm" : "no arm move found"));
             }
         }
 
@@ -2644,16 +2666,22 @@ public sealed class ConsoleCommandRegistry
             return;
         }
 
-        float driftX = cxMax - cxMin, driftY = cyMax - cyMin;
         ctx.Log($"[support trace] {layersHit}/{hi - lo + 1} layer(s) carry the pocket · "
-            + $"centroid drift X={driftX:0.###} mm Y={driftY:0.###} mm");
+            + $"worst corner off its outline {maxDev:0.###} mm · "
+            + $"{nMin}..{nMax} wrap move(s) per layer");
+        if (nMin != nMax)
+            ctx.Log("[support trace] the wrap move count varies by layer. That is EXPECTED — "
+                + "the arc runs whichever way round the pocket the wall run enters from, so "
+                + "its extent alternates. It is not the pocket moving.");
         if (neckMin <= neckMax)
-            ctx.Log($"[support trace] neck length range {neckMin:0.#}..{neckMax:0.#} mm "
-                + $"(varies by {neckMax - neckMin:0.#} mm — this SHOULD vary as the wall moves)");
-        ctx.Log(driftX + driftY < 0.05f
-            ? "[support trace] VERDICT: pocket is rock-steady across layers (drift ~0)."
-            : $"[support trace] VERDICT: pocket DRIFTS {driftX:0.##}/{driftY:0.##} mm across "
-              + "layers — that is a real bug, the footprint is fixed data and must not move.");
+            ctx.Log($"[support trace] arm length range {neckMin:0.#}..{neckMax:0.#} mm "
+                + $"(varies by {neckMax - neckMin:0.#} mm — expected to vary only as much as "
+                + "the wall's cross-section moves; constant is correct for a vertical wall)");
+        ctx.Log(maxDev <= tol * 0.5f
+            ? $"[support trace] VERDICT: pocket sits on its own outline to within "
+              + $"{maxDev:0.##} mm on every layer — the footprint is not moving."
+            : $"[support trace] VERDICT: pocket corners sit up to {maxDev:0.##} mm off the "
+              + "spec outline — the footprint is fixed data and should land on it exactly.");
     }
 
     /// <summary>
