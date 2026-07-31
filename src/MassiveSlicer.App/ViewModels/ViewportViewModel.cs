@@ -1507,6 +1507,14 @@ public sealed class ViewportViewModel : ViewModelBase
 
     // ── Toolpath edit menu: paint brushes + line marking (preview view) ────────
 
+    /// <summary>
+    /// Pre-edit snapshot of the toolpath display toggles that
+    /// <see cref="ApplyPaintEditDisplayMode"/> stamps over. Edit mode only borrows
+    /// them; without this they stayed stamped for the rest of the session — seam
+    /// dots in particular never came back until an app restart.
+    /// </summary>
+    private (bool Bead, bool Extrusion, bool Travel, bool Wipe, bool Seam)? _preEditDisplayToggles;
+
     private bool _isPaintEditOpen;
     /// <summary>Expands the Edit toolbar in the Preview view. Realtime slicing is
     /// PAUSED while the menu is open (edits accumulate); collapsing the menu (or
@@ -1531,6 +1539,17 @@ public sealed class ViewportViewModel : ViewModelBase
                     IsSlicePlaneViewerActive = false;
                 // Restore normal toolpath display when leaving edit.
                 ToolpathLineOpacity = 1f;
+                // Hand back the display toggles edit mode borrowed. Seam dots are
+                // the visible one: without this they stay off for the whole session.
+                if (_preEditDisplayToggles is { } pre)
+                {
+                    ShowBead           = pre.Bead;
+                    ShowExtrusionMoves = pre.Extrusion;
+                    ShowTravelMoves    = pre.Travel;
+                    ShowWipeMoves      = pre.Wipe;
+                    ShowSeam           = pre.Seam;
+                    _preEditDisplayToggles = null;
+                }
             }
             else if (_viewMode == "Preview")
             {
@@ -1734,6 +1753,10 @@ public sealed class ViewportViewModel : ViewModelBase
     internal void ApplyPaintEditDisplayMode()
     {
         if (!IsPaintEditOpen || _viewMode != "Preview") return;
+        // Capture once, on the first stamp of this edit session — later re-stamps
+        // (granularity flip, session restore) must not overwrite the real pre-edit
+        // values. Cleared on exit, when they are handed back.
+        _preEditDisplayToggles ??= (ShowBead, ShowExtrusionMoves, ShowTravelMoves, ShowWipeMoves, ShowSeam);
         if (PaintPointGranularityActive)
         {
             // Points hierarchy: all bead points; centre-lines stay readable (thicker in
