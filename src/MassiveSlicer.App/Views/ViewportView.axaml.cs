@@ -7439,18 +7439,30 @@ public partial class ViewportView : UserControl
                 poly.Add(W(outline[0].X, outline[0].Y));
                 AddThickPolyline(segs, poly, col, radiusMm: 0.9f, fat: si == add.SelectedSupportIndex);
 
-                // Anchor tick + neck preview to nearest outline vertex.
+                // Anchor tick + arm preview. This used to draw one line to the pocket's
+                // NEAREST OUTLINE VERTEX, which is not where the duct attaches: the builder
+                // shoots two leg lines from the anchor toward the pocket CENTRE and takes
+                // each one's first crossing of the outline. So the old preview pointed at a
+                // corner the printer never visits. Draw both legs, to the real mouths, using
+                // the planner's own math so the preview cannot disagree with what prints.
                 var anchorW = W(spec.AnchorX, spec.AnchorY);
                 AddMarkSphere(segs, anchorW, 2.2f, col);
-                int near = 0; float nd = float.MaxValue;
-                for (int i = 0; i < outline.Length; i++)
+                if (MassiveSlicer.Core.Slicing.StructuralSupportPlanner.TryArmMouths(
+                        spec, (float)add.BeadWidth,
+                        new System.Numerics.Vector2(spec.AnchorX, spec.AnchorY),
+                        out var legA, out var mouthA, out var legB, out var mouthB))
                 {
-                    float dx = outline[i].X - spec.AnchorX, dy = outline[i].Y - spec.AnchorY;
-                    float d2 = dx * dx + dy * dy;
-                    if (d2 < nd) { nd = d2; near = i; }
+                    AddThickPolyline(segs, [W(legA.X, legA.Y), W(mouthA.X, mouthA.Y)],
+                        col, radiusMm: 0.6f, fat: false);
+                    AddThickPolyline(segs, [W(legB.X, legB.Y), W(mouthB.X, mouthB.Y)],
+                        col, radiusMm: 0.6f, fat: false);
                 }
-                AddThickPolyline(segs,
-                    [anchorW, W(outline[near].X, outline[near].Y)], col, radiusMm: 0.6f, fat: false);
+                else
+                {
+                    // Degenerate spec (anchor on the centre, or no outline) — show the intent.
+                    AddThickPolyline(segs, [anchorW, W(spec.CenterX, spec.CenterY)],
+                        col, radiusMm: 0.6f, fat: false);
+                }
             }
         }
 

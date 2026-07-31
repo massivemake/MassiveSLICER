@@ -343,6 +343,43 @@ public static class StructuralSupportPlanner
     // ── Pocket-side geometry (all fixed per spec) ────────────────────────────────────
 
     /// <summary>
+    /// Where the arm's two legs actually LAND on the pocket. Each leg is a line half a bead
+    /// either side of the anchor→centre axis, and its mouth is that line's FIRST crossing of
+    /// the outline — so the arm attaches wherever the shot from the anchor happens to hit,
+    /// which is usually not a corner.
+    /// <para>
+    /// Public so a viewport preview can be drawn from the same math the builder uses. A
+    /// preview that computes its own approximation — the nearest outline vertex, say — points
+    /// at somewhere the printer never goes.
+    /// </para>
+    /// <para>
+    /// Pass the resolved anchor if you have one: the builder may pull it inboard at the anchor
+    /// layer (<see cref="LimitAnchorToRunInterior"/>) when it sits within half a bead of the
+    /// end of a wall run, which tilts the axis slightly.
+    /// </para>
+    /// </summary>
+    public static bool TryArmMouths(
+        StructuralSupportSpec spec, float beadWidth, Vector2 anchor,
+        out Vector2 legStart1, out Vector2 mouth1,
+        out Vector2 legStart2, out Vector2 mouth2)
+    {
+        legStart1 = legStart2 = mouth1 = mouth2 = default;
+        var outline = spec.BuildOutline();
+        if (outline.Length < 3) return false;
+
+        var axis = new Vector2(spec.CenterX, spec.CenterY) - anchor;
+        if (axis.LengthSquared() < 1e-8f) return false;
+        var u = Vector2.Normalize(axis);
+        var perp = new Vector2(-u.Y, u.X);
+        float h = MathF.Max(0.1f, beadWidth) * 0.5f;
+
+        legStart1 = anchor + perp * h;
+        legStart2 = anchor - perp * h;
+        return TryRayHitOutline(outline, legStart1, u, out _, out mouth1)
+            && TryRayHitOutline(outline, legStart2, u, out _, out mouth2);
+    }
+
+    /// <summary>
     /// First crossing of the ray (origin, dir) with the outline — the NEAR side. A band of
     /// one bead cuts clean through a pocket much wider than a bead, so each leg line crosses
     /// twice; only the near crossing is the mouth.
