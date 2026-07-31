@@ -952,11 +952,18 @@ public sealed class ConsoleCommandRegistry
                         badLayers.Add($"L{li + 1}x{layerJumps}");
                 }
 
-                // Layer-to-layer transitions. A "dead end" is a layer that finishes somewhere
-                // and the next layer starts somewhere else entirely, with nothing stepping up
-                // between them. The in-layer scan above cannot see this — it skips each
-                // layer's first move — so it must be checked separately.
-                int deadEnds = 0;
+                // Layer-to-layer transitions, checked the way the EXPORTER sees them.
+                // KrlExporter emits move.From exactly once (the first point) and thereafter
+                // only each move's To — so every move's From is ASSUMED to equal the previous
+                // move's To, across layer boundaries included. A discontinuity therefore does
+                // not stop the print: the head simply drives straight from the previous
+                // endpoint to the next one. Whether that matters depends entirely on whether
+                // the move after the gap extrudes.
+                //
+                // So the boundary test must consider ALL moves, not just extrudes: a travel
+                // sitting between two layers is exactly how a legitimate step-up is expressed,
+                // and ignoring it reports a dead end that isn't one.
+                int deadEnds = 0, benignSteps = 0;
                 float worstStep = 0f;
                 string worstStepWhere = "";
                 var stepBad = new List<string>();
@@ -964,13 +971,17 @@ public sealed class ConsoleCommandRegistry
 
                 for (int li = 0; li + 1 < tp.Layers.Count; li++)
                 {
-                    var a = tp.Layers[li].Moves.LastOrDefault(m => m.Kind == MoveKind.Extrude);
-                    var b = tp.Layers[li + 1].Moves.FirstOrDefault(m => m.Kind == MoveKind.Extrude);
-                    if (a is null || b is null) continue;
+                    if (tp.Layers[li].Moves.Count == 0 || tp.Layers[li + 1].Moves.Count == 0) continue;
+                    var a = tp.Layers[li].Moves[^1];
+                    var b = tp.Layers[li + 1].Moves[0];
                     float dxy = MathF.Sqrt(
                         (b.From.X - a.To.X) * (b.From.X - a.To.X)
                         + (b.From.Y - a.To.Y) * (b.From.Y - a.To.Y));
                     if (dxy <= stepTol) continue;
+
+                    // Non-extruding move after the gap = the head repositions dry. Fine.
+                    if (b.Kind != MoveKind.Extrude) { benignSteps++; continue; }
+
                     deadEnds++;
                     if (dxy > worstStep)
                     {
@@ -983,12 +994,13 @@ public sealed class ConsoleCommandRegistry
 
                 ctx.Log($"[tpcheck] {tp.Layers.Count} layer(s) · {extrudes} extrude · "
                     + $"{travels} travel · {runs} run(s) · {seamEvents} seam start/stop event(s)");
-                ctx.Log($"[tpcheck] layer step-ups: {tp.Layers.Count - 1 - deadEnds}/"
-                    + $"{tp.Layers.Count - 1} connect within {stepTol:0.#} mm XY"
+                ctx.Log($"[tpcheck] layer step-ups: {tp.Layers.Count - 1 - deadEnds - benignSteps}"
+                    + $"/{tp.Layers.Count - 1} land within {stepTol:0.#} mm XY · "
+                    + $"{benignSteps} repositioned dry (travel first — fine)"
                     + (deadEnds > 0
-                        ? $" · {deadEnds} DEAD END(S), worst {worstStep:0.#} mm — {worstStepWhere}"
+                        ? $" · {deadEnds} DRAGGED, worst {worstStep:0.#} mm — {worstStepWhere}"
                           + (stepBad.Count > 0 ? $" · {string.Join(", ", stepBad)}" : "")
-                        : " · every layer hands off to the next"));
+                        : " · 0 dragged"));
                 if (jumps == 0 && deadEnds == 0)
                 {
                     ctx.Log("[tpcheck] VERDICT: continuous within every layer AND from each "
@@ -997,8 +1009,9 @@ public sealed class ConsoleCommandRegistry
                 else if (jumps == 0)
                 {
                     ctx.LogError($"[tpcheck] VERDICT: layers are internally continuous, but "
-                        + $"{deadEnds} layer(s) DEAD END — the path finishes with no handoff to "
-                        + "the layer above.");
+                        + $"{deadEnds} layer transition(s) start EXTRUDING somewhere the head "
+                        + "isn't — the exporter drives straight there while depositing, so a "
+                        + "bead gets dragged across the gap.");
                 }
                 else
                 {
