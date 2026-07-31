@@ -7159,15 +7159,6 @@ public partial class ViewportView : UserControl
         if (layerIdx < 0 && vm.ActiveScrubToolpath is { } tp)
             layerIdx = Math.Max(0, tp.Layers.IndexOf(rec.Layer));
 
-        // TEMP DIAGNOSTIC: the anchor layer keeps coming out as 0. Print every candidate
-        // source side by side so we can see which one is lying instead of guessing.
-        {
-            int byIndexOf = vm.ActiveScrubToolpath is { } dtp ? dtp.Layers.IndexOf(rec.Layer) : -2;
-            int layerCount = vm.ActiveScrubToolpath?.Layers.Count ?? -1;
-            LogPaintConsole($"[support-diag] rec.Layer.Index={rec.Layer.Index} "
-                + $"rec.Layer.Z={rec.Layer.Z:F2} indexOf={byIndexOf} scrubLayers={layerCount} "
-                + $"scrubIdx={vm.CurrentScrubLayerIndex} chosen={layerIdx}");
-        }
 
         var dir = new System.Numerics.Vector2(mv.To.X - mv.From.X, mv.To.Y - mv.From.Y);
         if (dir.LengthSquared() < 1e-6f) dir = new(1, 0);

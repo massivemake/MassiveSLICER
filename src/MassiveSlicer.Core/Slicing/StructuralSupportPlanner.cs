@@ -23,10 +23,6 @@ namespace MassiveSlicer.Core.Slicing;
 /// </summary>
 public static class StructuralSupportPlanner
 {
-    /// <summary>How far the wall may be from the anchor and still count as passing through
-    /// the break, as a multiple of the bead width.</summary>
-    const float ReachBeads = 1f;
-
     /// <summary>Search radius for wall/leg intersections, as a multiple of the bead width.
     /// Keeps a leg line from grabbing a different island across the layer.</summary>
     const float SearchBeads = 8f;
@@ -34,13 +30,30 @@ public static class StructuralSupportPlanner
     public static void Apply(Toolpath toolpath, SliceSettings settings)
     {
         var specs = settings.StructuralSupports;
-        if (specs.Count == 0 || toolpath.Layers.Count == 0) return;
+        if (specs.Count == 0 || toolpath.Layers.Count == 0)
+        {
+            // Say so rather than vanishing: "nothing was built" and "nothing was asked for"
+            // look identical from the outside, and that cost a long debugging detour.
+            System.Console.WriteLine($"[support] skipped: {specs.Count} spec(s), "
+                + $"{toolpath.Layers.Count} layer(s) — nothing to do");
+            return;
+        }
 
         foreach (var spec in specs)
         {
-            if (!spec.Enabled) continue;
+            string label = string.IsNullOrWhiteSpace(spec.Name) ? "support" : spec.Name;
+            if (!spec.Enabled)
+            {
+                System.Console.WriteLine($"[support] {label}: SKIPPED — disabled");
+                continue;
+            }
             var outline = spec.BuildOutline();
-            if (outline.Length < 3) continue;
+            if (outline.Length < 3)
+            {
+                System.Console.WriteLine($"[support] {label}: SKIPPED — degenerate outline "
+                    + $"({outline.Length} pts, {spec.WidthMm:0.#}x{spec.DepthMm:0.#} mm)");
+                continue;
+            }
 
             int lo = Math.Max(0, spec.AnchorLayer - Math.Max(0, spec.LayersDown));
             int hi = Math.Min(toolpath.Layers.Count - 1,
@@ -66,63 +79,96 @@ public static class StructuralSupportPlanner
             // any line offset less than the inradius from an interior point still crosses the
             // boundary twice (half a bead vs 21 mm on a 2x4, or the radius on a circle).
             var axis = new Vector2(spec.CenterX, spec.CenterY) - anchor;
-            if (axis.LengthSquared() < 1e-8f) continue;      // anchor sits on the pocket
+            if (axis.LengthSquared() < 1e-8f)
+            {
+                System.Console.WriteLine($"[support] {label}: SKIPPED — anchor "
+                    + $"({anchor.X:0.#}, {anchor.Y:0.#}) sits on the pocket centre, no arm "
+                    + "direction");
+                continue;
+            }
             var u = Vector2.Normalize(axis);
             var perp = new Vector2(-u.Y, u.X);
 
             // Pocket mouth = where each leg line first meets the outline. Fixed, so the
             // pocket never drifts; the wall end is free to move as the wall does.
-            if (!TryRayHitOutline(outline, anchor + perp * h, u, out int mouthEdge1, out var mouth1))
+            bool hit1 = TryRayHitOutline(outline, anchor + perp * h, u, out int mouthEdge1, out var mouth1);
+            bool hit2 = TryRayHitOutline(outline, anchor - perp * h, u, out int mouthEdge2, out var mouth2);
+            if (!hit1 || !hit2)
+            {
+                System.Console.WriteLine($"[support] {label}: SKIPPED — leg line missed the "
+                    + $"pocket (leg1 hit={hit1}, leg2 hit={hit2}) · anchor ({anchor.X:0.#}, "
+                    + $"{anchor.Y:0.#}) → centre ({spec.CenterX:0.#}, {spec.CenterY:0.#}) · "
+                    + $"axis ({u.X:0.###}, {u.Y:0.###}) · half-bead {h:0.##} mm · "
+                    + $"{outline.Length} outline pts");
                 continue;
-            if (!TryRayHitOutline(outline, anchor - perp * h, u, out int mouthEdge2, out var mouth2))
-                continue;
+            }
 
             // The outbound journey can never head back toward the other arm — that arc is
             // what the mouth just trimmed away. It follows the pocket AROUND instead. The
             // "around" arc is simply the one containing the pocket's far side.
             var wrap = BuildWrapArc(outline, mouthEdge1, mouthEdge2, anchor, u, mouth1, mouth2);
 
-            // ── Reach gate + one-way termination ─────────────────────────────────────
-            // A break only means something if THIS layer's wall passes through it. Walk
-            // outward from the anchor layer and stop the first time the wall has receded out
-            // of reach — and never resume higher up even if it comes back, because a column
-            // cannot restart in mid-air.
-            float reach = bead * ReachBeads;
+            // ── One-way termination, gated on the real condition ─────────────────────
+            // The test is Jeff's rule literally: does THIS layer's wall cross into the
+            // break? The two leg lines either still meet wall or they don't — no magic
+            // distance involved. Once they don't, the arm ends and never resumes, because a
+            // column cannot restart in mid-air.
+            //
+            // The previous version measured distance from the FIXED anchor and quit past one
+            // bead. That was wrong for a leaning wall: the cross-section walks sideways as
+            // the stack rises, so a wall that is perfectly present — and that the leg lines
+            // still cross cleanly — was declared absent after a handful of layers. On a wall
+            // leaning ~10 degrees, 6 mm of drift is only ~12 layers of height.
+            // `track` follows the break up the stack, so a leaning wall is tracked layer to
+            // layer instead of being measured against a fixed point hundreds of layers below.
             int built = 0;
             int endedUpAt = -1, endedDownAt = -1;
 
+            var track = anchor;
             for (int li = start; li <= hi; li++)
             {
-                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor) > reach)
+                if (!ApplyToLayer(toolpath.Layers[li], track, u, mouth1, mouth2, wrap, bead,
+                        out var nextTrack))
                 { endedUpAt = li; break; }
-                if (ApplyToLayer(toolpath.Layers[li], anchor, u, mouth1, mouth2, wrap, bead))
-                    built++;
+                track = nextTrack;
+                built++;
             }
+            track = anchor;
             for (int li = start - 1; li >= lo; li--)
             {
-                if (ClosestWallDistanceXY(toolpath.Layers[li], anchor) > reach)
+                if (!ApplyToLayer(toolpath.Layers[li], track, u, mouth1, mouth2, wrap, bead,
+                        out var nextTrack))
                 { endedDownAt = li; break; }
-                if (ApplyToLayer(toolpath.Layers[li], anchor, u, mouth1, mouth2, wrap, bead))
-                    built++;
+                track = nextTrack;
+                built++;
             }
 
-            string name = string.IsNullOrWhiteSpace(spec.Name) ? "support" : spec.Name;
             System.Console.WriteLine(
-                $"[support] {name}: {built} layer(s) built"
+                $"[support] {label}: {built} layer(s) built, L{lo + 1}..L{hi + 1} requested"
                 + (endedUpAt >= 0
-                    ? $", topped out at L{endedUpAt + 1} (wall receded past {reach:0.#} mm — "
+                    ? $", topped out at L{endedUpAt + 1} (wall no longer crosses the break — "
                       + "arm ends there and does not resume)"
                     : ", reached the top of its range")
-                + (endedDownAt >= 0 ? $", bottomed out at L{endedDownAt + 1}" : ""));
+                + (endedDownAt >= 0
+                    ? $", bottomed out at L{endedDownAt + 1}"
+                    : ""));
         }
     }
 
-    /// <summary>Splices the duct into one layer. False when this layer had nothing usable.</summary>
+    /// <summary>
+    /// Splices the duct into one layer. False when this layer's wall no longer crosses into
+    /// the break — which is what ends the arm. <paramref name="track"/> is the previous
+    /// layer's break (the anchor on the first layer); <paramref name="nextTrack"/> reports
+    /// this layer's, so a leaning wall is followed rather than measured against a fixed point.
+    /// </summary>
     static bool ApplyToLayer(
-        ToolpathLayer layer, Vector2 anchor, Vector2 u,
-        Vector2 mouth1, Vector2 mouth2, Vector2[] wrap, float bead)
+        ToolpathLayer layer, Vector2 track, Vector2 u,
+        Vector2 mouth1, Vector2 mouth2, Vector2[] wrap, float bead,
+        out Vector2 nextTrack)
     {
-        // Reference move: nearest to the anchor. Supplies Z and the move template.
+        nextTrack = track;
+
+        // Reference move: nearest to the tracked break. Supplies Z and the move template.
         int refMove = -1;
         float refD2 = float.MaxValue;
         Vector3 refPoint = default;
@@ -130,7 +176,7 @@ public static class StructuralSupportPlanner
         {
             var mv = layer.Moves[i];
             if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
-            var (p, _, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
+            var (p, _, d2) = ClosestOnSegmentXY(track, mv.From, mv.To);
             if (d2 < refD2) { refD2 = d2; refMove = i; refPoint = p; }
         }
         if (refMove < 0) return false;
@@ -141,8 +187,13 @@ public static class StructuralSupportPlanner
         // Surface break = where each leg line crosses the wall. Never "half a bead along the
         // wall either way" — at an oblique arm that gives a gap narrower than a bead, and at
         // the end of an open run it gives half a gap.
-        if (!TryWallHit(layer, mouth1, u, anchor, search, out int idx1, out var root1)) return false;
-        if (!TryWallHit(layer, mouth2, u, anchor, search, out int idx2, out var root2)) return false;
+        if (!TryWallHit(layer, mouth1, u, track, search, bead, out int idx1, out var root1))
+            return false;
+        if (!TryWallHit(layer, mouth2, u, track, search, bead, out int idx2, out var root2))
+            return false;
+
+        // Hand the midpoint of this layer's break to the next layer.
+        nextTrack = new Vector2((root1.X + root2.X) * 0.5f, (root1.Y + root2.Y) * 0.5f);
 
         // Path order: whichever root the wall reaches first is where it stops.
         bool oneFirst = idx1 < idx2
@@ -292,7 +343,7 @@ public static class StructuralSupportPlanner
     /// </summary>
     static bool TryWallHit(
         ToolpathLayer layer, Vector2 linePoint, Vector2 dir, Vector2 anchor, float maxDist,
-        out int moveIdx, out Vector3 hit)
+        float maxPerp, out int moveIdx, out Vector3 hit)
     {
         moveIdx = -1;
         hit = default;
@@ -320,9 +371,12 @@ public static class StructuralSupportPlanner
         }
         if (moveIdx >= 0) return true;
 
-        // No crossing (leg line runs off the end of the run): clamp to the nearest wall
-        // point to the line, so the arm still lands on wall instead of vanishing.
-        float bestPerp = float.MaxValue;
+        // No crossing. The ONLY case worth rescuing is a leg line running just past the end
+        // of an open run, where the true root is the run's endpoint a hair off the line.
+        // Bound the rescue to one bead of perpendicular offset: beyond that the wall really
+        // isn't in the break any more, and clamping would resurrect the original bug where
+        // the arm chased a receding wall into an unprintable overhang.
+        float bestPerp = MathF.Max(0.05f, maxPerp);
         for (int i = 0; i < layer.Moves.Count; i++)
         {
             var mv = layer.Moves[i];
@@ -415,22 +469,6 @@ public static class StructuralSupportPlanner
             i = next;
             p = target;
         }
-    }
-
-    /// <summary>
-    /// XY distance from the anchor to the nearest printable extrude segment on a layer —
-    /// "does this layer's wall still pass through the break?".
-    /// </summary>
-    static float ClosestWallDistanceXY(ToolpathLayer layer, Vector2 anchor)
-    {
-        float best = float.MaxValue;
-        foreach (var mv in layer.Moves)
-        {
-            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
-            var (_, _, d2) = ClosestOnSegmentXY(anchor, mv.From, mv.To);
-            if (d2 < best) best = d2;
-        }
-        return best == float.MaxValue ? float.MaxValue : MathF.Sqrt(best);
     }
 
     // ── Small geometry helpers ──────────────────────────────────────────────────────
