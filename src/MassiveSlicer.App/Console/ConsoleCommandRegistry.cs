@@ -952,13 +952,53 @@ public sealed class ConsoleCommandRegistry
                         badLayers.Add($"L{li + 1}x{layerJumps}");
                 }
 
+                // Layer-to-layer transitions. A "dead end" is a layer that finishes somewhere
+                // and the next layer starts somewhere else entirely, with nothing stepping up
+                // between them. The in-layer scan above cannot see this — it skips each
+                // layer's first move — so it must be checked separately.
+                int deadEnds = 0;
+                float worstStep = 0f;
+                string worstStepWhere = "";
+                var stepBad = new List<string>();
+                float stepTol = MathF.Max(1f, (float)ctx.Main.RightPanel.Additive.BeadWidth);
+
+                for (int li = 0; li + 1 < tp.Layers.Count; li++)
+                {
+                    var a = tp.Layers[li].Moves.LastOrDefault(m => m.Kind == MoveKind.Extrude);
+                    var b = tp.Layers[li + 1].Moves.FirstOrDefault(m => m.Kind == MoveKind.Extrude);
+                    if (a is null || b is null) continue;
+                    float dxy = MathF.Sqrt(
+                        (b.From.X - a.To.X) * (b.From.X - a.To.X)
+                        + (b.From.Y - a.To.Y) * (b.From.Y - a.To.Y));
+                    if (dxy <= stepTol) continue;
+                    deadEnds++;
+                    if (dxy > worstStep)
+                    {
+                        worstStep = dxy;
+                        worstStepWhere = $"L{li + 1} ends ({a.To.X:0.#},{a.To.Y:0.#}) → "
+                            + $"L{li + 2} starts ({b.From.X:0.#},{b.From.Y:0.#})";
+                    }
+                    if (stepBad.Count < 6) stepBad.Add($"L{li + 1}→L{li + 2} {dxy:0.#}mm");
+                }
+
                 ctx.Log($"[tpcheck] {tp.Layers.Count} layer(s) · {extrudes} extrude · "
                     + $"{travels} travel · {runs} run(s) · {seamEvents} seam start/stop event(s)");
-                if (jumps == 0)
+                ctx.Log($"[tpcheck] layer step-ups: {tp.Layers.Count - 1 - deadEnds}/"
+                    + $"{tp.Layers.Count - 1} connect within {stepTol:0.#} mm XY"
+                    + (deadEnds > 0
+                        ? $" · {deadEnds} DEAD END(S), worst {worstStep:0.#} mm — {worstStepWhere}"
+                          + (stepBad.Count > 0 ? $" · {string.Join(", ", stepBad)}" : "")
+                        : " · every layer hands off to the next"));
+                if (jumps == 0 && deadEnds == 0)
                 {
-                    ctx.Log("[tpcheck] VERDICT: continuous — no position jumps anywhere. "
-                        + "The head never teleports mid-path, so this prints. Missing seam dots "
-                        + "are a display matter, not a path defect.");
+                    ctx.Log("[tpcheck] VERDICT: continuous within every layer AND from each "
+                        + "layer up to the next. Nothing teleports, nothing dead-ends.");
+                }
+                else if (jumps == 0)
+                {
+                    ctx.LogError($"[tpcheck] VERDICT: layers are internally continuous, but "
+                        + $"{deadEnds} layer(s) DEAD END — the path finishes with no handoff to "
+                        + "the layer above.");
                 }
                 else
                 {
