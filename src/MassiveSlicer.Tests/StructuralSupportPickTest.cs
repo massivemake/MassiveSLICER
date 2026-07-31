@@ -220,6 +220,52 @@ public sealed class StructuralSupportPickTest
     }
 
     /// <summary>
+    /// The splice must never delete a TRAVEL. Seam markers are derived from the first and last
+    /// extrude move of each contiguous run, so swallowing the travel between two zig-zag
+    /// passes merges the runs and silently loses a pair of seam dots — plus it changes the
+    /// printed path. The break has to stay inside one wall pass.
+    /// </summary>
+    [Fact]
+    public void Splice_never_swallows_a_travel_between_passes()
+    {
+        const float bead = 6f;
+        var layer = new ToolpathLayer(0, 0f) { PlaneNormal = Vector3.UnitZ, Height = 3f };
+        // Zig-zag single skin: pass 1 ENDS at x=201, so the +side leg line (x=203) cannot
+        // cross it and its nearest crossing is on pass 2, on the FAR side of the travel.
+        // Pre-fix that made headIdx=0 / tailIdx=2 and RemoveRange deleted the travel with it.
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(0f, 0f, 0f), new Vector3(201f, 0f, 0f), MoveKind.Extrude));
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(201f, 0f, 0f), new Vector3(400f, 8f, 0f), MoveKind.Travel));
+        layer.Moves.Add(new ToolpathMove(
+            new Vector3(400f, 8f, 0f), new Vector3(0f, 8f, 0f), MoveKind.Extrude));
+        var tp = new Toolpath();
+        tp.Layers.Add(layer);
+
+        int travelsBefore = layer.Moves.Count(m => m.Kind == MoveKind.Travel);
+
+        // Anchor on the first pass, pocket out in -Y so the arm leaves that pass.
+        var spec = new StructuralSupportSpec
+        {
+            AnchorX = 200f, AnchorY = 0f, AnchorLayer = 0,
+            CenterX = 200f, CenterY = -80f,
+            WidthMm = 92f, DepthMm = 42f,
+            LayersUp = 0, LayersDown = 0,
+        };
+        StructuralSupportPlanner.Apply(tp, new SliceSettings
+        {
+            BeadWidth = bead,
+            StructuralSupports = [spec],
+        });
+
+        Assert.Equal(travelsBefore, layer.Moves.Count(m => m.Kind == MoveKind.Travel));
+        // The second pass must survive intact — still a run reaching y = 8.
+        Assert.Contains(layer.Moves, m =>
+            m.Kind == MoveKind.Extrude
+            && MathF.Abs(m.From.Y - 8f) < 0.01f && MathF.Abs(m.To.Y - 8f) < 0.01f);
+    }
+
+    /// <summary>
     /// A support placed at the END of an open wall run still gets a full one-bead mouth.
     /// The anchor has no wall on one side, so half-from-each-side produced a half-bead
     /// opening with the two legs overlapping — the mangled arm seen on end-placed supports.

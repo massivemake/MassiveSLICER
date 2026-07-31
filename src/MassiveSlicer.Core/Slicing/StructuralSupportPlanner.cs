@@ -184,12 +184,25 @@ public static class StructuralSupportPlanner
         float z = refPoint.Z;
         float search = bead * SearchBeads;
 
+        // The break must be a gap in ONE continuous wall pass, so both roots have to live in
+        // the same contiguous extrude run as the reference move. Without this the splice's
+        // RemoveRange could span a TRAVEL between two zig-zag passes and delete it, silently
+        // merging two runs into one — which loses a pair of seam markers (they are derived
+        // from each run's first/last extrude move) and changes the printed path.
+        int runLo = refMove, runHi = refMove;
+        while (runLo - 1 >= 0 && IsWallMove(layer.Moves[runLo - 1])
+               && Vector3.Distance(layer.Moves[runLo - 1].To, layer.Moves[runLo].From) < 0.05f)
+            runLo--;
+        while (runHi + 1 < layer.Moves.Count && IsWallMove(layer.Moves[runHi + 1])
+               && Vector3.Distance(layer.Moves[runHi].To, layer.Moves[runHi + 1].From) < 0.05f)
+            runHi++;
+
         // Surface break = where each leg line crosses the wall. Never "half a bead along the
         // wall either way" — at an oblique arm that gives a gap narrower than a bead, and at
         // the end of an open run it gives half a gap.
-        if (!TryWallHit(layer, mouth1, u, track, search, bead, out int idx1, out var root1))
+        if (!TryWallHit(layer, mouth1, u, track, search, bead, runLo, runHi, out int idx1, out var root1))
             return false;
-        if (!TryWallHit(layer, mouth2, u, track, search, bead, out int idx2, out var root2))
+        if (!TryWallHit(layer, mouth2, u, track, search, bead, runLo, runHi, out int idx2, out var root2))
             return false;
 
         // Hand the midpoint of this layer's break to the next layer.
@@ -343,17 +356,17 @@ public static class StructuralSupportPlanner
     /// </summary>
     static bool TryWallHit(
         ToolpathLayer layer, Vector2 linePoint, Vector2 dir, Vector2 anchor, float maxDist,
-        float maxPerp, out int moveIdx, out Vector3 hit)
+        float maxPerp, int runLo, int runHi, out int moveIdx, out Vector3 hit)
     {
         moveIdx = -1;
         hit = default;
         float bestD2 = float.MaxValue;
         float maxD2 = maxDist * maxDist;
 
-        for (int i = 0; i < layer.Moves.Count; i++)
+        for (int i = runLo; i <= runHi; i++)
         {
             var mv = layer.Moves[i];
-            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            if (!IsWallMove(mv)) continue;
             var a = new Vector2(mv.From.X, mv.From.Y);
             var b = new Vector2(mv.To.X, mv.To.Y);
             var ab = b - a;
@@ -377,10 +390,10 @@ public static class StructuralSupportPlanner
         // isn't in the break any more, and clamping would resurrect the original bug where
         // the arm chased a receding wall into an unprintable overhang.
         float bestPerp = MathF.Max(0.05f, maxPerp);
-        for (int i = 0; i < layer.Moves.Count; i++)
+        for (int i = runLo; i <= runHi; i++)
         {
             var mv = layer.Moves[i];
-            if (mv.Kind != MoveKind.Extrude || mv.IsWipe || mv.IsResumeRamp) continue;
+            if (!IsWallMove(mv)) continue;
             foreach (var (pt, s) in new[] { (mv.From, 0f), (mv.To, 1f) })
             {
                 var q = new Vector2(pt.X, pt.Y);
@@ -472,6 +485,11 @@ public static class StructuralSupportPlanner
     }
 
     // ── Small geometry helpers ──────────────────────────────────────────────────────
+
+    /// <summary>A printable wall segment the break may cut — plain extrusion, not a wipe or
+    /// a resume ramp, and never a travel.</summary>
+    static bool IsWallMove(ToolpathMove mv)
+        => mv.Kind == MoveKind.Extrude && !mv.IsWipe && !mv.IsResumeRamp;
 
     static float Cross(Vector2 a, Vector2 b) => a.X * b.Y - a.Y * b.X;
 
