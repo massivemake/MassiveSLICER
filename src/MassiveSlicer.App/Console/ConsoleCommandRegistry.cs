@@ -901,6 +901,76 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "tpcheck",
+            Description = "Printability audit of the active toolpath: position jumps between "
+                + "consecutive moves, extrude runs, travels and seam start/stop events per layer",
+            Usage = "tpcheck",
+            Execute = (ctx, _) =>
+            {
+                var vp = ctx.Main.Viewport;
+                if (vp.ActiveScrubToolpath is not { Layers.Count: > 0 } tp)
+                {
+                    ctx.LogError("[tpcheck] no active toolpath — slice, then select the toolpath");
+                    return;
+                }
+
+                // A JUMP is the thing that actually ruins a print: consecutive moves where the
+                // head teleports with no travel between them. The machine draws a straight
+                // line through it while extruding. Seam DOTS are only a display of run
+                // start/stops — their absence is cosmetic; a jump is not.
+                const float tol = 0.05f;
+                int jumps = 0, runs = 0, travels = 0, seamEvents = 0, extrudes = 0;
+                float worstJump = 0f;
+                string worstWhere = "";
+                var badLayers = new List<string>();
+
+                for (int li = 0; li < tp.Layers.Count; li++)
+                {
+                    var moves = tp.Layers[li].Moves;
+                    int layerJumps = 0;
+                    bool inRun = false;
+
+                    for (int i = 0; i < moves.Count; i++)
+                    {
+                        var mv = moves[i];
+                        if (mv.Kind == MoveKind.Extrude) { extrudes++; if (!inRun) { inRun = true; runs++; seamEvents += 2; } }
+                        else { if (mv.Kind == MoveKind.Travel) travels++; inRun = false; }
+
+                        if (i == 0) continue;
+                        float gap = System.Numerics.Vector3.Distance(moves[i - 1].To, mv.From);
+                        if (gap <= tol) continue;
+                        jumps++; layerJumps++;
+                        if (gap > worstJump)
+                        {
+                            worstJump = gap;
+                            worstWhere = $"L{li + 1} m{i - 1}->m{i} "
+                                + $"({moves[i - 1].To.X:0.#},{moves[i - 1].To.Y:0.#}) -> "
+                                + $"({mv.From.X:0.#},{mv.From.Y:0.#})";
+                        }
+                    }
+                    if (layerJumps > 0 && badLayers.Count < 6)
+                        badLayers.Add($"L{li + 1}x{layerJumps}");
+                }
+
+                ctx.Log($"[tpcheck] {tp.Layers.Count} layer(s) · {extrudes} extrude · "
+                    + $"{travels} travel · {runs} run(s) · {seamEvents} seam start/stop event(s)");
+                if (jumps == 0)
+                {
+                    ctx.Log("[tpcheck] VERDICT: continuous — no position jumps anywhere. "
+                        + "The head never teleports mid-path, so this prints. Missing seam dots "
+                        + "are a display matter, not a path defect.");
+                }
+                else
+                {
+                    ctx.LogError($"[tpcheck] VERDICT: {jumps} JUMP(S) — the head moves without a "
+                        + $"travel and will drag material. Worst {worstJump:0.##} mm at {worstWhere}"
+                        + (badLayers.Count > 0 ? $" · layers: {string.Join(", ", badLayers)}" : ""));
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "edit",
             Description = "Toolpath edit mode (the pencil): open/close it, and toggle the 2D "
                 + "slice plane viewer — makes the edit-mode-only UI reachable without clicking",
