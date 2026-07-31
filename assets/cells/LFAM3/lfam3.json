@@ -296,6 +296,8 @@
   "scanToolName": "Scanner",
   "bridgeIp": "192.168.0.153",
   "bridgePort": 7000,
+  "massiveDriveUrl": "http://192.168.0.233:8080",
+  "massiveDriveCellId": "lfam3",
   "extIp": "192.168.0.196",
   "extBridgePort": 8765,
   "millBridgePort": 8765,

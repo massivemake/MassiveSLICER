@@ -1052,9 +1052,32 @@ public partial class ViewportView : UserControl
     }
 
 
+    /// <summary>True after the GL viewport failed to initialise (e.g. GLSL too old).</summary>
+    private bool _glInitFailed;
+    private string? _glInitError;
+
+    /// <summary>Non-null when the 3D viewport could not start on this GPU.</summary>
+    public string? GlInitError => _glInitError;
+
     private void OnRender(TimeSpan delta, int w, int h)
     {
-        _renderer.Initialise();
+        // Weak / embedded GPUs (some Linux ARM boards) only expose GLSL 1.40 or ES 3.00.
+        // Our shaders require #version 330 core — fail the viewport, not the whole app.
+        if (_glInitFailed)
+            return;
+
+        try
+        {
+            _renderer.Initialise();
+        }
+        catch (Exception ex)
+        {
+            _glInitFailed = true;
+            _glInitError = ex.Message;
+            System.Console.Error.WriteLine(
+                "[MassiveSlicer] 3D viewport disabled (OpenGL/GLSL unsupported on this GPU):\n" + ex.Message);
+            return;
+        }
 
         if (_vm is { } vm)
         {
@@ -1598,6 +1621,11 @@ public partial class ViewportView : UserControl
                         _robotHomePos.Y + off.Y,
                         _robotHomePos.Z + off.Z);
                     RefreshIkSceneKinematics();
+
+                    // The rail moves ROBROOT without touching A1-A6, so the joint-change
+                    // guard above skips the readout. Refresh it here or the flange/TCP
+                    // numbers (and `cal-check`) stay stale after a rail-only move.
+                    SyncTcpReadout(vm);
                 }
 
                 // LFAM 3 rotary: spin the turntable about the vertical axis through its centre.
@@ -1722,6 +1750,12 @@ public partial class ViewportView : UserControl
         vm.Robot!.FlangeX = Math.Round(pos.X - robroot.X, 1);
         vm.Robot.FlangeY  = Math.Round(pos.Y - robroot.Y, 1);
         vm.Robot.FlangeZ  = Math.Round(pos.Z - robroot.Z, 1);
+
+        // Scene-world nozzle tip, kept separate from TcpX/Y/Z because the live sync
+        // overwrites those with the controller's BASE-frame pose (see `cal-check`).
+        vm.Robot.SceneTcpX = Math.Round(tcp.X, 1);
+        vm.Robot.SceneTcpY = Math.Round(tcp.Y, 1);
+        vm.Robot.SceneTcpZ = Math.Round(tcp.Z, 1);
 
         vm.Robot.TcpX = Math.Round(tcp.X, 1);
         vm.Robot.TcpY = Math.Round(tcp.Y, 1);
@@ -2248,7 +2282,10 @@ public partial class ViewportView : UserControl
 
         var rp = swap.Config.Robot.WorldPosition;
         _robrootWorldPos   = new Vector3(rp.X, rp.Y, rp.Z);
-        _robotHomePos      = _robrootWorldPos;
+        // The rail rewrites the robot node's transform every frame from _robotHomePos, so the
+        // render-only ModelOffset has to be folded in here too or the rail would undo it.
+        var mp = swap.Config.Robot.ModelWorldPosition;
+        _robotHomePos      = new Vector3(mp.X, mp.Y, mp.Z);
         _robotRail         = swap.Config.RobotRail;
         _flangeDisplayRoll = swap.Config.Robot.FlangeDisplayRoll * MathF.PI / 180f;
 
@@ -5634,11 +5671,9 @@ public partial class ViewportView : UserControl
     private void DropToPlate()
     {
         if (_renderer.SelectedNode is not { } node) return;
-        float minZ = LayFlatMinZ(node);
-        if (minZ >= float.MaxValue) return;
+        if (LayFlatMinZ(node) >= float.MaxValue) return;
         var old = node.LocalTransform;
-        node.LocalTransform = node.LocalTransform
-            * TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
+        DropNodeToBed(node, _renderer.BedZ);
         // A one-shot transform edit, same category as a typed coordinate change — mesh and
         // toolpath are scene-graph siblings, not real parent/child, so nothing carries the
         // toolpath along unless explicitly told to (same mechanism OnSelectionTranslated
@@ -6491,20 +6526,46 @@ public partial class ViewportView : UserControl
         }
 
         // Rotate around the world-space bounding-box centre so the object doesn't drift.
+        // center and rot are both WORLD quantities, so they must be conjugated into the
+        // parent frame — see ApplyWorldTransformToNode.
         var center = LayFlatWorldCenter(node);
-        // Row-vector: p_new = p_old * M  ->  W_new = W_old * M
         var M = TkMatrix4.CreateTranslation(-center) * rot * TkMatrix4.CreateTranslation(center);
-        node.LocalTransform = node.LocalTransform * M;
+        ApplyWorldTransformToNode(node, M);
 
         // Drop the object so its lowest point sits exactly on the bed surface.
+        DropNodeToBed(node, bedZ);
+    }
+
+    /// <summary>
+    /// Applies <paramref name="world"/> — a transform expressed in WORLD space — to
+    /// <paramref name="node"/>, converting it into the node's parent frame.
+    /// <para>
+    /// Row-vector convention: p_world = p_local · L · P. Wanting p_world' = p_world · W gives
+    /// L' = L · P · W · P⁻¹. Post-multiplying L by W directly (the old code) silently assumes
+    /// P is identity. It is a pure translation on LFAM 1/2 (so only the rotation pivot drifted)
+    /// but on LFAM 3 user models hang off the rotary pivot, whose frame carries
+    /// baseAbc C = −90° — mapping local +Z onto world ±Y. That turned Drop to Plate into a
+    /// sideways slide of a foot or two instead of a drop (reported 2026-07-29).
+    /// </para>
+    /// </summary>
+    internal static void ApplyWorldTransformToNode(SceneNode node, TkMatrix4 world)
+    {
+        var parent = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+        node.LocalTransform = node.LocalTransform * parent * world * parent.Inverted();
+    }
+
+    /// <summary>Drops <paramref name="node"/> straight down (world −Z) until its lowest
+    /// point rests on <paramref name="bedZ"/>. No-op when the node has no geometry.</summary>
+    internal static void DropNodeToBed(SceneNode node, float bedZ)
+    {
         float minZ = LayFlatMinZ(node);
-        if (minZ < float.MaxValue)
-            node.LocalTransform = node.LocalTransform * TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ);
+        if (minZ >= float.MaxValue) return;
+        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ));
     }
 
     private static TkVector3 LayFlatWorldCenter(SceneNode node)
     {
-        var mesh = node.Mesh?.PickingData;
+        var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
         if (mesh is null) return node.WorldTransform.Row3.Xyz;
         var lo = mesh.LocalBounds.Min;
         var hi = mesh.LocalBounds.Max;
@@ -6521,7 +6582,7 @@ public partial class ViewportView : UserControl
         float minZ = float.MaxValue;
         foreach (var n in node.SelfAndDescendants())
         {
-            var mesh = n.Mesh?.PickingData;
+            var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;
             var m = n.WorldTransform;
             foreach (var p in mesh.Positions)
@@ -14937,6 +14998,13 @@ public partial class ViewportView : UserControl
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
     {
+        // Destination dropdown: MassiveDRIVE package send vs classic KRL→robot SMB.
+        if (vm.SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive)
+        {
+            await SendToMassiveDriveAsync(vm);
+            return;
+        }
+
         var toolpath = vm.ActiveScrubToolpath;
         var node     = _activeScrubNode;
         var cell     = vm.ActiveCell;
@@ -14951,7 +15019,7 @@ public partial class ViewportView : UserControl
         if (cfg is null || !vm.RobotSmb.IsConfigured)
         {
             mvm?.Console.LogError(
-                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the ⌄ button to save the .src manually.");
+                $"[robot] {cell.Name} has no SMB credentials — set IP/username/password under ROBOT NETWORK in the cell panel, or use the save button to export .src manually.");
             SetSliceStatus(vm,
                 $"⚠ Send to Robot: {cell.Name} has no robot-network credentials. " +
                 "Set IP/username/password under ROBOT NETWORK in the cell panel, or export the .src manually.",
@@ -15012,6 +15080,109 @@ public partial class ViewportView : UserControl
 
         if (mvm is not null)
             await mvm.NotifyErpSentToRobotAsync(srcPath, fileName, cell.Name, cfg.Host);
+    }
+
+    /// <summary>
+    /// Export toolpath as massivedrive.job/v1 and start MassiveDRIVE path executor.
+    /// Does not upload KRL to the robot.
+    /// </summary>
+    private async Task SendToMassiveDriveAsync(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        var target   = vm.SelectedSendTarget;
+
+        if (toolpath is null || node is null || cell is null || settings is null) return;
+        if (target is null || target.Kind != SendTargetKind.MassiveDrive
+            || string.IsNullOrWhiteSpace(target.Url))
+        {
+            SetSliceStatus(vm,
+                "⚠ MassiveDRIVE URL not configured for this cell (massiveDriveUrl in cell JSON).",
+                isError: true);
+            return;
+        }
+
+        if (!await ConfirmExportDespiteValidationAsync(node)) return;
+
+        var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
+        var mvm = topLevel?.DataContext as MainWindowViewModel;
+
+        var exportSettings = new MassiveDriveExportSettings
+        {
+            Name = string.IsNullOrWhiteSpace(node.Name) ? "print-job" : node.Name,
+            CellId = target.CellId ?? cell.MassiveDriveCellId ?? "lfam3",
+            Tool = settings.ToolDataIndex,
+            Base = settings.BaseDataIndex,
+            PrintSpeedMmS = (float)settings.PrintSpeed,
+            TravelSpeedMmS = (float)settings.TravelSpeed,
+            ReverseMs = 200f,
+            ReversePercent = 40f,
+            TravelReverse = true,
+            // Same toolhead offsets as KRL export — ABC must match viewport / KukaAbc
+            ToolheadOffsetA = (float)settings.ToolheadA,
+            ToolheadOffsetB = (float)settings.ToolheadB,
+            ToolheadOffsetC = (float)settings.ToolheadC,
+            WorkspacePath = mvm?.AppPreferences.LastWorkspacePath,
+            SourceNote = $"cell={cell.Name}",
+        };
+
+        Dictionary<string, object?> package;
+        try
+        {
+            package = MassiveDriveJobExporter.ExportDict(toolpath, exportSettings);
+        }
+        catch (Exception ex)
+        {
+            mvm?.Console.LogError($"[drive] Export package failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE export failed: {ex.Message}", isError: true);
+            return;
+        }
+
+        var segCount = (package["segments"] as System.Collections.ICollection)?.Count ?? 0;
+        mvm?.Console.Log(
+            $"[drive] Sending \"{exportSettings.Name}\" ({segCount} segments) → {target.Url} …");
+
+        try
+        {
+            using var client = new MassiveDriveClient(target.Url!);
+            // Health check first for clearer errors
+            try
+            {
+                using var health = await client.HealthAsync();
+            }
+            catch (Exception hex)
+            {
+                mvm?.Console.LogError($"[drive] Health check failed at {target.Url}: {hex.Message}");
+                SetSliceStatus(vm,
+                    $"⚠ MassiveDRIVE unreachable at {target.Url} — is serve running?",
+                    isError: true);
+                return;
+            }
+
+            var result = await client.SendAndStartAsync(package);
+            mvm?.Console.Log(
+                $"[drive] Sent package {result.PackageId} to {cell.Name} — path executor started.");
+            if (mvm is not null)
+            {
+                mvm.StatusBar.OperationFeedback =
+                    $"✓ Sent to MassiveDRIVE ({cell.Name}): {result.PackageId} — {segCount} segments";
+            }
+            SetSliceStatus(vm,
+                $"✓ Sent to MassiveDRIVE — {result.PackageId} ({segCount} segs). Robot needs RSI runtime armed.",
+                isError: false);
+        }
+        catch (MassiveDriveClientException ex)
+        {
+            mvm?.Console.LogError($"[drive] Send failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE send failed: {ex.Message}", isError: true);
+        }
+        catch (Exception ex)
+        {
+            mvm?.Console.LogError($"[drive] Send failed: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ MassiveDRIVE send failed: {ex.Message}", isError: true);
+        }
     }
 
     /// <summary>

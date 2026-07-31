@@ -131,6 +131,25 @@ dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj
 open MassiveSlicer.app        # launcher; regenerate with tools/make_macos_app.sh
 ```
 
+### "Build me a copy of <branch>" — do exactly this
+
+A teammate asking for a build of someone else's branch is routine. Steps, in order:
+
+1. **Protect their work first.** If the tree is dirty or their own branch has unpushed
+   commits, say so and let them commit/stash before you switch — never discard it silently.
+2. `git fetch origin` — the branch usually doesn't exist locally yet.
+3. `git checkout <branch>` (exact name; `git branch -r` if unsure — misspellings are common
+   when a name is retyped from chat).
+4. **Force a rebuild:** `dotnet build src/MassiveSlicer.App/MassiveSlicer.App.csproj --no-incremental`.
+   Switching branches changes source files but leaves binaries from the previous branch, and a
+   plain incremental build can report "0 Errors" while doing nothing.
+5. **Prove the branch's code is in the binary** before handing it over — don't trust the build
+   log. Pick a string the branch introduced and check it as UTF-16 (see the command above).
+6. Launch, and tell them which branch they're on plus how to get back (`git checkout main`).
+
+Also tell them if the branch is **not yet print-verified** — check the warning banner at the
+top of `memory.md`. Unproven export/motion changes must not reach a real print unannounced.
+
 Build identity is auto-generated: build number = git commit count
 (`build N · date · sha` in the status bar). Never hand-edit build numbers.
 

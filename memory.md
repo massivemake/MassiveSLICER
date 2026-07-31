@@ -14,7 +14,7 @@ robot as usual." Confirm with Jeff whether shop testing has actually validated a
 before trusting this path, and don't merge this branch into `main`/`master` without his
 explicit sign-off.
 
-Last updated: 2026-07-28 (Touchpad navigation + Preferences controls; preference edits no longer re-slice; repo working-cost cleanup for multi-dev AI sessions)
+Last updated: 2026-07-29 (Drop to Plate / Lay Flat frame fix on LFAM 3; extruder keep-alive on a branch, not yet print-verified)
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -401,6 +401,43 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-29 — Drop to Plate slid sideways on LFAM 3 (world-vs-parent frame)
+
+**Symptom (Wes):** on LFAM 3 only, flip a model 180° then Drop to Plate and it moves a foot or
+two along **Y** instead of landing on the bed. Rotate itself was fine.
+
+**Cause.** `DropToPlate` computed the drop correctly in WORLD space
+(`LayFlatMinZ` and `BedZ` are both world Z) but applied it with a post-multiply:
+`node.LocalTransform * CreateTranslation(0,0,dz)`. Under the row-vector convention that lands
+the translation in the **parent's** frame. On LFAM 1/2 the bed node is a pure translation, so
+parent-Z == world-Z and it worked by luck. LFAM 3 has no flat bed — user imports are parented to
+the rotary pivot (`AttachUserImportToCell` → `_rotaryBedPivot ?? _bedNode`), whose frame carries
+`baseAbc = [-0.093, 0, -90]` from `lfam3.json`. That −90° roll maps the frame's local +Z onto
+world ±Y. Reproduced numerically with the real matrices: old code moved **ΔY +100, ΔZ 0** (never
+touched the bed); fixed code moves **ΔZ +100** and lands exactly on it.
+
+**`ApplyLayFlat` had the same defect twice** — it builds a rotation about a WORLD centre and
+post-multiplies it, so its rotation pivot drifted on *every* cell (not just LFAM 3), and its drop
+step failed identically. The stale comment "Row-vector: W_new = W_old * M" was the tell: that
+identity only holds when the parent is identity.
+
+**Fix.** One helper, `ViewportView.ApplyWorldTransformToNode(node, W)`, conjugating a world
+transform into the parent frame: **`L' = L · P · W · P⁻¹`**. `DropNodeToBed(node, bedZ)` wraps the
+drop. Both `DropToPlate` and `ApplyLayFlat` now go through them. **Any future code applying a
+world-space transform to a scene node must use this** — post-multiplying is only safe when the
+parent is identity, which is not true on any cell.
+
+Also: `LayFlatMinZ` / `LayFlatWorldCenter` now fall back to `PendingMesh` (the repo-wide
+`Mesh?.PickingData ?? PendingMesh` idiom), so a freshly imported mesh can be dropped before GPU
+upload. Tests: `DropToPlateFrameTest` ×5 against LFAM 3's real rotary matrices — flat-parent case,
+rotary case, purely-vertical motion, flip-180-then-drop, idempotency. Verified in the app on
+LFAM 3 by Derek. Suite 543 pass / same 15 known failures.
+
+**Related open work:** `feature/extruder-keepalive` (Caracol screw keep-alive, see the .src gap
+analysis) is pushed but **NOT print-verified** — needs a real run before merging.
+`tools/check_extruder_gaps.py` is on `main` already and audits any .src for extruder silence.
+
 
 ### 2026-07-28 — Trackpad navigation, Preferences controls, and a preference→re-slice bug
 

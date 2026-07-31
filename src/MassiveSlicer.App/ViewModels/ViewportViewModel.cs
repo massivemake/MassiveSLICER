@@ -534,12 +534,89 @@ public sealed class ViewportViewModel : ViewModelBase
             _activeCell = value;
             if (value is not null)
                 RobotSmb.SetActiveCell(value.Name, value.BridgeIp);
+            RebuildSendTargets();
         }
     }
     private CellConfig? _activeCell;
 
     /// <summary>Per-cell SMB credentials for direct Export-to-Robot uploads.</summary>
     public RobotSmbViewModel RobotSmb { get; } = new();
+
+    // -- Send destination (Robot SMB vs MassiveDRIVE) -------------------------
+
+    /// <summary>Where the top-bar Send action delivers the active toolpath.</summary>
+    public ObservableCollection<SendTargetOption> SendTargets { get; } = [];
+
+    private SendTargetOption? _selectedSendTarget;
+
+    /// <summary>Selected destination for <see cref="SendToRobotCommand"/>.</summary>
+    public SendTargetOption? SelectedSendTarget
+    {
+        get => _selectedSendTarget;
+        set
+        {
+            if (!SetField(ref _selectedSendTarget, value)) return;
+            OnPropertyChanged(nameof(SendActionLabel));
+            OnPropertyChanged(nameof(SendActionTip));
+        }
+    }
+
+    /// <summary>Label on the green Send button (updates with destination).</summary>
+    public string SendActionLabel =>
+        SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive
+            ? "Send to Drive"
+            : "Export to Robot";
+
+    /// <summary>Tooltip for the green Send button.</summary>
+    public string SendActionTip =>
+        SelectedSendTarget?.Kind == SendTargetKind.MassiveDrive
+            ? "Upload toolpath package to MassiveDRIVE and start path executor (RSI + extruder). No print KRL on the robot."
+            : "Send the KRL program to the selected cell's robot (D drive over SMB) and report it to the ERP";
+
+    /// <summary>Rebuild Robot / MassiveDRIVE send destinations from the active cell.</summary>
+    public void RebuildSendTargets()
+    {
+        var prevKind = SelectedSendTarget?.Kind;
+        SendTargets.Clear();
+
+        var cell = ActiveCell;
+        var robotLabel = cell is null ? "Robot (KRC)" : $"Robot — {cell.Name}";
+        SendTargets.Add(new SendTargetOption(
+            SendTargetKind.Robot,
+            robotLabel,
+            Url: null,
+            CellId: null));
+
+        if (cell is not null && !string.IsNullOrWhiteSpace(cell.MassiveDriveUrl))
+        {
+            var driveId = string.IsNullOrWhiteSpace(cell.MassiveDriveCellId)
+                ? InferDriveCellId(cell.Name)
+                : cell.MassiveDriveCellId!;
+            SendTargets.Add(new SendTargetOption(
+                SendTargetKind.MassiveDrive,
+                $"MassiveDRIVE — {cell.Name}",
+                Url: cell.MassiveDriveUrl!.TrimEnd('/'),
+                CellId: driveId));
+        }
+
+        // Prefer MassiveDRIVE when the cell has it (new architecture); else Robot.
+        SendTargetOption? pick = null;
+        if (prevKind is not null)
+            pick = SendTargets.FirstOrDefault(t => t.Kind == prevKind);
+        pick ??= SendTargets.FirstOrDefault(t => t.Kind == SendTargetKind.MassiveDrive)
+                 ?? SendTargets.FirstOrDefault();
+        SelectedSendTarget = pick;
+    }
+
+    static string InferDriveCellId(string cellName)
+    {
+        var n = cellName.Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
+        if (n.Contains("lfam1", StringComparison.Ordinal)) return "lfam1";
+        if (n.Contains("lfam2", StringComparison.Ordinal)) return "lfam2";
+        if (n.Contains("lfam3", StringComparison.Ordinal)) return "lfam3";
+        if (n.Contains("lfam4", StringComparison.Ordinal)) return "lfam4";
+        return n.Length <= 12 ? n : "lfam3";
+    }
 
     /// <summary>Writes the active toolpath's KRL program into the given directory,
     /// named "&lt;geometry&gt; RevNN.src", and returns the written path — or null when
