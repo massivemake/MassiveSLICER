@@ -7803,7 +7803,15 @@ public sealed class ViewportViewModel : ViewModelBase
         // cards sitting in the panel, aimed at geometry that no longer existed, and they
         // then applied themselves to whatever mesh was imported next. Opening a workspace
         // that carries no supports of its own had the same effect.
+        // NOTE the two stores. The VIEW owns the authoritative card list
+        // (ViewportView._paintModifications); the collection on this VM is only what the
+        // panel renders. Clearing the display alone left the real list intact, so the next
+        // thing that resynced the panel — adding a single support, say — brought every old
+        // card straight back. Route through the view's own restore-with-nothing path, which
+        // clears its list and refreshes the panel from it. The local Clear() still runs so
+        // headless callers (and tests) with no view attached also end up empty.
         PaintModifications.Clear();
+        RestorePaintModifications?.Invoke([]);
         if (AdditiveSettings is { } jobSettings)
         {
             jobSettings.StructuralSupports.Clear();

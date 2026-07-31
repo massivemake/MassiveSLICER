@@ -61,6 +61,23 @@ public sealed class JobResetClearsSupportsTest
     }
 
     [Fact]
+    public void Resetting_the_job_also_clears_the_views_own_card_list()
+    {
+        // The view holds the authoritative list; this VM collection is only the display.
+        // Clearing the display alone was not enough — adding one support resynced the panel
+        // from the view's untouched list and every old card reappeared. So the reset has to
+        // reach the view, which it does by asking it to restore nothing.
+        var vm = VmWithJobData();
+        var restoreCalls = new List<int>();
+        vm.RestorePaintModifications = saved => restoreCalls.Add(saved.Count);
+
+        vm.ClearUserScene();
+
+        Assert.Single(restoreCalls);
+        Assert.Equal(0, restoreCalls[0]);
+    }
+
+    [Fact]
     public void Resetting_a_job_with_no_settings_attached_does_not_throw()
     {
         // AdditiveSettings is nullable and is null early in startup.
