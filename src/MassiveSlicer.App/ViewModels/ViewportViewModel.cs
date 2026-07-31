@@ -7796,6 +7796,20 @@ public sealed class ViewportViewModel : ViewModelBase
             }
         }
 
+        // Support pockets and the MODIFICATIONS cards are JOB data, not scenery, so a job
+        // reset has to take them with it. Both callers of this method are exactly that reset
+        // — File > New, and the workspace open path (which repopulates from the file
+        // straight after). Without this, File > New left the previous job's pockets and
+        // cards sitting in the panel, aimed at geometry that no longer existed, and they
+        // then applied themselves to whatever mesh was imported next. Opening a workspace
+        // that carries no supports of its own had the same effect.
+        PaintModifications.Clear();
+        if (AdditiveSettings is { } jobSettings)
+        {
+            jobSettings.StructuralSupports.Clear();
+            jobSettings.SelectedSupportIndex = -1;
+        }
+
         _armatureScanNode = null;
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
