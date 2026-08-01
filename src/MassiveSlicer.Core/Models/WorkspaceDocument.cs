@@ -257,6 +257,36 @@ public sealed class WorkspaceModelEntry
     /// <summary>Row-major 4×4 local transform (16 floats: M11–M44).</summary>
     public float[] LocalTransform { get; set; } = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
+    /// <summary>
+    /// The part's pivot in its own mesh space — where the gizmo sits and what rotation and scale
+    /// work about. Three floats; <c>null</c> in files saved before pivots were a thing.
+    /// </summary>
+    /// <remarks>
+    /// The matrix above cannot carry this. A pivot move is deliberately composed to leave the final
+    /// matrix identical — that is what lets the handle be repositioned without the geometry
+    /// stirring — so the pivot is invisible to anything reading the matrix alone. Saving only the
+    /// matrix therefore lost every Move Origin and Recenter the user had done, and reopening a file
+    /// left its parts with no placement at all: back to the exporter's own origin, the detached
+    /// gizmo, and world-axis rotation this whole transform rework exists to get rid of.
+    /// <para>
+    /// Everything else about the placement — position, rotation, scale — is recoverable from the
+    /// matrix once the pivot is known (<c>NodeTransform.FromMatrix</c>), so only this and
+    /// <see cref="ImportScale"/> need storing.
+    /// </para>
+    /// </remarks>
+    public float[]? PivotOrigin { get; set; }
+
+    /// <summary>
+    /// The scale the part had when it first adopted a placement — the 100% the scale tool's percent
+    /// mode measures against. Three floats; <c>null</c> in older files.
+    /// </summary>
+    /// <remarks>
+    /// Not always 1: a metres-as-millimetres import is corrected ×1000 and a part dropped into a
+    /// rotary cell is scaled to fit the platter, both before the placement is taken. Without this,
+    /// reopening a file quietly redefines 100% as "whatever size it was saved at".
+    /// </remarks>
+    public float[]? ImportScale { get; set; }
+
     /// <summary>Toolpaths generated from this model (child outliner entries).</summary>
     public List<WorkspaceToolpathEntry> Toolpaths { get; set; } = [];
 

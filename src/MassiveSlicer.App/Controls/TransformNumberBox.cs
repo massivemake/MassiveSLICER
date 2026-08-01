@@ -74,8 +74,19 @@ public class TransformNumberBox : TextBox
 
         // Subscribed rather than overridden: the focus-event signatures differ between Avalonia
         // versions, and nothing here needs to run before the base implementation.
-        GotFocus  += (_, _) => SelectAll();   // covers arriving by Tab as well as by click
-        LostFocus += (_, _) => Commit();
+        GotFocus += (_, e) =>
+        {
+            SelectAll();   // covers arriving by Tab as well as by click
+            // Remember whether a click is what brought us here, so the press still to come knows it
+            // is the opening one. Tab-in deliberately does not set this: the first click after
+            // tabbing should place the caret, not re-select.
+            _focusArrivedByClick = e.NavigationMethod == NavigationMethod.Pointer;
+        };
+        LostFocus += (_, _) =>
+        {
+            _focusArrivedByClick = false;
+            Commit();
+        };
     }
 
     protected override Type StyleKeyOverride => typeof(TextBox);
@@ -85,6 +96,21 @@ public class TransformNumberBox : TextBox
     /// <summary>Set while the opening click of a focus-in gesture is still in flight, so its
     /// release can be suppressed too.</summary>
     private bool _openingClick;
+
+    /// <summary>
+    /// True between a click granting this box focus and that same click's press reaching us.
+    /// </summary>
+    /// <remarks>
+    /// This exists because <see cref="InputElement.IsFocused"/> cannot answer "is this the click
+    /// that got me focus". Avalonia focuses the box while routing the press, <em>before</em>
+    /// <see cref="OnPointerPressed"/> is called on it — so on the very first click IsFocused is
+    /// already true, the code took the already-focused branch, and base placed a caret over the
+    /// SelectAll that GotFocus had just done. That is the whole reason the field behaved like a
+    /// plain TextBox: caret on one click, part of the number on two, all of it on three. Two
+    /// earlier attempts fought the symptom by suppressing base at various points; the discriminator
+    /// was the bug.
+    /// </remarks>
+    private bool _focusArrivedByClick;
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
@@ -96,10 +122,10 @@ public class TransformNumberBox : TextBox
         // then finishes that drag against the anchor. Either one collapses the SelectAll — with base
         // on press the selection shrank to the digits after the decimal, and suppressing only the
         // press left the release to clear it entirely.
-        if (!IsFocused)
+        if (_focusArrivedByClick)
         {
+            _focusArrivedByClick = false;
             _openingClick = true;
-            Focus();
             SelectAllDeferred();
             e.Handled = true;
             return;

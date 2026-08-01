@@ -6969,10 +6969,10 @@ public partial class ViewportView : UserControl
         bool floating = delta < -BedContactTolerance;
         if (!sunk && !(floating && alsoLower)) return;
 
-        var shift = TkMatrix4.CreateTranslation(0f, 0f, delta);
-        ApplyWorldTransformToNode(node, shift);
+        var shift = new TkVector3(0f, 0f, delta);
+        TranslateNodeWorld(node, shift);
         foreach (var follower in linked)
-            ApplyWorldTransformToNode(follower, shift);
+            TranslateNodeWorld(follower, shift);
     }
 
     /// <summary>Which Keep on bed preference governs a given edit.</summary>
@@ -7050,7 +7050,38 @@ public partial class ViewportView : UserControl
     {
         float minZ = LayFlatMinZ(node);
         if (minZ >= float.MaxValue) return;
-        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ));
+        TranslateNodeWorld(node, new TkVector3(0f, 0f, bedZ - minZ));
+    }
+
+    /// <summary>
+    /// Shifts <paramref name="node"/> by a world-space offset, without disturbing anything else
+    /// about its placement.
+    /// </summary>
+    /// <remarks>
+    /// Moves the pivot directly rather than composing the offset into the matrix. Writing a matrix
+    /// onto a placement-bearing node makes it re-derive position, rotation and scale from what was
+    /// written, and that decomposition squares the basis back up with Gram-Schmidt — so a pure
+    /// slide sideways came back very slightly rotated and repositioned. Small (~0.3mm on a 2m part)
+    /// but real, in machine coordinates rather than just on screen, and it accumulated once per
+    /// correction. Editing the pivot skips the round trip entirely and is exact.
+    /// </remarks>
+    internal static void TranslateNodeWorld(SceneNode node, TkVector3 worldDelta)
+    {
+        var parent = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+
+        if (node.Placement is { } placement)
+        {
+            var invParent = TkMatrix4.Identity;
+            if (MathF.Abs(parent.Determinant) > 1e-12f)
+                TkMatrix4.Invert(parent, out invParent);
+
+            placement.Position += TransformDir(worldDelta, invParent);
+            node.SetPlacement(placement);
+            return;
+        }
+
+        // No placement (the robot rig, cell fixtures): matrix composition is all there is.
+        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(worldDelta));
     }
 
     private static TkVector3 LayFlatWorldCenter(SceneNode node)

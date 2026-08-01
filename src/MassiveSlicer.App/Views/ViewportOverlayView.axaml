@@ -853,9 +853,10 @@
 
                         <Border Width="1" Background="#3D3D3D" Margin="0,2,7,2"/>
 
-                        <!-- Contextual to Scale mode, per the spec: these two live here rather than
-                             in the always-visible toolbar, because they mean nothing in Move or Rotate. -->
-                        <Border x:Name="FitToCellButton" Cursor="Hand"
+                        <!-- Fit to Cell is hidden rather than deleted: it works and is still on the
+                             `scale fit` console command, but it was earning no keep on the toolbar.
+                             Set IsVisible to True to bring it back. -->
+                        <Border x:Name="FitToCellButton" Cursor="Hand" IsVisible="False"
                                 Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
                                 CornerRadius="5" Padding="8,4" Margin="0,0,7,0"
                                 ToolTip.Tip="Scale the part up or down uniformly until it just fits the bed, with room to spare. Stops at whichever axis runs out first.">

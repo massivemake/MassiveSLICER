@@ -71,6 +71,11 @@ internal static class WorkspaceService
                 Visible        = node.Visible,
                 LayerPreview   = node.LayerPreview,
                 LocalTransform = ToArray(node.WorldTransform),
+                // The matrix alone cannot express these: a pivot move leaves the composed matrix
+                // untouched by design, and the imported scale is a historical fact about the file
+                // rather than anything the current transform records.
+                PivotOrigin    = node.Placement is { } pl ? [pl.Origin.X, pl.Origin.Y, pl.Origin.Z] : null,
+                ImportScale    = node.ImportScale is { } isc ? [isc.X, isc.Y, isc.Z] : null,
             };
 
             // EnumerateUserModelItems() flattens Applied-Pieces groups (see its own comment) so
@@ -260,6 +265,7 @@ internal static class WorkspaceService
                     node.Name         = entry.Name;
                     node.Visible      = entry.Visible;
                     node.LayerPreview = entry.LayerPreview;
+                    RestorePlacement(node, entry);
 
                     if (entry.PiecesGroupName is { } groupName)
                     {
@@ -425,6 +431,36 @@ internal static class WorkspaceService
         foreach (var smb in clone.RobotSmb)
             smb.Password = null;
         return clone;
+    }
+
+    /// <summary>
+    /// Gives a restored node back the placement it was saved with — pivot and imported scale — so
+    /// reopening a file behaves the same as the session it was saved from.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the pivot is read back from the file. Position, rotation and scale are recovered by
+    /// decomposing the matrix around it, which is exact for anything this app writes (placements
+    /// never shear), so there is no second copy of the same numbers to fall out of step.
+    /// </para>
+    /// <para>
+    /// A file saved before pivots existed carries none, and still gets a placement here — pivoted at
+    /// its bounding-box centre, exactly like a fresh import. Leaving it without one would keep those
+    /// parts on the old behaviour: gizmo parked at whatever origin the exporter chose, rotation
+    /// about a distant point. The pivot is a guess for those files, but a far better one than none.
+    /// </para>
+    /// </remarks>
+    private static void RestorePlacement(SceneNode node, WorkspaceModelEntry entry)
+    {
+        if (entry.PivotOrigin is { Length: >= 3 } o)
+            node.EnsurePlacement(new Vector3(o[0], o[1], o[2]));
+        else
+            ImportHelper.CenterOrigin(node);
+
+        // After EnsurePlacement, which otherwise captures the saved scale as if it were the
+        // original — quietly redefining 100% as whatever size the part was last left at.
+        if (entry.ImportScale is { Length: >= 3 } s)
+            node.ImportScale = new Vector3(s[0], s[1], s[2]);
     }
 
     private static float[] ToArray(Matrix4 m) =>
