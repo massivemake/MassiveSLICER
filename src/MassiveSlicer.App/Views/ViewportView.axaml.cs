@@ -494,7 +494,9 @@ public partial class ViewportView : UserControl
             {
                 if (_renderer.SelectedNode is not { } n) return "[bed] nothing selected.";
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
-                float lowest = LayFlatMinZ(n);
+                // Linked-aware, so selecting a toolpath reports the pair's clearance rather than
+                // "no geometry" — the same measurement the clamp itself uses.
+                float lowest = LowestWorldZWithLinked(n);
                 if (lowest >= float.MaxValue) return "[bed] selection has no real geometry to measure.";
 
                 float gap = lowest - _renderer.BedZ;
@@ -794,9 +796,10 @@ public partial class ViewportView : UserControl
                 lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
                 node.LocalTransform = lt;
             }
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
+            MirrorTypedTransformDelta(vm, node, old);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
-            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Move");
@@ -824,9 +827,10 @@ public partial class ViewportView : UserControl
                 lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
                 node.LocalTransform = lt;
             }
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
+            MirrorTypedTransformDelta(vm, node, old);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
-            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Rotate");
@@ -835,9 +839,10 @@ public partial class ViewportView : UserControl
         // headless test exercises the real path rather than a shortcut around it.
         vm.OnExternalNodeTransform = (node, oldLocal, label) =>
         {
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
+            MirrorTypedTransformDelta(vm, node, oldLocal);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
-            MirrorTypedTransformDelta(vm, node, oldLocal);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SyncSelectionTransformDisplay(vm);
@@ -851,9 +856,10 @@ public partial class ViewportView : UserControl
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
+            MirrorTypedTransformDelta(vm, node, old);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
-            MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SchedulePanelTransformUndo(vm, node, "Scale");
@@ -3428,8 +3434,10 @@ public partial class ViewportView : UserControl
                     // started from and never to a sunk one.
                     if (op != GizmoMode.Translate)
                     {
+                        // Followers are already current — ApplyTransformLink ran on every move of
+                        // the drag — and EnsureAboveBed lifts the whole linked set itself, so there
+                        // is nothing left to re-mirror here.
                         EnsureAboveBed(gzNode);
-                        ApplyTransformLink(gzNode);
                         vmGz.ConstrainModifierPlanesUnder(gzNode);
                     }
 
@@ -6844,13 +6852,56 @@ public partial class ViewportView : UserControl
     /// tumble that dips below the bed part-way through is normal, not a mistake to undo.
     /// </para>
     /// </remarks>
+    /// <remarks>
+    /// <para>
+    /// Must run <em>after</em> the linked toolpath has been mirrored, not before. Measuring first
+    /// reads a pair that has not finished moving: drag the toolpath down and, at that instant, the
+    /// mesh is still sitting up on the bed, so the pair measures as resting and nothing is
+    /// corrected — then the mirror carries the mesh down through the floor unchecked.
+    /// </para>
+    /// <para>
+    /// Moves the whole linked set by one shared world lift rather than moving the primary and
+    /// letting the mirror re-derive the rest. They are rigid with respect to each other, so the same
+    /// translation on each keeps them together without a second mirroring pass to get wrong.
+    /// </para>
+    /// </remarks>
     private void EnsureAboveBed(SceneNode node)
     {
         if (!BedClampApplies(node)) return;
-        float minZ = LayFlatMinZ(node);
+
+        var linked = DataContext is ViewportViewModel vm
+            ? ResolveLinkedNodes(vm, node)
+            : new List<SceneNode>();
+
+        float minZ = LowestWorldZWithLinked(node, linked);
         if (minZ >= float.MaxValue) return;
         if (minZ >= _renderer.BedZ - BedContactTolerance) return;
-        DropNodeToBed(node, _renderer.BedZ);
+
+        var lift = TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
+        ApplyWorldTransformToNode(node, lift);
+        foreach (var follower in linked)
+            ApplyWorldTransformToNode(follower, lift);
+    }
+
+    /// <summary>
+    /// Lowest world Z of <paramref name="node"/>'s real geometry together with anything linked to it.
+    /// </summary>
+    /// <remarks>
+    /// A mesh and its toolpath move as one rigid pair, so the bed has to stop the pair however you
+    /// grab it. Measuring only the node under the cursor was not enough: a toolpath carries no mesh
+    /// geometry of its own — <see cref="LayFlatMinZ"/> finds nothing on it and returns the empty
+    /// sentinel — so dragging the toolpath sailed straight through the bed while dragging the mesh
+    /// stopped dead, which is the same operation as far as anyone using it is concerned.
+    /// </remarks>
+    private float LowestWorldZWithLinked(SceneNode node, IReadOnlyList<SceneNode>? linked = null)
+    {
+        float minZ = LayFlatMinZ(node);
+        linked ??= DataContext is ViewportViewModel vm
+            ? ResolveLinkedNodes(vm, node)
+            : new List<SceneNode>();
+        foreach (var follower in linked)
+            minZ = MathF.Min(minZ, LayFlatMinZ(follower));
+        return minZ;
     }
 
     /// <summary>
@@ -14288,7 +14339,7 @@ public partial class ViewportView : UserControl
         _gizmoDragInitialLocal     = node.LocalTransform;
         _gizmoDragInitialPlacement = node.Placement;
         _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
-        _bedClampStartMinZ         = BedClampApplies(node) ? LayFlatMinZ(node) : float.MaxValue;
+        _bedClampStartMinZ         = BedClampApplies(node) ? LowestWorldZWithLinked(node) : float.MaxValue;
         _bedClampGizmoWorld        = null;
         BeginTransformLink(node);
         BeginToolIkDrag(node);
