@@ -119,9 +119,10 @@ public partial class ViewportView : UserControl
     private Matrix4   _kbTransformInitialLocal;
     private Vector2   _kbObjScreenCenter;
 
-    // Transform undo (panel numeric edits debounced; gizmo commits immediately)
-    private SceneNode? _lastCommittedTransformNode;
-    private Matrix4    _lastCommittedTransform = Matrix4.Identity;
+    // Transform undo (panel numeric edits debounced; gizmo commits immediately).
+    // The primary node's own baseline is NOT kept here: every caller already knows the pose it is
+    // editing from and passes it in, which is what stops a refresh landing mid-edit from quietly
+    // erasing the undo entry. Only the followers still need a remembered baseline, below.
     // Baseline for linked nodes (a model's toolpath, or vice versa) carried along by
     // MirrorTypedTransformDelta/the drag-link — lets RecordTransformUndo bundle their
     // before/after into the same undo entry so Undo can never desync them from the primary.
@@ -802,7 +803,7 @@ public partial class ViewportView : UserControl
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
-            SchedulePanelTransformUndo(vm, node, "Move");
+            SchedulePanelTransformUndo(vm, node, "Move", old);
         };
         vm.OnSelectionRotated = (a, b, c) =>
         {
@@ -833,7 +834,7 @@ public partial class ViewportView : UserControl
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
-            SchedulePanelTransformUndo(vm, node, "Rotate");
+            SchedulePanelTransformUndo(vm, node, "Rotate", old);
         };
         // Console/bridge-driven transform edits get the same follow-up a typed field edit does, so a
         // headless test exercises the real path rather than a shortcut around it.
@@ -846,18 +847,22 @@ public partial class ViewportView : UserControl
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
-            SyncSelectionTransformDisplay(vm);
+            // remember: false — this refresh must not advance the undo baseline. Doing so left the
+            // debounced entry below with before == after, so it was dropped and the edit became
+            // un-undoable while looking perfectly applied.
+            SyncSelectionTransformDisplay(vm, remember: false);
             if (isScale)
             {
                 vm.RefreshScaleFields();
                 vm.OnModelGeometryChanged?.Invoke();
             }
-            SchedulePanelTransformUndo(vm, node, label);
+            SchedulePanelTransformUndo(vm, node, label, oldLocal);
         };
         vm.OnSelectionScaled = (sx, sy, sz) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
             if (node.Placement is not { } p) return;
+            var old = node.LocalTransform;
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
@@ -870,7 +875,7 @@ public partial class ViewportView : UserControl
             // specify. A resized part needs a genuinely new path, not a stretched one, so the slice
             // is re-run instead — debounced, so holding a field down does not queue a dozen of them.
             vm.OnModelGeometryChanged?.Invoke();
-            SchedulePanelTransformUndo(vm, node, "Scale");
+            SchedulePanelTransformUndo(vm, node, "Scale", old);
         };
 
         vm.GetToolWorldPose = ComputeToolWorldPose;
@@ -11198,8 +11203,6 @@ public partial class ViewportView : UserControl
 
     private void RememberCommittedTransform(ViewportViewModel vm, SceneNode node)
     {
-        _lastCommittedTransformNode = node;
-        _lastCommittedTransform     = node.LocalTransform;
         foreach (var f in ResolveLinkedNodes(vm, node))
             _lastCommittedFollowerTransform[f] = f.LocalTransform;
     }
@@ -11450,8 +11453,39 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private void SchedulePanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
+    /// <summary>The node a debounced panel edit is pending for, and the pose it started from.</summary>
+    private SceneNode? _panelUndoNode;
+    private Matrix4    _panelUndoBefore;
+
+    /// <summary>
+    /// Queues one undo entry for a burst of panel, field or console edits, from the pose the burst
+    /// started at.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The "before" is passed in by the caller, captured before it touched the node, and held for
+    /// the whole burst. It used to be read at commit time out of the <c>_lastCommittedTransform</c>
+    /// ledger instead, which had two failure modes and hit both. If anything refreshed that ledger
+    /// inside the 400ms window — and <see cref="SyncSelectionTransformDisplay"/> does exactly that
+    /// by default, as does a re-slice landing — then before and after came out equal and the entry
+    /// was <em>silently dropped</em>: the edit stayed, but Ctrl+Z skipped straight past it to an
+    /// older one, which reads as a much bigger reset than anything you just did. And if the ledger
+    /// happened to hold some much older pose, the entry reverted far too much.
+    /// </para>
+    /// <para>
+    /// Only the first edit of a burst sets the baseline; later ones coalesce into it, so holding a
+    /// field down still collapses to a single undo rather than one per keystroke.
+    /// </para>
+    /// </remarks>
+    private void SchedulePanelTransformUndo(
+        ViewportViewModel vm, SceneNode node, string description, Matrix4 before)
     {
+        if (_panelUndoNode != node)
+        {
+            _panelUndoNode   = node;
+            _panelUndoBefore = before;
+        }
+
         _panelTransformDebounce?.Cancel();
         _panelTransformDebounce = new CancellationTokenSource();
         var token = _panelTransformDebounce.Token;
@@ -11468,11 +11502,14 @@ public partial class ViewportView : UserControl
 
     private void CommitPanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
     {
-        if (_renderer.SelectedNode != node) return;
+        // Deliberately not gated on the node still being selected. Clicking away during the 400ms
+        // window is a normal thing to do and used to throw the entry away with no sign it had
+        // happened — the edit was still there, but no longer undoable.
+        if (_panelUndoNode != node) return;
 
-        var before = _lastCommittedTransformNode == node
-            ? _lastCommittedTransform
-            : node.LocalTransform;
+        var before = _panelUndoBefore;
+        _panelUndoNode = null;
+        _panelTransformDebounce = null;
         RecordTransformUndo(vm, node, before, node.LocalTransform, description);
     }
 
