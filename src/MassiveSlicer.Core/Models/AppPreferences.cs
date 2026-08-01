@@ -7,6 +7,36 @@ namespace MassiveSlicer.Core.Models;
 /// </summary>
 public sealed class AppPreferences
 {
+    // ── Keep on bed ───────────────────────────────────────────────────────
+    //
+    // A part already sitting on the bed stays on it through an edit, instead of being left hanging
+    // in the air or buried in the plate and needing a Drop to Plate afterwards.
+    //
+    // Deliberately "keep", not "always drop": these only hold down a part that was ALREADY resting
+    // on the bed when the edit began. A part you have deliberately parked in mid-air is left where
+    // you put it. That is the difference between a helpful default and one that keeps undoing your
+    // positioning.
+    //
+    // Separate from the hard floor, which is not optional: a translate drag is always stopped at
+    // the bed and anything pushed through it is always set back down, because printing through the
+    // plate is never what anyone meant. These toggles govern the softer question of whether a part
+    // should FOLLOW the bed down when an edit would otherwise lift it clear.
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a move.</summary>
+    /// <remarks>
+    /// Off by default, unlike the other two. Dragging a part upward IS the gesture for lifting one
+    /// off the plate, so keeping it planted through a move means a resting part cannot be raised at
+    /// all — it drops straight back the moment the drag commits. Useful if you never lift parts and
+    /// want them pinned; surprising otherwise.
+    /// </remarks>
+    public bool KeepOnBedWhenMoving { get; set; }
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a rotation.</summary>
+    public bool KeepOnBedWhenRotating { get; set; } = true;
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a resize.</summary>
+    public bool KeepOnBedWhenScaling { get; set; } = true;
+
     // ── Navigation ────────────────────────────────────────────────────────
 
     /// <summary>

@@ -92,6 +92,10 @@ public partial class ViewportView : UserControl
     // being held back. The mesh stops on the bed while the handle keeps following the pointer; on
     // release this clears and the handle snaps back onto the part.
     private Vector3? _bedClampGizmoWorld;
+
+    // Whether the part was already sitting on the bed when the drag began — the question the
+    // Keep on bed preferences answer, and one that can only be asked before anything moves.
+    private bool _bedWasRestingAtDragStart;
     /// <summary>Set when the viewport itself saw the left press. Click-to-select runs on release
     /// against the press position, so without this a press swallowed by overlay chrome would still
     /// produce a pick — at a stale position — on release.</summary>
@@ -781,6 +785,7 @@ public partial class ViewportView : UserControl
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old = node.LocalTransform;
+            bool wasResting = IsRestingOnBed(node);
             if (node.Placement is { } p)
             {
                 // The typed numbers are where the pivot goes, which is also where the gizmo is —
@@ -799,7 +804,7 @@ public partial class ViewportView : UserControl
             }
             // After the mirror, so the bed sees the finished pair rather than a half-moved one.
             MirrorTypedTransformDelta(vm, node, old);
-            EnsureAboveBed(node);
+            ApplyBedRules(node, wasResting, BedEdit.Move);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -809,6 +814,7 @@ public partial class ViewportView : UserControl
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old  = node.LocalTransform;
+            bool wasResting = IsRestingOnBed(node);
             if (node.Placement is { } p)
             {
                 // Absolute set, about the part's own X/Y/Z — the same axes as the coloured handles.
@@ -830,7 +836,7 @@ public partial class ViewportView : UserControl
             }
             // After the mirror, so the bed sees the finished pair rather than a half-moved one.
             MirrorTypedTransformDelta(vm, node, old);
-            EnsureAboveBed(node);
+            ApplyBedRules(node, wasResting, BedEdit.Rotate);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -841,9 +847,22 @@ public partial class ViewportView : UserControl
         vm.OnExternalNodeTransform = (node, oldLocal, label) =>
         {
             bool isScale = label.Equals("scale", StringComparison.OrdinalIgnoreCase);
+            // The console tags say which tool ran: "scale" and "step" are unambiguous, and
+            // everything else on this path is a move or a pivot edit.
+            var edit = isScale ? BedEdit.Scale
+                     : label.Equals("step", StringComparison.OrdinalIgnoreCase) ? BedEdit.Rotate
+                     : BedEdit.Move;
+
+            // This callback runs after the edit has landed, so "was it resting" has to be measured
+            // by putting the old matrix back for the length of one measurement. The followers have
+            // not been mirrored yet at this point, so the pair really is in its pre-edit pose.
+            var applied = node.LocalTransform;
+            node.LocalTransform = oldLocal;
+            bool wasRestingBefore = IsRestingOnBed(node);
+            node.LocalTransform = applied;
             // A scale deliberately does not mirror onto the toolpath — see OnSelectionScaled below.
             if (!isScale) MirrorTypedTransformDelta(vm, node, oldLocal);
-            EnsureAboveBed(node);
+            ApplyBedRules(node, wasRestingBefore, edit);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -863,10 +882,11 @@ public partial class ViewportView : UserControl
             if (_renderer.SelectedNode is not { } node) return;
             if (node.Placement is not { } p) return;
             var old = node.LocalTransform;
+            bool wasResting = IsRestingOnBed(node);
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
-            EnsureAboveBed(node);
+            ApplyBedRules(node, wasResting, BedEdit.Scale);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
@@ -3446,14 +3466,18 @@ public partial class ViewportView : UserControl
                     // the same "if it's going through the bed, it drops to bed after" rule a typed
                     // field gets. Ahead of the undo entry, so Ctrl+Z goes back to the pose the drag
                     // started from and never to a sunk one.
-                    if (op != GizmoMode.Translate)
+                    // Followers are already current — ApplyTransformLink ran on every move of the
+                    // drag — and SettleOnBed shifts the whole linked set itself, so there is
+                    // nothing left to re-mirror here. A translate drag was already held against the
+                    // bed as it happened, so it only needs the Keep on bed half.
+                    var bedEdit = op switch
                     {
-                        // Followers are already current — ApplyTransformLink ran on every move of
-                        // the drag — and EnsureAboveBed lifts the whole linked set itself, so there
-                        // is nothing left to re-mirror here.
-                        EnsureAboveBed(gzNode);
-                        vmGz.ConstrainModifierPlanesUnder(gzNode);
-                    }
+                        GizmoMode.Rotate => BedEdit.Rotate,
+                        GizmoMode.Scale  => BedEdit.Scale,
+                        _                => BedEdit.Move,
+                    };
+                    ApplyBedRules(gzNode, _bedWasRestingAtDragStart, bedEdit);
+                    if (op != GizmoMode.Translate) vmGz.ConstrainModifierPlanesUnder(gzNode);
 
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
                     tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialLocal, gzNode.LocalTransform);
@@ -6904,7 +6928,32 @@ public partial class ViewportView : UserControl
     /// translation on each keeps them together without a second mirroring pass to get wrong.
     /// </para>
     /// </remarks>
-    private void EnsureAboveBed(SceneNode node)
+    private void EnsureAboveBed(SceneNode node) => SettleOnBed(node, alsoLower: false);
+
+    /// <summary>How close to the bed still counts as "sitting on it" when deciding whether a part
+    /// should be kept there. Looser than <see cref="BedContactTolerance"/>: this is a judgement
+    /// about the user's intent, not a float comparison.</summary>
+    private const float BedRestingTolerance = 0.5f;
+
+    /// <summary>Whether the part (with anything linked to it) is currently resting on the bed.</summary>
+    private bool IsRestingOnBed(SceneNode node)
+    {
+        if (!BedClampApplies(node)) return false;
+        float minZ = LowestWorldZWithLinked(node);
+        return minZ < float.MaxValue && MathF.Abs(minZ - _renderer.BedZ) <= BedRestingTolerance;
+    }
+
+    /// <summary>
+    /// Puts the part back in contact with the bed. Always lifts one that has gone through it;
+    /// lowers one that has been left hanging only when <paramref name="alsoLower"/>.
+    /// </summary>
+    /// <remarks>
+    /// The two halves are deliberately not the same rule. Being below the plate is never what
+    /// anyone meant, so that is corrected unconditionally. Being above it often is — a part parked
+    /// in mid-air on purpose must stay there — so pulling one down happens only when it was already
+    /// resting on the bed before the edit and the matching Keep on bed preference is on.
+    /// </remarks>
+    private void SettleOnBed(SceneNode node, bool alsoLower)
     {
         if (!BedClampApplies(node)) return;
 
@@ -6914,13 +6963,39 @@ public partial class ViewportView : UserControl
 
         float minZ = LowestWorldZWithLinked(node, linked);
         if (minZ >= float.MaxValue) return;
-        if (minZ >= _renderer.BedZ - BedContactTolerance) return;
 
-        var lift = TkMatrix4.CreateTranslation(0f, 0f, _renderer.BedZ - minZ);
-        ApplyWorldTransformToNode(node, lift);
+        float delta = _renderer.BedZ - minZ;
+        bool sunk     = delta >  BedContactTolerance;
+        bool floating = delta < -BedContactTolerance;
+        if (!sunk && !(floating && alsoLower)) return;
+
+        var shift = TkMatrix4.CreateTranslation(0f, 0f, delta);
+        ApplyWorldTransformToNode(node, shift);
         foreach (var follower in linked)
-            ApplyWorldTransformToNode(follower, lift);
+            ApplyWorldTransformToNode(follower, shift);
     }
+
+    /// <summary>Which Keep on bed preference governs a given edit.</summary>
+    private enum BedEdit { Move, Rotate, Scale }
+
+    private bool KeepOnBedEnabled(BedEdit edit)
+    {
+        if (TopLevel.GetTopLevel(this)?.DataContext is not MainWindowViewModel mvm) return false;
+        var p = mvm.AppPreferences;
+        return edit switch
+        {
+            BedEdit.Move   => p.KeepOnBedWhenMoving,
+            BedEdit.Rotate => p.KeepOnBedWhenRotating,
+            _              => p.KeepOnBedWhenScaling,
+        };
+    }
+
+    /// <summary>
+    /// The full bed rule for one committed edit: hard floor always, plus keeping a part that was
+    /// already planted planted. <paramref name="wasResting"/> must be sampled BEFORE the edit.
+    /// </summary>
+    private void ApplyBedRules(SceneNode node, bool wasResting, BedEdit edit)
+        => SettleOnBed(node, alsoLower: wasResting && KeepOnBedEnabled(edit));
 
     /// <summary>
     /// Lowest world Z of <paramref name="node"/>'s real geometry together with anything linked to it.
@@ -11554,7 +11629,9 @@ public partial class ViewportView : UserControl
 
         // Parented to the part, so the box tracks it as it moves and turns with nothing having to
         // re-place it, and a marker's local position is directly the pivot value it will set.
-        var overlay = OriginPickOverlay.Build(box, out var points);
+        // The part's scale goes in so the snap markers stay cubes: everything in the overlay is
+        // parented to the part, so an unevenly scaled part would otherwise stretch them into slabs.
+        var overlay = OriginPickOverlay.Build(box, out var points, node.Placement?.Scale);
         node.AddChild(overlay);
 
         _originOverlay        = overlay;
@@ -14415,6 +14492,7 @@ public partial class ViewportView : UserControl
         _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
         _bedClampStartMinZ         = BedClampApplies(node) ? LowestWorldZWithLinked(node) : float.MaxValue;
         _bedClampGizmoWorld        = null;
+        _bedWasRestingAtDragStart  = IsRestingOnBed(node);
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
 

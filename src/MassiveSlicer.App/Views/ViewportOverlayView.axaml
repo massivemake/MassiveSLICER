@@ -709,8 +709,26 @@
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
-                            ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
+                            ToolTip.Tip="Recenter — put the handle at the centre of the part's footprint, at the height of its lowest point (the face that meets the bed). The part does not move.">
                         <ia:Icon Value="mdi-target-variant" FontSize="14"/>
+                    </Button>
+
+                    <!-- Placing the part on the plate. Moved here from the top-left focus overlay:
+                         these belong with the transform tools, not with the camera controls. -->
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"
+                            IsVisible="{Binding !IsToolpathSelected}"/>
+                    <Button Classes="ToolbarButton" Padding="12,4"
+                            Classes.active="{Binding IsLayFlatMode}"
+                            Command="{Binding LayFlatCommand}"
+                            IsVisible="{Binding !IsToolpathSelected}"
+                            ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
+                        <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
+                    </Button>
+                    <Button Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding DropToPlateCommand}"
+                            IsVisible="{Binding !IsToolpathSelected}"
+                            ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
+                        <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
                     </Button>
                 </StackPanel>
             </Border>
@@ -864,27 +882,8 @@
                 CornerRadius="5"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <!-- Transformation tools: place the object on the plate -->
-                <Button Classes="ToolbarButton"
-                        Classes.active="{Binding IsLayFlatMode}"
-                        Padding="6,4"
-                        Command="{Binding LayFlatCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
-                    <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding DropToPlateCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
-                    <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
-                </Button>
-
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
-
+                <!-- Lay on Face and Drop to Plate used to live here; they moved into the transform
+                     toolbar next to Recenter, which is where the rest of the placing tools are. -->
                 <!-- Other tools: camera + mesh structure -->
                 <Button Classes="ToolbarButton" Padding="6"
                         Command="{Binding FrameAllCommand}"

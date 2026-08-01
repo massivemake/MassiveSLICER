@@ -92,6 +92,29 @@
                               Padding="24,20,24,20">
                     <StackPanel>
 
+                        <!-- KEEP ON BED section -->
+                        <StackPanel x:Name="SectionKeepOnBed">
+                            <TextBlock Text="KEEP ON BED"
+                                       Classes="SectionHeader"
+                                       Margin="0,0,0,6"/>
+                            <TextBlock Text="A part already sitting on the plate stays on it through an edit, instead of being left hanging in the air. Parts you have deliberately parked above the plate are never pulled down. Going through the plate is always corrected, whatever these say."
+                                       TextWrapping="Wrap"
+                                       Classes="LabelMuted"
+                                       FontSize="11"
+                                       Margin="0,0,0,12"/>
+                            <CheckBox Content="When rotating"
+                                      IsChecked="{Binding KeepOnBedWhenRotating}"
+                                      Margin="0,0,0,10"/>
+                            <CheckBox Content="When scaling"
+                                      IsChecked="{Binding KeepOnBedWhenScaling}"
+                                      Margin="0,0,0,10"/>
+                            <CheckBox Content="When moving  —  off by default: dragging upward is how you lift a part off the plate, and this pulls it straight back"
+                                      IsChecked="{Binding KeepOnBedWhenMoving}"
+                                      Margin="0,0,0,10"/>
+
+                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,6,0,16"/>
+                        </StackPanel>
+
                         <!-- NAVIGATION section -->
                         <StackPanel x:Name="SectionNavigation">
                             <TextBlock Text="NAVIGATION SETTINGS"

@@ -31,9 +31,24 @@ public static class OriginPickOverlay
     /// the snap points in the same order as the marker children, so a screen-space pick maps
     /// straight back to a pivot position.
     /// </summary>
-    public static SceneNode Build((Vector3 Min, Vector3 Max) box, out Vector3[] snapPoints)
+    /// <param name="targetScale">
+    /// The part's own scale, so the markers can be kept cubic. Everything here is built in the
+    /// part's local space and parented to it, which means the part's scale multiplies it on the way
+    /// to the screen — fine for the box, which is meant to hug the part, but it turned the marker
+    /// cubes into stretched slabs on anything scaled unevenly, and made them balloon or shrink with
+    /// the part's overall size. Dividing the marker extents through by the scale first cancels that
+    /// back out. Omit for an unscaled part.
+    /// </param>
+    public static SceneNode Build(
+        (Vector3 Min, Vector3 Max) box, out Vector3[] snapPoints, Vector3? targetScale = null)
     {
         snapPoints = NodeBounds.SnapPoints(box).ToArray();
+
+        var s = targetScale ?? Vector3.One;
+        var absScale = new Vector3(
+            MathF.Max(MathF.Abs(s.X), 1e-6f),
+            MathF.Max(MathF.Abs(s.Y), 1e-6f),
+            MathF.Max(MathF.Abs(s.Z), 1e-6f));
 
         var root = new SceneNode
         {
@@ -57,15 +72,23 @@ public static class OriginPickOverlay
             TranslucentPass    = true,
         });
 
-        float diag = (box.Max - box.Min).Length;
-        float half = MathF.Max(diag * MarkerScale, 1e-3f) * 0.5f;
+        // Sized against the box as it actually appears on screen, not its unscaled local extent, so
+        // a part scaled to 300% gets markers that still read as small handles rather than crates.
+        var local = box.Max - box.Min;
+        float worldDiag = new Vector3(
+            local.X * absScale.X, local.Y * absScale.Y, local.Z * absScale.Z).Length;
+        float halfWorld = MathF.Max(worldDiag * MarkerScale, 1e-3f) * 0.5f;
+
+        // Pre-divided per axis: the part's scale multiplies these back up to a cube on screen.
+        var half = new Vector3(
+            halfWorld / absScale.X, halfWorld / absScale.Y, halfWorld / absScale.Z);
 
         foreach (var p in snapPoints)
         {
             root.AddChild(new SceneNode
             {
                 Name               = NodeName + "_pt",
-                PendingMesh        = BoxMesh(p - new Vector3(half), p + new Vector3(half), MarkerColor),
+                PendingMesh        = BoxMesh(p - half, p + half, MarkerColor),
                 IsAuthoringOverlay = true,
                 PickIgnore         = true,
                 Selectable         = false,
