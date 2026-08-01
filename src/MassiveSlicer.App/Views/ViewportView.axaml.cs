@@ -3416,6 +3416,23 @@ public partial class ViewportView : UserControl
                     && DataContext is ViewportViewModel vmGz)
                 {
                     var op = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+
+                    // Everything except a translate drag gets the bed rule applied on release
+                    // rather than live. A translate drag is already held against the bed as it
+                    // happens; a rotate or scale is not, because correcting height mid-gesture
+                    // reads as the part squirming away from the cursor, and dipping below part-way
+                    // through a tumble is normal rather than a mistake. Once the gesture is over
+                    // there is nothing left to push against, so the part is simply set back down —
+                    // the same "if it's going through the bed, it drops to bed after" rule a typed
+                    // field gets. Ahead of the undo entry, so Ctrl+Z goes back to the pose the drag
+                    // started from and never to a sunk one.
+                    if (op != GizmoMode.Translate)
+                    {
+                        EnsureAboveBed(gzNode);
+                        ApplyTransformLink(gzNode);
+                        vmGz.ConstrainModifierPlanesUnder(gzNode);
+                    }
+
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
                     tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialLocal, gzNode.LocalTransform);
                 }

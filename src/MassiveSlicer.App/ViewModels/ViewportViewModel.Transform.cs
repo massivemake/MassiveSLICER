@@ -326,8 +326,6 @@ public sealed partial class ViewportViewModel
         // dragging hard back and forth.
         if (_modifierGizmoNodes.Count == 0) return;
 
-        var bedCenter = ResolveBedCenterXYZ();
-
         foreach (var (cut, node) in _modifierGizmoNodes)
         {
             if (!IsDescendantOf(node, meshNode)) continue;
@@ -349,17 +347,17 @@ public sealed partial class ViewportViewModel
                 levelled = Matrix4.CreateRotationZ(MathF.Atan2(n.Y, n.X));
             }
 
-            // X and Y ride the part, so a cut still travels with the model.
+            // Position rides the part whole — X, Y and Z. The plane is a child of the mesh and is
+            // expected to behave like one: move the model up and its cuts go up with it.
             //
-            // Z does not, for a Horizontal plane. Its height IS the cut — that is what the Offset
-            // field means — so letting the part's rotation swing it up and down made the cut happen
-            // at a different layer than the panel reported. Not cosmetic: that is a wrong part.
-            // Held at exactly what the fields specify, so panel and geometry always agree.
-            var pos = w.Row3.Xyz;
-            if (cut.Orientation == CutOrientation.Horizontal)
-                pos.Z = bedCenter.Z + cut.Offset;
-
-            levelled.Row3 = new Vector4(pos, 1f);
+            // An earlier pass pinned a Horizontal plane's Z to bedCenter.Z + Offset here, to stop a
+            // rotation swinging the cut height away from what the panel reported. That fixed the
+            // wrong half of the problem: it froze the plane against translation too, so moving the
+            // model up and down slid it through a stationary cut. The reported-height mismatch was
+            // never really about Z riding the parent — it was the node and the fields being two
+            // sources of truth, which the write-back at the end of this loop is what actually cures.
+            // With that in place the plane can ride its parent freely and Offset stays honest.
+            levelled.Row3 = new Vector4(w.Row3.Xyz, 1f);
 
             var parent = node.Parent?.WorldTransform ?? Matrix4.Identity;
             node.LocalTransform = MathF.Abs(parent.Determinant) > 1e-12f
