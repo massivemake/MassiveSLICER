@@ -1732,6 +1732,15 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "bed",
+            Aliases = ["bed-clamp"],
+            Description = "Bed height vs the selected part's lowest point — is it resting, floating or through",
+            Usage = "bed",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BedCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "step",
             Aliases = ["step-rotate"],
             Description = "Snap to the next 90° stop about a world axis (what clicking an axis letter does)",

@@ -79,6 +79,19 @@ public partial class ViewportView : UserControl
     private Vector3  _gizmoDragPlaneNormal;
     private Vector3  _gizmoDragPlanePoint;
     private Vector3  _gizmoDragStartHit;
+
+    // Bed clamp: the bed is solid, so a translate drag cannot push a part through it.
+    //
+    // Measured once at drag start rather than per mouse-move. A translate drag is rigid, so the
+    // part's lowest point moves exactly with the drag's world Z — re-walking every vertex each
+    // frame would buy nothing and put a whole-mesh scan on the mouse-poll path.
+    // float.MaxValue means "no clamp": no real geometry, or a node the bed does not apply to.
+    private float    _bedClampStartMinZ = float.MaxValue;
+
+    // Where the handle would be if the bed were not holding the part back, or null when nothing is
+    // being held back. The mesh stops on the bed while the handle keeps following the pointer; on
+    // release this clears and the handle snaps back onto the part.
+    private Vector3? _bedClampGizmoWorld;
     /// <summary>Set when the viewport itself saw the left press. Click-to-select runs on release
     /// against the press position, so without this a press swallowed by overlay chrome would still
     /// produce a pick — at a stale position — on release.</summary>
@@ -477,6 +490,21 @@ public partial class ViewportView : UserControl
                     posBefore.X, posBefore.Y, posBefore.Z,
                     posAfter.X, posAfter.Y, posAfter.Z);
             };
+            vm.OnBedClearanceDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[bed] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                float lowest = LayFlatMinZ(n);
+                if (lowest >= float.MaxValue) return "[bed] selection has no real geometry to measure.";
+
+                float gap = lowest - _renderer.BedZ;
+                string state = MathF.Abs(gap) <= BedContactTolerance ? "resting"
+                             : gap > 0f ? "floating"
+                             : "THROUGH";
+                return string.Format(inv,
+                    "[bed] bedZ={0:F2} lowest={1:F2} gap={2:F3} state={3} clampApplies={4}",
+                    _renderer.BedZ, lowest, gap, state, BedClampApplies(n));
+            };
             vm.OnRecenterRequested    = RecenterSelected;
             vm.OnUngroupRequested     = UngroupSelected;
             vm.OnExplodeRequested     = ExplodeSelected;
@@ -766,6 +794,7 @@ public partial class ViewportView : UserControl
                 lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
                 node.LocalTransform = lt;
             }
+            EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
@@ -795,6 +824,7 @@ public partial class ViewportView : UserControl
                 lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
                 node.LocalTransform = lt;
             }
+            EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
@@ -805,6 +835,7 @@ public partial class ViewportView : UserControl
         // headless test exercises the real path rather than a shortcut around it.
         vm.OnExternalNodeTransform = (node, oldLocal, label) =>
         {
+            EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, oldLocal);
             GlCanvas.RequestNextFrameRendering();
@@ -820,6 +851,7 @@ public partial class ViewportView : UserControl
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
+            EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             MirrorTypedTransformDelta(vm, node, old);
             GlCanvas.RequestNextFrameRendering();
@@ -1798,6 +1830,13 @@ public partial class ViewportView : UserControl
         {
             _renderer.GizmoPivotWorld = new Vector3(
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
+        }
+        else if (_bedClampGizmoWorld is { } heldBackByBed)
+        {
+            // The part has stopped on the bed but the pointer has carried on. Draw the handle where
+            // the hand actually is, so the drag reads as pushing against a surface rather than as
+            // the tool having gone dead. Cleared on release, which snaps the handle back onto the part.
+            _renderer.GizmoPivotWorld = heldBackByBed;
         }
         else
         {
@@ -3383,6 +3422,7 @@ public partial class ViewportView : UserControl
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                ClearBedClamp();
                 EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
@@ -5823,13 +5863,30 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Puts the pivot on the part's bottom centre.
+    /// Puts the pivot at the centre of the part's world footprint, at the height of its lowest
+    /// point — the spot that will touch the bed.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Just a pivot move, exactly like a Move Origin snap — the bottom-centre point of the same
-    /// bounding box the chooser already offers. Nothing is baked, no vertices are touched, no GPU
-    /// upload happens: it changes four numbers and is instant.
+    /// Measured in <em>world</em> space, not the part's own. The part's own bottom stops meaning
+    /// anything once it has been tumbled: rotate something upside down and its local bottom is now
+    /// its top, so the pivot landed on the face pointing at the ceiling. What is actually wanted is
+    /// the face that meets the bed, and that is only knowable from how the part is currently sitting.
+    /// </para>
+    /// <para>
+    /// The consequence is that this is <em>pose-dependent</em> — unlike a Move Origin snap, which
+    /// picks a fixed spot on the mesh and stays there, this reads the current orientation. Rotate
+    /// the part afterwards and the pivot no longer sits at the new lowest point until Recenter is
+    /// pressed again. That is inherent to asking for "wherever the bottom is now".
+    /// </para>
+    /// <para>
+    /// X and Y stay centred on the footprint rather than following the single lowest vertex. On a
+    /// tilted part that vertex is off at one corner, which would put the handle right back where
+    /// this whole overhaul found it — metres away from the middle of the thing being dragged.
+    /// </para>
+    /// <para>
+    /// Just a pivot move, exactly like a Move Origin snap. Nothing is baked, no vertices are
+    /// touched, no GPU upload happens: it changes four numbers and is instant.
     /// </para>
     /// <para>
     /// It used to rewrite every vertex so the model's own zero became its bottom centre, then
@@ -5849,11 +5906,21 @@ public partial class ViewportView : UserControl
         if (node != selected)
             _renderer.Select(node);
 
-        if (NodeBounds.LocalAabb(node) is not { } box) return;
-        var bottomCentre = new Vector3(
-            (box.Min.X + box.Max.X) * 0.5f,
-            (box.Min.Y + box.Max.Y) * 0.5f,
-            box.Min.Z);
+        var (wMin, wMax) = ImportHelper.ComputeSubtreeWorldAabb(node);
+        if (wMin.X > wMax.X) return;   // the empty-box sentinel: nothing real to measure
+
+        var worldBottomCentre = new Vector3(
+            (wMin.X + wMax.X) * 0.5f,
+            (wMin.Y + wMax.Y) * 0.5f,
+            wMin.Z);
+
+        // Origin is expressed in the node's own space — the frame NodeBounds measures in — so the
+        // world point chosen above has to come back down through the node's own world transform.
+        var nodeWorld = node.WorldTransform;
+        var invNodeWorld = Matrix4.Identity;
+        if (MathF.Abs(nodeWorld.Determinant) > 1e-12f)
+            Matrix4.Invert(nodeWorld, out invNodeWorld);
+        var bottomCentre = Vector3.TransformPosition(worldBottomCentre, invNodeWorld);
 
         var before = NodePose.Of(node);
         var t = node.EnsurePlacement(bottomCentre);
@@ -6743,6 +6810,58 @@ public partial class ViewportView : UserControl
         node.LocalTransform = node.LocalTransform * parent * world * parent.Inverted();
     }
 
+    /// <summary>How far below the bed still counts as resting on it, in mm.</summary>
+    private const float BedContactTolerance = 1e-3f;
+
+    /// <summary>
+    /// Puts <paramref name="node"/> back on the bed if the edit that just ran pushed it through.
+    /// </summary>
+    /// <remarks>
+    /// The after-the-fact counterpart to the live clamp a translate drag gets. A drag can be held
+    /// against the bed as it happens because the pointer is still moving and the part can lag behind
+    /// the handle; a typed field or an A/B/C step arrives already finished, with no gesture left to
+    /// push against, so the part is simply set back down.
+    /// <para>
+    /// Rotation drags are deliberately left out entirely. Correcting height mid-spin moves the part
+    /// under the cursor while it is being turned, which reads as the model squirming away — and a
+    /// tumble that dips below the bed part-way through is normal, not a mistake to undo.
+    /// </para>
+    /// </remarks>
+    private void EnsureAboveBed(SceneNode node)
+    {
+        if (!BedClampApplies(node)) return;
+        float minZ = LayFlatMinZ(node);
+        if (minZ >= float.MaxValue) return;
+        if (minZ >= _renderer.BedZ - BedContactTolerance) return;
+        DropNodeToBed(node, _renderer.BedZ);
+    }
+
+    /// <summary>
+    /// Ends any bed clamp, which is what snaps the handle back onto the part on release.
+    /// </summary>
+    private void ClearBedClamp()
+    {
+        _bedClampStartMinZ  = float.MaxValue;
+        _bedClampGizmoWorld = null;
+    }
+
+    /// <summary>
+    /// Whether the bed should stop <paramref name="node"/> from being dragged below it.
+    /// </summary>
+    /// <remarks>
+    /// Parts only. The robot's own tool has to be able to reach below the bed to print, and a cut
+    /// modifier's plane is an authoring overlay whose whole job is passing through the part, so
+    /// neither can be treated as something that rests on a surface. A node with no real geometry
+    /// (a toolpath on its own) measures as <see cref="float.MaxValue"/> further down and clamps to
+    /// nothing anyway.
+    /// </remarks>
+    private bool BedClampApplies(SceneNode node)
+    {
+        if (IsToolNodeSelected()) return false;
+        if (DataContext is ViewportViewModel vm && vm.IsModifierNode(node)) return false;
+        return true;
+    }
+
     /// <summary>Drops <paramref name="node"/> straight down (world −Z) until its lowest
     /// point rests on <paramref name="bedZ"/>. No-op when the node has no geometry.</summary>
     internal static void DropNodeToBed(SceneNode node, float bedZ)
@@ -7247,6 +7366,7 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        ClearBedClamp();
         if (DataContext is ViewportViewModel vmCb2) SyncSelectionTransformDisplay(vmCb2);
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
@@ -10807,6 +10927,7 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        ClearBedClamp();
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -14150,6 +14271,8 @@ public partial class ViewportView : UserControl
         _gizmoDragInitialLocal     = node.LocalTransform;
         _gizmoDragInitialPlacement = node.Placement;
         _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
+        _bedClampStartMinZ         = BedClampApplies(node) ? LayFlatMinZ(node) : float.MaxValue;
+        _bedClampGizmoWorld        = null;
         BeginTransformLink(node);
         BeginToolIkDrag(node);
 
@@ -14462,6 +14585,26 @@ public partial class ViewportView : UserControl
         var worldDelta = _gizmoDragAxis.IsPlane()
             ? travel
             : _gizmoDragAxisDir * Vector3.Dot(travel, _gizmoDragAxisDir);
+
+        // The bed is solid. Pull a part down through it and the part stops resting exactly on the
+        // bed — the same place Drop to Plate would leave it — while the handle carries on tracking
+        // the pointer, so the drag still feels connected to the hand instead of going dead.
+        //
+        // Clamped in world space before the parent's frame is divided out, so a part living under a
+        // rotated parent (a rotary table) still stops against a real horizontal bed rather than
+        // against its parent's tilted idea of down.
+        var unclampedDelta = worldDelta;
+        bool heldBackByBed = false;
+        if (_bedClampStartMinZ < float.MaxValue)
+        {
+            float restingDelta = _renderer.BedZ - _bedClampStartMinZ;
+            if (worldDelta.Z < restingDelta)
+            {
+                worldDelta.Z = restingDelta;
+                heldBackByBed = true;
+            }
+        }
+        _bedClampGizmoWorld = heldBackByBed ? _gizmoDragPlanePoint + unclampedDelta : null;
 
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);

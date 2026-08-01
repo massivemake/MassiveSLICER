@@ -460,46 +460,9 @@ public sealed partial class ViewportViewModel
     public string StepRotation(int axisIndex, bool reverse)
         => WithPlacement("step", t =>
         {
-            var e = t.EulerDegrees;
-            var snapped = new Vector3(NearestStop(e.X), NearestStop(e.Y), NearestStop(e.Z));
-
-            float current = axisIndex switch { 0 => e.X, 1 => e.Y, _ => e.Z };
-            float stepped = Wrap360(NextStop(current, reverse));
-
-            t.EulerDegrees = axisIndex switch
-            {
-                0 => new Vector3(stepped, Wrap360(snapped.Y), Wrap360(snapped.Z)),
-                1 => new Vector3(Wrap360(snapped.X), stepped, Wrap360(snapped.Z)),
-                _ => new Vector3(Wrap360(snapped.X), Wrap360(snapped.Y), stepped),
-            };
-
+            t.SnapToAxisStop(axisIndex, reverse);
             return (t, $"snapped to {V(t.EulerDegrees)}° about world {"XYZ"[axisIndex]}.");
         });
-
-    private const float StopTolerance = 0.5f;
-
-    /// <summary>Nearest multiple of 90°.</summary>
-    private static float NearestStop(float deg) => MathF.Round(deg / 90f) * 90f;
-
-    /// <summary>
-    /// The next 90° stop in the chosen direction. Already sitting on one, it moves a full quarter
-    /// turn; off-grid, it lands on the next stop that way rather than adding to the odd angle.
-    /// </summary>
-    private static float NextStop(float deg, bool reverse)
-    {
-        bool onStop = MathF.Abs(deg - NearestStop(deg)) < StopTolerance;
-        if (onStop) return NearestStop(deg) + (reverse ? -90f : 90f);
-        return reverse ? MathF.Floor(deg / 90f) * 90f : MathF.Ceiling(deg / 90f) * 90f;
-    }
-
-    /// <summary>Keeps reported angles in a tidy 0-359 rather than drifting to 450 or -270.</summary>
-    private static float Wrap360(float deg)
-    {
-        deg %= 360f;
-        if (deg < 0f) deg += 360f;
-        // 360 and -0 both read as 0.
-        return MathF.Abs(deg - 360f) < 1e-3f ? 0f : deg + 0f;
-    }
 
     /// <summary>
     /// Invoked by the <c>drop</c> command; reports the part's lowest point before and after so a
@@ -510,6 +473,16 @@ public sealed partial class ViewportViewModel
     /// <summary>Backs the <c>drop</c> command.</summary>
     public string DropCommand()
         => OnDropToPlateDiagnostic?.Invoke() ?? "[drop] viewport not ready.";
+
+    /// <summary>
+    /// Invoked by the <c>bed</c> command; reports the bed height against the selection's lowest
+    /// point so "it went through the floor" can be measured rather than eyeballed.
+    /// </summary>
+    internal Func<string>? OnBedClearanceDiagnostic { get; set; }
+
+    /// <summary>Backs the <c>bed</c> command.</summary>
+    public string BedCommand()
+        => OnBedClearanceDiagnostic?.Invoke() ?? "[bed] viewport not ready.";
 
     /// <summary>Invoked by the <c>recenter</c> command; reports world bounds before and after.</summary>
     internal Func<string>? OnRecenterDiagnostic { get; set; }

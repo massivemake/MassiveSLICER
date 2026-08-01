@@ -237,6 +237,140 @@ public struct NodeTransform
     private void Compose(Matrix4 rowRotation)
         => Rotation = QuatFromRowBasis(new Matrix3(rowRotation));
 
+    /// <summary>Half a degree, in radians — how close to a stop still counts as being on it.</summary>
+    private const float StopToleranceRadians = 0.008726646f;
+
+    /// <summary>
+    /// Squares the part up onto a clean quarter-turn stop about axis <paramref name="axisIndex"/> in
+    /// the parent's frame. Off-angle, it straightens to the next stop the requested way (37° forward
+    /// lands on 90°, not 127°); already on a stop, it advances a full quarter turn.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately computed on the rotation itself rather than on <see cref="EulerDegrees"/>. Doing
+    /// it through the three numbers worked for X and Z but left Y toggling between two stops forever:
+    /// Y is the <em>middle</em> axis of an X-Y-Z decomposition and so only spans −90…+90, meaning a
+    /// part turned to Y=180 comes back out spelled as (180, 0, 180). The code then read Y as 0,
+    /// stepped it to 90, and never got any further. There is no bug in the decomposition — three
+    /// ordered angles genuinely cannot give every orientation its own unique spelling — so the fix is
+    /// to stop asking them and work where no axis is privileged.
+    /// </para>
+    /// <para>
+    /// All three axes end up square, not just the one clicked. The point of the button is getting a
+    /// flat face back down onto the bed, and squaring one axis while the other two sit off-grid would
+    /// not achieve that. Any composition of quarter turns about the coordinate axes maps axes onto
+    /// axes, so the result always presents a face to the bed.
+    /// </para>
+    /// </remarks>
+    public void SnapToAxisStop(int axisIndex, bool reverse)
+    {
+        var current = new Matrix3(Matrix4.CreateFromQuaternion(Rotation));
+        var snapped = NearestAxisAligned(current);
+
+        // Which way, and how far, squaring up moved the axis being clicked.
+        float off = SignedAngleAbout(current, snapped, axisIndex);
+        float dir = reverse ? -1f : 1f;
+
+        // Already square about this axis, or squaring up went the opposite way to the click: either
+        // way the click has not yet moved the part the way it was asked to, so take a whole quarter.
+        // Otherwise squaring up IS the requested move and landing on it is the answer.
+        bool advance = MathF.Abs(off) < StopToleranceRadians || MathF.Sign(off) != MathF.Sign(dir);
+
+        var result = snapped;
+        if (advance)
+        {
+            float quarter = dir * MathF.PI * 0.5f;
+            var delta = axisIndex switch
+            {
+                0 => Matrix3.CreateRotationX(quarter),
+                1 => Matrix3.CreateRotationY(quarter),
+                _ => Matrix3.CreateRotationZ(quarter),
+            };
+            // Delta on the right = applied last = in the parent's frame, matching RotateInParent.
+            result = snapped * delta;
+        }
+
+        Rotation = QuatFromRowBasis(result);
+    }
+
+    /// <summary>
+    /// The 24 orientations that put every one of the object's axes along a parent axis — the corner
+    /// turns of a cube. Every result of <see cref="SnapToAxisStop"/> is one of these.
+    /// </summary>
+    private static readonly Matrix3[] AxisAlignedOrientations = BuildAxisAlignedOrientations();
+
+    private static Matrix3[] BuildAxisAlignedOrientations()
+    {
+        Vector3[] dirs =
+        [
+            Vector3.UnitX, -Vector3.UnitX,
+            Vector3.UnitY, -Vector3.UnitY,
+            Vector3.UnitZ, -Vector3.UnitZ,
+        ];
+
+        var all = new List<Matrix3>(24);
+        foreach (var row0 in dirs)
+        foreach (var row1 in dirs)
+        {
+            // Any second row parallel to the first cannot form a basis; the other four can.
+            if (MathF.Abs(Vector3.Dot(row0, row1)) > 0.5f) continue;
+            // Cross product for the third row keeps every one of them right-handed, so none of
+            // these is a mirror the quaternion could not represent.
+            all.Add(new Matrix3(row0, row1, Vector3.Cross(row0, row1)));
+        }
+        return all.ToArray();
+    }
+
+    /// <summary>The axis-aligned orientation closest to <paramref name="m"/>.</summary>
+    /// <remarks>
+    /// Ranked by the Frobenius inner product, which for two rotations is <c>1 + 2cos θ</c> of the
+    /// angle between them — so the largest value is the smallest turn. Cheaper and steadier than
+    /// converting each candidate to an angle, and there are only 24 to try.
+    /// </remarks>
+    private static Matrix3 NearestAxisAligned(Matrix3 m)
+    {
+        var best = AxisAlignedOrientations[0];
+        float bestScore = float.MinValue;
+
+        foreach (var candidate in AxisAlignedOrientations)
+        {
+            float score = m.M11 * candidate.M11 + m.M12 * candidate.M12 + m.M13 * candidate.M13
+                        + m.M21 * candidate.M21 + m.M22 * candidate.M22 + m.M23 * candidate.M23
+                        + m.M31 * candidate.M31 + m.M32 * candidate.M32 + m.M33 * candidate.M33;
+            if (score <= bestScore) continue;
+            bestScore = score;
+            best = candidate;
+        }
+
+        return best;
+    }
+
+    /// <summary>
+    /// The signed angle, about parent axis <paramref name="axisIndex"/>, of the turn that carries
+    /// <paramref name="from"/> onto <paramref name="to"/>.
+    /// </summary>
+    /// <remarks>
+    /// Row-vector composition applies a parent-frame delta on the right, so the turn wanted here is
+    /// <c>transpose(from) * to</c>. Its axis comes from the skew-symmetric part, whose length is
+    /// <c>2 sin θ</c> — well-conditioned for the small corrections this is used on (never more than
+    /// a cube corner away), and short-circuited at zero where the axis is undefined.
+    /// </remarks>
+    private static float SignedAngleAbout(Matrix3 from, Matrix3 to, int axisIndex)
+    {
+        var d = Matrix3.Transpose(from) * to;
+
+        float cos = Math.Clamp((d.M11 + d.M22 + d.M33 - 1f) * 0.5f, -1f, 1f);
+        float angle = MathF.Acos(cos);
+        if (angle < 1e-5f) return 0f;
+
+        var axis = new Vector3(d.M23 - d.M32, d.M31 - d.M13, d.M12 - d.M21);
+        if (axis.LengthSquared < 1e-12f) return 0f;
+        axis = Vector3.Normalize(axis);
+
+        float component = axisIndex switch { 0 => axis.X, 1 => axis.Y, _ => axis.Z };
+        return angle * component;
+    }
+
     // -- Euler view (the number fields) ----------------------------------------
 
     /// <summary>

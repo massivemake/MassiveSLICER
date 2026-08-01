@@ -273,4 +273,138 @@ public class NodeTransformTest
         Assert.Equal(2f, t.Scale.Y, 4);
         Assert.Equal(1f, t.Scale.Z, 4);
     }
+
+    // -- The A/B/C step buttons ------------------------------------------------
+    //
+    // Asserted on what the rotation DOES to the part's axes, never on EulerDegrees. The middle axis
+    // of an Euler triple re-spells itself past 90 degrees, and reading the answer back through the
+    // very representation that caused the bug would let it pass while still being broken.
+
+    /// <summary>Where the part's own X/Y/Z end up pointing — a spelling-free identity for an orientation.</summary>
+    private static (Vector3 X, Vector3 Y, Vector3 Z) Axes(NodeTransform t)
+        => (t.LocalAxis(0), t.LocalAxis(1), t.LocalAxis(2));
+
+    private static void AssertAxes((Vector3 X, Vector3 Y, Vector3 Z) expected, NodeTransform actual)
+    {
+        var got = Axes(actual);
+        AssertClose(expected.X, got.X, 1e-3f);
+        AssertClose(expected.Y, got.Y, 1e-3f);
+        AssertClose(expected.Z, got.Z, 1e-3f);
+    }
+
+    private static NodeTransform Turned(int axisIndex, float degrees)
+    {
+        var t = NodeTransform.Identity;
+        t.RotateInParent(
+            axisIndex switch { 0 => Vector3.UnitX, 1 => Vector3.UnitY, _ => Vector3.UnitZ },
+            MathHelper.DegreesToRadians(degrees));
+        return t;
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void Stepping_an_axis_four_times_returns_to_the_start(int axisIndex)
+    {
+        // The B-axis bug: clicking B went 90, 180, 90, 180 forever, because Y is the middle axis of
+        // the X-Y-Z decomposition and only spans -90..+90, so a part at Y=180 read back as Y=0.
+        // A full turn must take exactly four clicks on every axis, with no orientation repeated.
+        var start = Axes(NodeTransform.Identity);
+        var t = NodeTransform.Identity;
+
+        var seen = new List<(Vector3, Vector3, Vector3)>();
+        for (int click = 0; click < 3; click++)
+        {
+            t.SnapToAxisStop(axisIndex, reverse: false);
+            seen.Add(Axes(t));
+        }
+
+        foreach (var (quarter, i) in seen.Select((s, i) => (s, i)))
+            Assert.True((quarter.Item1 - start.X).Length > 1e-3f
+                     || (quarter.Item2 - start.Y).Length > 1e-3f
+                     || (quarter.Item3 - start.Z).Length > 1e-3f,
+                $"click {i + 1} of 4 came back to the starting orientation — the axis is toggling, not turning");
+
+        t.SnapToAxisStop(axisIndex, reverse: false);
+        AssertAxes(start, t);
+    }
+
+    [Fact]
+    public void Stepping_B_reaches_the_half_turn_the_euler_view_cannot_spell()
+    {
+        // Two clicks on B is a 180 about Y: the part's own X now points along -X, Z along -Z.
+        var t = NodeTransform.Identity;
+        t.SnapToAxisStop(1, reverse: false);
+        t.SnapToAxisStop(1, reverse: false);
+
+        AssertAxes((-Vector3.UnitX, Vector3.UnitY, -Vector3.UnitZ), t);
+    }
+
+    [Fact]
+    public void An_off_angle_part_straightens_onto_the_next_stop_rather_than_adding_to_it()
+    {
+        // Jeff's locked spec: 37 degrees forward lands on 90, not 127. It is a straighten-up
+        // button, not a nudge.
+        var t = Turned(0, 37f);
+        t.SnapToAxisStop(0, reverse: false);
+
+        AssertAxes(Axes(Turned(0, 90f)), t);
+    }
+
+    [Fact]
+    public void An_off_angle_part_stepped_backwards_straightens_down_to_the_stop_below()
+    {
+        var t = Turned(0, 37f);
+        t.SnapToAxisStop(0, reverse: true);
+
+        AssertAxes(Axes(NodeTransform.Identity), t);
+    }
+
+    [Fact]
+    public void Stepping_past_the_nearest_stop_still_moves_the_way_it_was_asked()
+    {
+        // 53 degrees is nearest to 90, so forward lands there; backward has to skip past the
+        // nearest stop and come down to 0, or the click would appear to do nothing in reverse.
+        var forward = Turned(0, 53f);
+        forward.SnapToAxisStop(0, reverse: false);
+        AssertAxes(Axes(Turned(0, 90f)), forward);
+
+        var backward = Turned(0, 53f);
+        backward.SnapToAxisStop(0, reverse: true);
+        AssertAxes(Axes(NodeTransform.Identity), backward);
+    }
+
+    [Fact]
+    public void Stepping_squares_up_every_axis_so_a_face_meets_the_bed()
+    {
+        // Tumbled on all three axes at once. Whichever axis is clicked, the result must be fully
+        // axis-aligned — snapping one axis alone would leave no flat face down.
+        var t = NodeTransform.Identity;
+        t.RotateInParent(Vector3.UnitX, MathHelper.DegreesToRadians(21f));
+        t.RotateInParent(Vector3.UnitY, MathHelper.DegreesToRadians(-14f));
+        t.RotateInParent(Vector3.UnitZ, MathHelper.DegreesToRadians(63f));
+
+        t.SnapToAxisStop(1, reverse: false);
+
+        foreach (var axis in new[] { t.LocalAxis(0), t.LocalAxis(1), t.LocalAxis(2) })
+        {
+            // Every axis lies along a world axis: one component is +/-1 and the rest are zero.
+            float biggest = MathF.Max(MathF.Abs(axis.X), MathF.Max(MathF.Abs(axis.Y), MathF.Abs(axis.Z)));
+            Assert.True(MathF.Abs(biggest - 1f) < 1e-3f,
+                $"axis {axis} is not square to the world after a step");
+        }
+    }
+
+    [Fact]
+    public void Stepping_forwards_then_backwards_returns_to_where_it_started()
+    {
+        var t = Turned(1, 90f);
+        var before = Axes(t);
+
+        t.SnapToAxisStop(1, reverse: false);
+        t.SnapToAxisStop(1, reverse: true);
+
+        AssertAxes(before, t);
+    }
 }
