@@ -258,208 +258,21 @@ internal static class ImportHelper
         return nativeRoot;
     }
 
-    /// <summary>
-    /// Moves the node origin to the bottom-center of its mesh bounds while keeping world geometry fixed.
-    /// Bakes per-mesh vertex offsets and compensates via the root transform; callers must re-upload GPU meshes.
-    /// </summary>
-    /// <remarks>
-    /// Distinct from <see cref="CenterOrigin"/> and from a Move Origin snap, both of which move only the
-    /// pivot and leave the model untouched. This rewrites every vertex so the model's own zero point
-    /// genuinely becomes its bottom-center — which is why it needs a GPU re-upload and why undoing it
-    /// has to restore whole vertex arrays.
-    /// </remarks>
-    internal static bool RecenterPivotToBottomCenter(SceneNode root)
-    {
-        if (!TryComputeBottomCenterLocal(root, out var bottomCenter))
-            return false;
-
-        if (!IsFinite(bottomCenter))
-            return false;
-
-        int expected = CountEditableMeshes(root);
-        if (expected == 0)
-            return false;
-
-        // -1 means it worked nothing out and wrote nothing; a count mismatch would mean it wrote
-        // some and not others, which must not be possible now that the plan is built up front.
-        int moved = OffsetSubtreeMeshPositionsInRootLocal(root, -bottomCenter);
-        if (moved != expected)
-            return false;
-
-        // Pre-multiply, not post-multiply. Row-vector convention means p_parent = p_local · L, so
-        // for baked vertices p' = p − bc the shift has to be undone in the model's own frame,
-        // BEFORE L: (p − bc) · T(bc) · L = p · L exactly, for any rotation or scale.
-        //
-        // Post-multiplying (the old code) applies the shift after the part's own rotation and scale,
-        // leaving a residual of bc − bc·M where M is L's linear part. That is zero only while M is
-        // identity — so the part stayed put on a fresh import and visibly jumped once it had been
-        // rotated or scaled, which is what Jeff reported. Same failure as the Drop-to-Plate frame bug.
-        root.LocalTransform = Matrix4.CreateTranslation(bottomCenter) * root.LocalTransform;
-
-        // The bake shifted the model's coordinates, so a pivot recorded in those coordinates now
-        // points at a different physical spot. Bottom-center is the model's zero from here on, and
-        // that is exactly what this button means the pivot to be, so re-seat it there. Rebuilt from
-        // the already-compensated matrix, so nothing moves on screen.
-        if (root.Placement is not null)
-            root.SetPlacement(NodeTransform.FromMatrix(root.LocalTransform, Vector3.Zero));
-
-        return true;
-    }
-
-    internal static Dictionary<SceneNode, NodePose> SnapshotSubtreeTransforms(SceneNode root)
-    {
-        var snap = new Dictionary<SceneNode, NodePose>();
-        foreach (var n in root.SelfAndDescendants())
-            snap[n] = NodePose.Of(n);
-        return snap;
-    }
-
-    internal static void RestoreSubtreeTransforms(SceneNode root, Dictionary<SceneNode, NodePose> transforms)
-    {
-        foreach (var n in root.SelfAndDescendants())
-        {
-            if (transforms.TryGetValue(n, out var pose))
-                pose.ApplyTo(n);
-        }
-    }
-
-    internal static Dictionary<SceneNode, MeshData?> SnapshotSubtreeMeshes(SceneNode root)
-    {
-        var snap = new Dictionary<SceneNode, MeshData?>();
-        foreach (var n in root.SelfAndDescendants())
-            snap[n] = CloneMeshSnapshot(n);
-        return snap;
-    }
-
-    internal static void RestoreMeshSnapshot(SceneNode node, MeshData? mesh)
-    {
-        if (mesh is null)
-        {
-            node.PendingMesh = null;
-            return;
-        }
-
-        node.PendingMesh = CloneMeshData(mesh);
-    }
-
-    internal static void RestoreSubtreeSnapshot(
-        SceneNode root,
-        Dictionary<SceneNode, NodePose> transforms,
-        Dictionary<SceneNode, MeshData?> meshes)
-    {
-        RestoreSubtreeTransforms(root, transforms);
-        foreach (var (node, mesh) in meshes)
-            RestoreMeshSnapshot(node, mesh);
-    }
-
-    private static MeshData? CloneMeshSnapshot(SceneNode node)
-    {
-        if (node.PendingMesh is { } pending) return CloneMeshData(pending);
-        if (node.Mesh?.PickingData is { } gpu) return CloneMeshData(gpu);
-        return null;
-    }
+    // Deleted 2026-08-01: RecenterPivotToBottomCenter and its whole support cast — the subtree
+    // transform/mesh snapshots, the restore path, and NodeRecenterAction.
+    //
+    // It rewrote every vertex so the model's own zero became its bottom centre, then compensated
+    // with the root transform. Recenter is a pivot move now, which is four numbers and instant. The
+    // bake bought nothing visible — slicing works off world transforms — while costing a GPU
+    // re-upload, an undo snapshot of every vertex array, and a bug that left the part correctly
+    // positioned but not drawing at all. Nothing had enqueued a recenter job since; this was
+    // unreachable code with live-looking tests around it.
 
     private static MeshData CloneMeshData(MeshData mesh) =>
         new(mesh.Positions.ToArray(), mesh.Normals.ToArray(), mesh.Indices?.ToArray() ?? [], mesh.Name,
             mesh.BaseColor, mesh.Metallic, mesh.Roughness,
             mesh.Uvs?.ToArray(), mesh.Tangents?.ToArray(), mesh.Material);
 
-    private static bool TryComputeBottomCenterLocal(SceneNode root, out Vector3 bottomCenterLocal)
-    {
-        bottomCenterLocal = default;
-        var (wMin, wMax)  = ComputeSubtreeWorldAabb(root);
-        if (wMin.X > wMax.X) return false;
-
-        var bcWorld = new Vector3(
-            (wMin.X + wMax.X) * 0.5f,
-            (wMin.Y + wMax.Y) * 0.5f,
-            wMin.Z);
-
-        bottomCenterLocal = TransformPoint(bcWorld, root.WorldTransform.Inverted());
-        return true;
-    }
-
-    /// <summary>
-    /// Shifts every mesh in the subtree by <paramref name="rootLocalOffset"/>, expressed in the
-    /// root's space. Returns the number of meshes moved, or -1 if the shift could not be worked out
-    /// for all of them — in which case <em>nothing</em> has been written.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Two passes on purpose. This rewrites vertex data, and the caller only applies the
-    /// compensating transform afterwards, so a partial run leaves geometry displaced by an
-    /// uncancelled offset with no undo entry recorded — the mesh flies off and Ctrl+Z brings back
-    /// the wrong thing. Working every shift out before touching anything makes the whole operation
-    /// all-or-nothing.
-    /// </para>
-    /// <para>
-    /// The offset is a <em>direction</em>, so it is rotated into each mesh's frame without the
-    /// frame's translation. Running it through a point transform (the old code) folded the child's
-    /// inverse translation into the shift, so a mesh sitting on a child node with any offset of its
-    /// own moved by a completely unrelated amount that the root's compensation could not cancel.
-    /// </para>
-    /// </remarks>
-    private static int OffsetSubtreeMeshPositionsInRootLocal(SceneNode root, Vector3 rootLocalOffset)
-    {
-        var toRootFromMesh = root.WorldTransform.Inverted();
-
-        var plan = new List<(MeshData Mesh, SceneNode Node, Vector3 Shift)>();
-        foreach (var n in root.SelfAndDescendants())
-        {
-            var mesh = GetOrCloneEditableMesh(n);
-            if (mesh is null) continue;
-
-            var meshToRoot = n.WorldTransform * toRootFromMesh;
-            if (MathF.Abs(meshToRoot.Determinant) < 1e-12f) return -1;
-
-            var shift = TransformDirection(rootLocalOffset, meshToRoot.Inverted());
-            if (!IsFinite(shift)) return -1;
-
-            plan.Add((mesh, n, shift));
-        }
-
-        foreach (var (mesh, node, shift) in plan)
-        {
-            for (int i = 0; i < mesh.Positions.Length; i++)
-                mesh.Positions[i] += shift;
-
-            node.PendingMesh = CloneMeshData(mesh);
-        }
-
-        return plan.Count;
-    }
-
-    /// <summary>Rotates/scales a direction by <paramref name="m"/>, ignoring its translation.</summary>
-    private static Vector3 TransformDirection(Vector3 v, Matrix4 m)
-        => new(
-            v.X * m.M11 + v.Y * m.M21 + v.Z * m.M31,
-            v.X * m.M12 + v.Y * m.M22 + v.Z * m.M32,
-            v.X * m.M13 + v.Y * m.M23 + v.Z * m.M33);
-
-    private static MeshData? GetOrCloneEditableMesh(SceneNode node)
-    {
-        if (node.PendingMesh is { } pending) return pending;
-        if (node.Mesh?.PickingData is not { } gpu)
-            return null;
-
-        var clone = CloneMeshData(gpu);
-        node.PendingMesh = clone;
-        return clone;
-    }
-
-    private static bool IsFinite(Vector3 v)
-        => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
-
-    private static int CountEditableMeshes(SceneNode root)
-    {
-        int count = 0;
-        foreach (var n in root.SelfAndDescendants())
-        {
-            if (n.PendingMesh is not null || n.Mesh?.PickingData is not null)
-                count++;
-        }
-        return count;
-    }
 
     private static Vector3 TransformPoint(Vector3 p, Matrix4 m)
         => new(

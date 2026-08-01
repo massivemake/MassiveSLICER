@@ -5813,11 +5813,6 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// <summary>Nodes whose subtree was reloaded on the UI thread and need GPU refresh.</summary>
     public ConcurrentQueue<SceneNode> PendingModelRefresh { get; } = new();
 
-    /// <summary>Pivot recenter jobs — geometry + transform applied atomically on the GL thread.</summary>
-    internal ConcurrentQueue<PendingRecenterJob> PendingRecenterJobs { get; } = new();
-
-    internal readonly record struct PendingRecenterJob(SceneNode Node);
-
     /// <summary>
     /// Layer boundary data queued after each slice so the GL thread can upload the
     /// layer-preview heatmap texture. zBounds has numLayers+1 entries (sorted);

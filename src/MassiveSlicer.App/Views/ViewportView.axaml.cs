@@ -463,19 +463,28 @@ public partial class ViewportView : UserControl
                 if (_renderer.SelectedNode is not { } n) return "[recenter] nothing selected.";
                 var inv = System.Globalization.CultureInfo.InvariantCulture;
                 var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
-                int nodes = n.SelfAndDescendants().Count();
-                int meshes = n.SelfAndDescendants().Count(d => d.Mesh?.PickingData is not null || d.PendingMesh is not null);
-                bool onRoot = n.Mesh?.PickingData is not null || n.PendingMesh is not null;
+
+                // Recenter is a pivot move now — four numbers, applied immediately on this thread —
+                // so before and after can both be reported from one call. It used to queue a job for
+                // the render thread to bake vertices on, which is why this only ever printed the
+                // pre-state and told you to run it again.
+                var pivotBefore = n.Placement is { } pb
+                    ? OpenTK.Mathematics.Vector3.TransformPosition(pb.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
 
                 RecenterSelected();
-                // The real work happens on the render thread via PendingRecenterJobs, so report the
-                // pre-state plus enough shape to tell what path it will take; run `recenter` again
-                // after a frame to see the result.
+
+                var pivotAfter = n.Placement is { } pa
+                    ? OpenTK.Mathematics.Vector3.TransformPosition(pa.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
+                var (aMin, aMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+
                 return string.Format(inv,
-                    "[recenter] before: worldMin=({0:F1},{1:F1},{2:F1}) worldMax=({3:F1},{4:F1},{5:F1}) "
-                    + "nodes={6} meshes={7} meshOnRoot={8} placement={9} — job queued",
-                    bMin.X, bMin.Y, bMin.Z, bMax.X, bMax.Y, bMax.Z,
-                    nodes, meshes, onRoot, n.Placement is not null);
+                    "[recenter] pivot ({0:F1},{1:F1},{2:F1}) -> ({3:F1},{4:F1},{5:F1}); "
+                    + "geometry worldMin ({6:F1},{7:F1},{8:F1}) -> ({9:F1},{10:F1},{11:F1}) (want no change)",
+                    pivotBefore.X, pivotBefore.Y, pivotBefore.Z,
+                    pivotAfter.X,  pivotAfter.Y,  pivotAfter.Z,
+                    bMin.X, bMin.Y, bMin.Z, aMin.X, aMin.Y, aMin.Z);
             };
             vm.OnMoveOriginModeChanged = SetMoveOriginOverlay;
             vm.OnDropToPlateRequested = DropToPlate;
@@ -1495,9 +1504,6 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingLayerPreview.TryDequeue(out var lp))
                 _renderer.SetLayerPreview(lp.zBounds, lp.heights);
-
-            while (vm.PendingRecenterJobs.TryDequeue(out var recenterJob))
-                ProcessRecenterJob(vm, recenterJob);
 
             while (vm.PendingModelRefresh.TryDequeue(out var refreshed))
             {
@@ -6008,52 +6014,6 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private void ProcessRecenterJob(ViewportViewModel vm, ViewportViewModel.PendingRecenterJob job)
-    {
-        var node = job.Node;
-        var transformsBefore = ImportHelper.SnapshotSubtreeTransforms(node);
-        var meshesBefore     = ImportHelper.SnapshotSubtreeMeshes(node);
-
-        if (!ImportHelper.RecenterPivotToBottomCenter(node))
-        {
-            System.Console.WriteLine("[recenter] aborted: pivot edit failed");
-            return;
-        }
-
-        if (!TryRefreshSubtreeGpuMeshes(node))
-        {
-            System.Console.WriteLine("[recenter] aborted: GPU refresh failed — rolling back");
-            ImportHelper.RestoreSubtreeSnapshot(node, transformsBefore, meshesBefore);
-            TryRefreshSubtreeGpuMeshes(node);
-            _renderer.InvalidateShaderAppearance();
-            return;
-        }
-
-        _renderer.InvalidateShaderAppearance();
-
-        var transformsAfter = ImportHelper.SnapshotSubtreeTransforms(node);
-        var meshesAfter     = ImportHelper.SnapshotSubtreeMeshes(node);
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            vm.UndoRedo?.Push(new NodeRecenterAction(
-                node, transformsBefore, transformsAfter,
-                meshesBefore, meshesAfter,
-                () =>
-                {
-                    vm.PendingModelRefresh.Enqueue(node);
-                    vm.NotifyRenderNeeded();
-                    OnRecenterApplied(vm, node);
-                }));
-            OnRecenterApplied(vm, node);
-        });
-
-        if (_renderer.SelectedNode is not null &&
-            node.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
-            _renderer.Select(node);
-
-        GlCanvas.RequestNextFrameRendering();
-    }
 
     private static bool TryRefreshSubtreeGpuMeshes(SceneNode root)
     {
