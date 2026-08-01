@@ -13,6 +13,8 @@ internal static class OcctBootstrap
         if (Interlocked.Exchange(ref _initialized, 1) != 0)
             return;
 
+        // Watch for the third-party Occt.NET MessageBox during first native load.
+        using var _ = OcctUiSuppressor.Begin();
         OcctConfiguration.Configure();
     }
 }

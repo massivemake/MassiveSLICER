@@ -14,8 +14,6 @@
 
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="6.0.0" />
-    <!-- Occt.NET (Open CASCADE) is Windows-only; the STEP test self-skips off Windows. -->
-    <PackageReference Include="Occt.NET" Version="7.9.0" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="SharpGLTF.Core" Version="1.0.6" />
     <PackageReference Include="xunit" Version="2.5.3" />
@@ -25,13 +23,6 @@
   <ItemGroup>
     <Using Include="Xunit" />
   </ItemGroup>
-
-  <Target Name="CopyIjwhostToTestOutput" AfterTargets="Build">
-    <Copy SourceFiles="$(OutDir)occt\x64\Ijwhost.dll"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="Exists('$(OutDir)occt\x64\Ijwhost.dll')" />
-  </Target>
 
   <ItemGroup>
     <ProjectReference Include="..\MassiveSlicer.App\MassiveSlicer.App.csproj" />

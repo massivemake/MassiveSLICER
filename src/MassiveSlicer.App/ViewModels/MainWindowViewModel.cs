@@ -156,6 +156,47 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.AdditiveSettings = RightPanel.Additive;
         Viewport.SubtractiveSettings = RightPanel.Subtractive;
 
+        // Mill OPERATION → SELECT AREA tools arm mesh-face picking on the workpiece only
+        // (user imports/scans — never robot, bed, or cell environment).
+        RightPanel.Subtractive.ApplyAreaSelectTool = tool =>
+        {
+            Viewport.MillAreaSelectTool = tool;
+            Viewport.ActiveTool = TransformTool.Select;
+            switch (tool)
+            {
+                case Core.Models.MillAreaSelectTool.WholeModel:
+                    Viewport.SelectionMode = SelectionMode.Object;
+                    Viewport.ClearMillAreaSelection();
+                    break;
+                case Core.Models.MillAreaSelectTool.Face:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    break;
+                case Core.Models.MillAreaSelectTool.Box:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    Viewport.PaintRegionSelectMode = "Square";
+                    break;
+                case Core.Models.MillAreaSelectTool.Lasso:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    Viewport.PaintRegionSelectMode = "Lasso";
+                    break;
+                case Core.Models.MillAreaSelectTool.Brush:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    break;
+            }
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        };
+        RightPanel.Subtractive.ClearAreaSelection = () =>
+        {
+            Viewport.MillAreaSelectTool = Core.Models.MillAreaSelectTool.WholeModel;
+            Viewport.SelectionMode = SelectionMode.Object;
+            Viewport.ActiveTool = TransformTool.Select;
+            Viewport.ClearMillAreaSelection();
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        };
+        Viewport.OnMillAreaSelectionChanged = () =>
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        Viewport.LogMill = msg => Console.Log(msg);
+
         // Modifiers panel reads the current selection back from the viewport, and the
         // viewport reads back which modifier is selected, to draw its plane preview.
         RightPanel.Modifiers.Viewport = Viewport;
@@ -2340,6 +2381,62 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        // STEP tessellation is heavy (cascadio/OCCT subprocess); keep it off the UI thread.
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".stp" or ".step")
+        {
+            _ = ImportStepModelAsync(path);
+            return true;
+        }
+
+        return FinishImport(path, loadSync: true);
+    }
+
+    async Task ImportStepModelAsync(string path)
+    {
+        var fileName = System.IO.Path.GetFileName(path);
+        ShowBusy("Importing STEP", $"Tessellating {fileName}… (first run may install converter)");
+        Console.Log($"[import] STEP load started: {fileName}");
+
+        SceneNode? node = null;
+        string? error = null;
+        try
+        {
+            var cell = Viewport.ActiveCell;
+            node = await Task.Run(() =>
+            {
+                try
+                {
+                    return ImportHelper.LoadAndPlace(path, cell, msg =>
+                        Dispatcher.UIThread.Post(() => Console.Log(msg)));
+                }
+                catch (Exception ex)
+                {
+                    error = ex.ToString();
+                    return null;
+                }
+            }).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            error = ex.ToString();
+        }
+        finally
+        {
+            HideBusy();
+        }
+
+        if (node is null)
+        {
+            Console.LogError($"[import] Failed to load '{path}'{(error is null ? "" : $": {error}")}.");
+            return;
+        }
+
+        FinishImportWithNode(path, node);
+    }
+
+    bool FinishImport(string path, bool loadSync)
+    {
         SceneNode? node;
         try
         {
@@ -2357,6 +2454,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        FinishImportWithNode(path, node);
+        return true;
+    }
+
+    void FinishImportWithNode(string path, SceneNode node)
+    {
         MarkWorkspaceDirty();
         // Inspect BEFORE enqueuing: AddImportNode hands the node to the GL upload thread,
         // which clears PendingMesh once uploaded -- for small meshes that can happen before
@@ -2373,7 +2476,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         RightPanel.StepSliceExpanded = true;
 
         Console.Log($"[import] Added '{node.Name}' to scene.");
-        return true;
     }
 
     /// <summary>Called when a cell load begins so workspace restore waits for the bed scene.</summary>

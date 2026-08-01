@@ -139,7 +139,12 @@ public sealed class Shader : IDisposable
         {
             string log = GL.GetShaderInfoLog(shader);
             GL.DeleteShader(shader);
-            throw new Exception($"{type} compile failed:\n{log}");
+            int previewLen = Math.Min(source.Length, 200);
+            string preview = source.Length == 0
+                ? "<empty>"
+                : source.Substring(0, previewLen).Replace('\n', ' ');
+            throw new Exception(
+                $"{type} compile failed (sourceLen={source.Length}):\n{log}\nSource preview: {preview}");
         }
 
         return shader;

@@ -702,6 +702,109 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "mill",
+            Description = "Milling SELECT AREA / brush / operation (SPSM mill workflow)",
+            Usage = "mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <name>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var sub = ctx.Main.RightPanel.Subtractive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0 || parts[0] is "help" or "?")
+                {
+                    ctx.Log("[mill] status | area <whole|face|box|lasso|brush|clear>");
+                    ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
+                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
+                    return;
+                }
+
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "status":
+                        ctx.Log($"[mill] area-tool={vp.MillAreaSelectTool}  brush={vp.MillBrushRadiusMm:0.#}mm  falloff={vp.MillBrushFalloff:0.##}");
+                        ctx.Log($"[mill] paint: {vp.MillPaintedVertices:N0} verts ({vp.MillPaintCoverage * 100:0.#}%)  target={vp.MillAreaTargetRoot?.Name ?? "(none)"}");
+                        ctx.Log($"[mill] layers: {vp.DescribeMillPaint?.Invoke() ?? "n/a"}");
+                        ctx.Log($"[mill] operation={sub.SelectedOperation}");
+                        ctx.Log($"[mill] status: {vp.MillAreaStatusText}");
+                        break;
+
+                    case "area" when parts.Length >= 2:
+                    {
+                        var t = parts[1].ToLowerInvariant();
+                        if (t is "clear" or "none" or "reset")
+                        {
+                            sub.ClearAreaSelectionCommand.Execute(null);
+                            ctx.Log("[mill] area cleared → whole model");
+                            break;
+                        }
+                        var map = t switch
+                        {
+                            "whole" or "all" or "model" => Core.Models.MillAreaSelectTool.WholeModel,
+                            "face" => Core.Models.MillAreaSelectTool.Face,
+                            "box" or "rect" or "square" => Core.Models.MillAreaSelectTool.Box,
+                            "lasso" => Core.Models.MillAreaSelectTool.Lasso,
+                            "brush" or "paint" => Core.Models.MillAreaSelectTool.Brush,
+                            _ => (Core.Models.MillAreaSelectTool?)null,
+                        };
+                        if (map is null)
+                        {
+                            ctx.LogError("[mill] area: whole|face|box|lasso|brush|clear");
+                            break;
+                        }
+                        sub.AreaSelectTool = map.Value;
+                        ctx.Log($"[mill] area tool → {map.Value}");
+                        break;
+                    }
+
+                    case "brush" when parts.Length >= 3:
+                    {
+                        var key = parts[1].ToLowerInvariant();
+                        if (!double.TryParse(parts[2], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var val))
+                        {
+                            ctx.LogError("[mill] brush size <mm> | brush falloff <0..1>");
+                            break;
+                        }
+                        if (key is "size" or "radius" or "r")
+                        {
+                            vp.MillBrushRadiusMm = val;
+                            ctx.Log($"[mill] brush size → {vp.MillBrushRadiusMm:0.#} mm");
+                        }
+                        else if (key is "falloff" or "soft" or "f")
+                        {
+                            vp.MillBrushFalloff = val;
+                            ctx.Log($"[mill] brush falloff → {vp.MillBrushFalloff:0.##}");
+                        }
+                        else
+                            ctx.LogError("[mill] brush size <mm> | brush falloff <0..1>");
+                        break;
+                    }
+
+                    case "op" or "operation" when parts.Length >= 2:
+                    {
+                        var name = string.Join("", parts.Skip(1));
+                        if (Enum.TryParse<Core.Models.MillOperationKind>(parts[1], ignoreCase: true, out var kind)
+                            || Enum.TryParse(name, ignoreCase: true, out kind))
+                        {
+                            sub.SelectedOperation = kind;
+                            ctx.Log($"[mill] operation → {kind}");
+                        }
+                        else
+                        {
+                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf");
+                        }
+                        break;
+                    }
+
+                    default:
+                        ctx.LogError("[mill] unknown — try: mill help");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "viewmode",
             Description = "Debug: set the view mode (Body/Toolpath/Speed/RPM/Preview)",
             Execute = (ctx, args) =>

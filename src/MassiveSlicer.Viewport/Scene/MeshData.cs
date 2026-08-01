@@ -42,7 +42,18 @@ public sealed class MeshData
     public float Roughness { get; }
 
     /// <summary>Per-vertex UV0 (TEXCOORD_0), same length as <see cref="Positions"/>, or <c>null</c>.</summary>
-    public Vector2[]? Uvs { get; }
+    public Vector2[]? Uvs { get; private set; }
+
+    /// <summary>
+    /// Attaches or replaces paint/import UVs (e.g. auto-generated box unwrap for mill surface paint).
+    /// Length must match <see cref="Positions"/>.
+    /// </summary>
+    public void SetUvs(Vector2[] uvs)
+    {
+        if (uvs.Length != Positions.Length)
+            throw new ArgumentException("UV count must match vertex count.", nameof(uvs));
+        Uvs = uvs;
+    }
 
     /// <summary>Per-vertex tangents (xyz + w handedness), same length as <see cref="Positions"/>, or <c>null</c>.</summary>
     public Vector4[]? Tangents { get; }

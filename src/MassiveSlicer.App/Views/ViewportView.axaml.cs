@@ -1560,6 +1560,7 @@ public partial class ViewportView : UserControl
             else
                 UpdateAnglePlanePreview(vm);
             UpdatePaintOverlay(vm);
+            UpdateMillAreaOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -2700,6 +2701,59 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
+        // (imports & scans). Robot, bed, and cell environment never receive hits.
+        if (DataContext is ViewportViewModel millPtrVm
+            && millPtrVm.IsMillAreaSelectActive
+            && !_spaceHeld)
+        {
+            if (kind == PointerUpdateKind.LeftButtonPressed)
+            {
+                bool erase = mods.HasFlag(KeyModifiers.Alt);
+                if (millPtrVm.IsMillAreaBox || millPtrVm.IsMillAreaLasso)
+                {
+                    _millAreaBoxDragging = true;
+                    _millAreaBoxStart = pos;
+                    _paintLassoPts.Clear();
+                    if (millPtrVm.IsMillAreaLasso)
+                    {
+                        millPtrVm.PaintMarqueeVisible = false;
+                        _paintLassoPts.Add(pos);
+                        millPtrVm.SetPaintLassoPoints(_paintLassoPts);
+                        millPtrVm.PaintLassoVisible = true;
+                    }
+                    else
+                    {
+                        millPtrVm.PaintLassoVisible = false;
+                        millPtrVm.ClearPaintLassoPoints();
+                        millPtrVm.PaintMarqueeX = pos.X;
+                        millPtrVm.PaintMarqueeY = pos.Y;
+                        millPtrVm.PaintMarqueeW = 0;
+                        millPtrVm.PaintMarqueeH = 0;
+                        millPtrVm.PaintMarqueeVisible = true;
+                    }
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                if (millPtrVm.IsMillAreaBrush)
+                {
+                    _millAreaStroking = true;
+                    _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                    TryMillAreaBrushAt(millPtrVm, pos, erase);
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                // Face click
+                TryMillAreaFaceAt(millPtrVm, pos, erase);
+                e.Handled = true;
+                return;
+            }
+        }
+
         // 2D slice plane: right-drag pans (orbit is locked; this is the primary pan).
         if (kind == PointerUpdateKind.RightButtonPressed && IsSlicePlaneNavLocked)
         {
@@ -2922,6 +2976,35 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill area marquee / brush drag (before toolpath paint so Mill mode owns the pointer).
+        if (_millAreaBoxDragging && DataContext is ViewportViewModel millBoxVm)
+        {
+            if (millBoxVm.IsMillAreaLasso)
+            {
+                if (_paintLassoPts.Count == 0 || Dist2D(_paintLassoPts[^1], pos) >= 4.0)
+                {
+                    _paintLassoPts.Add(pos);
+                    millBoxVm.SetPaintLassoPoints(_paintLassoPts);
+                }
+            }
+            else
+            {
+                millBoxVm.PaintMarqueeX = Math.Min(pos.X, _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeY = Math.Min(pos.Y, _millAreaBoxStart.Y);
+                millBoxVm.PaintMarqueeW = Math.Abs(pos.X - _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeH = Math.Abs(pos.Y - _millAreaBoxStart.Y);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking && DataContext is ViewportViewModel millStrokeVm)
+        {
+            if (Math.Abs(pos.X - _lastPaintPx.X) + Math.Abs(pos.Y - _lastPaintPx.Y) >= 5)
+                TryMillAreaBrushAt(millStrokeVm, pos, erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
         if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
         {
             if (pbxVm.PaintRegionSelectIsLasso)
@@ -3078,6 +3161,44 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+
+        if (_millAreaBoxDragging)
+        {
+            _millAreaBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel millBoxVm)
+            {
+                bool erase = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+                if (millBoxVm.IsMillAreaLasso)
+                {
+                    millBoxVm.PaintLassoVisible = false;
+                    if (_paintLassoPts.Count >= 3)
+                        SelectMillFacesInLasso(millBoxVm, _paintLassoPts, erase);
+                    _paintLassoPts.Clear();
+                    millBoxVm.ClearPaintLassoPoints();
+                }
+                else
+                {
+                    millBoxVm.PaintMarqueeVisible = false;
+                    var rect = new Avalonia.Rect(
+                        Math.Min(pt.Position.X, _millAreaBoxStart.X),
+                        Math.Min(pt.Position.Y, _millAreaBoxStart.Y),
+                        Math.Abs(pt.Position.X - _millAreaBoxStart.X),
+                        Math.Abs(pt.Position.Y - _millAreaBoxStart.Y));
+                    if (rect.Width > 4 && rect.Height > 4)
+                        SelectMillFacesInRect(millBoxVm, rect, erase);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking)
+        {
+            _millAreaStroking = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            e.Handled = true;
+            return;
+        }
 
         if (_paintBoxDragging)
         {
@@ -5279,10 +5400,12 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
-        if (toolpathChild is not null)
-            await RunUpdateSliceAsync(vm, (item, toolpathChild));
-        else
-            await RunSliceAsync(vm);
+        // Only re-slice when a toolpath already exists. Auto-slicing a fresh import
+        // (esp. dense STEP meshes) can freeze or crash right after the geometry appears.
+        if (toolpathChild is null)
+            return;
+
+        await RunUpdateSliceAsync(vm, (item, toolpathChild));
     }
 
     /// <summary>Begin a new slice cancellation token (cancels any previous).</summary>
@@ -6971,6 +7094,210 @@ public partial class ViewportView : UserControl
     private bool _paintBoxDragging;
     private Avalonia.Point _paintBoxStart;
     private readonly List<Avalonia.Point> _paintLassoPts = [];
+
+    // ── Mill OPERATION → SELECT AREA (soft vertex paint on workpiece only) ───
+    private bool _millAreaStroking, _millAreaBoxDragging;
+    private Avalonia.Point _millAreaBoxStart;
+    private MillSurfacePaint? _millSurfacePaint;
+    private bool _millPaintHooked;
+
+    MillSurfacePaint MillPaint
+    {
+        get
+        {
+            _millSurfacePaint ??= new MillSurfacePaint();
+            return _millSurfacePaint;
+        }
+    }
+
+    void EnsureMillPaintHook(ViewportViewModel vm)
+    {
+        if (_millPaintHooked) return;
+        _millPaintHooked = true;
+        vm.ClearMillSurfacePaint = () =>
+        {
+            _pendingMillPaintClear = true;
+            vm.NotifyRenderNeeded();
+        };
+        vm.DescribeMillPaint = () => _millSurfacePaint?.Describe() ?? "no paint";
+    }
+
+    bool _pendingMillPaintClear;
+
+    /// <summary>
+    /// Ray-pick a face exclusively on millable user workpieces (imports / scans).
+    /// Robot, bed, toolheads, and other cell environment never qualify.
+    /// </summary>
+    Picker.FaceHit? PickMillableFace(ViewportViewModel vm, Avalonia.Point pos)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return null;
+        var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+        return Picker.PickFaceDetailed(ray, _renderer.SceneRoot, vm.IsMillableWorkpiece);
+    }
+
+    void EnsureMillAreaTarget(ViewportViewModel vm, SceneNode meshLeaf)
+    {
+        if (vm.MillAreaTargetRoot is not null) return;
+        var root = meshLeaf;
+        for (var c = meshLeaf; c is not null; c = c.Parent)
+        {
+            if (vm.FindUserMeshOutlinerItem(c) is { } item
+                && !item.IsToolpath && !item.IsEffector
+                && !item.IsModifier && !item.IsModifiersGroup)
+            {
+                root = item.Node;
+                break;
+            }
+        }
+        vm.SetMillAreaTargetRoot(root);
+    }
+
+    void SyncMillPaintStats(ViewportViewModel vm)
+    {
+        var paint = _millSurfacePaint;
+        if (paint is null) { vm.UpdateMillPaintStats(0, 0); return; }
+        vm.UpdateMillPaintStats(paint.PaintedVertexCount, paint.Coverage01);
+    }
+
+    void TryMillAreaFaceAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+        {
+            ConsoleLogMill($"[mill-paint] face miss (no workpiece under cursor)");
+            return;
+        }
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+        if (hit.Value.MeshNode.Mesh?.PickingData is not { } mesh) return;
+
+        MillPaint.StampTriangle(hit.Value.MeshNode, mesh, hit.Value.TriangleIndex, erase);
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] face tri={hit.Value.TriangleIndex} on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void TryMillAreaBrushAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        _lastPaintPx = pos;
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+            return;
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+
+        // World-space soft brush — works without material UVs (STEP/STL/GLB).
+        int before = MillPaint.PaintedVertexCount;
+        MillPaint.StampWorld(
+            hit.Value.MeshNode,
+            hit.Value.WorldHit,
+            radiusMm: (float)vm.MillBrushRadiusMm,
+            falloff: (float)vm.MillBrushFalloff,
+            strength: erase ? 1f : 1f,
+            erase: erase,
+            hitTriangleIndex: hit.Value.TriangleIndex);
+        SyncMillPaintStats(vm);
+        if (vm.MillPaintedVertices != before)
+            ConsoleLogMill($"[mill-paint] brush on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void SelectMillFacesInRect(ViewportViewModel vm, Avalonia.Rect rect, bool erase)
+        => SelectMillPaintInScreenRegion(vm, erase, p => rect.Contains(p));
+
+    void SelectMillFacesInLasso(ViewportViewModel vm, List<Avalonia.Point> loop, bool erase)
+    {
+        if (loop.Count < 3) return;
+        SelectMillPaintInScreenRegion(vm, erase, p => PointInPolygon(p, loop));
+    }
+
+    static bool PointInPolygon(Avalonia.Point p, List<Avalonia.Point> poly)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y;
+            double xj = poly[j].X, yj = poly[j].Y;
+            if (((yi > p.Y) != (yj > p.Y))
+                && (p.X < (xj - xi) * (p.Y - yi) / (yj - yi + 1e-30) + xi))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    void SelectMillPaintInScreenRegion(
+        ViewportViewModel vm, bool erase, Func<Avalonia.Point, bool> inside)
+    {
+        EnsureMillPaintHook(vm);
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return;
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is null) continue;
+            var selectable = Picker.FindSelectableRoot(node);
+            if (selectable is null) continue;
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            if (vm.MillAreaTargetRoot is null)
+                EnsureMillAreaTarget(vm, node);
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            MillPaint.StampScreenRegion(
+                node,
+                world =>
+                {
+                    var scr = _renderer.ProjectToScreen(world, viewProj, vpW, vpH);
+                    if (float.IsNaN(scr.X)) return false;
+                    return inside(new Avalonia.Point(scr.X, scr.Y));
+                },
+                strength: 0.95f,
+                erase: erase);
+        }
+
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] region → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Upload vertex paint weights to GPU (selection wash is in the mesh shader).</summary>
+    void UpdateMillAreaOverlay(ViewportViewModel vm)
+    {
+        EnsureMillPaintHook(vm);
+
+        if (_pendingMillPaintClear)
+        {
+            _pendingMillPaintClear = false;
+            _millSurfacePaint?.Clear();
+            vm.UpdateMillPaintStats(0, 0);
+        }
+
+        if (_millSurfacePaint is not null)
+        {
+            _millSurfacePaint.UploadDirty();
+            _millSurfacePaint.RebindAll();
+        }
+    }
+
+    void ConsoleLogMill(string msg)
+    {
+        System.Console.WriteLine(msg);
+        if (DataContext is ViewportViewModel vm)
+            vm.LogMill?.Invoke(msg);
+    }
+
     /// <summary>Applied modifications (reselectable from the MODIFICATIONS panel).</summary>
     private readonly List<PaintModificationRecord> _paintModifications = [];
 
@@ -7217,7 +7544,9 @@ public partial class ViewportView : UserControl
                 || (vm.AdditiveSettings?.PaintMarks.Count ?? 0) > 0);
         if (!show)
         {
-            _renderer.SetPaintOverlay([], null);
+            // Leave the buffer alone when mill SELECT AREA owns the brush-cursor overlay.
+            if (!vm.IsMillAreaSelectActive && vm.MillPaintedTexels == 0)
+                _renderer.SetPaintOverlay([], null);
             return;
         }
         var add = vm.AdditiveSettings!;

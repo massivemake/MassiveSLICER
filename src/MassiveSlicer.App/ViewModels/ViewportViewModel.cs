@@ -36,6 +36,191 @@ public sealed class ViewportViewModel : ViewModelBase
         set => SetField(ref _selectionMode, value);
     }
 
+    // ── Mill OPERATION → SELECT AREA (mesh-face region on the workpiece) ──────
+
+    private MillAreaSelectTool _millAreaSelectTool = MillAreaSelectTool.WholeModel;
+
+    /// <summary>
+    /// Active mill area tool from the Mill sidebar. When not
+    /// <see cref="MillAreaSelectTool.WholeModel"/>, viewport input paints faces
+    /// exclusively on user workpieces (imports/scans) — never robot / bed / cell.
+    /// </summary>
+    public MillAreaSelectTool MillAreaSelectTool
+    {
+        get => _millAreaSelectTool;
+        set
+        {
+            if (!SetField(ref _millAreaSelectTool, value)) return;
+            OnPropertyChanged(nameof(IsMillAreaSelectActive));
+            OnPropertyChanged(nameof(IsMillAreaBrush));
+            OnPropertyChanged(nameof(IsMillAreaBox));
+            OnPropertyChanged(nameof(IsMillAreaLasso));
+            OnPropertyChanged(nameof(IsMillAreaFace));
+            OnPropertyChanged(nameof(ShowMillBrushToolbar));
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>True while a face-region tool is armed (Face / Box / Lasso / Brush).</summary>
+    public bool IsMillAreaSelectActive =>
+        MillAreaSelectTool is MillAreaSelectTool.Face
+            or MillAreaSelectTool.Box
+            or MillAreaSelectTool.Lasso
+            or MillAreaSelectTool.Brush;
+
+    public bool IsMillAreaBrush => MillAreaSelectTool == MillAreaSelectTool.Brush;
+    public bool IsMillAreaBox   => MillAreaSelectTool == MillAreaSelectTool.Box;
+    public bool IsMillAreaLasso => MillAreaSelectTool == MillAreaSelectTool.Lasso;
+    public bool IsMillAreaFace  => MillAreaSelectTool == MillAreaSelectTool.Face;
+
+    private double _millBrushRadiusMm = 25.0;
+
+    /// <summary>Soft-brush radius in world millimetres. Edit via right-click brush menu.</summary>
+    public double MillBrushRadiusMm
+    {
+        get => _millBrushRadiusMm;
+        set => SetField(ref _millBrushRadiusMm, Math.Clamp(value, 2.0, 400.0));
+    }
+
+    private double _millBrushFalloff = 0.65;
+
+    /// <summary>Brush edge falloff 0 = hard, 1 = soft gaussian. Right-click menu.</summary>
+    public double MillBrushFalloff
+    {
+        get => _millBrushFalloff;
+        set => SetField(ref _millBrushFalloff, Math.Clamp(value, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// Bottom-center brush toolbar while SELECT AREA → Brush is armed.
+    /// Fixed above the timeline (~250px from bottom).
+    /// </summary>
+    public bool ShowMillBrushToolbar => IsMillAreaBrush;
+
+    /// <summary>
+    /// Workpiece root locked once the first stroke is painted (one model per operation).
+    /// Null until first hit or when cleared.
+    /// </summary>
+    public SceneNode? MillAreaTargetRoot { get; private set; }
+
+    private int _millPaintedVertices;
+    private float _millPaintCoverage;
+
+    /// <summary>Vertices with selection weight (soft brush coverage proxy).</summary>
+    public int MillPaintedVertices
+    {
+        get => _millPaintedVertices;
+        private set
+        {
+            if (!SetField(ref _millPaintedVertices, value)) return;
+            OnPropertyChanged(nameof(MillAreaStatusText));
+        }
+    }
+
+    /// <summary>Alias for older bindings / status.</summary>
+    public int MillPaintedTexels => MillPaintedVertices;
+
+    /// <summary>Fraction of vertices painted (0..1).</summary>
+    public float MillPaintCoverage
+    {
+        get => _millPaintCoverage;
+        private set => SetField(ref _millPaintCoverage, value);
+    }
+
+    /// <summary>Status line for the SELECT AREA card.</summary>
+    public string MillAreaStatusText
+    {
+        get
+        {
+            if (MillAreaSelectTool == MillAreaSelectTool.WholeModel)
+                return "Whole model";
+            string tool = MillAreaSelectTool switch
+            {
+                MillAreaSelectTool.Face  => "Face",
+                MillAreaSelectTool.Box   => "Box",
+                MillAreaSelectTool.Lasso => "Lasso",
+                MillAreaSelectTool.Brush => "Brush",
+                _ => "Area",
+            };
+            string target = MillAreaTargetRoot?.Name is { Length: > 0 } n
+                ? $" on \"{n}\""
+                : " — paint the milling model only";
+            if (MillPaintedVertices <= 0)
+                return $"{tool}: soft brush{target} · Alt erases · size/falloff on bottom bar";
+            return $"{tool}: {MillPaintCoverage * 100f:0.#}% ({MillPaintedVertices:N0} verts){target}";
+        }
+    }
+
+    /// <summary>Raised when mill surface paint changes.</summary>
+    internal Action? OnMillAreaSelectionChanged { get; set; }
+
+    /// <summary>Viewport owns the paint masks; calls this to clear GL resources.</summary>
+    internal Action? ClearMillSurfacePaint { get; set; }
+
+    /// <summary>Optional host log sink (app console).</summary>
+    internal Action<string>? LogMill { get; set; }
+
+    /// <summary>Describe paint layers for console/MCP diagnostics.</summary>
+    internal Func<string>? DescribeMillPaint { get; set; }
+
+    internal void SetMillAreaTargetRoot(SceneNode? root)
+    {
+        if (MillAreaTargetRoot == root) return;
+        MillAreaTargetRoot = root;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+    }
+
+    internal void UpdateMillPaintStats(int paintedVertices, float coverage01)
+    {
+        MillPaintCoverage = Math.Clamp(coverage01, 0f, 1f);
+        MillPaintedVertices = paintedVertices;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+        OnMillAreaSelectionChanged?.Invoke();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Clears surface paint and unlocks the target model.</summary>
+    public void ClearMillAreaSelection()
+    {
+        ClearMillSurfacePaint?.Invoke();
+        MillAreaTargetRoot = null;
+        MillPaintCoverage = 0;
+        MillPaintedVertices = 0;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+        OnMillAreaSelectionChanged?.Invoke();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// True when <paramref name="node"/> (or its selectable root) is a user workpiece
+    /// mesh suitable for milling area selection — imports and scans, never robot/bed/cell
+    /// infrastructure, toolpaths, effectors, or modifiers.
+    /// </summary>
+    internal bool IsMillableWorkpiece(SceneNode? node)
+    {
+        if (node is null) return false;
+        if (IsEffectorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
+            return false;
+
+        var item = FindUserMeshOutlinerItem(node);
+        if (item is null) return false;
+        if (item.IsToolpath || item.IsEffector || item.IsModifier || item.IsModifiersGroup)
+            return false;
+
+        // Lock to first painted model (same outliner item or under that root).
+        if (MillAreaTargetRoot is { } locked)
+        {
+            for (var c = node; c is not null; c = c.Parent)
+                if (c == locked) return true;
+            var lockedItem = FindUserMeshOutlinerItem(locked);
+            if (lockedItem is not null && ReferenceEquals(lockedItem, item))
+                return true;
+            return false;
+        }
+
+        return true;
+    }
+
     private TransformTool _activeTool = TransformTool.Select;
 
     /// <summary>The active transform gizmo tool (select/move/rotate/scale).</summary>
@@ -1159,7 +1344,10 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         if (!ShowLfam3ToolPicker) return;
         _lfam3WorkflowPhaseIndex = phaseIndex;
-        SelectLfam3Tool(toolName);
+        // Phase UI / sidebar only. Do not mount or select the phase tool here —
+        // that was selecting the TCP toolhead in the viewport on every Print/Scan/Mill click.
+        // Explicit pick/deposit (or robot tool dropdown) still mounts tools when the user asks.
+        _ = toolName;
         NotifyWorkflowStateChanged();
     }
 

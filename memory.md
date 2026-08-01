@@ -1,20 +1,22 @@
 # MassiveSLICER V3 — Project Memory
 
-## ⚠️ Cut Modifier feature branch — NOT print-verified, do not merge assuming it's safe
+## ⚠️ Active work: `feature/spsm` (Scan–Print–Scan–Mill) — NOT fully merged to main
 
-This branch (`feature/cut-modifier`) adds a non-destructive Cut Modifier: split a mesh into
-independent pieces, reposition/reorient each one freely, and slice each for real. It has been
-verified in simulation only — reachability, mesh/toolpath alignment, and collision checks all
-pass on-screen, but **no piece has been printed on real hardware yet**. Jeff is running the
-first in-shop print test after this lands.
+**Branch:** `feature/spsm` (tracking `origin/feature/spsm`). First push: `8568268` (default cell prefs + Scan/Mill StepCard chrome). **Large pile of uncommitted SPSM work** still local (mill bits library, STEP via cascadio, mill area soft-paint, phase-switch fix, MCP mill commands) — commit when Jeff wants.
 
-**If you're reading this before that's happened:** treat Cut Modifier output as unverified for
-production printing. Don't assume "it slices and shows reachable" means "safe to run on the
-robot as usual." Confirm with Jeff whether shop testing has actually validated a printed part
-before trusting this path, and don't merge this branch into `main`/`master` without his
-explicit sign-off.
+**This PC (MassiveMAKE shop workstation):** machine-local defaults only (do not commit personal prefs):
+- Default cell: **LFAM 3** (`AppPreferences` / `DefaultCellName`)
+- Windows GPU High Performance for `MassiveSlicer.App.exe` when set via registry earlier
+- Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
+- STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: 2026-07-29 (Drop to Plate / Lay Flat frame fix on LFAM 3; extruder keep-alive on a branch, not yet print-verified)
+Last updated: **2026-07-31** (SPSM mill SELECT AREA soft paint + STEP cascadio + phase-switch no TCP select)
+
+---
+
+## Older note: Cut Modifier (historical)
+
+Cut Modifier lived on `feature/cut-modifier` (non-destructive split). Treat production trust as shop-validated only. See archive if needed.
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -130,39 +132,87 @@ dotnet format
 
 | What | Path |
 |------|------|
-| Repo (this machine) | `/Users/thomboessel/MassiveSLICER V3` |
+| Repo (this machine / MassiveMAKE PC) | `C:\Users\MassiveMAKE\MassiveSLICER` |
 | Repo (NAS historical) | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
 | GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
-| GitHub (mirror) | https://github.com/MattWhite3194/MassiveSlicer |
-| Milestone tag (2026-06-25) | `milestone/krl-import-viewport-polish-2026-06-25` @ `409e2e8` on `master`/`main` |
-| Publish (only) | `%LOCALAPPDATA%\MassiveSlicer\build` |
-| Cell JSON (canonical) | Repo `assets\cells\` — dev saves mirror here via `CellPaths` |
+| Active branch | **`feature/spsm`** |
+| Publish (optional) | `%LOCALAPPDATA%\MassiveSlicer\build` |
+| Dev run (this PC often) | `src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe` |
+| Cell JSON (canonical) | Repo `assets\cells\` |
+| Mill bit library (user) | `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` |
+| STEP env (cascadio) | `%APPDATA%\MassiveSlicer\step-env` |
+| Bridge port file | `%LOCALAPPDATA%\MassiveSlicer\bridge.port` |
 | Test GLB | `assets\test\crystal_stone_rock.glb` |
-
-**Do not use `build2`, `build3`, or `build4`** — obsolete copies from earlier sessions.
 
 ### Build + run (canonical — always paste this in full)
 
 ```powershell
 Stop-Process -Name "MassiveSlicer.App" -Force -ErrorAction SilentlyContinue
-Set-Location '\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2'
-dotnet publish 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release -o "$env:LOCALAPPDATA\MassiveSlicer\build"
+Set-Location 'C:\Users\MassiveMAKE\MassiveSLICER'
+dotnet build 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release
 if ($LASTEXITCODE -eq 0) {
-    Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App.exe" -WorkingDirectory "$env:LOCALAPPDATA\MassiveSlicer\build"
+    Start-Process -FilePath '.\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+      -WorkingDirectory '.\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 }
 ```
 
-Equivalent script (same steps): `scripts\publish-and-run.ps1`
+Publish variant (optional): `scripts\publish-and-run.ps1` → `%LOCALAPPDATA%\MassiveSlicer\build`.
 
 ### Start only (no rebuild)
 
 ```powershell
-Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App.exe" -WorkingDirectory "$env:LOCALAPPDATA\MassiveSlicer\build"
+Start-Process -FilePath 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+  -WorkingDirectory 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 ```
 
 ---
 
 ## Completed features
+
+### SPSM / Mill sidebar (`feature/spsm`, 2026-07-31)
+
+**Goal:** Scan–Print–Scan–Mill workflow on LFAM 3 — Mill panel structure, bit library, area paint, reliable STEP import.
+
+#### Mill right-panel structure (LFAM 3)
+- **1 BITS** — spindle tool library dropdown + dialog; default **Flat 3in AP90** (`MillBitTool.CreateLfam3DefaultFlat3In`); library JSON v3 under AppData.
+- **2 OPERATION** — strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf) + **SELECT AREA**.
+- **3 TOOLPATHING** — passes / travel / movement; SpindleRpm linked between BITS and TOOLPATHING.
+- **MORE** — catch-all.
+- Scan/Mill StepCards match Printing styling; BACK TO STEPS removed.
+- Key UI: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillBitLibraryDialog.axaml`, `MillBitLibraryViewModel.cs`, `MillBitTool.cs`, `MillBitLibraryLoader.cs`, `MillOperationKind.cs`.
+
+#### SELECT AREA (soft brush on workpiece only)
+- Tools: Whole / Face / Box / Lasso / Brush / Clear.
+- **Workpiece-only:** `ViewportViewModel.IsMillableWorkpiece` — user imports/scans; never robot, bed, cell env, toolpaths, effectors, modifiers.
+- **Not UV-atlas dependent:** `MillSurfacePaint` stores **world-space vertex weights** (soft falloff). Weights upload into dedicated paint vertex channel (`aPaintUv.x`); material TEXCOORD_0 and PBR maps (units 4–8) untouched.
+- Shader: `MeshRenderer.applySelectionOverlay` — **lime green** wash (`SelectionTint` ~`0.25,1.0,0.20`, strength ~0.88). Applied in Standard / fastcell / arctic / layer / wire / normals paths.
+- Brush UI: bottom-center toolbar when Brush armed (`ShowMillBrushToolbar`, ~250px from bottom) — Size mm + Falloff. **No right-click menu, no sphere cursor.**
+- Alt = erase. Hit triangle always flooded so a pick always leaves a mark.
+- Key: `MillSurfacePaint.cs`, `ViewportView` mill handlers, `ViewportOverlayView.axaml` toolbar, `Picker.FaceHit` / `PickFaceDetailed`.
+
+#### STEP import (Windows)
+- **Occt.NET removed from the load path** — TianTeng package popped a garbled license MessageBox and crashed the host.
+- **Cascadio** (Python OCCT wheel) via private venv: `CascadioStepConverter.cs` + thin `StepLoader.cs` (all platforms). Needs Python 3 on PATH first run.
+- Non-Windows already used cascadio; now shared.
+- Legacy files kept but not compiled: `OcctBootstrap.cs`, `OcctUiSuppressor.cs` (MessageBox auto-OK experiment — superseded).
+- Package refs stripped from App/Viewport/Tests csproj.
+
+#### GLSL / launch crash gotcha (reconfirmed 2026-07-31)
+- NVIDIA rejects **any non-ASCII** in shader source strings (even comments) → `error C0000: unexpected $end` → app dies on first mesh upload.
+- Keep `MeshRenderer.VertSrc` / `FragSrc` pure ASCII.
+
+#### LFAM 3 phase switch: do not select TCP
+- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` + sidebar only.
+- **Does not** call `SelectLfam3Tool` (that set `Robot.SelectedToolIndex` → mount → `_renderer.Select(tool)`).
+- Tool mount still via explicit pick/deposit or robot tool dropdown.
+
+#### Console + MCP milling
+- Console: `mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <Kind>`
+- MCP: `massiveslicer_mill` tool + `massiveslicer_command` docs in `scripts/mcp/massiveslicer_mcp.py`.
+- Bridge: `POST /command` on port from `bridge.port`.
+
+#### Machine-local (do not commit)
+- Default cell LFAM 3; GPU High Performance preference; mill_tools.json; step-env venv.
 
 ### PBR rendering (metallic-roughness + material inspector)
 - Imported GLBs render real **metallic-roughness PBR** from their textures (base colour, MR, normal, AO, emissive) via Cook-Torrance + env IBL + ACES tonemap. Data model: `TextureData`/`MaterialData` + `MeshData.Uvs/Tangents/Material`; loader decodes/dedups images (StbImageSharp); GPU textures pooled in `GpuTextureCache` (units 4-8). Single uber-shader in `MeshRenderer.FragSrc` (mode 0 = PBR; modes 1/2/3 = normals/layer/fastcell unchanged; presets via factor path).
@@ -358,6 +408,28 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 Current baseline: **`docs/KNOWN-TEST-FAILURES.md`** (15 known failures, with reasons).
 The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
+## Key files (SPSM / mill / STEP — 2026-07-31)
+
+| Path | Role |
+|------|------|
+| `src/MassiveSlicer.Core/Models/MillBitTool.cs` | Bit library model + Flat 3in AP90 default |
+| `src/MassiveSlicer.Core/IO/MillBitLibraryLoader.cs` | AppData `mill_tools.json` load/save |
+| `src/MassiveSlicer.Core/Models/MillOperationKind.cs` | Operation catalog + `MillAreaSelectTool` enum |
+| `src/MassiveSlicer.App/ViewModels/SubtractiveSettingsViewModel.cs` | BITS / OPERATION / TOOLPATHING / SELECT AREA |
+| `src/MassiveSlicer.App/ViewModels/MillBitLibraryViewModel.cs` | Bit library dialog VM |
+| `src/MassiveSlicer.App/Views/MillBitLibraryDialog.axaml` | Bit library UI |
+| `src/MassiveSlicer.App/Views/RightPanelView.axaml` | Mill StepCards + SELECT AREA tiles |
+| `src/MassiveSlicer.App/ViewModels/ViewportViewModel.cs` | Mill area state, brush toolbar, phase select (no TCP) |
+| `src/MassiveSlicer.App/Views/ViewportView.axaml.cs` | Mill pointer paint + GL upload of weights |
+| `src/MassiveSlicer.App/Views/ViewportOverlayView.axaml` | Bottom mill brush toolbar |
+| `src/MassiveSlicer.Viewport/Rendering/MillSurfacePaint.cs` | Soft vertex-weight paint |
+| `src/MassiveSlicer.Viewport/Rendering/MeshRenderer.cs` | Paint channel + lime selection overlay shader |
+| `src/MassiveSlicer.Viewport/Scene/Picker.cs` | `PickFaceDetailed` / triangle helpers |
+| `src/MassiveSlicer.Viewport/Loading/CascadioStepConverter.cs` | STEP → GLB via Python cascadio |
+| `src/MassiveSlicer.Viewport/Loading/StepLoader.cs` | Windows STEP entry → cascadio |
+| `src/MassiveSlicer.App/Console/ConsoleCommandRegistry.cs` | `mill` command family |
+| `scripts/mcp/massiveslicer_mcp.py` | MCP mill tool + command docs |
+
 ## Key files (quick reference)
 
 | Area | Paths |
@@ -388,6 +460,16 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 > **The forward-looking backlog now lives in `ROADMAP.md` (repo root).**
 > Items below predate it and are carried there; keep new plans in ROADMAP.md.
 
+### SPSM / `feature/spsm` open items (2026-07-31)
+
+1. **Commit + push** remaining uncommitted SPSM work (mill library, cascadio STEP, soft paint, phase no-TCP, MCP mill) — only `8568268` is on origin so far.
+2. **Mill area paint → real toolpath region** — weights exist in-viewport; need to feed SELECT AREA into subtractive path generators / stock bounds.
+3. **SELECT AREA deeper mesh marquee** if Face/Box/Lasso still feel incomplete vs Brush.
+4. **Auto-unwrap quality** for soft paint is world-vertex-based now (good for CAD); optional xatlas if UV-based tools return.
+5. **Shop verify:** paint on large STEP; mill bit library dialog UX on both 100% / 125% DPI.
+
+### General backlog (older)
+
 1. **PBR polish (core done — see Completed features):** real metallic-roughness PBR with textures now renders. Remaining nice-to-haves: full prefiltered-env + BRDF LUT IBL (v1 uses roughness→LOD + analytic Karis fit); alpha **blend** ordering (v1 = Opaque + Mask only); populate `UvSettingsViewModel` from the selected mesh; later: apply the material system to toolpath meshes + feed the slicer.
    - **"Make it pop" — DONE via user sliders + default backdrop (2026-06-21):** a *hardcoded* in-shader exposure/IBL boost **grayed** the crystal (it's mostly metal → colour comes from albedo-tinted env reflection → brightening hits ACES's desaturation shoulder). So instead: added user-facing **Exposure** + **Reflections (IBL gain)** sliders in the LIGHTING panel (`ViewportViewModel.Exposure`/`IblIntensity` → `SceneRenderer` → per-mesh `MeshRenderer.Exposure`/`IblGain` → `uExposure`/`uIblGain`, defaults 1.0 = neutral) so the user dials it live. Also set a **non-None default backdrop** (`ViewportViewModel` ctor picks AmbienceExposure4k/CasualDay4K/… from `assets/Images/*.hdr`, fallback first image) so imported models get IBL out of the box. Verified: bumping the sliders brightens + glosses the crystal with colour intact.
    - **Import display:** the committed Final Render is colourful and correct (verified after a clean rebuild). If an imported model looks grey/flat, suspect a **stale NAS build** first (clean-rebuild Viewport), then check that `ApplyShaderModeToSubtree` ran (toggling a shader mode forces it).
@@ -401,6 +483,39 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-07-31 — `feature/spsm`: Mill BITS/OPERATION/paint, STEP cascadio, no TCP on phase switch
+
+**Branch:** `feature/spsm` @ MassiveMAKE PC (`C:\Users\MassiveMAKE\MassiveSLICER`). Pushed earlier: `8568268`. Rest uncommitted at session end.
+
+**Mill UI (SPSM)**
+- Mill sidebar: **1 BITS** (library + Flat 3in AP90 default), **2 OPERATION** (strategy + SELECT AREA), **3 TOOLPATHING** (SpindleRpm linked), MORE catch-all.
+- Scan/Mill StepCards match Printing; BACK TO STEPS removed.
+- This PC only: default cell **LFAM 3** (prefs local).
+
+**STEP import**
+- Dropped Occt.NET runtime path (garbled license MessageBox + crashes).
+- Windows STEP = **cascadio** Python (`CascadioStepConverter` + `step-env` venv under AppData).
+- Smoke: `CES - C_EXE_2.stp` → ~8k verts OK.
+
+**SELECT AREA paint**
+- Soft **world-space vertex weights** (`MillSurfacePaint`), lime green wash in `MeshRenderer`.
+- Workpiece-only filter; bottom-center Size/Falloff bar when Brush armed (~250px up).
+- No sphere cursor / no right-click brush menu.
+- Paint channel isolated from PBR maps (attrib 4 + unit-9 legacy unused for vertex mode).
+
+**Phase switch**
+- Print/Scan/Mill sidebar **does not** call `SelectLfam3Tool` → no TCP toolhead selection on phase change.
+
+**Console / MCP**
+- `mill status|area|brush size|brush falloff|op …`
+- MCP `massiveslicer_mill` + command description update.
+
+**Gotchas logged**
+- GLSL must stay ASCII or NVIDIA kills launch on mesh load.
+- Prefer Release build from repo bin path on this PC; kill `MassiveSlicer.App` before rebuild if exe locked.
+
+**Key new files:** see “Key files (SPSM…)” table above.
 
 ### 2026-07-29 — Drop to Plate slid sideways on LFAM 3 (world-vs-parent frame)
 
