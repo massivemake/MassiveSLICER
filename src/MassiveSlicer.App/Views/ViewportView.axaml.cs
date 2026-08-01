@@ -839,29 +839,37 @@ public partial class ViewportView : UserControl
         // headless test exercises the real path rather than a shortcut around it.
         vm.OnExternalNodeTransform = (node, oldLocal, label) =>
         {
-            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
-            MirrorTypedTransformDelta(vm, node, oldLocal);
+            bool isScale = label.Equals("scale", StringComparison.OrdinalIgnoreCase);
+            // A scale deliberately does not mirror onto the toolpath — see OnSelectionScaled below.
+            if (!isScale) MirrorTypedTransformDelta(vm, node, oldLocal);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
             SyncSelectionTransformDisplay(vm);
+            if (isScale)
+            {
+                vm.RefreshScaleFields();
+                vm.OnModelGeometryChanged?.Invoke();
+            }
             SchedulePanelTransformUndo(vm, node, label);
         };
         vm.OnSelectionScaled = (sx, sy, sz) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
             if (node.Placement is not { } p) return;
-            var old = node.LocalTransform;
             p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
             p.ClampScale();
             node.SetPlacement(p);
-            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
-            MirrorTypedTransformDelta(vm, node, old);
             EnsureAboveBed(node);
             vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
+            // No MirrorTypedTransformDelta: mirroring a scale onto the toolpath node would multiply
+            // its baked bead geometry, drawing a part printed with a fatter nozzle than the settings
+            // specify. A resized part needs a genuinely new path, not a stretched one, so the slice
+            // is re-run instead — debounced, so holding a field down does not queue a dozen of them.
+            vm.OnModelGeometryChanged?.Invoke();
             SchedulePanelTransformUndo(vm, node, "Scale");
         };
 
@@ -3417,6 +3425,7 @@ public partial class ViewportView : UserControl
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
                 bool tilted = false;
+                bool scaled = false;
                 if (!cutDragging
                     && _renderer.SelectedNode is { } gzNode
                     && DataContext is ViewportViewModel vmGz)
@@ -3443,6 +3452,8 @@ public partial class ViewportView : UserControl
 
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
                     tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                    scaled = op == GizmoMode.Scale && ChangedScale(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                    if (scaled) vmGz.RefreshScaleFields();
                 }
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
@@ -3459,6 +3470,13 @@ public partial class ViewportView : UserControl
                         // Dragging the TCP mid-scrub = keyframe the offset at this moment
                         // (no re-slice — the adjustment lives on the toolpath timeline).
                         AddTcpKeyframeAtCurrentIndex(vmGz2);
+                    }
+                    else if (scaled)
+                    {
+                        // A resized part is a different part to slice: layer count changes, and the
+                        // bead width the settings ask for has to be laid down at the new size rather
+                        // than stretched with the geometry. Same hook a tilt uses, and debounced.
+                        vmGz2.OnModelGeometryChanged?.Invoke();
                     }
                     else if (tilted)
                     {
@@ -6837,6 +6855,22 @@ public partial class ViewportView : UserControl
 
     /// <summary>How far below the bed still counts as resting on it, in mm.</summary>
     private const float BedContactTolerance = 1e-3f;
+
+    /// <summary>
+    /// Whether a drag actually resized the part, by comparing basis-row lengths.
+    /// </summary>
+    /// <remarks>
+    /// Row length is the scale on that axis and is unchanged by any rotation, so this stays false
+    /// for a scale-mode drag that grabbed a handle and moved nowhere — which matters, because the
+    /// answer decides whether to spend a whole re-slice.
+    /// </remarks>
+    private static bool ChangedScale(Matrix4 before, Matrix4 after)
+    {
+        const float tol = 1e-4f;
+        return MathF.Abs(before.Row0.Xyz.Length - after.Row0.Xyz.Length) > tol
+            || MathF.Abs(before.Row1.Xyz.Length - after.Row1.Xyz.Length) > tol
+            || MathF.Abs(before.Row2.Xyz.Length - after.Row2.Xyz.Length) > tol;
+    }
 
     /// <summary>
     /// Puts <paramref name="node"/> back on the bed if the edit that just ran pushed it through.
@@ -11594,6 +11628,9 @@ public partial class ViewportView : UserControl
                 Math.Round(pivot.X, 2), Math.Round(pivot.Y, 2), Math.Round(pivot.Z, 2),
                 Math.Round(e.X, 2),     Math.Round(e.Y, 2),     Math.Round(e.Z, 2));
             vm.SyncSelectionScaleDisplay(p.Scale.X, p.Scale.Y, p.Scale.Z);
+            // The scale row shows millimetres or percent rather than the raw factor, so it needs its
+            // own pass — and it has to follow a selection change, not just a scale edit.
+            vm.RefreshScaleFields();
             if (remember) RememberCommittedTransform(vm, node);
             return;
         }
@@ -14341,10 +14378,16 @@ public partial class ViewportView : UserControl
         _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
         _bedClampStartMinZ         = BedClampApplies(node) ? LowestWorldZWithLinked(node) : float.MaxValue;
         _bedClampGizmoWorld        = null;
-        BeginTransformLink(node);
-        BeginToolIkDrag(node);
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+
+        // A toolpath is carried along by a move or a rotate, but deliberately NOT by a scale. Its
+        // bead width is baked into the drawn geometry at slice time, so scaling its node fattens
+        // every bead on screen — a picture of a print nobody asked for. The path is re-sliced at the
+        // part's new size on release instead, which is the only way the widths stay honest.
+        if (dragOp != GizmoMode.Scale) BeginTransformLink(node);
+        else                           _transformLinkFollowers = null;
+        BeginToolIkDrag(node);
         switch (dragOp)
         {
             case GizmoMode.Translate:

@@ -157,9 +157,30 @@ public sealed class SceneNode
     /// </summary>
     public NodeTransform EnsurePlacement(Vector3 origin)
     {
-        _placement ??= NodeTransform.FromMatrix(_localTransform, origin);
+        if (_placement is null)
+        {
+            _placement  = NodeTransform.FromMatrix(_localTransform, origin);
+            ImportScale = _placement.Value.Scale;
+        }
         return _placement.Value;
     }
+
+    /// <summary>
+    /// The scale this node had when it first adopted a placement — its "as imported" size, and the
+    /// 100% the scale tool's percent mode is a percentage of.
+    /// </summary>
+    /// <remarks>
+    /// Not simply 1: an STL exported in metres is corrected ×1000 before the placement is taken, and
+    /// a part imported into a rotary cell is scaled down to fit the platter. Both are baked into the
+    /// matrix that <see cref="EnsurePlacement"/> decomposes, so the raw <see cref="NodeTransform.Scale"/>
+    /// is a poor answer to "how big is this compared to the file I opened". Captured at the same
+    /// moment as the pivot, once, and never recomputed.
+    /// <para>
+    /// <c>null</c> on a node restored from a workspace saved before this existed; callers should
+    /// read that as <see cref="Vector3.One"/>, which is what the raw scale already meant.
+    /// </para>
+    /// </remarks>
+    public Vector3? ImportScale { get; set; }
 
     /// <summary>Accumulated world-space transform, computed from the parent chain.</summary>
     public Matrix4 WorldTransform

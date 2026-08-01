@@ -1732,6 +1732,15 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "scale",
+            Aliases = ["scale-tool"],
+            Description = "The scale tool: size in mm or % of import, proportion chain, Fit to Cell, Reset Scale",
+            Usage = "scale [show|mm|pct|chain [on|off]|reset|fit|x <v>|y <v>|z <v>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.ScaleCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "bed",
             Aliases = ["bed-clamp"],
             Description = "Bed height vs the selected part's lowest point — is it resting, floating or through",

@@ -13,6 +13,7 @@
 
     <UserControl.Resources>
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
+        <conv:BoolConverter x:Key="NotCvt" Invert="True"/>
     </UserControl.Resources>
 
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
@@ -782,6 +783,72 @@
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
                                        Padding="5,4" VerticalContentAlignment="Center" Margin="0"
                                        ToolTip.Tip="Rotation about the part's own Z axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ScaleValuesRow"
+                        Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8,6"
+                        Margin="0,-3,0,0"
+                        IsVisible="{Binding IsScaleActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <!-- Unit toggle: reads as the unit currently in force, click swaps it. -->
+                        <Border x:Name="ScaleUnitToggle" Background="#F2161616" Cursor="Hand"
+                                BorderBrush="#3D3D3D" BorderThickness="1" CornerRadius="5"
+                                Padding="6,4" Margin="0,0,7,0" MinWidth="34"
+                                ToolTip.Tip="Switch between millimetres and percent of the size this part was imported at. In percent, typing 100 puts it back to its original size.">
+                            <TextBlock Text="{Binding ScaleUnitLabel}" VerticalAlignment="Center"
+                                       HorizontalAlignment="Center" FontSize="11" FontWeight="Bold"
+                                       Foreground="#DDDDDD"/>
+                        </Border>
+
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldX}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own X. Accepts maths: 1200/2, 300x3"/>
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldY}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own Y. Accepts maths: 1200/2, 300x3"/>
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldZ}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own Z. Accepts maths: 1200/2, 300x3"/>
+
+                        <!-- Chain: on, editing any axis rescales the other two by the same ratio. -->
+                        <Border x:Name="ScaleChainToggle" Cursor="Hand"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="6,4" Margin="0,0,7,0"
+                                ToolTip.Tip="Keep the part in proportion. On, changing one axis rescales the other two by the same ratio — halving 100 to 50 also takes 1300 down to 650. Off, each axis moves on its own.">
+                            <Panel>
+                                <ia:Icon Value="mdi-link-variant" FontSize="14" Foreground="#4EA8DE"
+                                         IsVisible="{Binding IsScaleChained}"/>
+                                <ia:Icon Value="mdi-link-variant-off" FontSize="14" Foreground="#777777"
+                                         IsVisible="{Binding IsScaleChained, Converter={StaticResource NotCvt}}"/>
+                            </Panel>
+                        </Border>
+
+                        <Border Width="1" Background="#3D3D3D" Margin="0,2,7,2"/>
+
+                        <!-- Contextual to Scale mode, per the spec: these two live here rather than
+                             in the always-visible toolbar, because they mean nothing in Move or Rotate. -->
+                        <Border x:Name="FitToCellButton" Cursor="Hand"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="8,4" Margin="0,0,7,0"
+                                ToolTip.Tip="Scale the part up or down uniformly until it just fits the bed, with room to spare. Stops at whichever axis runs out first.">
+                            <TextBlock Text="Fit to Cell" VerticalAlignment="Center" FontSize="11" Foreground="#DDDDDD"/>
+                        </Border>
+                        <Border x:Name="ResetScaleButton" Cursor="Hand"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="8,4" Margin="0"
+                                ToolTip.Tip="Put the part back to the size it was imported at.">
+                            <TextBlock Text="Reset Scale" VerticalAlignment="Center" FontSize="11" Foreground="#DDDDDD"/>
+                        </Border>
                     </StackPanel>
                 </Border>
         </StackPanel>
