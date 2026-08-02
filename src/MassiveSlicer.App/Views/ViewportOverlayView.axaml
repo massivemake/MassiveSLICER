@@ -623,9 +623,8 @@
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>
 
-        <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
-             Same LiveIo view model — the extruder/milling bridge config is set on
-             every cell swap, so the monitor works on any cell. -->
+        <!-- Live I/O monitor dock (all cells, including LFAM 3 — bottom workflow bar
+             is hidden; phase switching is in the sidebar). Same LiveIo view model. -->
         <Border x:Name="LiveIoDock"
                 IsVisible="{Binding ShowStandaloneLiveIo}"
                 HorizontalAlignment="Right"

@@ -994,8 +994,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public LiveIoMonitorViewModel LiveIo { get; } = new();
 
-    /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
-    public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
+    /// <summary>
+    /// Bottom-right Live I/O toggle + panel on the viewport for every active cell.
+    /// (LFAM 3 used to host this inside the large workflow timeline; that bar is hidden
+    /// while phase switching lives in the sidebar, so the dock must show on LFAM 3 too.)
+    /// </summary>
+    public bool ShowStandaloneLiveIo => ActiveCell is not null;
 
     private Avalonia.Thickness _bottomDockMargin = new(8, 8, 8, 8);
     /// <summary>Margin for the bottom corner docks (ERP left, Live I/O right). The overlay

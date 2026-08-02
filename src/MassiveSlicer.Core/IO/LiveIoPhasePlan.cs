@@ -35,8 +35,8 @@ public static class LiveIoPhasePlan
         AcceptanceCriteria:
         [
             "Open LFAM 3 → Show Live I/O → Sync Robot: Robot column shows Live · C3Bridge",
-            "$IN[6–17] digital inputs update ~2×/s with lime/amber/red indicators",
-            "$OUT[5–16] digital outputs show HIGH/LOW; ⇅ force writes with Confirm",
+            "$IN[1–17] digital inputs use MassiveDRIVE names (Spindle Docked, Extruder Docked, …)",
+            "$OUT[1–17] + $OUT[51] Spindle match MassiveDRIVE; ⇅ force writes with Confirm",
             "$ANOUT[1–4] show °C / RPM % using LFAM scaling",
             "Closing panel or desyncing stops C3Bridge I/O polling (axes still stream)",
         ],
