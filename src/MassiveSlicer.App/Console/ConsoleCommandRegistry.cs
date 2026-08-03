@@ -1902,7 +1902,7 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "bed-cal",
             Aliases = ["bedcal", "auto-bed-cal", "run-bed-cal"],
-            Description = "Run Auto Bed Calibration (waypoint → CELL MS_AXIS E1 sweep → fit → BASE_DATA)",
+            Description = "Bed cal via MassiveDRIVE (MS_CMD=93 E1 sweep + Zivid). Play LFAM3_RSI_BulkPTP; path idle.",
             Execute = (ctx, _) => ctx.Main.StartBedCalibration(),
         });
 
@@ -1910,8 +1910,42 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "scan-cal",
             Aliases = ["scancal", "auto-scan-cal", "run-scan-cal"],
-            Description = "Run Auto 3D Scan (hand-eye) Calibration (waypoint → CELL MS_AXIS wrist sweep → fit → tool #6)",
+            Description = "Scan hand-eye via MassiveDRIVE (MS_CMD=93 wrist sweep + Zivid → tool #6). Play LFAM3_RSI_BulkPTP.",
             Execute = (ctx, _) => ctx.Main.StartScanCalibration(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "calibrate",
+            Aliases = ["lfam3-cal", "cal-wizard", "cell-cal"],
+            Description = "LFAM3 cal wizard via MassiveDRIVE: scan-cal → bed-cal. Pendant LFAM3_RSI_BulkPTP.",
+            Usage = "calibrate [scan|bed|full]",
+            Execute = (ctx, args) =>
+            {
+                string? mode = string.IsNullOrWhiteSpace(args) ? null : args.Trim().Split(' ', 2)[0];
+                ctx.Main.StartLfam3CalibrationWizard(mode);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drive-status",
+            Aliases = ["md-status", "massive-drive-status"],
+            Description = "Query MassiveDRIVE path executor busy state (safe for CELL cal?)",
+            Execute = (ctx, __) => { var _ = ctx.Main.ReportMassiveDriveStatusAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drive-stop",
+            Aliases = ["md-stop", "stop-path"],
+            Description = "Stop MassiveDRIVE path executor (so CELL bed/scan cal can run)",
+            Usage = "drive-stop [reason]",
+            Execute = (ctx, args) =>
+            {
+                string reason = string.IsNullOrWhiteSpace(args) ? "slicer-cal" : args.Trim();
+                var _ = ctx.Main.StopMassiveDrivePathAsync(reason);
+            },
         });
 
         Register(new ConsoleCommandDefinition
@@ -1976,10 +2010,64 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "waypoint",
             Aliases = ["wp", "goto"],
-            Description = "List, recall, or save reusable cell waypoints (scan/bed cal, etc.)",
-            Usage = "waypoint list | waypoint go <name> [vel%] | waypoint save <name>",
+            Description = "List, recall, or save reusable cell waypoints (scan/bed cal, home, etc.)",
+            Usage = "waypoint list | waypoint go <name> [vel%] | waypoint save <name> | waypoint save-scan",
             Execute = (ctx, args) => RunWaypoint(ctx, args),
         });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "mark-scan",
+            Aliases = ["scan-pose", "mark-scan-pose", "teach-scan"],
+            Description = "Save current live pose as scanner-down-bed (scan-cal + bed-cal tags)",
+            Execute = (ctx, __) => { var t = ctx.Main.MarkScanPositionAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "home",
+            Aliases = ["xhome"],
+            Description = "Teach or recall cell Home via MassiveDRIVE (joint PTP). Like KUKA XHOME storage in the cell.",
+            Usage = "home save [name] | home go [vel%]",
+            Execute = (ctx, args) => RunHome(ctx, args),
+        });
+    }
+
+    private static void RunHome(ConsoleCommandContext ctx, string args)
+    {
+        var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
+        {
+            // bare `home` → go
+            _ = ctx.Main.GoToSavedHomeAsync();
+            return;
+        }
+
+        var sub = parts[0].ToLowerInvariant();
+        switch (sub)
+        {
+            case "save" or "mark" or "teach" or "set":
+            {
+                string name = parts.Length >= 2 ? parts[1] : "Home";
+                _ = ctx.Main.MarkHomePositionAsync(name);
+                break;
+            }
+            case "go" or "move" or "run":
+            {
+                int vel = 20;
+                if (parts.Length >= 2 && int.TryParse(parts[1], out var v))
+                    vel = v;
+                _ = ctx.Main.GoToSavedHomeAsync(vel);
+                break;
+            }
+            default:
+                // `home 15` → go at 15%
+                if (int.TryParse(parts[0], out var velOnly))
+                    _ = ctx.Main.GoToSavedHomeAsync(velOnly);
+                else
+                    ctx.LogError("usage: home save [name] | home go [vel%]");
+                break;
+        }
     }
 
     private static void RunWaypoint(ConsoleCommandContext ctx, string args)
@@ -1987,7 +2075,7 @@ public sealed class ConsoleCommandRegistry
         var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
-            ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name>");
+            ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name> | waypoint save-scan");
             return;
         }
 
@@ -2011,10 +2099,21 @@ public sealed class ConsoleCommandRegistry
             case "save" or "add" or "store":
                 if (parts.Length < 2)
                 {
-                    ctx.LogError("usage: waypoint save <name>");
+                    ctx.LogError("usage: waypoint save <name>  or  waypoint save-scan");
                     return;
                 }
-                _ = ctx.Main.SaveWaypointFromRobotAsync(parts[1]);
+                if (parts[1].Equals("scan", StringComparison.OrdinalIgnoreCase)
+                    || parts[1].Equals("scan-pose", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = ctx.Main.MarkScanPositionAsync();
+                }
+                else
+                {
+                    _ = ctx.Main.SaveWaypointFromRobotAsync(parts[1]);
+                }
+                break;
+            case "save-scan" or "mark-scan" or "scan":
+                _ = ctx.Main.MarkScanPositionAsync();
                 break;
             default:
                 // Shorthand: `waypoint scanner-down-bed` → go

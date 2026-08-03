@@ -3114,7 +3114,10 @@
                                 <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                            Text="Recall scan poses, capture from the Zivid camera, and choose where scans are written."/>
 
-                                <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False">
+                                <!-- QUICK POSITIONS hidden until MassiveDRIVE joint recall is reliable (LFAM 3).
+                                     Keep markup so we can re-show later; ViewModel still works via console. -->
+                                <Expander Classes="SectionExpander" Header="QUICK POSITIONS" IsExpanded="False"
+                                          IsVisible="False">
                                     <StackPanel Margin="0,2,0,6">
                                         <TextBlock Classes="LabelMuted" Margin="8,4,8,6" TextWrapping="Wrap"
                                                    Text="Recall saved scan poses. Robot must be synced before moving or saving."/>
@@ -3211,8 +3214,8 @@
                                 <Button Content="AUTO-CALIBRATE SCAN TOOL"
                                         Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="10,2,10,2"
                                         Command="{Binding Scan.Calibration.AutoCalibrateCommand}"
-                                        ToolTip.Tip="Place the calibration card in the bed centre and aim the scanner at it. Runs SCAN_TOOL_CAL (or start it on the pendant): the robot nutates the wrist through 9 views, the app scans at each, then computes and applies the hand-eye result."/>
-                                <TextBlock Text="Auto: card in the bed centre, scanner aimed at it, robot synced + in AUTO with drives on. Or collect poses manually below."
+                                        ToolTip.Tip="Hand-eye auto-cal. Wrist moves in joint space via MassiveDRIVE MS_CMD=93 (SPTP MS_AXIS). Needs BulkPTP REL 36+. Pendant: AUT, drives ON, path idle. Saves tool #6."/>
+                                <TextBlock Text="MassiveDRIVE movement “Scanner Calibration” (notes=scan). Card on bed, BulkPTP running, path idle. Teach poses on Drive — not in SLICER."
                                            Classes="LabelMuted" Margin="10,0,10,4" TextWrapping="Wrap"/>
 
                                 <Grid Margin="10,4,10,4">

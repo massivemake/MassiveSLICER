@@ -92,21 +92,21 @@
   "bed": {
     "modelPath": "assets/cells/LFAM3/LFAM3Bed.glb",
     "origin": {
-      "x": 2134.44,
-      "y": -52.88,
-      "z": 893.67
+      "x": 2135.45,
+      "y": -52.54,
+      "z": 916.31
     },
     "width": 1800,
     "depth": 1800,
     "gridOrigin": {
-      "x": 1234.44,
-      "y": -952.8799,
-      "z": 893.67
+      "x": 1235.45,
+      "y": -952.5399,
+      "z": 916.31
     },
     "baseData": {
-      "x": 2134.44,
-      "y": -52.88,
-      "z": -106.33002
+      "x": 2135.45,
+      "y": -52.54,
+      "z": -83.69
     },
     "diameter": 1828.8,
     "rotationSign": -1,
@@ -175,16 +175,17 @@
     "bottomPath": "assets/cells/LFAM3/rotary_bed_bottom.glb",
     "topPath": "assets/cells/LFAM3/rotary_bed_top.glb",
     "basePos": [
-      2134.44,
-      -52.88,
-      -663.75757
+      2135.45,
+      -52.54,
+      -654.8739
     ],
     "baseAbc": [
-      -0.092999995,
+      -6.0329995,
       0,
       -90
     ],
     "e1Sign": 1,
+    "machineDefIndex": 2,
     "orientationOffsetDeg": -0.99
   },
   "tools": [
@@ -212,20 +213,20 @@
     {
       "name": "Scanner",
       "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
-      "tcpX": 694.76,
-      "tcpY": 17.74,
-      "tcpZ": 312.44,
-      "tcpA": 15,
-      "tcpB": 0,
-      "tcpC": 0,
+      "tcpX": -55.3,
+      "tcpY": -103.64,
+      "tcpZ": 260.18,
+      "tcpA": 0.084,
+      "tcpB": 2.457,
+      "tcpC": -1.211,
       "toolFrameRoll": 0,
       "krlIndex": 6,
-      "sensorOriginX": -55.57,
-      "sensorOriginY": -103.6,
-      "sensorOriginZ": 260.57,
-      "sensorOriginA": 0.077,
-      "sensorOriginB": 2.434,
-      "sensorOriginC": -1.349,
+      "sensorOriginX": -55.3,
+      "sensorOriginY": -103.64,
+      "sensorOriginZ": 260.18,
+      "sensorOriginA": 0.084,
+      "sensorOriginB": 2.457,
+      "sensorOriginC": -1.211,
       "dock": {
         "x": 1340.3301,
         "y": -2028.6117,
@@ -305,10 +306,11 @@
   "view": {
     "azimuth": -33.80002,
     "elevation": 14.000105,
-    "radius": 1640.2579,
-    "targetX": 1832.4707,
-    "targetY": 56.76979,
-    "targetZ": 1061.0533
+    "radius": 2056.5847,
+    "targetX": 1661.6918,
+    "targetY": -90.47764,
+    "targetZ": 1301.7042,
+    "isOrthographic": false
   },
   "bedScan": {
     "scanPose": [

@@ -92,23 +92,24 @@
   "bed": {
     "modelPath": "assets/cells/LFAM3/LFAM3Bed.glb",
     "origin": {
-      "x": 2032.71,
-      "y": 56.09,
-      "z": 891.83
+      "x": 2135.45,
+      "y": -52.54,
+      "z": 916.31
     },
     "width": 1800,
     "depth": 1800,
     "gridOrigin": {
-      "x": 1132.71,
-      "y": -843.91,
-      "z": 891.83
+      "x": 1235.45,
+      "y": -952.5399,
+      "z": 916.31
     },
     "baseData": {
-      "x": 2032.71,
-      "y": 56.09,
-      "z": -108.17
+      "x": 2135.45,
+      "y": -52.54,
+      "z": -83.69
     },
     "diameter": 1828.8,
+    "rotationSign": -1,
     "hidden": true
   },
   "boosterFrame": {
@@ -130,8 +131,8 @@
       "modelPath": "assets/cells/LFAM3/Stands/stand_extruder.glb",
       "position": [
         0.236,
-        0.45,
-        2.340924
+        0.26573002,
+        2.34092
       ],
       "rotation": [
         -1.5707964,
@@ -145,13 +146,13 @@
       "modelPath": "assets/cells/LFAM3/Stands/stand_scanner.glb",
       "position": [
         1.34,
-        0.45,
-        2.3776686
+        0.26572505,
+        2.1268914
       ],
       "rotation": [
-        -1.5707964,
-        0,
-        0
+        1.5707964,
+        -8.742278e-08,
+        -3.1415925
       ]
     },
     {
@@ -159,14 +160,14 @@
       "name": "Spindle Stand",
       "modelPath": "assets/cells/LFAM3/Stands/stand_spindle.glb",
       "position": [
-        -0.769,
-        0.45,
-        2.3776698
+        -0.5538245,
+        0.25787845,
+        2.0828164
       ],
       "rotation": [
-        -1.5707964,
-        0,
-        0
+        1.5707964,
+        -8.742278e-08,
+        -3.1415925
       ]
     }
   ],
@@ -174,16 +175,18 @@
     "bottomPath": "assets/cells/LFAM3/rotary_bed_bottom.glb",
     "topPath": "assets/cells/LFAM3/rotary_bed_top.glb",
     "basePos": [
-      2048.242,
-      63.63916,
-      -1090.5845
+      2135.45,
+      -52.54,
+      -654.8739
     ],
     "baseAbc": [
-      0,
+      -6.0329995,
       0,
       -90
     ],
-    "e1Sign": 1
+    "e1Sign": 1,
+    "machineDefIndex": 2,
+    "orientationOffsetDeg": -0.99
   },
   "tools": [
     {
@@ -210,20 +213,20 @@
     {
       "name": "Scanner",
       "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
-      "tcpX": -100,
-      "tcpY": 100,
-      "tcpZ": 661.74,
-      "tcpA": 105.21,
-      "tcpB": 177.55,
-      "tcpC": 178.63,
+      "tcpX": -55.3,
+      "tcpY": -103.64,
+      "tcpZ": 260.18,
+      "tcpA": 0.084,
+      "tcpB": 2.457,
+      "tcpC": -1.211,
       "toolFrameRoll": 0,
       "krlIndex": 6,
-      "sensorOriginX": -114.11,
-      "sensorOriginY": 26.69,
-      "sensorOriginZ": 262.23,
-      "sensorOriginA": 105.21,
-      "sensorOriginB": 177.55,
-      "sensorOriginC": 178.63,
+      "sensorOriginX": -55.3,
+      "sensorOriginY": -103.64,
+      "sensorOriginZ": 260.18,
+      "sensorOriginA": 0.084,
+      "sensorOriginB": 2.457,
+      "sensorOriginC": -1.211,
       "dock": {
         "x": 1340.3301,
         "y": -2028.6117,
@@ -294,15 +297,20 @@
   "scanToolName": "Scanner",
   "bridgeIp": "192.168.0.153",
   "bridgePort": 7000,
+  "massiveDriveUrl": "http://192.168.0.233:8080",
+  "massiveDriveCellId": "lfam3",
   "extIp": "192.168.0.196",
   "extBridgePort": 8765,
+  "millBridgePort": 8765,
+  "hasMilling": false,
   "view": {
-    "azimuth": -43.800022,
-    "elevation": 8,
-    "radius": 3419.4116,
-    "targetX": 1749.5077,
-    "targetY": 45.24054,
-    "targetZ": 1631.6459
+    "azimuth": -33.80002,
+    "elevation": 14.000105,
+    "radius": 2056.5847,
+    "targetX": 1661.6918,
+    "targetY": -90.47764,
+    "targetZ": 1301.7042,
+    "isOrthographic": false
   },
   "bedScan": {
     "scanPose": [
@@ -314,6 +322,112 @@
       0
     ],
     "rotaryAxisIndex": 1,
-    "scanSteps": 8
-  }
+    "scanSteps": 8,
+    "bedCalVantageOffsetsY": [
+      0,
+      -300
+    ],
+    "scanCalWristDeltas": [
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": 8,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": -4,
+        "a6": 0
+      },
+      {
+        "a4": 8,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": -8,
+        "a5": 0,
+        "a6": 0
+      },
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": 15
+      },
+      {
+        "a4": 0,
+        "a5": 0,
+        "a6": -15
+      },
+      {
+        "a4": 7,
+        "a5": 7,
+        "a6": 0
+      },
+      {
+        "a4": -7,
+        "a5": -7,
+        "a6": 0
+      }
+    ]
+  },
+  "waypoints": [
+    {
+      "name": "scanner-down-bed",
+      "description": "Scanner aimed down ~24\u2033 above bed centre \u2014 3D scan cal + auto bed cal",
+      "tags": [
+        "scan-cal",
+        "bed-cal"
+      ],
+      "tcpX": 2093.6,
+      "tcpY": -17.2,
+      "tcpZ": 131.6,
+      "tcpA": -90.057,
+      "tcpB": -2.31,
+      "tcpC": 179.71,
+      "joints": [
+        1.66,
+        -66.75,
+        109.43,
+        -180.19,
+        -46.19,
+        197,
+        0
+      ],
+      "tool": 6,
+      "base": 0,
+      "velocityPct": 20,
+      "preferJoints": true
+    },
+    {
+      "name": "down-45-deg",
+      "description": "DOWN 45 Deg",
+      "tags": [
+        "scan-quick"
+      ],
+      "tcpX": -73.08354,
+      "tcpY": 160.37422,
+      "tcpZ": 196.8648,
+      "tcpA": -88.99168,
+      "tcpB": -42.59595,
+      "tcpC": 178.87498,
+      "joints": [
+        -18.044012,
+        -58.327705,
+        106.933044,
+        -136.62622,
+        -63.415775,
+        149.5646,
+        60
+      ],
+      "tool": 6,
+      "base": 0,
+      "velocityPct": 20,
+      "preferJoints": true
+    }
+  ]
 }

@@ -12,9 +12,9 @@ public static class Lfam3LiveIoCatalog
     public static LiveIoConfig Default { get; } = new(
     [
         RobotSection(),
-        ScanSection(),
         ExtruderSection(),
-        MillingSection(),
+        MillingSection(), // Spindle column (right of KUKA + Extruder)
+        ScanSection(),
     ]);
 
     static LiveIoSectionConfig RobotSection() => new("Robot (KUKA)",
@@ -111,7 +111,8 @@ public static class Lfam3LiveIoCatalog
         new("Nozzle RTD 2",        "RTDValue_2",                 LiveIoSignalKind.AnalogInput, LiveIoSource.ExtruderBridge, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
     ]);
 
-    static LiveIoSectionConfig MillingSection() => new("Milling Spindle",
+    /// <summary>Spindle cabinet (milling RevPi) — shown as its own Live I/O column.</summary>
+    static LiveIoSectionConfig MillingSection() => new("Spindle",
     [
         // Milling cabinet RevPi — lfam-monitor bridge on millIp:8765 (LFAM3 only)
         new("Gate open stop",      "DI_04_gateOpenStop",    LiveIoSignalKind.DigitalInput,  LiveIoSource.MillingModbus, LiveIoHighlight.Safety),

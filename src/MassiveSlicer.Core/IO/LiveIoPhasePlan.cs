@@ -60,15 +60,16 @@ public static class LiveIoPhasePlan
 
     public static LiveIoPhaseDefinition Phase3 { get; } = new(
         Number: 3,
-        Title: "Milling Spindle",
+        Title: "Spindle",
         Status: LiveIoPhaseStatus.Implemented,
         PrimarySource: LiveIoSource.MillingModbus,
-        ConnectionSummary: "lfam-monitor JSON bridge TCP:8765 on millIp (LFAM3: 192.168.0.249)",
+        ConnectionSummary: "lfam-monitor JSON bridge TCP:8765 on millIp (LFAM3: 192.168.0.249) + ATV340 RPM",
         AcceptanceCriteria:
         [
-            "Milling DI live: gate, SS1, emergency, KUKA-running signal",
+            "Spindle DI live: gate, SS1, emergency, KUKA-running signal",
             "Status lamps (red/yellow/green) reflect milling cabinet state",
-            "Milling section status shows P3 live · bridge when millIp reachable",
+            "RPM setpoint field polls ATV setpoint; Set writes via bridge set_rpm",
+            "Spindle section status shows live · bridge when millIp reachable",
         ],
         ImplementationTasks: []);
 
@@ -79,7 +80,8 @@ public static class LiveIoPhasePlan
         "Robot (KUKA)"     => Phase1,
         "Scanner"          => Phase2,
         "Pellet Extruder"  => Phase2,
-        "Milling Spindle"  => Phase3,
+        "Spindle"          => Phase3,
+        "Milling Spindle"  => Phase3, // legacy title
         _                  => null,
     };
 
