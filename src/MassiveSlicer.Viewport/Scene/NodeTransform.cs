@@ -120,6 +120,36 @@ public struct NodeTransform
     }
 
     /// <summary>
+    /// True when two placements are the same to within floating-point noise — i.e. re-applying one
+    /// over the other moved nothing a user could see.
+    /// </summary>
+    /// <remarks>
+    /// Exact equality is useless for this question. Typing a field's own value straight back sends
+    /// it through a divide and a multiply that do not cancel exactly: entering 1847.4 on a part
+    /// whose measured extent is 1847.39990234375 yields a scale factor of 1.0000000528, not 1. The
+    /// matrix then differs, and anything gated on "did this change" fires — for a scale edit that
+    /// means a full re-slice, seconds of work and a re-posed robot for an edit nobody made.
+    /// <para>
+    /// The tolerance is relative so it means the same thing for a scale factor near 1 and for a
+    /// translation of several thousand millimetres. At 1e-5 the widest column here (a ~3700mm
+    /// position) resolves to about 0.04mm, far below anything the machine can act on, while a
+    /// genuine edit of even a hundredth of a percent still registers.
+    /// </para>
+    /// </remarks>
+    public static bool ApproximatelyEqual(Matrix4 a, Matrix4 b, float tolerance = 1e-5f)
+    {
+        for (int row = 0; row < 4; row++)
+        for (int col = 0; col < 4; col++)
+        {
+            float x = a[row, col];
+            float y = b[row, col];
+            float scale = MathF.Max(1f, MathF.Max(MathF.Abs(x), MathF.Abs(y)));
+            if (MathF.Abs(x - y) > tolerance * scale) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// How far a matrix's basis is from square, as the largest absolute dot product between its
     /// normalised rows (0 = perpendicular, 1 = collapsed). Non-zero means an older build sheared
     /// this node and <see cref="FromMatrix"/> will straighten it.

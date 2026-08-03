@@ -407,4 +407,59 @@ public class NodeTransformTest
 
         AssertAxes(before, t);
     }
+
+    // -- ApproximatelyEqual ----------------------------------------------------
+
+    [Fact]
+    public void Retyping_a_fields_own_value_reads_as_no_change()
+    {
+        // The exact arithmetic behind Jeff's "clicking a field re-slices", 2026-08-03. The part
+        // measures 1847.39990234375mm; the box shows "1847.40"; committing that divides back to a
+        // scale factor of 1.0000000528, not 1. Exact matrix equality caught none of it, and the
+        // app re-sliced — verified through the bridge, the toolpath gained seven moves.
+        const float measured = 1847.39990234375f;
+        float ratio = 1847.4f / measured;
+        Assert.NotEqual(1f, ratio);   // the whole reason this helper exists
+
+        var before = Matrix4.CreateScale(1f) * Matrix4.CreateTranslation(2806f, 19f, 670f);
+        var after  = Matrix4.CreateScale(ratio) * Matrix4.CreateTranslation(2806f, 19f, 670f);
+
+        Assert.NotEqual(before, after);
+        Assert.True(NodeTransform.ApproximatelyEqual(before, after));
+    }
+
+    [Fact]
+    public void A_real_scale_change_reads_as_a_change()
+    {
+        var before = Matrix4.CreateScale(1f);
+        var half   = Matrix4.CreateScale(0.5f);
+
+        Assert.False(NodeTransform.ApproximatelyEqual(before, half));
+    }
+
+    [Fact]
+    public void An_edit_of_a_hundredth_of_a_percent_still_reads_as_a_change()
+    {
+        // The tolerance must not swallow a small but deliberate edit. 1847.4 -> 1847.5mm is a
+        // 0.0054% change, well under anything a person would call significant, and it must still
+        // re-slice.
+        var before = Matrix4.CreateScale(1f);
+        var nudged = Matrix4.CreateScale(1847.5f / 1847.4f);
+
+        Assert.False(NodeTransform.ApproximatelyEqual(before, nudged));
+    }
+
+    [Fact]
+    public void The_tolerance_scales_with_the_magnitude_of_a_translation()
+    {
+        // A relative tolerance, so it means the same thing for a scale factor near 1 and for a
+        // position of several thousand millimetres. 0.001mm on a 3700mm position is noise; 1mm is
+        // a move, and the machine can act on it.
+        var at3700  = Matrix4.CreateTranslation(3700f, 0f, 0f);
+        var noise   = Matrix4.CreateTranslation(3700.001f, 0f, 0f);
+        var oneMm   = Matrix4.CreateTranslation(3701f, 0f, 0f);
+
+        Assert.True(NodeTransform.ApproximatelyEqual(at3700, noise));
+        Assert.False(NodeTransform.ApproximatelyEqual(at3700, oneMm));
+    }
 }

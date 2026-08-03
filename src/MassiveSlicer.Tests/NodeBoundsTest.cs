@@ -166,13 +166,13 @@ public class NodeBoundsTest
         Assert.All(markers.Take(26), m =>
             Assert.Equal(markers[0].PendingMesh!.BaseColor, m.PendingMesh!.BaseColor));
 
-        // Bigger than a surface marker, so it still reads through an overlapping face centre.
+        // Same size as the other 26 — Jeff's call: colour alone is enough to pick it out, so the
+        // centre marker must not be inflated to shout about itself.
         static float Span(MeshData m)
         {
             var xs = m.Positions.Select(p => p.X).ToList();
             return xs.Max() - xs.Min();
         }
-        Assert.True(Span(centreMesh) > Span(markers[0].PendingMesh!),
-            "the centre marker should be drawn larger than a surface marker");
+        Assert.Equal(Span(markers[0].PendingMesh!), Span(centreMesh), precision: 5);
     }
 }

@@ -203,4 +203,52 @@ public class TransformNumberBoxClickTest
             Assert.Equal(box.Text!.Length, length);
         });
     }
+
+    [Fact]
+    public void Clicking_in_and_out_without_typing_does_not_change_the_value()
+    {
+        // Jeff, 2026-08-03: "just clicking on a field triggers a reslice. Even if I dont change
+        // values." A scale field holds a float widened to a double, so 1847.39990234375 renders
+        // as "1847.40" and parses back as 1847.4 — a 1e-4 difference, far above the old 1e-9
+        // no-change threshold. Every focus-out therefore committed an edit nobody made, and for
+        // the scale fields an edit means a full re-slice.
+        _ui.OnUiThread(() =>
+        {
+            var (window, box, other) = Show(1847.39990234375);
+            Assert.Equal("1847.40", box.Text);
+
+            int changes = 0;
+            box.PropertyChanged += (_, e) =>
+            {
+                if (e.Property == TransformNumberBox.ValueProperty) changes++;
+            };
+
+            Click(window, box);
+            Click(window, other);   // blur — this is what commits
+            Assert.False(box.IsFocused);
+
+            Assert.Equal(0, changes);
+            Assert.Equal(1847.39990234375, box.Value);
+            Assert.Equal("1847.40", box.Text);
+        });
+    }
+
+    [Fact]
+    public void A_real_edit_still_commits()
+    {
+        // Guards the fix above against over-reach: rejecting no-op commits must not reject
+        // genuine ones. Without this, "never assign Value" would pass the test before it.
+        _ui.OnUiThread(() =>
+        {
+            var (window, box, other) = Show(1847.39990234375);
+
+            Click(window, box);
+            window.KeyTextInput("900");
+            Dispatcher.UIThread.RunJobs();
+            Click(window, other);
+
+            Assert.Equal(900d, box.Value);
+            Assert.Equal("900.00", box.Text);
+        });
+    }
 }

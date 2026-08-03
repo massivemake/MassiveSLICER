@@ -191,7 +191,7 @@ public class TransformNumberBox : TextBox
     private void Commit()
     {
         if (NumericEntryExpression.TryEvaluate(Text, Value, out double evaluated)
-            && Math.Abs(evaluated - Value) > 1e-9)
+            && !RendersTheSameAsCurrent(evaluated))
             Value = evaluated;
 
         // Always re-render, whether the value changed, stayed the same, or the entry was rejected.
@@ -199,6 +199,29 @@ public class TransformNumberBox : TextBox
         // something half-typed — which meant that after pressing Enter the box went on showing the
         // expression ("100+50") until focus left, even though the part had already moved to 150.
         SyncTextFromValue();
+    }
+
+    /// <summary>
+    /// True when <paramref name="candidate"/> is indistinguishable from <see cref="Value"/> at the
+    /// precision this box displays — i.e. the user did not actually change anything.
+    /// </summary>
+    /// <remarks>
+    /// This used to be an absolute <c>1e-9</c> epsilon, which was far tighter than the two decimals
+    /// the box shows. Every value here starts life as a <c>float</c> widened to a <c>double</c>, so
+    /// a scale of 1847.39990234375 renders as "1847.40" and parses straight back as 1847.4 — a
+    /// difference of 1e-4, comfortably over the old threshold. Merely clicking into a field and
+    /// back out therefore committed an edit nobody made: harmless-looking on the position and
+    /// rotation fields (a wasted undo entry), but the scale fields invalidate the toolpath, so it
+    /// cost a full re-slice every time. Jeff reported exactly that, 2026-08-03.
+    /// <para>
+    /// Comparing the rendered text rather than the numbers also draws the line in the right place:
+    /// an edit too small to show up in the box is an edit the user can neither see nor verify.
+    /// </para>
+    /// </remarks>
+    private bool RendersTheSameAsCurrent(double candidate)
+    {
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        return candidate.ToString(FormatString, inv) == Value.ToString(FormatString, inv);
     }
 
     // -- Keeping the text in step ---------------------------------------------

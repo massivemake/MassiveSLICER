@@ -30,12 +30,9 @@ public static class OriginPickOverlay
     /// </summary>
     private static readonly Vector4 CenterColor = new(1.00f, 0.76f, 0.16f, 1.00f);
 
-    /// <summary>Marker cube edge, as a fraction of the box's diagonal.</summary>
+    /// <summary>Marker cube edge, as a fraction of the box's diagonal. The centre marker is the
+    /// same size as the other 26 — Jeff's call, 2026-08-03: the colour alone carries it.</summary>
     private const float MarkerScale = 0.018f;
-
-    /// <summary>The centre marker is drawn larger so it still reads as the dominant target when a
-    /// dead-on axis view stacks it behind a face-centre marker.</summary>
-    private const float CenterMarkerScale = MarkerScale * 1.5f;
 
     /// <summary>
     /// Builds the overlay for <paramref name="box"/> (the target's local-space bounds) and reports
@@ -98,14 +95,11 @@ public static class OriginPickOverlay
             local.X * absScale.X, local.Y * absScale.Y, local.Z * absScale.Z).Length;
 
         // Pre-divided per axis: the part's scale multiplies these back up to a cube on screen.
-        Vector3 HalfExtent(float fraction)
-        {
-            float halfWorld = MathF.Max(worldDiag * fraction, 1e-3f) * 0.5f;
-            return new Vector3(
-                halfWorld / absScale.X, halfWorld / absScale.Y, halfWorld / absScale.Z);
-        }
+        float halfWorld = MathF.Max(worldDiag * MarkerScale, 1e-3f) * 0.5f;
+        var half = new Vector3(
+            halfWorld / absScale.X, halfWorld / absScale.Y, halfWorld / absScale.Z);
 
-        void Marker(Vector3 p, Vector3 half, Vector4 color) => root.AddChild(new SceneNode
+        void Marker(Vector3 p, Vector4 color) => root.AddChild(new SceneNode
         {
             Name               = NodeName + "_pt",
             PendingMesh        = BoxMesh(p - half, p + half, color),
@@ -120,12 +114,12 @@ public static class OriginPickOverlay
             AlwaysOnTop        = true,
         });
 
-        var surfaceHalf = HalfExtent(MarkerScale);
         foreach (var p in NodeBounds.SnapPoints(box))
-            Marker(p, surfaceHalf, MarkerColor);
+            Marker(p, MarkerColor);
 
-        // Last, so painter's order leaves the gold square whole where a face centre overlaps it.
-        Marker(center, HalfExtent(CenterMarkerScale), CenterColor);
+        // Last, so painter's order leaves the gold square whole where a face centre overlaps it —
+        // which matters more now that it is no longer bigger than the marker it can hide behind.
+        Marker(center, CenterColor);
 
         return root;
     }

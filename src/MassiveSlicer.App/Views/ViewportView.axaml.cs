@@ -882,7 +882,28 @@ public partial class ViewportView : UserControl
             if (isScale)
             {
                 vm.RefreshScaleFields();
-                vm.OnModelGeometryChanged?.Invoke();
+                // Belt and braces with the no-op guard in TransformNumberBox.Commit: an edit that
+                // left the placement where it found it changed no geometry, so re-slicing would
+                // burn seconds and re-pose the robot for nothing. The field path is the one that
+                // used to do this on every click; this also covers the console and any future
+                // caller that recomputes the same scale it already had.
+                //
+                // Approximate, not exact: `scale x 1847.4` on a part measuring 1847.39990234375
+                // divides and multiplies back to 1.0000000528 rather than 1, so exact equality
+                // caught nothing at all. Verified through the bridge — that command used to add
+                // seven moves to the toolpath by re-slicing an unchanged part.
+                if (NodeTransform.ApproximatelyEqual(applied, oldLocal))
+                {
+                    // Says so out loud, because a scale edit that does not re-slice looks broken
+                    // from the outside. Only fires on the skip, so it stays quiet in normal use.
+                    if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel skipVm)
+                        skipVm.Console.Log(
+                            "[scale] value unchanged — keeping the existing toolpath, no re-slice.");
+                }
+                else
+                {
+                    vm.OnModelGeometryChanged?.Invoke();
+                }
             }
             SchedulePanelTransformUndo(vm, node, label, oldLocal);
         };
