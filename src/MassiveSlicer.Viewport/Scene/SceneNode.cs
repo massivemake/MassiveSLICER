@@ -237,7 +237,21 @@ public sealed class SceneNode
             // inside faces stay visible, several levels below any top-level child — that
             // setting was dead code).
             if (CullFaces) GL.Enable(EnableCap.CullFace); else GL.Disable(EnableCap.CullFace);
+            // AlwaysOnTop used to be honoured only by the translucent pass and the selection-mask
+            // pass, so an OPAQUE node carrying the flag was silently depth-tested anyway. The Move
+            // Origin snap markers are exactly that, which is why the ones on the far side of a part
+            // never showed through it and the gold centre marker — inside the mesh by definition —
+            // could not be seen at all. Same explicit set/restore shape as CullFaces above.
+            //
+            // ⚠ The restore re-enables unconditionally, which is right for every caller today: the
+            // opaque pass always enters with depth testing on. The one caller that does not is the
+            // translucent pass, which disables it around this call for an AlwaysOnTop node and
+            // re-enables afterwards — harmless because it only wraps the node's OWN mesh here, and
+            // the sole such node (a cut modifier's corner markers) is a leaf. Give a translucent
+            // always-on-top node children and their depth state would need rethinking.
+            if (AlwaysOnTop) GL.Disable(EnableCap.DepthTest);
             mesh.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);
+            if (AlwaysOnTop) GL.Enable(EnableCap.DepthTest);
         }
 
         foreach (var child in Children)

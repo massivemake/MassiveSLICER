@@ -59,16 +59,20 @@ public static class NodeBounds
         return any ? (min, max) : null;
     }
 
-    /// <summary>
-    /// Centre of <see cref="LocalAabb"/> — the pivot a part gets at import and whenever Recenter
-    /// Origin is pressed. <c>null</c> when there is no geometry to measure.
-    /// </summary>
-    public static Vector3? LocalCenter(SceneNode node)
-        => LocalAabb(node) is { } b ? (b.Min + b.Max) * 0.5f : null;
+    /// <summary>Centre of an already-measured box.</summary>
+    public static Vector3 Center((Vector3 Min, Vector3 Max) box) => (box.Min + box.Max) * 0.5f;
 
     /// <summary>
-    /// The 26 points the Move Origin box offers: 8 corners, 6 face centres, 12 edge midpoints.
-    /// The box centre is deliberately absent — Recenter Origin already covers it.
+    /// Centre of <see cref="LocalAabb"/> — the pivot a part gets at import, and the point the gold
+    /// centre marker in Move Origin sets. <c>null</c> when there is no geometry to measure.
+    /// </summary>
+    public static Vector3? LocalCenter(SceneNode node)
+        => LocalAabb(node) is { } b ? Center(b) : null;
+
+    /// <summary>
+    /// The 26 <em>surface</em> points the Move Origin box offers: 8 corners, 6 face centres,
+    /// 12 edge midpoints. The box centre is not one of them — it is offered separately, and drawn
+    /// in a different colour, by <see cref="OriginPickOverlay"/>.
     /// </summary>
     /// <remarks>
     /// Because the box is axis-aligned in the node's own space, the object's own X/Y/Z axes already
@@ -78,7 +82,7 @@ public static class NodeBounds
     /// </remarks>
     public static IEnumerable<Vector3> SnapPoints((Vector3 Min, Vector3 Max) box)
     {
-        var mid = (box.Min + box.Max) * 0.5f;
+        var mid = Center(box);
         var xs  = new[] { box.Min.X, mid.X, box.Max.X };
         var ys  = new[] { box.Min.Y, mid.Y, box.Max.Y };
         var zs  = new[] { box.Min.Z, mid.Z, box.Max.Z };

@@ -11608,7 +11608,8 @@ public partial class ViewportView : UserControl
     private const float OriginPickRadiusPx = 16f;
 
     /// <summary>
-    /// Shows or hides the bounding box and its 26 snap markers for the current selection.
+    /// Shows or hides the bounding box and its 27 snap markers (26 on the surface plus the gold
+    /// box centre) for the current selection.
     /// </summary>
     private void SetMoveOriginOverlay(bool on)
     {
@@ -11625,10 +11626,11 @@ public partial class ViewportView : UserControl
         var overlay = OriginPickOverlay.Build(box, out var points, node.Placement?.Scale);
         node.AddChild(overlay);
 
-        _originOverlay        = overlay;
-        _originOverlayTarget  = node;
-        _originSnapPoints     = points;
-        _pendingOverlayUpload = overlay;
+        _originOverlay          = overlay;
+        _originOverlayTarget    = node;
+        _originSnapPoints       = points;
+        _pendingOverlayUpload   = overlay;
+        _renderer.MoveOriginActive = true;
 
         GlCanvas.RequestNextFrameRendering();
     }
@@ -11637,9 +11639,10 @@ public partial class ViewportView : UserControl
     {
         if (_originOverlay is { } old)
             (old.Parent ?? _renderer.SceneRoot).RemoveChild(old);
-        _originOverlay       = null;
-        _originOverlayTarget = null;
-        _originSnapPoints    = [];
+        _originOverlay          = null;
+        _originOverlayTarget    = null;
+        _originSnapPoints       = [];
+        _renderer.MoveOriginActive = false;
     }
 
     /// <summary>

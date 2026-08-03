@@ -515,6 +515,14 @@ public sealed class SceneRenderer : IDisposable
     public bool GizmoEnabled { get; set; } = true;
 
     /// <summary>
+    /// True while the Move Origin chooser is up. Only suppresses the scale gizmo's centre cube,
+    /// which would otherwise sit on top of the chooser's gold centre marker; the handles stay
+    /// drawn so the tool still reads as present, and they cannot be grabbed anyway because
+    /// Move Origin swallows the click before gizmo hit-testing.
+    /// </summary>
+    public bool MoveOriginActive { get; set; }
+
+    /// <summary>
     /// Optional world-space gizmo pivot (e.g. robot TCP). When set, overrides the
     /// selected node's origin for gizmo display and hit-testing.
     /// </summary>
@@ -1505,7 +1513,7 @@ public sealed class SceneRenderer : IDisposable
                         if (n.Mesh is null) continue;
                         var nodeMvp = n.WorldTransform * mvp;
                         _maskShader.SetMatrix4("uMVP", ref nodeMvp);
-                        // Same always-on-top exemption as the main draw above -- otherwise the
+                        // Same always-on-top exemption as SceneNode.Draw -- otherwise the
                         // mask (and thus the selection outline) would still only cover whichever
                         // part of the marker isn't occluded by real geometry behind it, even
                         // though the marker itself now renders fully visible on top of it.
@@ -1740,7 +1748,8 @@ public sealed class SceneRenderer : IDisposable
 
             if (GizmoEnabled && GizmoMode != GizmoMode.None)
             {
-                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis);
+                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis,
+                            drawScaleCenter: !MoveOriginActive);
                 if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
                     _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp, GizmoAxisBasis);
             }

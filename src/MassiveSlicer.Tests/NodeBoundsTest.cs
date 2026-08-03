@@ -98,7 +98,8 @@ public class NodeBoundsTest
         Assert.Equal(26, points.Count);
         Assert.Equal(26, points.Distinct().Count());
 
-        // The centre is deliberately absent — Recenter Origin covers it.
+        // SnapPoints is the surface set only. The centre is offered separately, in its own colour,
+        // by OriginPickOverlay — see Chooser_offers_the_box_centre_first_and_draws_it_last.
         Assert.DoesNotContain(Vector3.Zero, points);
 
         int Extremes(Vector3 p) =>
@@ -127,5 +128,51 @@ public class NodeBoundsTest
                 p.Z == box.Min.Z || p.Z == box.Max.Z,
                 $"{p} is inside the box, not on its surface");
         }
+    }
+
+    [Fact]
+    public void Chooser_offers_the_box_centre_first_and_draws_it_last()
+    {
+        var box = (Min: new Vector3(-10f, -20f, -30f), Max: new Vector3(10f, 20f, 30f));
+
+        var overlay = OriginPickOverlay.Build(box, out var points);
+
+        // 26 surface points plus the centre.
+        Assert.Equal(27, points.Length);
+        Assert.Equal(27, points.Distinct().Count());
+
+        // First in the pick array: a dead-on axis view stacks it with two face centres, and the
+        // nearest-marker search takes the first of a tie, so the gold square wins the click.
+        Assert.Equal(NodeBounds.Center(box), points[0]);
+
+        // Last among the marker children, so painter's order leaves it unobscured — the two orders
+        // disagree deliberately, which is exactly what makes the click match what is on screen.
+        var markers = overlay.Children
+            .Where(c => c.Name == OriginPickOverlay.NodeName + "_pt")
+            .ToList();
+        Assert.Equal(27, markers.Count);
+
+        static Vector3 MidOf(MeshData m)
+            => (m.LocalBounds.Min + m.LocalBounds.Max) * 0.5f;
+
+        var centreMesh = markers[^1].PendingMesh;
+        Assert.NotNull(centreMesh);
+        // Pinned by position, not just "a different colour from marker 0" — that would still hold
+        // if the centre were drawn first, which is the ordering this test exists to catch.
+        Assert.Equal(NodeBounds.Center(box), MidOf(centreMesh!));
+        Assert.NotEqual(markers[0].PendingMesh!.BaseColor, centreMesh!.BaseColor);
+
+        // Every marker in front of it is one of the surface points, drawn in the surface colour.
+        Assert.All(markers.Take(26), m =>
+            Assert.Equal(markers[0].PendingMesh!.BaseColor, m.PendingMesh!.BaseColor));
+
+        // Bigger than a surface marker, so it still reads through an overlapping face centre.
+        static float Span(MeshData m)
+        {
+            var xs = m.Positions.Select(p => p.X).ToList();
+            return xs.Max() - xs.Min();
+        }
+        Assert.True(Span(centreMesh) > Span(markers[0].PendingMesh!),
+            "the centre marker should be drawn larger than a surface marker");
     }
 }

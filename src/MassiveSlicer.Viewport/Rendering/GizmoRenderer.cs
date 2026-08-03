@@ -157,7 +157,13 @@ public sealed class GizmoRenderer : IDisposable
     /// modifier's gizmo can show/hit-test its own local X/Y (aligned to its RotationDegrees)
     /// instead of always being world-axis-aligned like every other selectable object.
     /// </summary>
-    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode, Matrix4? axisBasis = null)
+    /// <param name="drawScaleCenter">
+    /// False while Move Origin is choosing a pivot. The scale gizmo's white centre cube sits exactly
+    /// where that tool's gold centre marker does, and the gizmo pass clears the depth buffer before
+    /// drawing, so the cube would always win and hide the point the user is aiming at.
+    /// </param>
+    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode,
+                     Matrix4? axisBasis = null, bool drawScaleCenter = true)
     {
         var mvp = Matrix4.CreateScale(scale)
                 * (axisBasis ?? Matrix4.Identity)
@@ -186,8 +192,11 @@ public sealed class GizmoRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, _scaleShaftCount);
                 GL.BindVertexArray(_scaleBoxesVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleBoxCount);
-                GL.BindVertexArray(_scaleCenterVao);
-                GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleCenterCount);
+                if (drawScaleCenter)
+                {
+                    GL.BindVertexArray(_scaleCenterVao);
+                    GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleCenterCount);
+                }
                 break;
 
             case GizmoMode.Rotate:

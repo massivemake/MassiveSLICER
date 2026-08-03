@@ -23,14 +23,32 @@ public static class OriginPickOverlay
     private static readonly Vector4 BoxColor    = new(0.35f, 0.65f, 1.00f, 0.10f);
     private static readonly Vector4 MarkerColor = new(0.55f, 0.80f, 1.00f, 0.95f);
 
+    /// <summary>
+    /// The box centre gets its own colour because it is the one point that is not on the surface,
+    /// and the one people reach for most. Gold rather than green: the scene is already full of
+    /// greens (bed, toolpath, status) and a green dot would read as one of them.
+    /// </summary>
+    private static readonly Vector4 CenterColor = new(1.00f, 0.76f, 0.16f, 1.00f);
+
     /// <summary>Marker cube edge, as a fraction of the box's diagonal.</summary>
     private const float MarkerScale = 0.018f;
 
+    /// <summary>The centre marker is drawn larger so it still reads as the dominant target when a
+    /// dead-on axis view stacks it behind a face-centre marker.</summary>
+    private const float CenterMarkerScale = MarkerScale * 1.5f;
+
     /// <summary>
     /// Builds the overlay for <paramref name="box"/> (the target's local-space bounds) and reports
-    /// the snap points in the same order as the marker children, so a screen-space pick maps
-    /// straight back to a pivot position.
+    /// every snap point it drew, so a screen-space pick maps straight back to a pivot position.
     /// </summary>
+    /// <remarks>
+    /// 27 points: the 26 surface points from <see cref="NodeBounds.SnapPoints"/> plus the box
+    /// centre. The centre is reported <em>first</em> but drawn <em>last</em>, and the two orders
+    /// disagree on purpose. Looking straight down an axis stacks the centre and both face centres
+    /// on the same pixel, and no rule can separate them; drawing last keeps the gold square
+    /// unobscured, and picking first means the marker you can see is the one you get. Orbit
+    /// slightly to reach the face centre hiding behind it.
+    /// </remarks>
     /// <param name="targetScale">
     /// The part's own scale, so the markers can be kept cubic. Everything here is built in the
     /// part's local space and parented to it, which means the part's scale multiplies it on the way
@@ -42,7 +60,8 @@ public static class OriginPickOverlay
     public static SceneNode Build(
         (Vector3 Min, Vector3 Max) box, out Vector3[] snapPoints, Vector3? targetScale = null)
     {
-        snapPoints = NodeBounds.SnapPoints(box).ToArray();
+        var center = NodeBounds.Center(box);
+        snapPoints = new[] { center }.Concat(NodeBounds.SnapPoints(box)).ToArray();
 
         var s = targetScale ?? Vector3.One;
         var absScale = new Vector3(
@@ -77,28 +96,36 @@ public static class OriginPickOverlay
         var local = box.Max - box.Min;
         float worldDiag = new Vector3(
             local.X * absScale.X, local.Y * absScale.Y, local.Z * absScale.Z).Length;
-        float halfWorld = MathF.Max(worldDiag * MarkerScale, 1e-3f) * 0.5f;
 
         // Pre-divided per axis: the part's scale multiplies these back up to a cube on screen.
-        var half = new Vector3(
-            halfWorld / absScale.X, halfWorld / absScale.Y, halfWorld / absScale.Z);
-
-        foreach (var p in snapPoints)
+        Vector3 HalfExtent(float fraction)
         {
-            root.AddChild(new SceneNode
-            {
-                Name               = NodeName + "_pt",
-                PendingMesh        = BoxMesh(p - half, p + half, MarkerColor),
-                IsAuthoringOverlay = true,
-                PickIgnore         = true,
-                Selectable         = false,
-                KeepOwnMaterial    = true,
-                CullFaces          = false,
-                // Markers must stay visible through the part they sit on, or the ones on the far
-                // side — exactly the ones a user reaches for — would be invisible.
-                AlwaysOnTop        = true,
-            });
+            float halfWorld = MathF.Max(worldDiag * fraction, 1e-3f) * 0.5f;
+            return new Vector3(
+                halfWorld / absScale.X, halfWorld / absScale.Y, halfWorld / absScale.Z);
         }
+
+        void Marker(Vector3 p, Vector3 half, Vector4 color) => root.AddChild(new SceneNode
+        {
+            Name               = NodeName + "_pt",
+            PendingMesh        = BoxMesh(p - half, p + half, color),
+            IsAuthoringOverlay = true,
+            PickIgnore         = true,
+            Selectable         = false,
+            KeepOwnMaterial    = true,
+            CullFaces          = false,
+            // Markers must stay visible through the part they sit on, or the ones on the far
+            // side — exactly the ones a user reaches for — would be invisible. The centre marker
+            // needs this even more: it is inside the mesh by definition.
+            AlwaysOnTop        = true,
+        });
+
+        var surfaceHalf = HalfExtent(MarkerScale);
+        foreach (var p in NodeBounds.SnapPoints(box))
+            Marker(p, surfaceHalf, MarkerColor);
+
+        // Last, so painter's order leaves the gold square whole where a face centre overlaps it.
+        Marker(center, HalfExtent(CenterMarkerScale), CenterColor);
 
         return root;
     }

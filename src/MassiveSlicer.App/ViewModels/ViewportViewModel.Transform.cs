@@ -75,7 +75,8 @@ public sealed partial class ViewportViewModel
             case "points":
                 return "[origin] snap specs: any combination of ±x ±y ±z. Omitted axes sit at the "
                      + "box middle, so `+x` is a face centre, `+x+y` an edge midpoint, `+x+y+z` a "
-                     + "corner. 26 in total; the box centre is `origin center`.";
+                     + "corner. 26 in total, all on the surface. The 27th is the box centre — the "
+                     + "gold marker in the middle of the chooser, or `origin center` from here.";
 
             case "center":
             case "centre":
