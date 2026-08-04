@@ -380,6 +380,8 @@ public partial class ViewportView : UserControl
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
+            vm.GetToolpathRenderOrigin = n =>
+                _toolpathOriginByNode.TryGetValue(n, out var o) ? o : null;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
@@ -4551,7 +4553,24 @@ public partial class ViewportView : UserControl
             var geometryCentroid = new NVec3(
                 centroidLocal.Row3.X, centroidLocal.Row3.Y, centroidLocal.Row3.Z);
 
-            if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
+            if (entry.RebaseToFreshCentroid)
+            {
+                // ReplaceToolpath above already parked the node on the new geometry's centroid,
+                // which is where a freshly re-sliced path belongs: its moves are baked in absolute
+                // world space from the mesh's CURRENT vertices, so the centroid is the whole answer.
+                //
+                // Why this is safe for the move case the branch below exists to protect: on a pure
+                // move the drag-link shifts this node by M and the new centroid shifts by M too, so
+                // preservedLocal and the fresh centroid are the SAME value and leaving it alone
+                // changes nothing. They only diverge when the centroid moves for a reason the node
+                // did not follow — a scale or a rotate — and that is exactly the broken case:
+                // measured 112mm adrift at 50% scale, 179mm at 25%, compounding on each resize.
+                //
+                // This is NOT the old `preservedLocal * invOldOrigin * centroidLocal` rebase that
+                // double-counted a move (see the comment below). That formula re-added the mesh's
+                // delta on top of a centroid which already contained it. This adds nothing.
+            }
+            else if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
             {
                 // Just keep the node exactly where it already was — do NOT rebase through the
                 // old/new centroids (the previous formula here was preservedLocal * invOldOrigin
@@ -5718,6 +5737,7 @@ public partial class ViewportView : UserControl
                 PreserveRelativePose   = true,
                 PreservedLocalTransform = preservedLocal,
                 PreservedOrigin        = preservedOrigin,
+                RebaseToFreshCentroid  = true,
             });
 
             ApplyToolpathStats(vm, smoothedToolpath);
@@ -7481,6 +7501,18 @@ public partial class ViewportView : UserControl
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
 
+        // Arm the model↔toolpath link, exactly as a mouse gizmo drag does. Without this,
+        // ApplyKbTransform's ApplyTransformLink call had no followers and no baseline to measure a
+        // delta from, so it returned immediately and did nothing: G or R moved the mesh and left
+        // the toolpath standing where it was, a bit further adrift on every keystroke. The mouse
+        // path had this all along; the keyboard path was simply never given it.
+        //
+        // Scale is excluded on the same grounds as the mouse path (see OnPointerPressed): the
+        // toolpath's bead width is baked into its geometry at slice time, so scaling its node
+        // fattens every bead on screen. A resized part gets a fresh slice instead.
+        if (op != GizmoMode.Scale) BeginTransformLink(node);
+        else                       EndTransformLink();
+
         // Project the node's world position to screen so KbRotate can use atan2.
         float vpW0 = (float)GlCanvas.Bounds.Width;
         float vpH0 = (float)GlCanvas.Bounds.Height;
@@ -7560,6 +7592,9 @@ public partial class ViewportView : UserControl
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        // Followers are current — ApplyTransformLink ran on every mouse move of the gesture.
+        // Dropping the baseline here stops a later, unrelated edit measuring its delta from it.
+        EndTransformLink();
         ClearBedClamp();
         if (DataContext is ViewportViewModel vmCb2) SyncSelectionTransformDisplay(vmCb2);
         GlCanvas.RequestNextFrameRendering();
@@ -11115,7 +11150,14 @@ public partial class ViewportView : UserControl
     private void CancelKbTransform()
     {
         if (_renderer.SelectedNode is { } node)
-            node.LocalTransform  = _kbTransformInitialLocal;
+        {
+            node.LocalTransform = _kbTransformInitialLocal;
+            // Put the followers back where they started too. The link has been dragging them
+            // along all gesture, so restoring only the node would abandon the toolpath at the
+            // cancelled pose — an Esc that half-undoes is worse than no Esc.
+            ApplyTransformLink(node);
+        }
+        EndTransformLink();
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
         _gizmoDragAxis           = GizmoAxis.None;

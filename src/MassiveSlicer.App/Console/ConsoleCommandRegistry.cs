@@ -1579,7 +1579,7 @@ public sealed class ConsoleCommandRegistry
         Register(new ConsoleCommandDefinition
         {
             Name = "align-debug",
-            Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
+            Description = "Diagnostic: compare a piece's mesh world AABB against its toolpath, both as the slice produced it and as it is actually drawn (node transform applied), to catch the two coming apart",
             Usage = "align-debug <name>",
             Execute = (ctx, args) =>
             {
@@ -1599,6 +1599,7 @@ public sealed class ConsoleCommandRegistry
                 var piece = Find(ctx.Main.Viewport.OutlinerItems);
                 if (piece is null) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
 
+                System.Numerics.Vector3? meshMin = null, meshMax = null;
                 if (piece.Node.Mesh?.PickingData is { } mesh)
                 {
                     var w = piece.Node.WorldTransform;
@@ -1610,6 +1611,7 @@ public sealed class ConsoleCommandRegistry
                         min = System.Numerics.Vector3.Min(min, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
                         max = System.Numerics.Vector3.Max(max, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
                     }
+                    meshMin = min; meshMax = max;
                     ctx.Log($"[debug] mesh world AABB: min=({min.X:0.#},{min.Y:0.#},{min.Z:0.#}) max=({max.X:0.#},{max.Y:0.#},{max.Z:0.#})");
                 }
                 else
@@ -1635,7 +1637,74 @@ public sealed class ConsoleCommandRegistry
                     }
                 }
                 if (moveCount == 0) { ctx.LogError("[debug] toolpath has zero moves."); return; }
-                ctx.Log($"[debug] toolpath RAW world AABB ({moveCount} moves): min=({tmin.X:0.#},{tmin.Y:0.#},{tmin.Z:0.#}) max=({tmax.X:0.#},{tmax.Y:0.#},{tmax.Z:0.#})");
+                ctx.Log($"[debug] toolpath SLICE-TIME AABB ({moveCount} moves): min=({tmin.X:0.#},{tmin.Y:0.#},{tmin.Z:0.#}) max=({tmax.X:0.#},{tmax.Y:0.#},{tmax.Z:0.#})");
+
+                // What is actually on screen. The GPU geometry is built relative to the centroid
+                // the toolpath had when it was uploaded, and the node's transform puts it back:
+                // rendered = (move - origin) * node.LocalTransform. Reporting only the line above
+                // — raw move coordinates, labelled "world" — is what let a visibly misplaced
+                // toolpath read as perfectly aligned. Keep both: if they disagree, the node's
+                // transform and the geometry it was built for have come apart.
+                var tpNode = tpItem.Node;
+                var origin = ctx.Main.Viewport.GetToolpathRenderOrigin?.Invoke(tpNode);
+                if (origin is not { } org)
+                {
+                    ctx.LogError("[debug] no render origin recorded for this toolpath — cannot "
+                               + "compute what is on screen. The line above is slice-time data only.");
+                    return;
+                }
+
+                var lt = tpNode.LocalTransform;
+                var rmin = new System.Numerics.Vector3(float.MaxValue);
+                var rmax = new System.Numerics.Vector3(float.MinValue);
+                void Accum(System.Numerics.Vector3 p)
+                {
+                    var local = new OpenTK.Mathematics.Vector3(p.X - org.X, p.Y - org.Y, p.Z - org.Z);
+                    var wp    = OpenTK.Mathematics.Vector3.TransformPosition(local, lt);
+                    var v     = new System.Numerics.Vector3(wp.X, wp.Y, wp.Z);
+                    rmin = System.Numerics.Vector3.Min(rmin, v);
+                    rmax = System.Numerics.Vector3.Max(rmax, v);
+                }
+                foreach (var layer in snap.Smoothed.Layers)
+                foreach (var mv in layer.Moves) { Accum(mv.From); Accum(mv.To); }
+
+                var rsize = rmax - rmin;
+                var ssize = tmax - tmin;
+                ctx.Log($"[debug] toolpath ON-SCREEN AABB: min=({rmin.X:0.#},{rmin.Y:0.#},{rmin.Z:0.#}) "
+                      + $"max=({rmax.X:0.#},{rmax.Y:0.#},{rmax.Z:0.#}) size=({rsize.X:0.#},{rsize.Y:0.#},{rsize.Z:0.#})");
+                ctx.Log($"[debug] toolpath node: origin=({org.X:0.#},{org.Y:0.#},{org.Z:0.#}) "
+                      + $"translation=({lt.M41:0.#},{lt.M42:0.#},{lt.M43:0.#}) "
+                      + $"basisScale=({lt.Row0.Xyz.Length:0.####},{lt.Row1.Xyz.Length:0.####},{lt.Row2.Xyz.Length:0.####})");
+
+                // The verdict compares the drawn toolpath against the MESH, not against slice-time.
+                // Slice-time coordinates go stale the moment the part is moved without re-slicing —
+                // the drag-link carries the toolpath node along, so on-screen legitimately diverges
+                // from them and a slice-time comparison cries wolf. What actually matters, and what
+                // a user can see, is whether the path lines up with the part it belongs to.
+                if (meshMin is not { } mMin || meshMax is not { } mMax)
+                {
+                    ctx.Log("[debug] no mesh AABB to compare against.");
+                    return;
+                }
+                var msize = mMax - mMin;
+                var placeDrift = rmin - mMin;
+                var sizeDrift  = rsize - msize;
+                // Z is expected to sit one first-layer height above the mesh's underside.
+                bool placeOk = MathF.Abs(placeDrift.X) < 0.5f && MathF.Abs(placeDrift.Y) < 0.5f
+                            && placeDrift.Z > -0.5f && placeDrift.Z < 25f;
+                bool sizeOk  = MathF.Abs(sizeDrift.X) < 0.5f && MathF.Abs(sizeDrift.Y) < 0.5f
+                            && MathF.Abs(sizeDrift.Z) < 25f;
+                if (sizeOk && placeOk)
+                    ctx.Log("[debug] drawn toolpath lines up with the mesh.");
+                else
+                    ctx.LogError($"[debug] MISMATCH vs MESH — offset=({placeDrift.X:0.#},{placeDrift.Y:0.#},{placeDrift.Z:0.#}) "
+                               + $"sizeDelta=({sizeDrift.X:0.#},{sizeDrift.Y:0.#},{sizeDrift.Z:0.#}).");
+
+                if (System.Numerics.Vector3.Abs(rmin - tmin).Length() > 0.5f)
+                    ctx.Log("[debug] note: on-screen differs from slice-time, which is normal after "
+                          + "moving the part without re-slicing — the toolpath node followed the mesh.");
+                ctx.Log("[debug] this measures the WHOLE path. How much of it is drawn is the scrub "
+                      + "timeline — run `scrub` if the path looks short rather than misplaced.");
             },
         });
 
@@ -1701,6 +1770,54 @@ public sealed class ConsoleCommandRegistry
             Description = "Show the bounding box and its snap points so a click can reposition the pivot",
             Usage = "move-origin [on|off]     bare toggles",
             Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.MoveOriginCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scrub",
+            Description = "How much of the toolpath is currently DRAWN (the timeline), and move it — a path that looks short rather than misplaced is this, not the geometry",
+            Usage = "scrub [show|end|<move index>|pct <0-100>]",
+            Execute = (ctx, args) =>
+            {
+                var vp   = ctx.Main.Viewport;
+                var verb = (args ?? string.Empty).Trim();
+                int max  = vp.ToolpathScrubMax;
+
+                if (verb.Length == 0 || verb.Equals("show", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (max <= 0) { ctx.Log("[scrub] no toolpath on the timeline."); return; }
+                    double pct = 100.0 * vp.ToolpathScrubIndex / max;
+                    ctx.Log($"[scrub] {vp.ToolpathScrubIndex}/{max} moves drawn ({pct:0.#}% of the path). "
+                          + $"{(pct > 99.5 ? "Whole path visible." : "The rest is hidden — the part will look unfinished.")}");
+                    return;
+                }
+
+                if (max <= 0) { ctx.LogError("[scrub] no toolpath on the timeline."); return; }
+
+                int target;
+                if (verb.Equals("end", StringComparison.OrdinalIgnoreCase)
+                    || verb.Equals("max", StringComparison.OrdinalIgnoreCase))
+                {
+                    target = max;
+                }
+                else if (verb.StartsWith("pct", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rest = verb[3..].Trim();
+                    if (!double.TryParse(rest, System.Globalization.NumberStyles.Float,
+                                         System.Globalization.CultureInfo.InvariantCulture, out double p))
+                    { ctx.LogError("[scrub] usage: scrub pct <0-100>"); return; }
+                    target = (int)Math.Round(Math.Clamp(p, 0, 100) / 100.0 * max);
+                }
+                else if (int.TryParse(verb, out int n))
+                {
+                    target = n;
+                }
+                else { ctx.LogError("[scrub] usage: scrub [show|end|<move index>|pct <0-100>]"); return; }
+
+                vp.ToolpathScrubIndex = Math.Clamp(target, 0, max);
+                ctx.Log($"[scrub] now {vp.ToolpathScrubIndex}/{max} moves drawn "
+                      + $"({100.0 * vp.ToolpathScrubIndex / max:0.#}% of the path).");
+            },
         });
 
         Register(new ConsoleCommandDefinition

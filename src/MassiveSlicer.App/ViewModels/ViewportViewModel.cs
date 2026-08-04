@@ -5556,6 +5556,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
     /// <summary>
+    /// The centroid a toolpath's GPU geometry was built relative to, so a diagnostic can reproduce
+    /// what is actually on screen: <c>rendered = (move - origin) * node.LocalTransform</c>. Without
+    /// it, reading raw move coordinates and calling them "world" silently ignores the node's own
+    /// transform — the mistake that made <c>align-debug</c> report a toolpath 179mm adrift as
+    /// perfectly aligned.
+    /// </summary>
+    internal Func<SceneNode, System.Numerics.Vector3?>? GetToolpathRenderOrigin { get; set; }
+
+    /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
