@@ -1542,6 +1542,13 @@ public partial class ViewportView : UserControl
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
             _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
+            // Body has no timeline of its own, so it shows the whole path. It used to render
+            // through the toolpath EDIT scrubber's position — set that to 20%, leave edit mode,
+            // and the part sat there looking a fifth built with no visible control explaining why.
+            // Jeff, 2026-08-03: "if body doesnt have a timeline, one would only assume its always
+            // at 100%." The Toolpath tab keeps its own sim timeline; Preview keeps the playback
+            // one. Only Body opts out.
+            _renderer.ScrubWindowApplies = vm.ViewMode != "Body";
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {

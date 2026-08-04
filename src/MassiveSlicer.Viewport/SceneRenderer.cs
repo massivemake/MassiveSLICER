@@ -771,6 +771,14 @@ public sealed class SceneRenderer : IDisposable
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
 
+    /// <summary>
+    /// Whether the scrub window governs how much of a toolpath is drawn. False in Body view, which
+    /// carries no timeline and therefore shows the whole path — otherwise it silently renders
+    /// through a scrubber belonging to a mode the user has left, and the part looks half printed
+    /// with nothing on screen to explain it.
+    /// </summary>
+    public bool ScrubWindowApplies { get; set; } = true;
+
     /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
     /// full selected appearance — colours, travels, seams — regardless of selection.
     /// Body view keeps the dimmed unselected treatment.</summary>
@@ -1343,9 +1351,10 @@ public sealed class SceneRenderer : IDisposable
             bool isSelected = IsToolpathHighlighted(tpNode);
             // Sticky scrub / edit mode: apply the layer window to the scrubbed
             // toolpath even when the mesh (or another node) is the selection.
-            bool applyScrub = isSelected
-                || (ToolpathActiveScrubNode is not null
-                    && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
+            bool applyScrub = ScrubWindowApplies
+                && (isSelected
+                    || (ToolpathActiveScrubNode is not null
+                        && ReferenceEquals(tpNode, ToolpathActiveScrubNode)));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
 
             // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
