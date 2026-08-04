@@ -96,6 +96,11 @@ public partial class ViewportView : UserControl
     // Whether the part was already sitting on the bed when the drag began — the question the
     // Keep on bed preferences answer, and one that can only be asked before anything moves.
     private bool _bedWasRestingAtDragStart;
+
+    // Same question, asked at the start of a keyboard G/R/S gesture. The mouse path had this and
+    // the keyboard path did not, so a G or R could park a part through the plate and nothing put
+    // it back — Jeff, 2026-08-03: "G and R do not respect the collision features."
+    private bool _kbWasRestingAtStart;
     /// <summary>Set when the viewport itself saw the left press. Click-to-select runs on release
     /// against the press position, so without this a press swallowed by overlay chrome would still
     /// produce a pick — at a stale position — on release.</summary>
@@ -574,6 +579,26 @@ public partial class ViewportView : UserControl
                 _rawToolpathByNode.TryGetValue(node, out var rawUp);
                 var snapUp = GetToolpathSnapshot(node);
                 if (snapUp is null) return;
+                // Optimize Toolpath and tpfix land here. They re-ORDER (or add to) moves that are
+                // already in world space — the orientation of the data does not change, so the
+                // node's own transform is still the right one and must be put back verbatim,
+                // rotation included.
+                //
+                // Without this the entry matched none of the drain's branches, so the node kept
+                // whatever ReplaceToolpath had just set: a pure centroid translation. That WIPES
+                // the rotation the model↔toolpath link had applied, and the path snapped back to
+                // its unrotated orientation while the mesh stayed turned. Jeff, 2026-08-03: "it was
+                // optimize toolpath that broke it and caused it to rotate off."
+                //
+                // Note this is the opposite of what a re-slice needs (RebaseToFreshCentroid): a
+                // re-slice rebuilds the moves from the mesh's CURRENT vertices, so the rotation is
+                // already baked into the data and re-applying the node's would double it. The two
+                // cases genuinely differ — what changed, the data or only its order.
+                if (!_toolpathOriginByNode.TryGetValue(node, out var reupOrigin))
+                {
+                    var lt0 = node.LocalTransform;
+                    reupOrigin = new NVec3(lt0.M41, lt0.M42, lt0.M43);
+                }
                 vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
                 {
                     Toolpath      = tpUp,
@@ -582,6 +607,9 @@ public partial class ViewportView : UserControl
                     BeadWidth     = snapUp.BeadWidth,
                     LayerHeight   = snapUp.LayerHeight,
                     MaterialColor = snapUp.MaterialColor,
+                    PreserveRelativePose    = true,
+                    PreservedLocalTransform = node.LocalTransform,
+                    PreservedOrigin         = reupOrigin,
                 });
                 GlCanvas.RequestNextFrameRendering();
             };
@@ -7500,6 +7528,9 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
+        // Must be sampled before anything moves — it is the question the Keep on bed preferences
+        // answer, and it is unanswerable once the gesture has started.
+        _kbWasRestingAtStart     = IsRestingOnBed(node);
 
         // Arm the model↔toolpath link, exactly as a mouse gizmo drag does. Without this,
         // ApplyKbTransform's ApplyTransformLink call had no followers and no baseline to measure a
@@ -7585,7 +7616,22 @@ public partial class ViewportView : UserControl
     private void CommitKbTransform()
     {
         if (_renderer.SelectedNode is { } node && DataContext is ViewportViewModel vmCb)
+        {
+            // The bed is solid for a keyboard gesture too. Applied BEFORE the undo entry is
+            // recorded, so Ctrl+Z returns to the pose the gesture started from and never to a
+            // sunk one — the same ordering the mouse release uses. SettleOnBed shifts the whole
+            // linked set by one shared translation, so the toolpath comes up with the mesh and
+            // there is nothing left to re-mirror.
+            var bedEdit = _kbTransformOp switch
+            {
+                GizmoMode.Rotate => BedEdit.Rotate,
+                GizmoMode.Scale  => BedEdit.Scale,
+                _                => BedEdit.Move,
+            };
+            ApplyBedRules(node, _kbWasRestingAtStart, bedEdit);
+
             RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
+        }
 
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
