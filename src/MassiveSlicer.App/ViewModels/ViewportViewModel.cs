@@ -3580,8 +3580,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
-        int previous    = _toolpathScrubIndex;
-        int previousMax = _toolpathScrubMax;
+        int previous = _toolpathScrubIndex;
         _toolpathScrubMax = Math.Max(0, max);
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
@@ -3591,17 +3590,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             index = 0;
         else if (preservePosition)
         {
-            // Hold the same FRACTION of the path, not the same absolute move number. A re-slice
-            // after a resize changes the move count wholesale — a 50% scale took one part from
-            // ~95,000 moves to ~35,000 — so clamping the old index pinned the robot to the end of
-            // the new path and the arm visibly jumped (measured: A5 swung 38.7°). Jeff, 2026-08-03:
-            // "the arm should stick to whatever position in the print it was in."
-            // A same-length re-slice maps back to the same index, so the ordinary case is unchanged.
-            index = previousMax > 0
-                ? (int)Math.Round((double)previous / previousMax * _toolpathScrubMax,
-                                  MidpointRounding.AwayFromZero)
-                : _toolpathScrubMax;
-            index = Math.Clamp(index, 0, _toolpathScrubMax);
+            index = Math.Clamp(previous, 0, _toolpathScrubMax);
             // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
             // blank window when the path has content (common after re-arming edit scrub
             // with a stale default index of 0).
