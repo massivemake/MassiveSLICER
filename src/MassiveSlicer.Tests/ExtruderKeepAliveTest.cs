@@ -55,8 +55,12 @@ public class ExtruderKeepAliveTest
         MaxExtruderSilenceSec    = maxSilence,
     };
 
-    // A line the extruder actually hears: screw speed (URM RPM or analog ANOUT[4]).
-    private static readonly Regex ScrewCmd = new(@"^\s*(RPM\s*=|\$ANOUT\[4\]\s*=)", RegexOptions.Compiled);
+    // A line the extruder actually hears: screw speed on either path, in either form.
+    // The TRIGGER form matters — that is how the analog path emits without breaking
+    // continuous path, and an earlier detector that missed it reported false silence.
+    private static readonly Regex ScrewCmd = new(
+        @"(^\s*RPM\s*=|^\s*\$ANOUT\[4\]\s*=|TRIGGER\b.*\$ANOUT\[4\]\s*=)",
+        RegexOptions.Compiled);
     private static readonly Regex VelLine  = new(@"^\s*\$VEL\.CP\s*=\s*([\d.]+)", RegexOptions.Compiled);
     private static readonly Regex LinXyz   = new(
         @"^\s*LIN\s*\{X\s*(-?[\d.]+),\s*Y\s*(-?[\d.]+),\s*Z\s*(-?[\d.]+)", RegexOptions.Compiled);
@@ -160,6 +164,24 @@ public class ExtruderKeepAliveTest
                .Where(l => ScrewCmd.IsMatch(l) && !l.Contains("0.00", StringComparison.Ordinal))
                .Select(l => l.Split(';')[0].Trim())
                .ToList();
+    }
+
+    [Fact]
+    public void Analog_keepalive_uses_TRIGGER_so_it_cannot_break_continuous_path()
+    {
+        // A bare "$ANOUT[4] = x" between motions forces an advance-run stop, collapsing the
+        // $ADVANCE look-ahead. Shipped once and showed up in the field as periodic marks on
+        // a 17 h print (4,261 of them). Every keep-alive must ride the motion as a TRIGGER.
+        var krl = KrlExporter.Export(ContinuousLoopTower(layers: 5, sideMm: 2000f), Settings());
+
+        var bare = krl.Split('\n')
+            .Where(l => l.Contains("keep-alive", StringComparison.Ordinal))
+            .Where(l => !l.TrimStart().StartsWith("TRIGGER", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.True(bare.Count == 0,
+            $"{bare.Count} keep-alive line(s) are bare assignments: {string.Join(" | ", bare.Take(3))}");
+        Assert.Contains("TRIGGER", krl, StringComparison.Ordinal);
     }
 
     [Fact]

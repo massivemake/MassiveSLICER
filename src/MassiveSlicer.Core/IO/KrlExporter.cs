@@ -114,6 +114,17 @@ public sealed record KrlExportSettings
     /// Longest silence permitted between extruder commands (sec). Default 30 — under Caracol's
     /// own measured 34.4 s worst case rather than just inside it. Emitted commands are exact
     /// restatements of the current screw speed: no motion, flow, or timing change.
+    /// <para>
+    /// On the analog path the restatement is emitted as a TRIGGER so it cannot break continuous
+    /// path. On the URM path it is a plain <c>RPM = N</c> line, matching Caracol's own Eidos
+    /// output (826 such lines in one print) — deliberately not "improved" past what their
+    /// controller is known to accept.
+    /// </para>
+    /// <para>
+    /// Timing is computed from the COMMANDED feedrate, so running the pendant override below
+    /// 100% stretches every real gap proportionally (75% override ⇒ ~40 s actual). Lower this
+    /// value if you routinely print at reduced override.
+    /// </para>
     /// </summary>
     public float MaxExtruderSilenceSec { get; init; } = 30f;
 
@@ -799,7 +810,11 @@ public static class KrlExporter
                     // layer is shorter than the silence cap and nothing changed.
                     if (wantLayerKeepAlive && s.ExtruderKeepAliveEnabled)
                     {
-                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive (layer)", useTrigger: false));
+                        // TRIGGER, not a plain assignment: a bare $ANOUT write between motions
+                        // forces an advance-run stop, collapsing the $ADVANCE look-ahead and
+                        // breaking continuous path (the exporter warns about this above, and it
+                        // showed up in the field as periodic marks). TRIGGER rides the motion.
+                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive (layer)", useTrigger: true));
                         wantLayerKeepAlive = false;
                         silenceSec = 0f;
                     }
@@ -812,7 +827,7 @@ public static class KrlExporter
                     if (s.ExtruderKeepAliveEnabled && s.MaxExtruderSilenceSec > 0f
                         && silenceSec + moveSec > s.MaxExtruderSilenceSec)
                     {
-                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive", useTrigger: false));
+                        sb.AppendLine(FormatExtruderOn(layerS, extrudeRpmScale, "keep-alive", useTrigger: true));
                         silenceSec = 0f;
                     }
                     silenceSec += moveSec;

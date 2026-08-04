@@ -21,7 +21,13 @@ MOVE = re.compile(r'^\s*(LIN|LIN_REL|PTP)\s*\{')
 XYZ  = re.compile(r'X\s*(-?[\d.]+),\s*Y\s*(-?[\d.]+),\s*Z\s*(-?[\d.]+)')
 VEL  = re.compile(r'^\s*\$VEL\.CP\s*=\s*([\d.]+)')
 # Anything the extruder hears: screw speed, digital handshakes, temps.
-CMD  = re.compile(r'^\s*(RPM\s*=|\$ANOUT\[|\$OUT\[\s*[789]\s*\]\s*=|T[123]\s*=)')
+# Anything the extruder hears. Must also match the TRIGGER form
+# (TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.27) — that is how the analog path
+# emits without breaking continuous path, and a start-of-line-only pattern misses it
+# entirely, reporting a healthy file as completely silent.
+CMD  = re.compile(
+    r'(^\s*(RPM\s*=|\$ANOUT\[|\$OUT\[\s*[789]\s*\]\s*=|T[123]\s*=)'
+    r'|TRIGGER\b.*(\$ANOUT\[|\$OUT\[\s*[789]\s*\]))')
 WAIT = re.compile(r'^\s*WAIT\s+SEC\s+([\d.]+)', re.I)
 
 def analyse(path):
