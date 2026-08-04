@@ -59,6 +59,16 @@ public sealed record CellConfig
     public string BridgeIp { get; init; } = "192.168.0.1";
     public int BridgePort { get; init; } = 7000;
 
+    /// <summary>
+    /// MassiveDRIVE HTTP base URL for this cell (e.g. <c>http://192.168.0.233:8080</c>).
+    /// When set, "Send to MassiveDRIVE" uploads a job package and starts the path executor.
+    /// Null/empty = MassiveDRIVE send disabled for this cell.
+    /// </summary>
+    public string? MassiveDriveUrl { get; init; }
+
+    /// <summary>Cell id for MassiveDRIVE configs (<c>lfam3</c>, <c>lfam2</c>, …).</summary>
+    public string? MassiveDriveCellId { get; init; }
+
     /// <summary>Extruder RevPi lfam-monitor bridge host (LFAM 3: 192.168.0.196).</summary>
     public string? ExtIp { get; init; }
 
@@ -140,6 +150,27 @@ public sealed record RobotCellConfig
 
     /// <summary>World position of ROBROOT (A1 axis mounting surface) in mm, Z-up.</summary>
     public Float3 WorldPosition { get; init; } = Float3.Zero;
+
+    /// <summary>
+    /// Render-only correction (mm) for a robot GLB whose geometry does not sit where
+    /// <see cref="WorldPosition"/> says ROBROOT is, so the drawn arm lands off the cell.
+    /// Applied to the robot scene node ONLY -- deliberately not to
+    /// <see cref="BedCellConfig.BaseMarkerWorld"/> and not to KRL export, both of which
+    /// stay anchored to <see cref="WorldPosition"/> + <c>bed.baseData</c>. Adjusting it
+    /// therefore moves what is drawn and cannot change a single exported coordinate.
+    /// <para>
+    /// This is a correction for a modelling error, not a machine measurement. Measure it
+    /// with the <c>cal-check</c> console command: it is the reported error vector negated.
+    /// Null = no correction (every cell except LFAM 1 today).
+    /// </para>
+    /// </summary>
+    public Float3? ModelOffset { get; init; }
+
+    /// <summary>Where the robot GLB is actually drawn: ROBROOT plus any render-only correction.</summary>
+    [JsonIgnore]
+    public Float3 ModelWorldPosition => ModelOffset is { } m
+        ? new Float3(WorldPosition.X + m.X, WorldPosition.Y + m.Y, WorldPosition.Z + m.Z)
+        : WorldPosition;
 
     /// <summary>Per-joint axis, sign, KRL offset, and soft limits for A1-A6.</summary>
     public IReadOnlyList<JointConfig> Joints { get; init; } = [];

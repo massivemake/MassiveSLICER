@@ -1134,7 +1134,6 @@ public sealed class SceneRenderer : IDisposable
     public void Initialise()
     {
         if (_initialised) return;
-        _initialised = true;
 
         GL.Enable(EnableCap.DepthTest);
         GL.Enable(EnableCap.CullFace);
@@ -1173,6 +1172,10 @@ public sealed class SceneRenderer : IDisposable
         GL.BindTexture(TextureTarget.Texture1D, 0);
 
         BuildFsq();
+
+        // Only mark ready after full GPU setup so a failed shader compile can retry
+        // or be handled by the host without leaving a half-initialised renderer.
+        _initialised = true;
     }
 
     /// <summary>

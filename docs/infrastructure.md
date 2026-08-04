@@ -49,7 +49,7 @@ flowchart TB
 
 **Secondary job (partially built):** live robot mirror, rotary-bed calibration, Zivid hand-eye, remote KRL execution.
 
-Cell config for LFAM3: `assets/cells/LFAM3/lfam3.json` — robot mesh, bed centre, rotary bed, tool TCPs (`krlIndex` 2/3/6), scanner stand docks, `bridgeIp: 192.168.0.153`.
+Cell config for LFAM3: `assets/cells/LFAM3/lfam3.json` — robot mesh, bed centre, rotary bed, tool TCPs (`krlIndex` 1/3/6), scanner stand docks, `bridgeIp: 192.168.0.153`.
 
 ---
 

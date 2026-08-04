@@ -46,7 +46,25 @@
                             Command="{Binding DataContext.Toolbar.SyncRobotCommand,
                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                             ToolTip.Tip="Connect to the KRC4 controller (live joint streaming). Click again to desync."/>
-                
+
+                    <!-- KRL tool / base frame # (moved from ROBOT section) -->
+                    <TextBlock Text="TOOL #" Classes="LabelMuted" Margin="0,8,0,2"/>
+                    <ComboBox Margin="0,0,0,6" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlToolOptions,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlToolSelectedIndex,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                              Mode=TwoWay}"
+                              ToolTip.Tip="KRL tool number ($TOOL_DATA index) for live sync / export"/>
+                    <TextBlock Text="BASE #" Classes="LabelMuted" Margin="0,0,0,2"/>
+                    <ComboBox Margin="0,0,0,0" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseSelectedIndex,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                              Mode=TwoWay}"
+                              ToolTip.Tip="KRL base number ($BASE_DATA index) for live sync / export"/>
+
         </StackPanel>
     </Expander>
     <Expander Classes="StepCard" IsExpanded="True"
@@ -713,25 +731,6 @@
                             <TextBlock Grid.Column="1" Classes="LabelMuted"
                                        Text="{Binding DataContext.RightPanel.Settings.Robot.BaseZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
                         </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                        <!-- KRL frame dropdowns -->
-                        <TextBlock Text="ROBOT FRAMES" Classes="SectionHeader"/>
-                        <TextBlock Text="TOOL" Classes="LabelMuted" Margin="8,4,8,2"/>
-                        <ComboBox Margin="8,0,8,6" HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlToolOptions,
-                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlToolSelectedIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}"/>
-                        <TextBlock Text="BASE" Classes="LabelMuted" Margin="8,4,8,2"/>
-                        <ComboBox Margin="8,0,8,8" HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
-                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseSelectedIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}"/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="TCP OFFSET" Classes="SectionHeader"/>

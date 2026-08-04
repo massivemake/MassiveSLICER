@@ -198,7 +198,7 @@
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
-      "krlIndex": 2,
+      "krlIndex": 1,
       "dock": {
         "x": 236.36894,
         "y": -2633.3901,
@@ -296,6 +296,8 @@
   "scanToolName": "Scanner",
   "bridgeIp": "192.168.0.153",
   "bridgePort": 7000,
+  "massiveDriveUrl": "http://192.168.0.233:8080",
+  "massiveDriveCellId": "lfam3",
   "extIp": "192.168.0.196",
   "extBridgePort": 8765,
   "millBridgePort": 8765,

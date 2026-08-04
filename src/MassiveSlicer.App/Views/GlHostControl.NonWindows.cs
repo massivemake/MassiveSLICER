@@ -130,7 +130,44 @@ internal sealed class GlHostControl : OpenGlControlBase, IDisposable
         DestroyResources();
     }
 
+    private bool _renderFailed;
+
     protected override void OnOpenGlRender(GlInterface gl, int fb)
+    {
+        // If scene shaders cannot compile (e.g. GLSL 3.30 on GLES-only SoCs),
+        // keep the app alive and paint a flat clear colour instead of crashing.
+        if (_renderFailed)
+        {
+            try
+            {
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, fb);
+                GL.Viewport(0, 0, Math.Max(1, (int)Bounds.Width), Math.Max(1, (int)Bounds.Height));
+                GL.ClearColor(0.12f, 0.14f, 0.18f, 1f);
+                GL.Clear(ClearBufferMask.ColorBufferBit);
+            }
+            catch { /* ignore */ }
+            return;
+        }
+
+        try
+        {
+            OnOpenGlRenderCore(gl, fb);
+        }
+        catch (Exception ex)
+        {
+            _renderFailed = true;
+            DiagLog($"[gl] render failed (viewport disabled): {ex.Message}");
+            try
+            {
+                GL.BindFramebuffer(FramebufferTarget.Framebuffer, fb);
+                GL.ClearColor(0.12f, 0.14f, 0.18f, 1f);
+                GL.Clear(ClearBufferMask.ColorBufferBit);
+            }
+            catch { /* ignore */ }
+        }
+    }
+
+    private void OnOpenGlRenderCore(GlInterface gl, int fb)
     {
         double dpi = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         int displayW = Math.Max(1, (int)(Bounds.Width  * dpi));
