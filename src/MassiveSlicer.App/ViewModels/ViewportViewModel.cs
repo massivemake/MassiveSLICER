@@ -4143,6 +4143,9 @@ public sealed partial class ViewportViewModel : ViewModelBase
             ApplyViewMode();
             ApplyViewDisplayProfile();
             if (value != "Toolpath") StopSimTimeline();
+            // Each view owns where the arm sits, so changing view re-poses it. Ignored while the
+            // robot is synced — the live machine outranks any of this.
+            OnViewGovernedPoseChanged?.Invoke();
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
@@ -4331,6 +4334,46 @@ public sealed partial class ViewportViewModel : ViewModelBase
         OnSimVideoExportRequested?.Invoke();
     });
     private RelayCommand? _simExportVideoCommand;
+
+    /// <summary>
+    /// Where the robot belongs for the view currently on screen — the same rule the renderer uses
+    /// to decide how much of the path to draw, so the arm and the picture always agree.
+    /// </summary>
+    /// <remarks>
+    /// A re-slice re-poses the arm on purpose (RunUpdateSliceAsync, and the pending-replace drain),
+    /// and it used to pass <see cref="ToolpathScrubIndex"/> raw. That is the toolpath EDIT
+    /// scrubber's position, so scaling, rotating, optimizing or rebuilding drove the arm back to a
+    /// mid-print pose from a mode the user had left — in every view, every time. Jeff, 2026-08-04:
+    /// "Scaling, rotating, optimizing, rebuilding path. Arm still stays in toolpath edit position."
+    /// <para>
+    /// Body carries no timeline, so it reports the end of the path: the same "no timeline means
+    /// 100%" rule that governs what Body draws.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Raised when the view changes, so the viewport can move the arm to that view's position.
+    /// </summary>
+    internal Action? OnViewGovernedPoseChanged { get; set; }
+
+    /// <summary>
+    /// True when the live robot owns the arm's pose and nothing here may drive it. Sync outranks
+    /// every view rule — driving IK calls <c>Desync()</c>, which would silently drop the machine
+    /// connection just because someone clicked a view tab.
+    /// </summary>
+    internal bool RobotOwnsPose => Robot?.IsConnected == true;
+
+    internal int ViewGovernedScrubIndex
+    {
+        get
+        {
+            float sim = SimRenderProgress;
+            if (sim >= 0f)
+                return Math.Clamp((int)Math.Round(sim * _toolpathScrubMax), 0, _toolpathScrubMax);
+            if (_viewMode == "Body")
+                return _toolpathScrubMax;
+            return _toolpathScrubIndex;
+        }
+    }
 
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>

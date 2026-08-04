@@ -536,6 +536,16 @@ public partial class ViewportView : UserControl
             vm.OnCancelCutToolRequested = CancelCutToolInteractive;
             vm.OnPerformCutToolRequested = () => PerformCutToolInteractive();
             vm.OnScrubIkRequested  = ScrubIk;
+            vm.OnViewGovernedPoseChanged = () =>
+            {
+                // Body 100%, Toolpath tab its own timeline, toolpath edit its scrubber — each view
+                // owns the arm. Skipped entirely while synced: ScrubIkForNode desyncs to take
+                // control, and losing the machine connection over a view tab would be far worse
+                // than a stale pose.
+                if (vm.RobotOwnsPose) return;
+                if (_activeScrubNode is not { } poseNode) return;
+                ScrubIkForNode(poseNode, vm.ViewGovernedScrubIndex);
+            };
             vm.OnSimScrubRequested = SimScrubIk;
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
@@ -1813,12 +1823,15 @@ public partial class ViewportView : UserControl
                 Dispatcher.UIThread.Post(() =>
                 {
                     UpdateFocusOverlay();
-                    // After re-slice upload, keep robot on the current timeline frame.
+                    // After re-slice upload, keep the robot on the frame the CURRENT view governs —
+                    // Body has no timeline, so the arm belongs at the end of the path rather than
+                    // wherever the toolpath editor was left.
                     if (DataContext is ViewportViewModel vRep
                         && ReferenceEquals(_activeScrubNode, replacedNode)
-                        && vRep.IsScrubSessionActive)
+                        && vRep.IsScrubSessionActive
+                        && !vRep.RobotOwnsPose)   // synced robot outranks a re-slice
                     {
-                        ScrubIkForNode(replacedNode, vRep.ToolpathScrubIndex);
+                        ScrubIkForNode(replacedNode, vRep.ViewGovernedScrubIndex);
                         // Repopulate playback IK data so the timeline can play again.
                         if (_toolpathByNode.TryGetValue(replacedNode, out var freshTp))
                             ValidateToolpathAsync(replacedNode, freshTp);
@@ -5783,12 +5796,16 @@ public partial class ViewportView : UserControl
             _activeScrubNode = toolpathNode;
             vm.IsScrubSessionActive = true;
             vm.ResetScrubIndex(newMax, smoothedToolpath, preservePosition: keepScrub);
-            // Re-pose robot at the preserved index once scrub cache is rebuilt on GL thread.
-            int restoreIdx = vm.ToolpathScrubIndex;
+            // Re-pose robot once the scrub cache is rebuilt on the GL thread — at the position the
+            // CURRENT view governs, not the toolpath editor's. Passing ToolpathScrubIndex raw sent
+            // the arm back to a mid-print pose from a mode the user had left, on every scale,
+            // rotate, optimize and rebuild.
+            int restoreIdx = vm.ViewGovernedScrubIndex;
             Dispatcher.UIThread.Post(() =>
             {
                 if (DataContext is ViewportViewModel v2
-                    && ReferenceEquals(_activeScrubNode, toolpathNode))
+                    && ReferenceEquals(_activeScrubNode, toolpathNode)
+                    && !v2.RobotOwnsPose)   // synced robot outranks a re-slice
                     ScrubIkForNode(toolpathNode, restoreIdx);
             }, DispatcherPriority.Background);
             GlCanvas.RequestNextFrameRendering();
