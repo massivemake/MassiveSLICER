@@ -85,6 +85,40 @@ public class ScrubPreserveTest
     }
 
     [Fact]
+    public void A_caller_supplied_fraction_beats_a_corrupted_live_index()
+    {
+        // The exact numbers traced out of the running app, 2026-08-03. Scaling a part to 50%
+        // takes the path from 95,206 moves to 34,659. Partway through the re-slice the layer-high
+        // slider's two-way binding writes 34,659 — a NEW-path index — into the scrub while
+        // ToolpathScrubMax is still 95,206. Reading the live index then says "36% through" for a
+        // user who was looking at the whole path, and only a third of the part gets drawn.
+        // Jeff saw exactly that: "Its only going like 1/3 up the mesh."
+        var vm = new ViewportViewModel();
+        vm.ResetScrubIndex(95_206, PathWith(95_206));
+        Assert.Equal(95_206, vm.ToolpathScrubIndex);      // whole path visible
+
+        vm.ToolpathScrubIndex = 34_659;                   // the binding's stale write
+
+        vm.ResetScrubIndex(34_659, PathWith(34_659), preservePosition: true,
+                           preserveFraction: 1.0);        // captured before the slice began
+
+        Assert.Equal(34_659, vm.ToolpathScrubIndex);      // still the whole path
+    }
+
+    [Fact]
+    public void A_supplied_fraction_is_honoured_mid_path()
+    {
+        // Guards against "just always land at the end", which would pass the test above and
+        // silently undo the robot-position fix.
+        var vm = AtFraction(95_206, 0.40);
+
+        vm.ResetScrubIndex(34_659, PathWith(34_659), preservePosition: true,
+                           preserveFraction: 0.40);
+
+        Assert.Equal(13_864, vm.ToolpathScrubIndex);
+    }
+
+    [Fact]
     public void A_blank_window_is_never_preserved()
     {
         // Scrub index is an exclusive end, so 0 draws nothing. Re-arming edit scrub with a stale

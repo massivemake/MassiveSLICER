@@ -380,6 +380,8 @@ public partial class ViewportView : UserControl
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
+            vm.GetToolpathRenderOrigin = n =>
+                _toolpathOriginByNode.TryGetValue(n, out var o) ? o : null;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
@@ -4551,7 +4553,18 @@ public partial class ViewportView : UserControl
             var geometryCentroid = new NVec3(
                 centroidLocal.Row3.X, centroidLocal.Row3.Y, centroidLocal.Row3.Z);
 
-            if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
+            if (entry.RebaseToFreshCentroid)
+            {
+                // ReplaceToolpath above already parked the node on the new geometry's centroid,
+                // which is exactly where a freshly re-sliced path belongs — its moves are baked in
+                // absolute world space from the mesh's current vertices. Leave it alone. Restoring
+                // the old translation here is what left a scaled part's toolpath sitting beside it.
+                //
+                // A deliberate independent nudge of the toolpath is not lost by this: the transform
+                // link is bidirectional, so moving a toolpath moves its mesh too, and the re-slice
+                // picks the offset up through the mesh's own vertices.
+            }
+            else if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
             {
                 // Just keep the node exactly where it already was — do NOT rebase through the
                 // old/new centroids (the previous formula here was preservedLocal * invOldOrigin
@@ -5642,6 +5655,16 @@ public partial class ViewportView : UserControl
         var resolved = explicitSource ?? FindResliceSource(vm);
         if (resolved is not { } source) return;
 
+        // Where the user is in the print, captured NOW — before anything about the old path is
+        // torn down. Reading it back after the slice does not work: the layer-high slider's
+        // two-way binding fires partway through and writes a NEW-path move index into the scrub
+        // while ToolpathScrubMax is still the OLD path's, so the position reads as a fraction the
+        // user never chose. Measured on a 50% scale: index 95,206/95,206 (the whole path) came
+        // back as 34,659/95,206, and preserving that "36%" drew barely a third of the part.
+        double? scrubFraction = vm.ToolpathScrubMax > 0
+            ? (double)vm.ToolpathScrubIndex / vm.ToolpathScrubMax
+            : null;
+
         var cancel = BeginSliceCancellation();
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
@@ -5718,6 +5741,7 @@ public partial class ViewportView : UserControl
                 PreserveRelativePose   = true,
                 PreservedLocalTransform = preservedLocal,
                 PreservedOrigin        = preservedOrigin,
+                RebaseToFreshCentroid  = true,
             });
 
             ApplyToolpathStats(vm, smoothedToolpath);
@@ -5727,7 +5751,8 @@ public partial class ViewportView : UserControl
                              || ReferenceEquals(_activeScrubNode, toolpathNode);
             _activeScrubNode = toolpathNode;
             vm.IsScrubSessionActive = true;
-            vm.ResetScrubIndex(newMax, smoothedToolpath, preservePosition: keepScrub);
+            vm.ResetScrubIndex(newMax, smoothedToolpath, preservePosition: keepScrub,
+                               preserveFraction: scrubFraction);
             // Re-pose robot at the preserved index once scrub cache is rebuilt on GL thread.
             int restoreIdx = vm.ToolpathScrubIndex;
             Dispatcher.UIThread.Post(() =>

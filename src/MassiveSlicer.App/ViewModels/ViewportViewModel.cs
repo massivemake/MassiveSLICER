@@ -3567,7 +3567,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
     /// the end. When false (first select / new toolpath), jumps to the end as before.
     /// Does not fire <see cref="OnScrubIkRequested"/> — call ScrubIk separately if needed.
     /// </summary>
-    internal void ResetScrubIndex(int max, Toolpath? toolpath, bool preservePosition = false)
+    /// <param name="preserveFraction">
+    /// How far through the path the user actually was, 0-1, captured by the caller BEFORE the
+    /// re-slice began. Supply it whenever you can: the live index cannot be trusted at this point,
+    /// because the layer-high slider's two-way binding fires partway through a re-slice and writes
+    /// a new-path move index while <see cref="ToolpathScrubMax"/> still holds the old path's total.
+    /// Falls back to the live index when omitted.
+    /// </param>
+    internal void ResetScrubIndex(int max, Toolpath? toolpath, bool preservePosition = false,
+                                  double? preserveFraction = null)
     {
         if (_isPlaying)
         {
@@ -3597,10 +3605,11 @@ public sealed partial class ViewportViewModel : ViewModelBase
             // the new path and the arm visibly jumped (measured: A5 swung 38.7°). Jeff, 2026-08-03:
             // "the arm should stick to whatever position in the print it was in."
             // A same-length re-slice maps back to the same index, so the ordinary case is unchanged.
-            index = previousMax > 0
-                ? (int)Math.Round((double)previous / previousMax * _toolpathScrubMax,
-                                  MidpointRounding.AwayFromZero)
-                : _toolpathScrubMax;
+            double fraction =
+                  preserveFraction is { } f     ? Math.Clamp(f, 0d, 1d)
+                : previousMax > 0               ? (double)previous / previousMax
+                : 1d;
+            index = (int)Math.Round(fraction * _toolpathScrubMax, MidpointRounding.AwayFromZero);
             index = Math.Clamp(index, 0, _toolpathScrubMax);
             // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
             // blank window when the path has content (common after re-arming edit scrub
@@ -5565,6 +5574,15 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Returns live toolpath data for a scene node (wired by the viewport).</summary>
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
+
+    /// <summary>
+    /// The centroid a toolpath's GPU geometry was built relative to, so a diagnostic can reproduce
+    /// what is actually on screen: <c>rendered = (move - origin) * node.LocalTransform</c>. Without
+    /// it, reading raw move coordinates and calling them "world" silently ignores the node's own
+    /// transform — the mistake that made <c>align-debug</c> report a toolpath as correctly aligned
+    /// while it was visibly adrift.
+    /// </summary>
+    internal Func<SceneNode, System.Numerics.Vector3?>? GetToolpathRenderOrigin { get; set; }
 
     /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
