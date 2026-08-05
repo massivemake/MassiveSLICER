@@ -5669,6 +5669,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
+    /// <summary>
+    /// Returns a per-span robot-validation report for the active toolpath, or an explicit
+    /// "no result on record" message when the analysis has not completed. Set by the viewport.
+    /// </summary>
+    internal Func<string>? OnValidationReportRequested { get; set; }
+
     internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>

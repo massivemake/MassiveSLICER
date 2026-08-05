@@ -131,6 +131,12 @@ public partial class ViewportView : UserControl
 
     /// <summary>Robot-validation issue summary per toolpath node (unreachable / singularity counts + Z range).</summary>
     private readonly ConcurrentDictionary<SceneNode, (int Unreachable, int Singular, float ZLo, float ZHi)> _validationIssuesByNode = new();
+    /// <summary>
+    /// Per-node record of every span the TCP auto-rotate repair looked at: the move range,
+    /// the nozzle spin it settled on, and whether that spin actually cleared the wrist.
+    /// Spans with <c>Fixed == false</c> are the ones that will still fault on the robot.
+    /// </summary>
+    private readonly ConcurrentDictionary<SceneNode, (int Start, int End, float Yaw, bool Fixed)[]> _repairSpansByNode = new();
     private readonly ConcurrentDictionary<SceneNode, MergedToolpathRecord> _mergedByNode = new();
     // Pre-smoothing toolpaths keyed by node -- used to re-apply OrientationSmoother live when settings change.
     private readonly ConcurrentDictionary<SceneNode, Toolpath>                    _rawToolpathByNode    = new();
@@ -177,6 +183,9 @@ public partial class ViewportView : UserControl
     private readonly ConcurrentDictionary<SceneNode, float[][]>  _ikSolutionsByNode  = new();
     private readonly ConcurrentDictionary<SceneNode, float[]>    _moveTimesMsByNode   = new(); // ms per move
     private readonly ConcurrentDictionary<SceneNode, bool[]>     _singularityByNode   = new();
+    /// <summary>Per-move reachability, parallel to the move list. Kept so validate-report
+    /// can locate unreachable spans; the render path consumes a queued copy instead.</summary>
+    private readonly ConcurrentDictionary<SceneNode, bool[]>     _reachableByNode     = new();
     /// <summary>Per-move planned rail E1 (mm), parallel to IK solutions / move list.</summary>
     private readonly ConcurrentDictionary<SceneNode, float[]>    _e1MmByNode          = new();
 
@@ -349,6 +358,7 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnValidationReportRequested = BuildValidationReport;
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -1329,6 +1339,8 @@ public partial class ViewportView : UserControl
                 _moveTimesMsByNode.TryRemove(removing, out _);
                 _collisionByNode.TryRemove(removing, out _);
                 _singularityByNode.TryRemove(removing, out _);
+                _reachableByNode.TryRemove(removing, out _);
+                _repairSpansByNode.TryRemove(removing, out _);
                 _e1MmByNode.TryRemove(removing, out _);
                 _renderer.RemoveToolpathIfExists(removing);
                 GpuMeshCache.ReleaseSubtree(removing);
@@ -1520,6 +1532,8 @@ public partial class ViewportView : UserControl
                 _moveTimesMsByNode.TryRemove(entry.Node, out _);
                 _collisionByNode.TryRemove(entry.Node, out _);
                 _singularityByNode.TryRemove(entry.Node, out _);
+                _reachableByNode.TryRemove(entry.Node, out _);
+                _repairSpansByNode.TryRemove(entry.Node, out _);
                 _e1MmByNode.TryRemove(entry.Node, out _);
                 _validationIssuesByNode.TryRemove(entry.Node, out _);
                 // The playback data above is gone — reset the validation dedup key so a
@@ -2057,6 +2071,8 @@ public partial class ViewportView : UserControl
         _moveTimesMsByNode.Clear();
         _collisionByNode.Clear();
         _singularityByNode.Clear();
+        _reachableByNode.Clear();
+        _repairSpansByNode.Clear();
         _e1MmByNode.Clear();
         _activeScrubNode = null;
     }
@@ -11639,6 +11655,128 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>
+    /// Human-readable robot-validation report for the active toolpath. Reads only the caches
+    /// that <see cref="ValidateToolpathAsync"/> fills in, so it never starts work of its own and
+    /// always reflects exactly what the last completed pass concluded.
+    /// </summary>
+    private string BuildValidationReport()
+    {
+        if (_activeScrubNode is not { } node)
+            return "[validate-report] No toolpath selected -- click one in the outliner first.";
+
+        if (_vm is { IsValidating: true })
+            return $"[validate-report] '{node.Name}': analysis is still RUNNING. "
+                 + "Wait for the '[validate]' console line, then run this again.";
+
+        if (!_validationIssuesByNode.TryGetValue(node, out var vi))
+            return $"[validate-report] '{node.Name}': NO RESULT ON RECORD.\n"
+                 + "  The analysis has not completed for this toolpath -- never started, cancelled, or it failed.\n"
+                 + "  Nothing here has been checked. Nudge Toolhead X by 1 degree to force a fresh run.";
+
+        if (!_toolpathByNode.TryGetValue(node, out var tp))
+            return $"[validate-report] '{node.Name}': verdict on record, but the toolpath is no longer cached.";
+
+        int total = 0;
+        foreach (var l in tp.Layers) total += l.Moves.Count;
+        if (total == 0) return $"[validate-report] '{node.Name}': toolpath has no moves.";
+
+        var zOf     = new float[total];
+        var layerOf = new int[total];
+        {
+            int fi = 0;
+            for (int li = 0; li < tp.Layers.Count; li++)
+                foreach (var mv in tp.Layers[li].Moves)
+                {
+                    if (fi < total) { zOf[fi] = mv.From.Z; layerOf[fi] = li; }
+                    fi++;
+                }
+        }
+        int Clamp(int i) => Math.Clamp(i, 0, total - 1);
+
+        _singularityByNode.TryGetValue(node, out var sing);
+        _reachableByNode.TryGetValue(node, out var reach);
+        _collisionByNode.TryGetValue(node, out var coll);
+        _ikSolutionsByNode.TryGetValue(node, out var sols);
+        _repairSpansByNode.TryGetValue(node, out var repairs);
+
+        int collCount = 0;
+        if (coll is not null) foreach (var c in coll) if (c) collCount++;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"[validate-report] '{node.Name}' -- {total:N0} moves in {tp.Layers.Count:N0} layers");
+        sb.AppendLine($"  singularity-risk : {vi.Singular:N0}");
+        sb.AppendLine($"  unreachable      : {vi.Unreachable:N0}");
+        sb.AppendLine($"  collision        : {(coll is null ? "not checked" : $"{collCount:N0}")}");
+
+        bool Flagged(int i) =>
+            (sing  is not null && i < sing.Length  &&  sing[i]) ||
+            (reach is not null && i < reach.Length && !reach[i]) ||
+            (coll  is not null && i < coll.Length  &&  coll[i]);
+
+        var spans = new List<(int A, int B)>();
+        for (int i = 0; i < total; i++)
+        {
+            if (!Flagged(i)) continue;
+            int j = i;
+            while (j + 1 < total && Flagged(j + 1)) j++;
+            spans.Add((i, j));
+            i = j;
+        }
+
+        if (spans.Count == 0)
+            sb.AppendLine("  no flagged moves -- this toolpath passed.");
+        else
+        {
+            sb.AppendLine($"  {spans.Count:N0} flagged span(s), worst first by length:");
+            spans.Sort((x, y) => (y.B - y.A).CompareTo(x.B - x.A));
+            int shown = 0;
+            foreach (var (a, b) in spans)
+            {
+                if (shown++ >= 20) { sb.AppendLine($"     ... {spans.Count - 20:N0} more span(s) not shown."); break; }
+                float zlo = MathF.Min(zOf[a], zOf[b]), zhi = MathF.Max(zOf[a], zOf[b]);
+                int nS = 0, nU = 0, nC = 0;
+                float worstA5 = float.MaxValue;
+                for (int i = a; i <= b; i++)
+                {
+                    if (sing  is not null && i < sing.Length  &&  sing[i])  nS++;
+                    if (reach is not null && i < reach.Length && !reach[i]) nU++;
+                    if (coll  is not null && i < coll.Length  &&  coll[i])  nC++;
+                    if (sols is not null && i < sols.Length && sols[i] is { Length: >= 5 } s5)
+                        worstA5 = MathF.Min(worstA5, MathF.Abs(s5[4]));
+                }
+                var kinds = new List<string>();
+                if (nS > 0) kinds.Add($"{nS:N0} singular");
+                if (nU > 0) kinds.Add($"{nU:N0} unreachable");
+                if (nC > 0) kinds.Add($"{nC:N0} collision");
+                string a5 = worstA5 < float.MaxValue ? $", worst |A5| {worstA5:F1} deg" : "";
+                sb.AppendLine($"     moves {a:N0}-{b:N0} (layers {layerOf[a]}-{layerOf[b]}, Z {zlo:0}-{zhi:0} mm): "
+                            + string.Join(", ", kinds) + a5);
+            }
+        }
+
+        if (repairs is null || repairs.Length == 0)
+            sb.AppendLine("  auto-rotate repair: nothing to attempt.");
+        else
+        {
+            int cleared = 0, gaveUp = 0;
+            foreach (var sp in repairs) { if (sp.Fixed) cleared++; else gaveUp++; }
+            sb.AppendLine($"  auto-rotate repair: {cleared:N0} span(s) cleared, {gaveUp:N0} GAVE UP.");
+            int shown = 0;
+            foreach (var sp in repairs)
+            {
+                if (sp.Fixed) continue;
+                if (shown++ >= 15) { sb.AppendLine("     ... more unfixed spans not shown."); break; }
+                int a = Clamp(sp.Start), b = Clamp(sp.End);
+                float zlo = MathF.Min(zOf[a], zOf[b]), zhi = MathF.Max(zOf[a], zOf[b]);
+                sb.AppendLine($"     UNFIXED moves {sp.Start:N0}-{sp.End:N0} (Z {zlo:0}-{zhi:0} mm) "
+                            + "-- no nozzle spin cleared the wrist here.");
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
     private void ValidateToolpathAsync(SceneNode node, Toolpath toolpath)
     {
         var currentTransform = node.WorldTransform;
@@ -11837,6 +11975,10 @@ public partial class ViewportView : UserControl
             for (int i = 0; i < total; i++)
                 singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
 
+            // Repair outcome per flagged span -- recorded so validate-report can say
+            // which spans the auto-rotate actually cleared and which it gave up on.
+            var repairSpans = new List<(int Start, int End, float Yaw, bool Fixed)>();
+
             // -- TCP auto-rotate repair -------------------------------------------
             // The nozzle is rotationally symmetric, so spinning it about its own axis
             // (KUKA C offset) is print-neutral — but it swings the flange/wrist into a
@@ -11917,6 +12059,7 @@ public partial class ViewportView : UserControl
                                 singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
                             }
                         }
+                        repairSpans.Add((s0, s1, chosen, chosen != 0f));
                         s0 = s1 + 1;
                     }
 
@@ -11991,6 +12134,7 @@ public partial class ViewportView : UserControl
             _ikSolutionsByNode[node]  = solutions;
             _moveTimesMsByNode[node]  = moveTimes;
             _singularityByNode[node]  = singularity;
+            _reachableByNode[node]    = result;
             _e1MmByNode[node]         = e1PerMove;
             if (collision is not null) _collisionByNode[node] = collision;
             else _collisionByNode.TryRemove(node, out _);
@@ -12008,7 +12152,8 @@ public partial class ViewportView : UserControl
                 foreach (var layer in toolpath.Layers)
                     foreach (var mv in layer.Moves)
                     {
-                        if (fi < total && (!result[fi] || singularity[fi]))
+                        if (fi < total && (!result[fi] || singularity[fi]
+                                           || (collision is not null && collision[fi])))
                         {
                             zLo = Math.Min(zLo, mv.From.Z);
                             zHi = Math.Max(zHi, mv.From.Z);
@@ -12017,6 +12162,7 @@ public partial class ViewportView : UserControl
                     }
             }
             _validationIssuesByNode[node] = (failCount, singCount, zLo, zHi);
+            _repairSpansByNode[node]      = repairSpans.ToArray();
 
             _pendingReachability.Enqueue((node, result));
             _pendingSingularityPoints.Enqueue((node, singularity));
@@ -12054,6 +12200,24 @@ public partial class ViewportView : UserControl
                             (zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "") +
                             " — the robot may fault or crash mid-print.",
                             isError: true);
+                    }
+
+                    // Always leave a line in the console log, even on a clean pass.
+                    // Without this, "analysed and clean", "cancelled" and "crashed"
+                    // are indistinguishable from outside -- the banner only appears
+                    // when a count is non-zero, and it is transient.
+                    if (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel logVm)
+                    {
+                        int cleared = 0, gaveUp = 0;
+                        foreach (var sp in repairSpans) { if (sp.Fixed) cleared++; else gaveUp++; }
+                        string zPart = zLo <= zHi ? $", Z {zLo:0}..{zHi:0} mm" : "";
+                        string msg =
+                            $"[validate] {node.Name}: {total:N0} moves — {singCount:N0} singularity-risk, " +
+                            $"{failCount:N0} unreachable, {collCount:N0} collision{zPart}. " +
+                            $"Repair: {cleared} span(s) cleared, {gaveUp} gave up. " +
+                            "Type 'validate-report' for per-span detail.";
+                        if (failCount + singCount + collCount > 0) logVm.Console.LogError(msg);
+                        else                                       logVm.Console.Log(msg);
                     }
                 }
                 GlCanvas.RequestNextFrameRendering();

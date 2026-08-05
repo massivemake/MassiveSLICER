@@ -1578,6 +1578,24 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "validate-report",
+            Description = "Robot validation detail for the selected toolpath: per-span move/layer/Z ranges, "
+                        + "worst |A5|, and which spans the auto-rotate repair could not clear. Says so "
+                        + "explicitly when no analysis has completed, so a clean pass is never confused "
+                        + "with one that never ran",
+            Usage = "validate-report",
+            Execute = (ctx, args) =>
+            {
+                var fn = ctx.Main.Viewport.OnValidationReportRequested;
+                if (fn is null) { ctx.LogError("[validate-report] viewport is not ready yet."); return; }
+                // (char)10 = LF, (char)13 = CR -- split without escape sequences.
+                foreach (var line in fn().Split((char)10))
+                    ctx.Log(line.TrimEnd((char)13));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "align-debug",
             Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
             Usage = "align-debug <name>",
