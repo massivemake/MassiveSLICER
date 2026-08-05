@@ -4452,6 +4452,29 @@ public partial class ViewportView : UserControl
         _                    => "Planar",
     };
 
+    /// <summary>Wall clock for the slice in flight, so the console can report duration.</summary>
+    private readonly System.Diagnostics.Stopwatch _sliceWatch = new();
+
+    /// <summary>
+    /// Writes a line straight to the in-app console. Needed because the status banner only
+    /// ever displays errors (ShowSliceStatus gates on SliceStatusIsError) and non-error status
+    /// messages only reach the log while IsSlicing is still true -- so slice completions were
+    /// landing nowhere the operator could see. This bypasses that routing.
+    /// </summary>
+    private void LogToConsole(string message, bool isError = false)
+    {
+        void Write()
+        {
+            if (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel mvm)
+            {
+                if (isError) mvm.Console.LogError(message);
+                else         mvm.Console.Log(message);
+            }
+        }
+        if (Dispatcher.UIThread.CheckAccess()) Write();
+        else Dispatcher.UIThread.Post(Write);
+    }
+
     private async Task RunSliceAsync(ViewportViewModel vm)
     {
         if (vm.IsSlicing || vm.OutlinerItems.Count == 0) return;
@@ -4460,6 +4483,8 @@ public partial class ViewportView : UserControl
         vm.IsSlicing = true;
         vm.SliceStatusIsError = false;
         SetSliceStatus(vm, "Slicing…");
+        _sliceWatch.Restart();
+        LogToConsole("[slice] full slice started…");
 
         try
         {
@@ -4528,6 +4553,7 @@ public partial class ViewportView : UserControl
             if (layerCount == 0)
             {
                 SetSliceStatus(vm, "Slice finished with 0 layers — check mesh, boundaries, and settings.", isError: true);
+                LogToConsole("[slice] finished with 0 layers — check mesh, boundaries, and settings.", isError: true);
                 return;
             }
 
@@ -4560,10 +4586,15 @@ public partial class ViewportView : UserControl
 
             int moveCount = smoothedToolpath.Layers.Sum(l => l.Moves.Count);
             if (smoothedToolpath.Warnings.Count > 0)
+            {
                 SetSliceStatus(vm, $"⚠ {smoothedToolpath.Warnings[0]}", isError: true);
+                LogToConsole($"[slice] finished with warning: {smoothedToolpath.Warnings[0]}", isError: true);
+            }
             else
             {
                 SetSliceStatus(vm, $"Slice complete — {layerCount} layers, {moveCount:N0} moves");
+                LogToConsole($"[slice] complete — {layerCount} layers, {moveCount:N0} moves "
+                           + $"in {_sliceWatch.Elapsed.TotalSeconds:F1}s.");
                 ScheduleClearSliceStatus(vm);
             }
             vm.MarkWorkspaceDirty?.Invoke();
@@ -4571,11 +4602,13 @@ public partial class ViewportView : UserControl
         catch (OperationCanceledException)
         {
             SetSliceStatus(vm, "Slice cancelled — applying latest changes…");
+            LogToConsole($"[slice] cancelled after {_sliceWatch.Elapsed.TotalSeconds:F1}s (superseded by newer settings).");
             System.Console.WriteLine("[slice] cancelled (superseded by newer settings)");
         }
         catch (Exception ex)
         {
             SetSliceStatus(vm, $"Slice failed: {ex.Message}", isError: true);
+            LogToConsole($"[slice] FAILED after {_sliceWatch.Elapsed.TotalSeconds:F1}s: {ex.Message}", isError: true);
             System.Console.Error.WriteLine($"[slice] {ex}");
         }
         finally
@@ -5326,6 +5359,8 @@ public partial class ViewportView : UserControl
         vm.IsSlicing = true;
         vm.SliceStatusIsError = false;
         SetSliceStatus(vm, "Updating slice…");
+        _sliceWatch.Restart();
+        LogToConsole("[slice] update started…");
         try
         {
             var (parentItem, toolpathItem) = source;
@@ -5353,6 +5388,7 @@ public partial class ViewportView : UserControl
             if (smoothedToolpath.Layers.Count == 0)
             {
                 SetSliceStatus(vm, "Update finished with 0 layers.", isError: true);
+                LogToConsole("[slice] update finished with 0 layers.", isError: true);
                 return;
             }
 
@@ -5418,10 +5454,16 @@ public partial class ViewportView : UserControl
             GlCanvas.RequestNextFrameRendering();
 
             if (smoothedToolpath.Warnings.Count > 0)
+            {
                 SetSliceStatus(vm, $"⚠ {smoothedToolpath.Warnings[0]}", isError: true);
+                LogToConsole($"[slice] finished with warning: {smoothedToolpath.Warnings[0]}", isError: true);
+            }
             else
             {
                 SetSliceStatus(vm, $"Update complete — {smoothedToolpath.Layers.Count} layers");
+                LogToConsole($"[slice] update complete — {smoothedToolpath.Layers.Count} layers, "
+                           + $"{smoothedToolpath.Layers.Sum(l => l.Moves.Count):N0} moves "
+                           + $"in {_sliceWatch.Elapsed.TotalSeconds:F1}s.");
                 ScheduleClearSliceStatus(vm);
             }
             vm.MarkWorkspaceDirty?.Invoke();
@@ -5429,11 +5471,13 @@ public partial class ViewportView : UserControl
         catch (OperationCanceledException)
         {
             SetSliceStatus(vm, "Update cancelled — applying latest changes…");
+            LogToConsole($"[slice] update cancelled after {_sliceWatch.Elapsed.TotalSeconds:F1}s (superseded).");
             System.Console.WriteLine("[slice] update cancelled (superseded by newer settings)");
         }
         catch (Exception ex)
         {
             SetSliceStatus(vm, $"Update failed: {ex.Message}", isError: true);
+            LogToConsole($"[slice] update FAILED after {_sliceWatch.Elapsed.TotalSeconds:F1}s: {ex.Message}", isError: true);
             System.Console.Error.WriteLine($"[slice] update: {ex}");
         }
         finally
