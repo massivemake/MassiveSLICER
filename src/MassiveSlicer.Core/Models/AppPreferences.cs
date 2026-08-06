@@ -462,7 +462,7 @@ public sealed class AppPreferences
     public double LayerLeanPercent { get; set; }
 
     /// <summary>Layer lean max tilt from vertical (degrees).</summary>
-    public double LayerLeanMaxTiltDeg { get; set; } = 20.0;
+    public double LayerLeanMaxTiltDeg { get; set; } = 0.0;
 
     /// <summary>Forward-biased Gaussian look-ahead for KRL ABC smoothing (mm). 0 = off.</summary>
     public double OrientationLookAheadMm { get; set; }

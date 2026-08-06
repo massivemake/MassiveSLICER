@@ -6116,21 +6116,33 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).</summary>
+    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).
+    /// Tool stands nest under Robot Root when present; print bed stays top-level.</summary>
     internal void SetCellEnvironmentOutliner(IEnumerable<(SceneNode Node, string DisplayName)> entries)
     {
         foreach (var item in _cellEnvOutlinerItems)
+        {
             OutlinerItems.Remove(item);
+            _robotGroupItem?.RemoveChild(item);
+        }
         _cellEnvOutlinerItems.Clear();
 
         foreach (var (node, displayName) in entries)
         {
             var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false)
             { IsLocked = true };
-            OutlinerItems.Add(item);
+            // Stands live under Robot Root in the outliner (siblings of Pedestal / Arm).
+            if (_robotGroupItem is not null && IsCellStandDisplayName(displayName))
+                _robotGroupItem.AddChild(item);
+            else
+                OutlinerItems.Add(item);
             _cellEnvOutlinerItems.Add(item);
         }
     }
+
+    static bool IsCellStandDisplayName(string displayName) =>
+        displayName is "Extruder Stand" or "Scanner Stand" or "Spindle Stand"
+        || displayName.EndsWith(" Stand", StringComparison.Ordinal);
 
     /// <summary>Locks/unlocks the cell-environment rows whose scene node is dev-editable
     /// (print bed, stands) — dev mode unlocks them so they can be selected and transformed.</summary>
@@ -6153,7 +6165,14 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
     {
-        if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        // Detach stand rows before dropping the group so SetCellEnvironmentOutliner can re-home them.
+        if (_robotGroupItem is not null)
+        {
+            foreach (var env in _cellEnvOutlinerItems)
+                _robotGroupItem.RemoveChild(env);
+            OutlinerItems.Remove(_robotGroupItem);
+            _robotGroupItem = null;
+        }
         _robotPedestalItem = null;
         _robotArmItem      = null;
         if (root is null) return;
@@ -6173,6 +6192,14 @@ public sealed class ViewportViewModel : ViewModelBase
             // Chain: Root -> Pedestal -> Arm (arm nests under the pedestal when present).
             _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
             (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
+        }
+
+        // Re-parent any already-registered stands under the new Robot Root.
+        foreach (var env in _cellEnvOutlinerItems)
+        {
+            if (!IsCellStandDisplayName(env.Name)) continue;
+            OutlinerItems.Remove(env);
+            _robotGroupItem.AddChild(env);
         }
     }
 

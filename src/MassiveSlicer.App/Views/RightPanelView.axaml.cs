@@ -194,9 +194,7 @@ public partial class RightPanelView : UserControl
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
         if (result is null) return;
 
-        vm.Additive.MaterialPresets.Add(result);
-        vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
-        MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+        AddMaterialPreset(vm, result);
     }
 
     private async void OnKrlPostProcessClicked(object? sender, RoutedEventArgs e)
@@ -226,8 +224,22 @@ public partial class RightPanelView : UserControl
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
         if (result is null) return;
 
+        // JSON import marks SaveAsNew so the open preset is left alone and a new entry is added.
+        if (dialog.SaveAsNew)
+        {
+            AddMaterialPreset(vm, result);
+            return;
+        }
+
         vm.Additive.MaterialPresets[idx] = result;
         vm.Additive.SelectedPresetIndex  = idx;
+        MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+    }
+
+    private static void AddMaterialPreset(RightPanelViewModel vm, Core.Models.MaterialPreset preset)
+    {
+        vm.Additive.MaterialPresets.Add(preset);
+        vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
         MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
     }
 }
