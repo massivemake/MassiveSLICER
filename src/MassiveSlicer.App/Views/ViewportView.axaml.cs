@@ -359,6 +359,7 @@ public partial class ViewportView : UserControl
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnValidationReportRequested = BuildValidationReport;
+            vm.OnSeamReportRequested = BuildSeamReport;
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -11718,6 +11719,66 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
+    /// Reports where the spiral/vase seam jumped instead of stitching continuously.
+    /// PlanarSlicer stitches layer to layer while the start of the next layer is within one
+    /// bead width of the end of the last; past that it inserts a travel, which stops
+    /// extrusion and sprints the head across the part. Those points are where blobs and
+    /// stray extrusions appear on the printed part, so list them with heights.
+    /// </summary>
+    private string BuildSeamReport()
+    {
+        if (_activeScrubNode is not { } node)
+            return "[seam-report] No toolpath selected -- click one in the outliner first.";
+        if (!_toolpathByNode.TryGetValue(node, out var tp))
+            return $"[seam-report] '{node.Name}': no toolpath cached.";
+
+        float bead = _toolpathMetaByNode.TryGetValue(node, out var meta) && meta.BeadWidth > 0f
+            ? meta.BeadWidth : 6f;
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"[seam-report] '{node.Name}' -- {tp.Layers.Count:N0} layers, bead {bead:0.##} mm");
+        sb.AppendLine($"  a layer start further than {bead:0.##} mm from the previous layer end breaks the");
+        sb.AppendLine("  spiral: extrusion stops, the head travels, then printing resumes elsewhere.");
+
+        int breaks = 0, stitched = 0;
+        double travelTotal = 0;
+        var rows = new List<(int Layer, float Z, float Dist)>();
+        for (int li = 0; li < tp.Layers.Count; li++)
+        {
+            var mv = tp.Layers[li].Moves;
+            if (mv.Count == 0) continue;
+            var first = mv[0];
+            if (first.Kind != MoveKind.Travel) { stitched++; continue; }
+            float dx = first.To.X - first.From.X, dy = first.To.Y - first.From.Y;
+            float d = MathF.Sqrt(dx * dx + dy * dy);
+            if (d <= bead) { stitched++; continue; }
+            breaks++; travelTotal += d;
+            rows.Add((li, first.From.Z, d));
+        }
+
+        sb.AppendLine($"  layers stitched continuously : {stitched:N0}");
+        sb.AppendLine($"  layers where the seam JUMPED : {breaks:N0}"
+                    + (breaks > 0 ? $"  (total travel {travelTotal / 1000.0:F2} m)" : ""));
+
+        if (breaks == 0)
+            sb.AppendLine("  the spiral is continuous end to end -- no seam jumps.");
+        else
+        {
+            rows.Sort((a, b) => b.Dist.CompareTo(a.Dist));
+            sb.AppendLine("  worst first:");
+            int shown = 0;
+            foreach (var r in rows)
+            {
+                if (shown++ >= 25) { sb.AppendLine($"     ... {rows.Count - 25:N0} more not shown."); break; }
+                double inches = r.Z / 25.4;
+                sb.AppendLine($"     layer {r.Layer,5}  Z {r.Z,7:0} mm  ({inches,6:0.0} in = "
+                            + $"{(int)inches / 12} ft {inches % 12:0} in)  jumped {r.Dist,7:0} mm");
+            }
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>
     /// Human-readable robot-validation report for the active toolpath. Reads only the caches
     /// that <see cref="ValidateToolpathAsync"/> fills in, so it never starts work of its own and
     /// always reflects exactly what the last completed pass concluded.
@@ -12303,6 +12364,10 @@ public partial class ViewportView : UserControl
 
                         if (anyProblem || gaveUp > 0)
                             LogToConsole("[analysis]   type 'analysis-report' to see exactly where.");
+
+                        // Spacer: the console view can land one line short of the end, so
+                        // give it something expendable to hide instead of a real result.
+                        LogToConsole(" ");
                     }
                 }
                 GlCanvas.RequestNextFrameRendering();

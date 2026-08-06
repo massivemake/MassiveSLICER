@@ -5675,6 +5675,10 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal Func<string>? OnValidationReportRequested { get; set; }
 
+    /// <summary>Returns a report of every layer where the spiral seam jumped instead of
+    /// stitching, with heights. Set by the viewport.</summary>
+    internal Func<string>? OnSeamReportRequested { get; set; }
+
     internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>

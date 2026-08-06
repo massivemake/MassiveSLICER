@@ -1578,6 +1578,23 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "seam-report",
+            Description = "Lists every layer where the spiral/vase seam jumped instead of stitching "
+                        + "continuously, with layer number, height in mm and inches, and how far it "
+                        + "jumped. These are the points where extrusion stops and the head travels, "
+                        + "which is where blobs and stray extrusions show up on the part",
+            Usage = "seam-report",
+            Execute = (ctx, args) =>
+            {
+                var fn = ctx.Main.Viewport.OnSeamReportRequested;
+                if (fn is null) { ctx.LogError("[seam-report] viewport is not ready yet."); return; }
+                foreach (var line in fn().Split((char)10))
+                    ctx.Log(line.TrimEnd((char)13));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "analysis-report",
             Aliases = ["validate-report", "analyze-report"],
             Description = "Robot validation detail for the selected toolpath: per-span move/layer/Z ranges, "
