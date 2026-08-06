@@ -6,12 +6,6 @@ namespace MassiveSlicer.Core.Models;
 public sealed class KrlPostProcessSettings
 {
     /// <summary>
-    /// When true, travel moves emit <c>$ANOUT[4] = 0</c> before the LIN so the extruder
-    /// is off while crossing the print (instead of relying on a delayed TRIGGER).
-    /// </summary>
-    public bool TravelSetAnout4Zero { get; set; } = true;
-
-    /// <summary>
     /// Header template inserted after <c>DEF program ()</c>. Supports
     /// <see cref="IO.KrlExporter"/> placeholders such as {{PROGRAM_NAME}}.
     /// Empty = built-in default.
@@ -21,4 +15,16 @@ public sealed class KrlPostProcessSettings
     /// <summary>
     /// Footer template appended before file end. Empty = built-in default.</summary>
     public string FooterText { get; set; } = "";
+
+    /// <summary>
+    /// Operator-saved header default restored by "Reset to default".
+    /// Empty = fall back to the built-in <see cref="IO.KrlExporter.DefaultHeaderTemplate"/>.
+    /// </summary>
+    public string DefaultHeaderText { get; set; } = "";
+
+    /// <summary>
+    /// Operator-saved footer default restored by "Reset to default".
+    /// Empty = fall back to the built-in <see cref="IO.KrlExporter.DefaultFooterTemplate"/>.
+    /// </summary>
+    public string DefaultFooterText { get; set; } = "";
 }

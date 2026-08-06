@@ -15492,7 +15492,6 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.Y,
                 cell.Bed.BaseData.Z),
             SliceBedWorldZ     = _renderer.BedZ,
-            TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
             // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
             // The exporter renders placeholders and, in URM mode, keeps the edited header
             // only if it is still URM-shaped (else falls back to the Caracol URM default).

@@ -1985,6 +1985,60 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "krlpost",
+            Aliases = ["krl-post", "krlpostprocess"],
+            Description = "KRL post-processing: show state, toggle Digital Start/Stop (URM), reset or save header/footer defaults",
+            Usage = "krlpost | krlpost open | krlpost urm <on|off> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Execute = (ctx, args) =>
+            {
+                var add  = ctx.Main.RightPanel.Additive;
+                var post = add.KrlPostProcess;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                void Report()
+                {
+                    ctx.Log($"[krlpost] Digital Start/Stop (URM): {(add.DigitalStartStopEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] header {post.HeaderText.Length} chars, saved default: {(post.HasSavedHeaderDefault ? "yes" : "no (built-in)")}");
+                    ctx.Log($"[krlpost] footer {post.FooterText.Length} chars, saved default: {(post.HasSavedFooterDefault ? "yes" : "no (built-in)")}");
+                }
+
+                switch (parts.FirstOrDefault())
+                {
+                    case "open":
+                        ctx.Log(add.RequestOpenKrlPostProcess()
+                            ? "[krlpost] dialog opened"
+                            : "[krlpost] no right panel attached — cannot open the dialog");
+                        break;
+                    case "urm" when parts.Length >= 2:
+                        add.DigitalStartStopEnabled = parts[1] is "on" or "1" or "true";
+                        ctx.Log($"[krlpost] URM {(add.DigitalStartStopEnabled ? "ON" : "off")} — header/footer templates swapped to match");
+                        Report();
+                        break;
+                    case "reset" when parts.Length >= 2 && parts[1].StartsWith("head", StringComparison.OrdinalIgnoreCase):
+                        post.ResetHeaderCommand.Execute(null);
+                        ctx.Log($"[krlpost] header reset ({post.HeaderText.Length} chars)");
+                        break;
+                    case "reset" when parts.Length >= 2 && parts[1].StartsWith("foot", StringComparison.OrdinalIgnoreCase):
+                        post.ResetFooterCommand.Execute(null);
+                        ctx.Log($"[krlpost] footer reset ({post.FooterText.Length} chars)");
+                        break;
+                    case "save-default" or "savedefault" when parts.Length >= 2 && parts[1].StartsWith("head", StringComparison.OrdinalIgnoreCase):
+                        post.SaveHeaderDefaultCommand.Execute(null);
+                        ctx.Log("[krlpost] current header saved as the default (written to assets/krl_postprocess.json)");
+                        break;
+                    case "save-default" or "savedefault" when parts.Length >= 2 && parts[1].StartsWith("foot", StringComparison.OrdinalIgnoreCase):
+                        post.SaveFooterDefaultCommand.Execute(null);
+                        ctx.Log("[krlpost] current footer saved as the default (written to assets/krl_postprocess.json)");
+                        break;
+                    default:
+                        Report();
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "check-build-freshness",
             Aliases = ["build-freshness", "check-baseline"],
             Description = "Re-run the origin/main freshness check now (same one that fires once at launch)",

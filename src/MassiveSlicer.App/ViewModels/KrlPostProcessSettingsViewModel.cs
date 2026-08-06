@@ -11,16 +11,33 @@ public enum KrlPostProcessTab { Rules, Header, Footer }
 /// <summary>ViewModel for the KRL post-processing settings dialog.</summary>
 public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
 {
-    private bool _travelSetAnout4Zero = true;
     private string _headerText = KrlExporter.DefaultHeaderTemplate;
     private string _footerText = KrlExporter.DefaultFooterTemplate;
+    private string _defaultHeaderText = "";
+    private string _defaultFooterText = "";
     private KrlPostProcessTab _selectedTab = KrlPostProcessTab.Rules;
 
-    public bool TravelSetAnout4Zero
+    /// <summary>
+    /// Owning settings VM. The Rules tab's Digital Start/Stop checkbox proxies to it —
+    /// the flag itself lives on <see cref="AdditiveSettingsViewModel"/> because prefs,
+    /// presets and the exporter all read it from there.
+    /// </summary>
+    public AdditiveSettingsViewModel? Owner { get; set; }
+
+    /// <summary>Digital Start/Stop (URM), proxied from <see cref="Owner"/>.</summary>
+    public bool DigitalStartStopEnabled
     {
-        get => _travelSetAnout4Zero;
-        set => SetField(ref _travelSetAnout4Zero, value);
+        get => Owner?.DigitalStartStopEnabled ?? false;
+        set
+        {
+            if (Owner is null || Owner.DigitalStartStopEnabled == value) return;
+            Owner.DigitalStartStopEnabled = value;
+            OnPropertyChanged();
+        }
     }
+
+    /// <summary>Re-reads the proxied URM flag after the owner changes it (preset or prefs load).</summary>
+    public void NotifyDigitalStartStopChanged() => OnPropertyChanged(nameof(DigitalStartStopEnabled));
 
     public string HeaderText
     {
@@ -55,15 +72,57 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
     public RelayCommand ShowFooterTabCommand { get; }
     public RelayCommand ResetHeaderCommand { get; }
     public RelayCommand ResetFooterCommand { get; }
+    public RelayCommand SaveHeaderDefaultCommand { get; }
+    public RelayCommand SaveFooterDefaultCommand { get; }
 
     public KrlPostProcessSettingsViewModel()
     {
         ShowRulesTabCommand  = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Rules);
         ShowHeaderTabCommand = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Header);
         ShowFooterTabCommand = new RelayCommand(() => SelectedTab = KrlPostProcessTab.Footer);
-        // Reset to LFAM defaults; URM mode re-applies Caracol templates from AdditiveSettings.
-        ResetHeaderCommand   = new RelayCommand(() => HeaderText = KrlExporter.DefaultHeaderTemplate);
-        ResetFooterCommand   = new RelayCommand(() => FooterText = KrlExporter.DefaultFooterTemplate);
+        // Reset restores the operator's saved default when there is one, else the built-in
+        // LFAM template. URM mode re-applies Caracol templates from AdditiveSettings.
+        ResetHeaderCommand   = new RelayCommand(() => HeaderText = EffectiveDefaultHeader);
+        ResetFooterCommand   = new RelayCommand(() => FooterText = EffectiveDefaultFooter);
+        SaveHeaderDefaultCommand = new RelayCommand(SaveHeaderAsDefault);
+        SaveFooterDefaultCommand = new RelayCommand(SaveFooterAsDefault);
+    }
+
+    /// <summary>What "Reset to default" restores: the saved default, else the built-in template.</summary>
+    private string EffectiveDefaultHeader => string.IsNullOrWhiteSpace(_defaultHeaderText)
+        ? KrlExporter.DefaultHeaderTemplate
+        : _defaultHeaderText;
+
+    private string EffectiveDefaultFooter => string.IsNullOrWhiteSpace(_defaultFooterText)
+        ? KrlExporter.DefaultFooterTemplate
+        : _defaultFooterText;
+
+    public bool HasSavedHeaderDefault => !string.IsNullOrWhiteSpace(_defaultHeaderText);
+    public bool HasSavedFooterDefault => !string.IsNullOrWhiteSpace(_defaultFooterText);
+
+    public string HeaderDefaultStatus => HasSavedHeaderDefault
+        ? "Reset restores your saved default."
+        : "Reset restores the built-in template.";
+
+    public string FooterDefaultStatus => HasSavedFooterDefault
+        ? "Reset restores your saved default."
+        : "Reset restores the built-in template.";
+
+    /// <summary>Stores the header currently in the editor as the new "Reset to default" target.</summary>
+    private void SaveHeaderAsDefault()
+    {
+        _defaultHeaderText = HeaderText;
+        OnPropertyChanged(nameof(HasSavedHeaderDefault));
+        OnPropertyChanged(nameof(HeaderDefaultStatus));
+        Save();
+    }
+
+    private void SaveFooterAsDefault()
+    {
+        _defaultFooterText = FooterText;
+        OnPropertyChanged(nameof(HasSavedFooterDefault));
+        OnPropertyChanged(nameof(FooterDefaultStatus));
+        Save();
     }
 
     /// <summary>True when the current header is the LFAM <c>$ANOUT</c> MAT style.</summary>
@@ -74,20 +133,27 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
 
     public void LoadFrom(KrlPostProcessSettings s)
     {
-        TravelSetAnout4Zero = s.TravelSetAnout4Zero;
+        _defaultHeaderText = s.DefaultHeaderText ?? "";
+        _defaultFooterText = s.DefaultFooterText ?? "";
+        OnPropertyChanged(nameof(HasSavedHeaderDefault));
+        OnPropertyChanged(nameof(HasSavedFooterDefault));
+        OnPropertyChanged(nameof(HeaderDefaultStatus));
+        OnPropertyChanged(nameof(FooterDefaultStatus));
+
         HeaderText = string.IsNullOrWhiteSpace(s.HeaderText)
-            ? KrlExporter.DefaultHeaderTemplate
+            ? EffectiveDefaultHeader
             : s.HeaderText;
         FooterText = string.IsNullOrWhiteSpace(s.FooterText)
-            ? KrlExporter.DefaultFooterTemplate
+            ? EffectiveDefaultFooter
             : s.FooterText;
     }
 
     public KrlPostProcessSettings ToSettings() => new()
     {
-        TravelSetAnout4Zero = TravelSetAnout4Zero,
-        HeaderText          = HeaderText,
-        FooterText          = FooterText,
+        HeaderText        = HeaderText,
+        FooterText        = FooterText,
+        DefaultHeaderText = _defaultHeaderText,
+        DefaultFooterText = _defaultFooterText,
     };
 
     public void Save() => KrlPostProcessLoader.Save(ToSettings());
