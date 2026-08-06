@@ -318,6 +318,16 @@ public sealed class AppPreferences
     /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
     public string ExtrusionSpeedOffset { get; set; } = "";
 
+    /// <summary>
+    /// Calibration-only: forces the exported screw speed (%) regardless of bead geometry.
+    /// 0 = off (normal computed flow). Written ONLY by the purge-and-weigh calibration
+    /// workspace. It previously abused <see cref="ExtrusionSpeedOffset"/> for this, which is
+    /// a field operators use on real jobs — a calibration run could leave a large number in
+    /// it and silently inflate the flow of every part sliced afterwards. Export raises a
+    /// warning whenever this is non-zero so it can never apply unnoticed.
+    /// </summary>
+    public double ExtrusionRpmOverridePercent { get; set; }
+
 
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";

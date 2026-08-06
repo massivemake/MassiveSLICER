@@ -179,58 +179,82 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     //   motor% = rpm ÷ maxRpm × 100
     //   flowRate (rev/cm³-equivalent) = motor% × (seconds/60) ÷ (grams ÷ density)
 
-    private string _calibratedOn = "";
+    // Every calibration value below is stored PER HEAD. The dialog shows whichever head
+    // CalibIsHf selects, so toggling reveals that head's own test conditions — an
+    // uncalibrated head reads 0 g instead of inheriting the other head's numbers.
+    private string _calibratedOnHv = "",  _calibratedOnHf = "";
+    private string _calibNoteHv    = "",  _calibNoteHf    = "";
+    private double _calibPctHv     = 50.0, _calibPctHf    = 50.0;
+    private double _calibSecHv     = 60.0, _calibSecHf    = 60.0;
+    private double _calibGHv       = 0.0,  _calibGHf      = 0.0;
+
     public string CalibratedOn
     {
-        get => _calibratedOn;
-        set { if (SetField(ref _calibratedOn, value)) OnPropertyChanged(nameof(CalibrationStatus)); }
+        get => _calibIsHf ? _calibratedOnHf : _calibratedOnHv;
+        set
+        {
+            if (_calibIsHf) { if (_calibratedOnHf == value) return; _calibratedOnHf = value; }
+            else            { if (_calibratedOnHv == value) return; _calibratedOnHv = value; }
+            OnPropertyChanged(); OnPropertyChanged(nameof(CalibrationStatus));
+        }
     }
 
-    private string _calibrationNote = "";
     public string CalibrationNote
     {
-        get => _calibrationNote;
-        set { if (SetField(ref _calibrationNote, value)) OnPropertyChanged(nameof(CalibrationStatus)); }
+        get => _calibIsHf ? _calibNoteHf : _calibNoteHv;
+        set
+        {
+            if (_calibIsHf) { if (_calibNoteHf == value) return; _calibNoteHf = value; }
+            else            { if (_calibNoteHv == value) return; _calibNoteHv = value; }
+            OnPropertyChanged(); OnPropertyChanged(nameof(CalibrationStatus));
+        }
     }
 
     public string CalibrationStatus =>
-        string.IsNullOrWhiteSpace(_calibratedOn)
-            ? "Not calibrated — flow rate is the default/manual value."
-            : $"Calibrated {_calibratedOn}   ({_calibrationNote})";
+        string.IsNullOrWhiteSpace(CalibratedOn)
+            ? $"{(_calibIsHf ? "HF" : "HV")} not calibrated — flow rate is the default/manual value."
+            : $"{(_calibIsHf ? "HF" : "HV")} calibrated {CalibratedOn}   ({CalibrationNote})";
 
-    private double _calibMotorRpm = 50.0;
-
-    /// <summary>Screw speed during the purge test, in true RPM (read off the drive).</summary>
-    public double CalibMotorRpm
+    /// <summary>
+    /// Screw speed used for the purge test, as a percentage of drive maximum — the same
+    /// number the slicer exports. Stored separately for HV and HF.
+    /// </summary>
+    public double CalibMotorPercent
     {
-        get => _calibMotorRpm;
-        set { if (SetField(ref _calibMotorRpm, Math.Max(0.1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+        get => _calibIsHf ? _calibPctHf : _calibPctHv;
+        set
+        {
+            double v = Math.Clamp(value, 0.1, 100.0);
+            if (_calibIsHf) { if (_calibPctHf == v) return; _calibPctHf = v; }
+            else            { if (_calibPctHv == v) return; _calibPctHv = v; }
+            OnPropertyChanged(); OnPropertyChanged(nameof(CalibComputedText));
+        }
     }
 
-    private double _calibMaxRpm = 100.0;
-
-    /// <summary>Drive scale: screw RPM at 100 % ($ANOUT[4] = 1.0). Machine property.</summary>
-    public double CalibMaxRpm
-    {
-        get => _calibMaxRpm;
-        set { if (SetField(ref _calibMaxRpm, Math.Max(1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
-    }
-
-    /// <summary>Motor % equivalent of <see cref="CalibMotorRpm"/> — the $ANOUT[4] signal value × 100.</summary>
-    public double CalibMotorPercent => _calibMotorRpm / _calibMaxRpm * 100.0;
-
-    private double _calibTimeSec = 60.0;
+    /// <summary>Purge duration (s) for the selected head.</summary>
     public double CalibTimeSec
     {
-        get => _calibTimeSec;
-        set { if (SetField(ref _calibTimeSec, Math.Max(1, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+        get => _calibIsHf ? _calibSecHf : _calibSecHv;
+        set
+        {
+            double v = Math.Max(1, value);
+            if (_calibIsHf) { if (_calibSecHf == v) return; _calibSecHf = v; }
+            else            { if (_calibSecHv == v) return; _calibSecHv = v; }
+            OnPropertyChanged(); OnPropertyChanged(nameof(CalibComputedText));
+        }
     }
 
-    private double _calibWeightG;
+    /// <summary>Purge weight (g) for the selected head. 0 = this head not yet purged.</summary>
     public double CalibWeightG
     {
-        get => _calibWeightG;
-        set { if (SetField(ref _calibWeightG, Math.Max(0, value))) OnPropertyChanged(nameof(CalibComputedText)); }
+        get => _calibIsHf ? _calibGHf : _calibGHv;
+        set
+        {
+            double v = Math.Max(0, value);
+            if (_calibIsHf) { if (_calibGHf == v) return; _calibGHf = v; }
+            else            { if (_calibGHv == v) return; _calibGHv = v; }
+            OnPropertyChanged(); OnPropertyChanged(nameof(CalibComputedText));
+        }
     }
 
     /// <summary>Flow rate computed from the calibration inputs, or null when incomplete.</summary>
@@ -238,10 +262,9 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     {
         get
         {
-            if (_calibWeightG <= 0 || _materialDensity <= 0 || _calibMaxRpm <= 0) return null;
-            double motorPercent = _calibMotorRpm / _calibMaxRpm * 100.0;
-            double volumeCm3    = _calibWeightG / _materialDensity;
-            return motorPercent * (_calibTimeSec / 60.0) / volumeCm3;
+            if (CalibWeightG <= 0 || _materialDensity <= 0 || CalibMotorPercent <= 0) return null;
+            double volumeCm3 = CalibWeightG / _materialDensity;
+            return CalibMotorPercent * (CalibTimeSec / 60.0) / volumeCm3;
         }
     }
 
@@ -250,13 +273,50 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         : "Enter purge weight to compute.";
 
     /// <summary>Applies the computed calibration to the preset's flow rate.</summary>
+    private bool _calibIsHf;
+
+    /// <summary>
+    /// Which head the purge test was run on. The two heads have different screws and so
+    /// different flow rates; calibration used to always write the HV field, silently leaving
+    /// HF uncalibrated no matter which head was actually purged.
+    /// Defaults to the active cell's extruder when the dialog opens.
+    /// </summary>
+    public bool CalibIsHf
+    {
+        get => _calibIsHf;
+        set
+        {
+            if (!SetField(ref _calibIsHf, value)) return;
+            OnPropertyChanged(nameof(CalibIsHv));
+            OnPropertyChanged(nameof(CalibTargetLabel));
+            // Every calibration field is per head — re-read them all for the new selection.
+            OnPropertyChanged(nameof(CalibMotorPercent));
+            OnPropertyChanged(nameof(CalibTimeSec));
+            OnPropertyChanged(nameof(CalibWeightG));
+            OnPropertyChanged(nameof(CalibratedOn));
+            OnPropertyChanged(nameof(CalibrationNote));
+            OnPropertyChanged(nameof(CalibrationStatus));
+            OnPropertyChanged(nameof(CalibComputedText));
+        }
+    }
+
+    /// <summary>Inverse of <see cref="CalibIsHf"/>, for a two-radio selector.</summary>
+    public bool CalibIsHv
+    {
+        get => !_calibIsHf;
+        set { if (value) CalibIsHf = false; }
+    }
+
+    /// <summary>Which flow field Apply will write, shown next to the button.</summary>
+    public string CalibTargetLabel => _calibIsHf ? "Applies to HF flow rate" : "Applies to HV flow rate";
+
     public void ApplyCalibration()
     {
         if (CalibComputedFlowRate is not double f) return;
-        FlowRate        = f;
+        if (_calibIsHf) FlowRateHf = f; else FlowRate = f;
         CalibratedOn    = DateTime.Now.ToString("yyyy-MM-dd");
-        CalibrationNote = $"{_calibMotorRpm:0.#} RPM × {_calibTimeSec:0}s → {_calibWeightG:0.#}g" +
-                          $" (max {_calibMaxRpm:0} RPM) @ {Temperature1:0}/{Temperature2:0}/{Temperature3:0}°C";
+        CalibrationNote = $"{CalibMotorPercent:0.#}% × {CalibTimeSec:0}s → {CalibWeightG:0.#}g" +
+                          $" @ {Temperature1:0}/{Temperature2:0}/{Temperature3:0}°C";
     }
 
     // -- Auto-name logic ---------------------------------------------------
@@ -292,8 +352,17 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         ThermalBondMarginC = ThermalBondMarginC,
         ThermalSagMarginC  = ThermalSagMarginC,
         ThermalAmbientC    = ThermalAmbientC,
-        CalibratedOn       = CalibratedOn,
-        CalibrationNote    = CalibrationNote,
+        CalibratedOn       = _calibratedOnHv,
+        CalibrationNote    = _calibNoteHv,
+        CalibratedOnHf      = _calibratedOnHf,
+        CalibrationNoteHf   = _calibNoteHf,
+        CalibMotorPercent   = _calibPctHv,
+        CalibTimeSec        = _calibSecHv,
+        CalibWeightG        = _calibGHv,
+        CalibMotorPercentHf = _calibPctHf,
+        CalibTimeSecHf      = _calibSecHf,
+        CalibWeightGHf      = _calibGHf,
+        CalibIsHf           = CalibIsHf,
     };
 
     public void LoadFrom(MaterialPreset p)
@@ -314,8 +383,18 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
         ThermalSagMarginC  = p.ThermalSagMarginC > 0 ? p.ThermalSagMarginC : 45;
         // Model default is 30; ambient can be 0 °C if the user set it.
         ThermalAmbientC    = p.ThermalAmbientC;
-        CalibratedOn       = p.CalibratedOn;
-        CalibrationNote    = p.CalibrationNote;
+        // Load both heads into their own stores, then pick the view.
+        _calibratedOnHv = p.CalibratedOn;
+        _calibNoteHv    = p.CalibrationNote;
+        _calibPctHv     = p.CalibMotorPercent > 0 ? p.CalibMotorPercent : 50.0;
+        _calibSecHv     = p.CalibTimeSec      > 0 ? p.CalibTimeSec      : 60.0;
+        _calibGHv       = p.CalibWeightG;
+        _calibratedOnHf = p.CalibratedOnHf;
+        _calibNoteHf    = p.CalibrationNoteHf;
+        _calibPctHf     = p.CalibMotorPercentHf > 0 ? p.CalibMotorPercentHf : 50.0;
+        _calibSecHf     = p.CalibTimeSecHf      > 0 ? p.CalibTimeSecHf      : 60.0;
+        _calibGHf       = p.CalibWeightGHf;
+        CalibIsHf          = p.CalibIsHf;
         OnPropertyChanged(nameof(GlassTransitionHint));
         OnPropertyChanged(nameof(ThermalThresholdsHint));
     }

@@ -155,13 +155,23 @@ public partial class RightPanelView : UserControl
         if (DataContext is not RightPanelViewModel vm) return;
         if (TopLevel.GetTopLevel(this) is not Window parent) return;
 
-        var dialog = new MaterialPresetDialog { DataContext = new MaterialPresetEditorViewModel() };
+        // Default the calibration head to whichever extruder the active cell uses.
+        var newEditor = new MaterialPresetEditorViewModel { CalibIsHf = vm.Additive.ActiveExtruderIsHf };
+        var dialog = new MaterialPresetDialog { DataContext = newEditor };
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
         if (result is null) return;
 
         vm.Additive.MaterialPresets.Add(result);
         vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
+        SaveMaterialsReportingErrors(vm);
+    }
+
+    /// <summary>Saves the material library and surfaces a failure instead of swallowing it.</summary>
+    private static void SaveMaterialsReportingErrors(RightPanelViewModel vm)
+    {
         MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+        if (MaterialPresetsLoader.LastSaveError is { } err)
+            vm.Presets.StatusMessage = $"⚠ Material library NOT saved: {err}";
     }
 
     private async void OnKrlPostProcessClicked(object? sender, RoutedEventArgs e)
@@ -186,6 +196,9 @@ public partial class RightPanelView : UserControl
 
         var editor = new MaterialPresetEditorViewModel();
         editor.LoadFrom(vm.Additive.MaterialPresets[idx]);
+        // Never calibrated on this preset? Default to the active cell's head.
+        if (string.IsNullOrEmpty(vm.Additive.MaterialPresets[idx].CalibratedOn))
+            editor.CalibIsHf = vm.Additive.ActiveExtruderIsHf;
 
         var dialog = new MaterialPresetDialog { DataContext = editor };
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
@@ -193,6 +206,6 @@ public partial class RightPanelView : UserControl
 
         vm.Additive.MaterialPresets[idx] = result;
         vm.Additive.SelectedPresetIndex  = idx;
-        MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+        SaveMaterialsReportingErrors(vm);
     }
 }
