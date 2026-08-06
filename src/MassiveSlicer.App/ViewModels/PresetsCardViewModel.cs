@@ -176,7 +176,6 @@ public sealed class PrintPresetSample
     public double? LayerSpeedMaxMmS { get; init; }
 
     // -- KRL post-process --------------------------------------------------------
-    public bool? TravelSetAnout4Zero { get; init; }
     public string? KrlHeaderText { get; init; }
     public string? KrlFooterText { get; init; }
 
@@ -421,7 +420,6 @@ public sealed class PrintPresetSample
 
             Section("KRL post-process", s =>
             {
-                B(s, "Travel sets ANOUT to zero", TravelSetAnout4Zero);
                 if (KrlHeaderText is { Length: > 0 } h) s.Add($"Header: custom ({h.Length} chars)");
                 if (KrlFooterText is { Length: > 0 } f) s.Add($"Footer: custom ({f.Length} chars)");
             });
@@ -999,7 +997,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
             LayerSpeedAdaptEnabled = d.LayerSpeedAdaptEnabled, LayerSpeedBasisDisplay = d.LayerSpeedBasisDisplay,
             LayerSpeedMinMmS = d.LayerSpeedMinMmS, LayerSpeedMaxMmS = d.LayerSpeedMaxMmS,
 
-            TravelSetAnout4Zero = d.KrlPostProcess.TravelSetAnout4Zero,
             KrlHeaderText = d.KrlPostProcess.HeaderText, KrlFooterText = d.KrlPostProcess.FooterText,
 
             AdaptiveLayerHeight = d.AdaptiveLayerHeight, MinLayerHeight = d.MinLayerHeight, AdaptiveQuality = d.AdaptiveQuality,
@@ -1324,7 +1321,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
         if (p.LayerSpeedMinMmS is { } layerSpeedMinMmS) _additive.LayerSpeedMinMmS = layerSpeedMinMmS;
         if (p.LayerSpeedMaxMmS is { } layerSpeedMaxMmS) _additive.LayerSpeedMaxMmS = layerSpeedMaxMmS;
 
-        if (p.TravelSetAnout4Zero is { } travelSetAnout4Zero) _additive.KrlPostProcess.TravelSetAnout4Zero = travelSetAnout4Zero;
         if (p.KrlHeaderText is { } krlHeaderText) _additive.KrlPostProcess.HeaderText = krlHeaderText;
         if (p.KrlFooterText is { } krlFooterText) _additive.KrlPostProcess.FooterText = krlFooterText;
 
@@ -1553,7 +1549,6 @@ public sealed class PresetsCardViewModel : ViewModelBase
             LayerSpeedMinMmS = adaptSpd ? a.LayerSpeedMinMmS : null,
             LayerSpeedMaxMmS = adaptSpd ? a.LayerSpeedMaxMmS : null,
 
-            TravelSetAnout4Zero = krlPost ? a.KrlPostProcess.TravelSetAnout4Zero : null,
             KrlHeaderText = krlPost ? a.KrlPostProcess.HeaderText : null,
             KrlFooterText = krlPost ? a.KrlPostProcess.FooterText : null,
 
@@ -1648,7 +1643,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         LayerSpeedAdaptEnabled = p.LayerSpeedAdaptEnabled, LayerSpeedBasisDisplay = p.LayerSpeedBasisDisplay,
         LayerSpeedMinMmS = p.LayerSpeedMinMmS, LayerSpeedMaxMmS = p.LayerSpeedMaxMmS,
 
-        TravelSetAnout4Zero = p.TravelSetAnout4Zero, KrlHeaderText = p.KrlHeaderText, KrlFooterText = p.KrlFooterText,
+        KrlHeaderText = p.KrlHeaderText, KrlFooterText = p.KrlFooterText,
 
         AdaptiveLayerHeight = p.AdaptiveLayerHeight, MinLayerHeight = p.MinLayerHeight, AdaptiveQuality = p.AdaptiveQuality,
 
@@ -1726,7 +1721,7 @@ public sealed class PresetsCardViewModel : ViewModelBase
         LayerSpeedAdaptEnabled = r.LayerSpeedAdaptEnabled, LayerSpeedBasisDisplay = r.LayerSpeedBasisDisplay,
         LayerSpeedMinMmS = r.LayerSpeedMinMmS, LayerSpeedMaxMmS = r.LayerSpeedMaxMmS,
 
-        TravelSetAnout4Zero = r.TravelSetAnout4Zero, KrlHeaderText = r.KrlHeaderText, KrlFooterText = r.KrlFooterText,
+        KrlHeaderText = r.KrlHeaderText, KrlFooterText = r.KrlFooterText,
 
         AdaptiveLayerHeight = r.AdaptiveLayerHeight, MinLayerHeight = r.MinLayerHeight, AdaptiveQuality = r.AdaptiveQuality,
 

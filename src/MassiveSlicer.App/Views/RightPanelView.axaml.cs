@@ -10,7 +10,18 @@ namespace MassiveSlicer.App.Views;
 
 public partial class RightPanelView : UserControl
 {
-    public RightPanelView() => InitializeComponent();
+    public RightPanelView()
+    {
+        InitializeComponent();
+        // Lets the console ("krlpost open") raise the same dialog as the KRL EXPORT gear.
+        // Bind on attach, not DataContextChanged: OnKrlPostProcessClicked needs a real
+        // TopLevel, and a detached instance registering last would silently no-op.
+        AttachedToVisualTree += (_, _) =>
+        {
+            if (DataContext is RightPanelViewModel vm)
+                vm.Additive.OnOpenKrlPostProcessRequested = () => OnKrlPostProcessClicked(this, new RoutedEventArgs());
+        };
+    }
 
     private void JointAngle_KeyDown(object? sender, KeyEventArgs e)
     {

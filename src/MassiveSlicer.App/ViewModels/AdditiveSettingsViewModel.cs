@@ -19,6 +19,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public AdditiveSettingsViewModel()
     {
+        KrlPostProcess.Owner = this;
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
@@ -557,6 +558,17 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public RelayCommand OpenSeamEditorCommand { get; }
 
     internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    /// <summary>Raised to open the KRL Post-Processing dialog (the KRL EXPORT gear, or "krlpost open").</summary>
+    internal Action? OnOpenKrlPostProcessRequested { get; set; }
+
+    /// <summary>Opens the KRL Post-Processing dialog. Returns false when no view is attached.</summary>
+    internal bool RequestOpenKrlPostProcess()
+    {
+        if (OnOpenKrlPostProcessRequested is null) return false;
+        OnOpenKrlPostProcessRequested();
+        return true;
+    }
 
     /// <summary>Runs the analytical thermomechanical screen and fills Adaptive Speed low/high.</summary>
     public RelayCommand SimulateThermalCommand { get; }
@@ -2020,6 +2032,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             // Keep Export-to-Robot post-process header/footer in sync so the editor and
             // export never keep an LFAM $ANOUT MAT block while URM is checked.
             ApplyUrmPostProcessTemplates(value);
+            // The checkbox lives on the KRL dialog's Rules tab and proxies back to here.
+            KrlPostProcess.NotifyDigitalStartStopChanged();
         }
     }
 
