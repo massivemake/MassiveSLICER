@@ -1051,7 +1051,7 @@ public partial class ViewportView : UserControl
         // screen. Toolpath nodes carry no pickable mesh, so the face pick above finds nothing
         // and the editor drew no line at all — it looked like the tool had stopped working.
         // The printed outline IS the wall here, so seam onto it.
-        if (TrySeamGuideOnToolpath(ray, out var tpHit))
+        if (TrySeamGuideOnToolpath(mx, my, out var tpHit))
         {
             _lastSeamGuideSurfacePoint = tpHit;
             hit = tpHit;
@@ -1072,21 +1072,34 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Nearest visible toolpath extrusion point to the cursor ray, used when no model mesh is
-    /// hittable (hidden after slicing, or a toolpath-only project). Returns false when the
-    /// cursor is well off the part, so hover there still holds the last on-wall position
-    /// rather than snapping across the scene.
+    /// Visible toolpath extrusion point nearest the cursor <b>in screen pixels</b>, used when no
+    /// model mesh is hittable (hidden after slicing, or a toolpath-only project). Returns false
+    /// when the cursor is not near a printed line, so hover off the part holds the last on-wall
+    /// position instead of snapping across the scene.
+    /// <para>
+    /// The radius must be in pixels, not millimetres: a world-space tolerance that feels right on
+    /// a 200mm bracket is a couple of pixels on a 3m cell, so the snap silently never fired and
+    /// clicks committed the stale held position instead — every guide landed on the same wrong
+    /// spot off the part.
+    /// </para>
     /// </summary>
-    private bool TrySeamGuideOnToolpath(Ray ray, out TkVector3 hit)
+    private bool TrySeamGuideOnToolpath(float mx, float my, out TkVector3 hit)
     {
         hit = default;
         if (_toolpathByNode.IsEmpty) return false;
 
-        var dir = ray.Direction.LengthSquared > 1e-12f
-            ? TkVector3.Normalize(ray.Direction)
-            : new TkVector3(0f, 0f, -1f);
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW <= 0f || vpH <= 0f) return false;
 
-        float bestDist2 = float.MaxValue;
+        // One matrix for the whole sweep — ProjectToScreen would rebuild it per point.
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        const float grabPx    = 40f;   // forgiving: printed lines are thin on screen
+        const float tieSlopPx = 6f;    // within this, prefer the line nearest the camera
+
+        float bestPx2  = float.MaxValue;
+        float bestDepth = float.MaxValue;
 
         foreach (var (node, tp) in _toolpathByNode)
         {
@@ -1111,26 +1124,24 @@ public partial class ViewportView : UserControl
 
                     var p = TkVector3.TransformPosition(
                         new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
-                    var v = p - ray.Origin;
-                    float t = TkVector3.Dot(v, dir);
-                    if (t <= 0f) continue;                                       // behind the camera
-                    float d2 = (v - dir * t).LengthSquared;
-                    if (d2 < bestDist2) { bestDist2 = d2; hit = p; }
+                    var s = _renderer.ProjectToScreenDepth(p, viewProj, vpW, vpH);
+                    if (float.IsNaN(s.X)) continue;                              // behind the camera
+
+                    float dx = s.X - mx, dy = s.Y - my;
+                    float px2 = dx * dx + dy * dy;
+                    if (px2 > grabPx * grabPx) continue;
+
+                    // The toolpath draws as lines, so the far wall is visible through the near
+                    // one. Nearest pixel wins; when two are effectively under the same pixel,
+                    // take the one closest to the camera — that's the wall you can see.
+                    bool better = px2 < bestPx2 - tieSlopPx * tieSlopPx
+                               || (MathF.Abs(px2 - bestPx2) <= tieSlopPx * tieSlopPx && s.Z < bestDepth);
+                    if (better) { bestPx2 = px2; bestDepth = s.Z; hit = p; }
                 }
             }
         }
 
-        if (bestDist2 == float.MaxValue) return false;
-
-        // Scale the accept radius to the part, so it behaves the same on a 200mm bracket and a
-        // 3m panel. Off-part hover falls through to the held position instead of jumping.
-        float tol = 25f;
-        if ((_vm ?? DataContext as ViewportViewModel) is { } tolVm)
-        {
-            var (zLo, zHi) = SeamGuideHeightRange(tolVm);
-            tol = MathF.Max(25f, (zHi - zLo) * 0.15f);
-        }
-        return bestDist2 <= tol * tol;
+        return bestPx2 < float.MaxValue;
     }
 
 

@@ -5380,6 +5380,22 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddSeamGuidePoint(SeamGuidePoint point)
     {
+        // Clicking while the cursor is off the part holds the last on-wall position, so repeated
+        // clicks used to stack identical guides on one spot (three "3044, -309, 163" entries in
+        // the list, all doing nothing). Select the existing one instead of piling up duplicates.
+        for (int i = 0; i < SeamGuideDraft.Count; i++)
+        {
+            var g = SeamGuideDraft[i];
+            if (MathF.Abs(g.X - point.X) < 2f
+             && MathF.Abs(g.Y - point.Y) < 2f
+             && MathF.Abs(g.Z - point.Z) < 2f)
+            {
+                SelectedSeamGuideIndex = i;
+                OnSeamGuidesChanged?.Invoke();
+                return;
+            }
+        }
+
         SeamGuideDraft.Add(point);
         SelectedSeamGuideIndex = SeamGuideDraft.Count - 1;
         IsSeamGuideLayerOpen = true;
