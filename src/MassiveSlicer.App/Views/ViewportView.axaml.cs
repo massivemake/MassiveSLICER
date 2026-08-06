@@ -11665,7 +11665,20 @@ public partial class ViewportView : UserControl
         {
             var joints = vm.ActiveCell?.Robot.Joints ?? [];
             if (joints.Count < 6) return null;
-            Action<string> log = s => vm.OnDevLog?.Invoke(s);
+            // Collision extraction emits one line per robot link plus an environment
+            // triangle count. That is internal detail and it floods a console panel that
+            // only shows a handful of lines, so swallow the routine ones and summarise.
+            // Anything unexpected (no geometry, collision disabled) still comes through.
+            int hullCount = 0;
+            string envSummary = "";
+            Action<string> log = s =>
+            {
+                if (s.Contains("hull verts", StringComparison.Ordinal)) { hullCount++; return; }
+                if (s.StartsWith("[collision] environment:", StringComparison.Ordinal))
+                { envSummary = s.Substring("[collision] environment:".Length).Trim(); return; }
+                if (s.StartsWith("[collision] baseline-excluded", StringComparison.Ordinal)) return;
+                vm.OnDevLog?.Invoke(s);
+            };
 
             var robot = CollisionModelExtractor.ExtractRobot(
                 robotRoot, joints, fk.RestPoses, log, _currentToolNode, _toolMeshMatrix);
@@ -11690,6 +11703,9 @@ public partial class ViewportView : UserControl
                     log($"[collision] baseline-excluded {RobotCollisionModel.LinkNames[a]} ↔ " +
                         $"{RobotCollisionModel.LinkNames[b]} ({d:F1} at home)");
             }
+
+            vm.OnDevLog?.Invoke($"[collision] model ready: {hullCount} hull(s) built"
+                               + (envSummary.Length > 0 ? $", environment {envSummary}" : "") + ".");
 
             _collisionWorld = world;
             return world;
