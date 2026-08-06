@@ -188,9 +188,6 @@ public sealed record KrlExportSettings
     /// </summary>
     public float SliceBedWorldZ { get; init; } = float.NaN;
 
-    /// <summary>Emit <c>$ANOUT[4] = 0</c> before travel moves instead of a TRIGGER idle pulse.</summary>
-    public bool TravelSetAnout4Zero { get; init; } = true;
-
     // -- Milling (subtractive) --------------------------------------------------
 
     /// <summary>When true, export a relief-milling program (LIN cuts + rapids, no extruder/temperature).</summary>

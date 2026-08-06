@@ -169,7 +169,6 @@ public sealed class PrintPresetRecord
     public double? LayerSpeedMaxMmS { get; set; }
 
     // -- KRL post-process --------------------------------------------------------
-    public bool? TravelSetAnout4Zero { get; set; }
     public string? KrlHeaderText { get; set; }
     public string? KrlFooterText { get; set; }
 
