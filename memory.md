@@ -484,6 +484,46 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-08-06 — Seam guide and actual seam on different sides of the part
+
+Three reports, two real causes, both in the placement/commit path rather than the slicer.
+
+**1. Guides landed off the part, and repeated clicks stacked identical points.**
+The toolpath snap shipped earlier the same day used a *world-space* accept radius (25mm, or
+15% of part height). On a 3m cell that is roughly two pixels, so the snap silently never
+fired; every click fell through to the held on-wall position and committed the same stale
+point. The Guide Points list showed three identical `3044, -309, 163` entries. The slicer
+then aligned the seam to that off-part guide — which is why the seam appeared "somewhere
+else." **No frame bug:** the slicer receives world-space meshes
+(`ViewportView.axaml.cs` ~4217, `TransformPoint(positions[i], world)`) and toolpath
+SceneNodes carry no transform of their own, so guide and part share one space.
+*Fix:* snap in screen pixels (40px grab, front-most on a pixel tie, since the toolpath draws
+as lines and the far wall shows through), plus a 2mm duplicate guard in
+`AddSeamGuidePoint`.
+
+**2. Saving a guide did not re-slice.** `SetSeamGuides` raises only `SeamGuideSummary`, which
+was absent from `RealtimeSliceProps` in `ViewportView.axaml.cs` (`SeamMode` was there, the
+guides were not). Save committed the point and left the toolpath alone, so the green guide
+sat next to the yellow seam from the previous slice. *Fix:* added the property to the list.
+`ScheduleRealtimeSlice` already refuses to run over a protected baked toolpath and honours
+the pause, so project load is unaffected.
+
+**How the slicer uses guides** (`PlanarSlicer.cs:654`, `ContourSeamPlanner.cs`): `ToXY()` —
+**Z is discarded**. `NearestGuideToContour` picks *one guide per closed loop*, so multiple
+points are meaningful only for multiple islands, never for varying the seam by height. The
+guide is consulted **only on a birth layer** (no overlapping parent above the threshold);
+every layer above projects the parent's seam onto its own contour for continuity. On a
+flaring part the seam therefore follows the surface outward while the guide column stays a
+vertical line — they diverge visually by design.
+
+**Key files:** `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`
+(`TrySeamGuideOnToolpath`, `RealtimeSliceProps`),
+`src/MassiveSlicer.App/ViewModels/ViewportViewModel.cs` (`AddSeamGuidePoint`,
+`SaveSeamEditor`).
+
+**Worth remembering:** a screen-picked tool needs a screen-space tolerance. A millimetre
+radius that feels right on a benchtop part is invisible on a 3m robot cell.
+
 ### 2026-08-06 — Seam edit tool showed no line on a sliced part
 
 **Symptom:** click **Edit** next to Seam position guides and no line appears — the tool
