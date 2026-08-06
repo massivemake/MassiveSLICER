@@ -4454,6 +4454,8 @@ public partial class ViewportView : UserControl
 
     /// <summary>Wall clock for the slice in flight, so the console can report duration.</summary>
     private readonly System.Diagnostics.Stopwatch _sliceWatch = new();
+    /// <summary>Wall clock for the robot analysis in flight, so the console can report duration.</summary>
+    private readonly System.Diagnostics.Stopwatch _analysisWatch = new();
 
     /// <summary>
     /// Writes a line straight to the in-app console. Needed because the status banner only
@@ -11707,23 +11709,23 @@ public partial class ViewportView : UserControl
     private string BuildValidationReport()
     {
         if (_activeScrubNode is not { } node)
-            return "[validate-report] No toolpath selected -- click one in the outliner first.";
+            return "[analysis-report] No toolpath selected -- click one in the outliner first.";
 
         if (_vm is { IsValidating: true })
-            return $"[validate-report] '{node.Name}': analysis is still RUNNING. "
+            return $"[analysis-report] '{node.Name}': analysis is still RUNNING. "
                  + "Wait for the '[validate]' console line, then run this again.";
 
         if (!_validationIssuesByNode.TryGetValue(node, out var vi))
-            return $"[validate-report] '{node.Name}': NO RESULT ON RECORD.\n"
+            return $"[analysis-report] '{node.Name}': NO RESULT ON RECORD.\n"
                  + "  The analysis has not completed for this toolpath -- never started, cancelled, or it failed.\n"
                  + "  Nothing here has been checked. Nudge Toolhead X by 1 degree to force a fresh run.";
 
         if (!_toolpathByNode.TryGetValue(node, out var tp))
-            return $"[validate-report] '{node.Name}': verdict on record, but the toolpath is no longer cached.";
+            return $"[analysis-report] '{node.Name}': verdict on record, but the toolpath is no longer cached.";
 
         int total = 0;
         foreach (var l in tp.Layers) total += l.Moves.Count;
-        if (total == 0) return $"[validate-report] '{node.Name}': toolpath has no moves.";
+        if (total == 0) return $"[analysis-report] '{node.Name}': toolpath has no moves.";
 
         var zOf     = new float[total];
         var layerOf = new int[total];
@@ -11748,7 +11750,7 @@ public partial class ViewportView : UserControl
         if (coll is not null) foreach (var c in coll) if (c) collCount++;
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine($"[validate-report] '{node.Name}' -- {total:N0} moves in {tp.Layers.Count:N0} layers");
+        sb.AppendLine($"[analysis-report] '{node.Name}' -- {total:N0} moves in {tp.Layers.Count:N0} layers");
         sb.AppendLine($"  singularity-risk : {vi.Singular:N0}");
         sb.AppendLine($"  unreachable      : {vi.Unreachable:N0}");
         sb.AppendLine($"  collision        : {(coll is null ? "not checked" : $"{collCount:N0}")}");
@@ -11845,6 +11847,8 @@ public partial class ViewportView : UserControl
 
         if (!_scrubCacheByNode.TryGetValue(node, out var cache) || cache.Length == 0) return;
         if (vm is not null) { vm.StatsReachability = "…"; vm.IsValidating = true; vm.SetScrubMarkers([], []); }
+        _analysisWatch.Restart();
+        LogToConsole($"[analysis] {node.Name}: robot analysis started…");
         _toolpathOriginByNode.TryGetValue(node, out var origin);
         var   wt      = node.WorldTransform;
         RefreshIkSceneKinematics();
@@ -12246,22 +12250,43 @@ public partial class ViewportView : UserControl
                             isError: true);
                     }
 
-                    // Always leave a line in the console log, even on a clean pass.
-                    // Without this, "analysed and clean", "cancelled" and "crashed"
-                    // are indistinguishable from outside -- the banner only appears
-                    // when a count is non-zero, and it is transient.
-                    if (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel logVm)
+                    // Always report, in plain language, even on a clean pass. Without this,
+                    // "analysed and clean", "cancelled" and "crashed" are indistinguishable
+                    // from outside -- the banner is transient and only shows non-zero counts.
                     {
                         int cleared = 0, gaveUp = 0;
                         foreach (var sp in repairSpans) { if (sp.Fixed) cleared++; else gaveUp++; }
-                        string zPart = zLo <= zHi ? $", Z {zLo:0}..{zHi:0} mm" : "";
-                        string msg =
-                            $"[validate] {node.Name}: {total:N0} moves — {singCount:N0} singularity-risk, " +
-                            $"{failCount:N0} unreachable, {collCount:N0} collision{zPart}. " +
-                            $"Repair: {cleared} span(s) cleared, {gaveUp} gave up. " +
-                            "Type 'validate-report' for per-span detail.";
-                        if (failCount + singCount + collCount > 0) logVm.Console.LogError(msg);
-                        else                                       logVm.Console.Log(msg);
+                        bool anyProblem = failCount + singCount + collCount > 0;
+                        float secs = (float)_analysisWatch.Elapsed.TotalSeconds;
+
+                        LogToConsole($"[analysis] {node.Name}: COMPLETE in {secs:F1}s — "
+                                   + $"checked all {total:N0} moves.");
+
+                        if (!anyProblem)
+                        {
+                            LogToConsole("[analysis]   result: NO PROBLEMS FOUND "
+                                       + "(0 singularity-risk, 0 unreachable, 0 collision).");
+                        }
+                        else
+                        {
+                            string zPart = zLo <= zHi ? $" between Z {zLo:0} and {zHi:0} mm" : "";
+                            LogToConsole($"[analysis]   result: PROBLEMS FOUND{zPart} — "
+                                       + $"{singCount:N0} singularity-risk, {failCount:N0} unreachable, "
+                                       + $"{collCount:N0} collision.", isError: true);
+                        }
+
+                        if (repairSpans.Count == 0)
+                            LogToConsole("[analysis]   auto-repair: not needed — nothing was flagged to fix.");
+                        else if (gaveUp == 0)
+                            LogToConsole($"[analysis]   auto-repair: fixed all {cleared} problem area(s) "
+                                       + "by spinning the nozzle. Nothing left unfixed.");
+                        else
+                            LogToConsole($"[analysis]   auto-repair: fixed {cleared} problem area(s); "
+                                       + $"{gaveUp} area(s) COULD NOT BE FIXED and will still fault on the robot.",
+                                         isError: true);
+
+                        if (anyProblem || gaveUp > 0)
+                            LogToConsole("[analysis]   type 'analysis-report' to see exactly where.");
                     }
                 }
                 GlCanvas.RequestNextFrameRendering();

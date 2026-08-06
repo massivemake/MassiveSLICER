@@ -1578,7 +1578,8 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
-            Name = "validate-report",
+            Name = "analysis-report",
+            Aliases = ["validate-report", "analyze-report"],
             Description = "Robot validation detail for the selected toolpath: per-span move/layer/Z ranges, "
                         + "worst |A5|, and which spans the auto-rotate repair could not clear. Says so "
                         + "explicitly when no analysis has completed, so a clean pass is never confused "
@@ -1587,7 +1588,7 @@ public sealed class ConsoleCommandRegistry
             Execute = (ctx, args) =>
             {
                 var fn = ctx.Main.Viewport.OnValidationReportRequested;
-                if (fn is null) { ctx.LogError("[validate-report] viewport is not ready yet."); return; }
+                if (fn is null) { ctx.LogError("[analysis-report] viewport is not ready yet."); return; }
                 // (char)10 = LF, (char)13 = CR -- split without escape sequences.
                 foreach (var line in fn().Split((char)10))
                     ctx.Log(line.TrimEnd((char)13));
