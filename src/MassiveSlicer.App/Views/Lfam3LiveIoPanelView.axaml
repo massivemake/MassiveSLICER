@@ -237,7 +237,7 @@
                                     </StackPanel>
                                 </Grid>
 
-                                <!-- Extruder: Inputs | Outputs only -->
+                                <!-- Extruder / Spindle: Inputs | Outputs (+ RPM on Spindle) -->
                                 <Grid ColumnDefinitions="*,10,*"
                                       IsVisible="{Binding UsesDualIoLayout}">
                                     <StackPanel Grid.Column="0" Spacing="2">
@@ -252,6 +252,42 @@
                                     </StackPanel>
                                     <Border Grid.Column="1" Classes="Lfam3LiveIoColumnDivider"/>
                                     <StackPanel Grid.Column="2" Spacing="2">
+                                        <!-- Spindle ATV RPM (separate from KUKA DO51 enable) -->
+                                        <Border IsVisible="{Binding ShowSpindleRpm}"
+                                                Classes="Lfam3LiveIoPoseGroup"
+                                                Margin="0,0,0,6">
+                                            <StackPanel Spacing="4">
+                                                <TextBlock Text="SPINDLE RPM"
+                                                           Classes="Lfam3LiveIoPoseGroupTitle"/>
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                    <TextBox Grid.Column="0"
+                                                             Text="{Binding SpindleRpmText, Mode=TwoWay}"
+                                                             PlaceholderText="0-24000"
+                                                             FontSize="11"
+                                                             FontFamily="Consolas,Courier New,monospace"
+                                                             MinHeight="26"
+                                                             Padding="6,3"
+                                                             IsEnabled="{Binding !SpindleRpmBusy}"/>
+                                                    <Button Grid.Column="1"
+                                                            Content="Set"
+                                                            FontSize="10"
+                                                            Padding="10,4"
+                                                            MinWidth="44"
+                                                            Classes="Lfam3LiveIoToggle"
+                                                            Command="{Binding SetSpindleRpmCommand}"
+                                                            IsEnabled="{Binding CanSetSpindleRpm}"
+                                                            ToolTip.Tip="Send RPM setpoint to ATV340 (does not toggle DO51)"/>
+                                                </Grid>
+                                                <TextBlock Text="{Binding SpindleRpmActualLine}"
+                                                           FontSize="9"
+                                                           Classes="LabelMuted"
+                                                           TextWrapping="Wrap"/>
+                                                <TextBlock Text="{Binding SpindleRpmStatus}"
+                                                           FontSize="9"
+                                                           Foreground="#f0c040"
+                                                           TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                        </Border>
                                         <TextBlock Text="OUTPUTS"
                                                    FontSize="9"
                                                    FontWeight="SemiBold"

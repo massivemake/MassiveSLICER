@@ -23,14 +23,19 @@ public sealed class OutlinerCanDeleteTest
 
         var rotary = vm.OutlinerItems.First(i => i.Name == "Rotary Bed");
         var robotItem = vm.OutlinerItems.First(i => i.Name == "Robot Root");
-        var standItem = vm.OutlinerItems.First(i => i.Name == "Extruder Stand");
+        var standItem = robotItem.Children.First(i => i.Name == "Extruder Stand");
         var bedItem = vm.OutlinerItems.First(i => i.Name == "Print Bed");
+
+        var pedestalItem = robotItem.Children.Single(c => c.Name == "Robot Pedestal");
+        var armItem = pedestalItem.Children.Single(c => c.Name == "Robot Arm");
 
         Assert.False(rotary.CanDelete);
         Assert.False(robotItem.CanDelete);
-        Assert.False(robotItem.Children.Single(c => c.Name == "Robot Pedestal").CanDelete);
-        Assert.False(robotItem.Children.Single(c => c.Name == "Robot Arm").CanDelete);
+        Assert.False(pedestalItem.CanDelete);
+        Assert.False(armItem.CanDelete);
         Assert.False(standItem.CanDelete);
+        Assert.DoesNotContain(vm.OutlinerItems, i => i.Name == "Extruder Stand");
+        Assert.Contains(robotItem.Children, c => c.Name == "Extruder Stand");
         Assert.False(bedItem.CanDelete);
     }
 

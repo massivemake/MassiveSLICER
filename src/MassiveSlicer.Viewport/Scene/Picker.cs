@@ -173,6 +173,17 @@ public static class Picker
     // -- Face picking ----------------------------------------------------------
 
     /// <summary>
+    /// Result of a face pick: mesh leaf node, triangle index (0, 1, 2…), hit point / normal.
+    /// </summary>
+    public readonly record struct FaceHit(
+        SceneNode MeshNode,
+        SceneNode SelectableRoot,
+        int TriangleIndex,
+        float Distance,
+        Vector3 WorldHit,
+        Vector3 WorldNormal);
+
+    /// <summary>
     /// Like <see cref="Pick"/> but also returns the world-space face normal of the
     /// closest hit triangle, oriented toward the camera (away from the ray).
     /// </summary>
@@ -180,18 +191,39 @@ public static class Picker
         Ray worldRay, SceneNode root,
         out Vector3 worldFaceNormal, out float hitDistance)
     {
-        hitDistance    = float.MaxValue;
-        worldFaceNormal = Vector3.UnitZ;
-        SceneNode? closest     = null;
-        Vector3   closestNormal = Vector3.UnitZ;
+        var hit = PickFaceDetailed(worldRay, root, _ => true);
+        if (hit is null)
+        {
+            hitDistance = float.MaxValue;
+            worldFaceNormal = Vector3.UnitZ;
+            return null;
+        }
+        hitDistance = hit.Value.Distance;
+        worldFaceNormal = hit.Value.WorldNormal;
+        return hit.Value.MeshNode;
+    }
 
+    /// <summary>
+    /// Face pick restricted to selectable roots that pass <paramref name="acceptSelectable"/>.
+    /// Returns full hit info including triangle index (0-based face id).
+    /// </summary>
+    public static FaceHit? PickFaceDetailed(
+        Ray worldRay, SceneNode root, Func<SceneNode, bool> acceptSelectable)
+    {
+        float hitDistance = float.MaxValue;
+        SceneNode? closest = null;
+        SceneNode? closestSel = null;
+        Vector3 closestNormal = Vector3.UnitZ;
+        int closestTri = -1;
         PickTier bestTier = PickTier.Environment;
 
         foreach (var node in root.SelfAndDescendants())
         {
             if (node.PickIgnore) continue;
+            if (!node.Visible) continue;
             if (node.Mesh?.PickingData is not { } mesh) continue;
             if (FindSelectableRoot(node) is not { } selectable) continue;
+            if (!acceptSelectable(selectable)) continue;
 
             Matrix4.Invert(node.WorldTransform, out var invWorld);
             var lo = TransformPoint(worldRay.Origin,    invWorld);
@@ -200,7 +232,8 @@ public static class Picker
             var (bMin, bMax) = mesh.LocalBounds;
             if (!RayHitsAabb(lo, ld, bMin, bMax)) continue;
 
-            if (!IntersectFace(mesh, lo, ld, out float t, out Vector3 localNormal)) continue;
+            if (!IntersectFace(mesh, lo, ld, out float t, out Vector3 localNormal, out int tri))
+                continue;
 
             var tier = selectable.PickTier;
             if (tier < bestTier || (tier == bestTier && t < hitDistance))
@@ -208,21 +241,59 @@ public static class Picker
                 bestTier      = tier;
                 hitDistance   = t;
                 closest       = node;
+                closestSel    = selectable;
+                closestTri    = tri;
                 closestNormal = TransformDir(localNormal, node.WorldTransform);
             }
         }
 
-        if (closest is not null && closestNormal.LengthSquared > 1e-12f)
-            worldFaceNormal = Vector3.Normalize(closestNormal);
-        return closest;
+        if (closest is null || closestSel is null || closestTri < 0)
+            return null;
+
+        var n = closestNormal.LengthSquared > 1e-12f
+            ? Vector3.Normalize(closestNormal)
+            : Vector3.UnitZ;
+        return new FaceHit(closest, closestSel, closestTri, hitDistance, worldRay.At(hitDistance), n);
     }
+
+    /// <summary>
+    /// Returns the three local-space corners of triangle <paramref name="triangleIndex"/>
+    /// (0-based face id), or false if out of range.
+    /// </summary>
+    public static bool TryGetTriangleLocal(
+        MeshData mesh, int triangleIndex, out Vector3 v0, out Vector3 v1, out Vector3 v2)
+    {
+        v0 = v1 = v2 = default;
+        if (triangleIndex < 0) return false;
+        var pos = mesh.Positions;
+        if (mesh.Indices is { } idx)
+        {
+            int i = triangleIndex * 3;
+            if (i + 2 >= idx.Length) return false;
+            v0 = pos[idx[i]];
+            v1 = pos[idx[i + 1]];
+            v2 = pos[idx[i + 2]];
+            return true;
+        }
+        int p = triangleIndex * 3;
+        if (p + 2 >= pos.Length) return false;
+        v0 = pos[p];
+        v1 = pos[p + 1];
+        v2 = pos[p + 2];
+        return true;
+    }
+
+    /// <summary>Number of triangles in <paramref name="mesh"/>.</summary>
+    public static int TriangleCount(MeshData mesh)
+        => mesh.Indices is { } idx ? idx.Length / 3 : mesh.Positions.Length / 3;
 
     private static bool IntersectFace(
         MeshData mesh, Vector3 ro, Vector3 rd,
-        out float tMin, out Vector3 normal)
+        out float tMin, out Vector3 normal, out int triangleIndex)
     {
         tMin   = float.MaxValue;
         normal = Vector3.UnitZ;
+        triangleIndex = -1;
         bool    hit    = false;
         Vector3 bestE1 = default, bestE2 = default;
         var     pos    = mesh.Positions;
@@ -234,15 +305,21 @@ public static class Picker
 
         if (mesh.Indices is { } idx)
         {
-            for (int i = 0; i + 2 < idx.Length; i += 3)
-                TestTriFace(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd, eps,
-                            ref tMin, ref hit, ref bestE1, ref bestE2);
+            for (int i = 0, tri = 0; i + 2 < idx.Length; i += 3, tri++)
+            {
+                if (TestTriFace(pos[idx[i]], pos[idx[i + 1]], pos[idx[i + 2]], ro, rd, eps,
+                                ref tMin, ref hit, ref bestE1, ref bestE2))
+                    triangleIndex = tri;
+            }
         }
         else
         {
-            for (int i = 0; i + 2 < pos.Length; i += 3)
-                TestTriFace(pos[i], pos[i + 1], pos[i + 2], ro, rd, eps,
-                            ref tMin, ref hit, ref bestE1, ref bestE2);
+            for (int i = 0, tri = 0; i + 2 < pos.Length; i += 3, tri++)
+            {
+                if (TestTriFace(pos[i], pos[i + 1], pos[i + 2], ro, rd, eps,
+                                ref tMin, ref hit, ref bestE1, ref bestE2))
+                    triangleIndex = tri;
+            }
         }
 
         if (hit)
@@ -255,7 +332,8 @@ public static class Picker
         return hit;
     }
 
-    private static void TestTriFace(
+    /// <returns>True when this triangle became the new closest hit.</returns>
+    private static bool TestTriFace(
         Vector3 v0, Vector3 v1, Vector3 v2,
         Vector3 ro, Vector3 rd, float eps,
         ref float tMin, ref bool hit,
@@ -265,16 +343,16 @@ public static class Picker
         var e2 = v2 - v0;
         var h  = Vector3.Cross(rd, e2);
         float a = Vector3.Dot(e1, h);
-        if (MathF.Abs(a) < eps) return;
+        if (MathF.Abs(a) < eps) return false;
 
         float f = 1f / a;
         var s   = ro - v0;
         float u = f * Vector3.Dot(s, h);
-        if (u < 0f || u > 1f) return;
+        if (u < 0f || u > 1f) return false;
 
         var q   = Vector3.Cross(s, e1);
         float v = f * Vector3.Dot(rd, q);
-        if (v < 0f || u + v > 1f) return;
+        if (v < 0f || u + v > 1f) return false;
 
         float t = f * Vector3.Dot(e2, q);
         if (t > BaseEps && t < tMin)
@@ -283,7 +361,9 @@ public static class Picker
             hit    = true;
             bestE1 = e1;
             bestE2 = e2;
+            return true;
         }
+        return false;
     }
 
     // -- Row-vector transform helpers ------------------------------------------

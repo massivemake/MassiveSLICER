@@ -321,6 +321,9 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     // -- Auto-name logic ---------------------------------------------------
 
+    /// <summary>Skip type/color → name rewriting while <see cref="LoadFrom"/> applies fields.</summary>
+    private bool _suppressAutoName;
+
     /// <summary>
     /// Updates the Name field to match the new type/color combination, but only
     /// if the name still equals what was previously auto-generated (meaning the
@@ -328,10 +331,21 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
     /// </summary>
     private void TryAutoUpdateName()
     {
+        if (_suppressAutoName) return;
         string newAuto = $"{_materialType} - {_color}";
         if (_name == _expectedAutoName)
             Name = newAuto;
         _expectedAutoName = newAuto;
+    }
+
+    // -- Import / export status (dialog chrome) ----------------------------
+
+    private string _importExportStatus = "";
+    /// <summary>One-line feedback after Import/Export JSON in the dialog.</summary>
+    public string ImportExportStatus
+    {
+        get => _importExportStatus;
+        set => SetField(ref _importExportStatus, value);
     }
 
     // -- Serialisation -----------------------------------------------------
@@ -367,34 +381,62 @@ public sealed class MaterialPresetEditorViewModel : ViewModelBase
 
     public void LoadFrom(MaterialPreset p)
     {
-        _expectedAutoName = p.Name;
-        Name               = p.Name;
-        MaterialType       = p.MaterialType;
-        Color              = p.Color;
-        Temperature1       = p.Temperature1;
-        Temperature2       = p.Temperature2;
-        Temperature3       = p.Temperature3;
-        FlowRate           = p.FlowRate;
-        FlowRateHf         = p.FlowRateHf;
-        MaterialDensity    = p.MaterialDensity;
-        CostPerLb          = p.CostPerLb;
-        GlassTransitionC   = p.GlassTransitionC;
-        ThermalBondMarginC = p.ThermalBondMarginC > 0 ? p.ThermalBondMarginC : 10;
-        ThermalSagMarginC  = p.ThermalSagMarginC > 0 ? p.ThermalSagMarginC : 45;
-        // Model default is 30; ambient can be 0 °C if the user set it.
-        ThermalAmbientC    = p.ThermalAmbientC;
-        // Load both heads into their own stores, then pick the view.
-        _calibratedOnHv = p.CalibratedOn;
-        _calibNoteHv    = p.CalibrationNote;
-        _calibPctHv     = p.CalibMotorPercent > 0 ? p.CalibMotorPercent : 50.0;
-        _calibSecHv     = p.CalibTimeSec      > 0 ? p.CalibTimeSec      : 60.0;
-        _calibGHv       = p.CalibWeightG;
-        _calibratedOnHf = p.CalibratedOnHf;
-        _calibNoteHf    = p.CalibrationNoteHf;
-        _calibPctHf     = p.CalibMotorPercentHf > 0 ? p.CalibMotorPercentHf : 50.0;
-        _calibSecHf     = p.CalibTimeSecHf      > 0 ? p.CalibTimeSecHf      : 60.0;
-        _calibGHf       = p.CalibWeightGHf;
-        CalibIsHf          = p.CalibIsHf;
+        // Setting MaterialType/Color fires TryAutoUpdateName. Without suppress, a custom
+        // name like "PPGF" was treated as the prior auto-name and rewritten to "Other - Natural".
+        _suppressAutoName = true;
+        try
+        {
+            Name               = p.Name;
+            MaterialType       = p.MaterialType;
+            Color              = p.Color;
+            Temperature1       = p.Temperature1;
+            Temperature2       = p.Temperature2;
+            Temperature3       = p.Temperature3;
+            FlowRate           = p.FlowRate;
+            FlowRateHf         = p.FlowRateHf;
+            MaterialDensity    = p.MaterialDensity;
+            CostPerLb          = p.CostPerLb;
+            GlassTransitionC   = p.GlassTransitionC;
+            ThermalBondMarginC = p.ThermalBondMarginC > 0 ? p.ThermalBondMarginC : 10;
+            ThermalSagMarginC  = p.ThermalSagMarginC > 0 ? p.ThermalSagMarginC : 45;
+            // Model default is 30; ambient can be 0 °C if the user set it.
+            ThermalAmbientC    = p.ThermalAmbientC;
+
+            // Both heads into their own stores (private fields, so no auto-name side effects),
+            // then pick which one the dialog shows.
+            _calibratedOnHv = p.CalibratedOn;
+            _calibNoteHv    = p.CalibrationNote;
+            _calibPctHv     = p.CalibMotorPercent > 0 ? p.CalibMotorPercent : 50.0;
+            _calibSecHv     = p.CalibTimeSec      > 0 ? p.CalibTimeSec      : 60.0;
+            _calibGHv       = p.CalibWeightG;
+            _calibratedOnHf = p.CalibratedOnHf;
+            _calibNoteHf    = p.CalibrationNoteHf;
+            _calibPctHf     = p.CalibMotorPercentHf > 0 ? p.CalibMotorPercentHf : 50.0;
+            _calibSecHf     = p.CalibTimeSecHf      > 0 ? p.CalibTimeSecHf      : 60.0;
+            _calibGHf       = p.CalibWeightGHf;
+            _calibIsHf      = p.CalibIsHf;
+        }
+        finally
+        {
+            _suppressAutoName = false;
+        }
+
+        // Auto-rename baseline = type/color pattern. Custom names (e.g. "PPGF") stay put because
+        // _name != _expectedAutoName; auto-style names ("ASA - Black") still track type/color.
+        _expectedAutoName = $"{_materialType} - {_color}";
+
+        // Backing stores were written directly — refresh every calibration view.
+        OnPropertyChanged(nameof(CalibIsHf));
+        OnPropertyChanged(nameof(CalibIsHv));
+        OnPropertyChanged(nameof(CalibTargetLabel));
+        OnPropertyChanged(nameof(CalibMotorPercent));
+        OnPropertyChanged(nameof(CalibTimeSec));
+        OnPropertyChanged(nameof(CalibWeightG));
+        OnPropertyChanged(nameof(CalibratedOn));
+        OnPropertyChanged(nameof(CalibrationNote));
+        OnPropertyChanged(nameof(CalibrationStatus));
+        OnPropertyChanged(nameof(CalibComputedText));
+
         OnPropertyChanged(nameof(GlassTransitionHint));
         OnPropertyChanged(nameof(ThermalThresholdsHint));
     }

@@ -130,7 +130,8 @@ internal static class CellSceneLoader
         ToolCellConfig? firstTool;
         if (Lfam3MinimalProbe.IsActive(cell.Name))
         {
-            firstTool = cell.EffectiveTools.FirstOrDefault(t => t.Name == "HV Extruder")
+            firstTool = cell.EffectiveTools.FirstOrDefault(t => t.Name == "Extruder")
+                     ?? cell.EffectiveTools.FirstOrDefault(t => t.Name == "HV Extruder")
                      ?? cell.EffectiveTools.FirstOrDefault();
             System.Console.WriteLine("[cell] Lfam3MinimalProbe: robot + extruder only");
         }
@@ -140,8 +141,8 @@ internal static class CellSceneLoader
             var defaultTabToolName = defaultTab switch
             {
                 RightPanelTab.Scan when cellHasScan => cell.ScanToolName,
-                RightPanelTab.Additive              => "HV Extruder",
-                _                                   => cellHasScan ? cell.ScanToolName : "HV Extruder",
+                RightPanelTab.Additive              => "Extruder",
+                _                                   => cellHasScan ? cell.ScanToolName : "Extruder",
             };
             firstTool = (defaultTabToolName is not null
                             ? cell.EffectiveTools.FirstOrDefault(t => t.Name == defaultTabToolName)

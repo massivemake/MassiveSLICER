@@ -1,0 +1,447 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ia="https://github.com/projektanker/icons.avalonia"
+        xmlns:vm="clr-namespace:MassiveSlicer.ViewModels"
+        x:Class="MassiveSlicer.App.Views.MillBitLibraryDialog"
+        x:CompileBindings="False"
+        Title="Tool library"
+        Width="960" Height="620"
+        MinWidth="800" MinHeight="480"
+        WindowStartupLocation="CenterOwner"
+        WindowDecorations="None"
+        CanResize="True"
+        ShowInTaskbar="False"
+        Background="{DynamicResource Bg0}">
+
+    <Window.Styles>
+        <!-- Room for value + spinner so digits are not clipped -->
+        <Style Selector="NumericUpDown.BitField">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="MinWidth" Value="140"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="TextBox.BitField">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="ComboBox.BitField">
+            <Setter Property="MinHeight" Value="34"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+        <Style Selector="Button.BitFooter">
+            <Setter Property="MinWidth" Value="120"/>
+            <Setter Property="MinHeight" Value="36"/>
+            <Setter Property="Padding" Value="18,8"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Styles>
+
+    <Border BorderBrush="{DynamicResource Border2}" BorderThickness="1">
+        <Grid RowDefinitions="44,*,56">
+
+            <!-- Title bar -->
+            <Border Grid.Row="0" x:Name="TitleBar"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,0,0,1"
+                    Cursor="SizeAll">
+                <Grid Margin="16,0" ColumnDefinitions="*,Auto">
+                    <TextBlock Text="Tool library"
+                               Foreground="{DynamicResource TextPrimary}"
+                               FontSize="14" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Button Grid.Column="1"
+                            Classes="ToolbarButton" Padding="8,4"
+                            Click="OnClose"
+                            ToolTip.Tip="Close without saving">
+                        <ia:Icon Value="mdi-close" FontSize="16"/>
+                    </Button>
+                </Grid>
+            </Border>
+
+            <!-- Body: list | editor -->
+            <Grid Grid.Row="1" ColumnDefinitions="300,*">
+
+                <!-- Left: search + list -->
+                <Border Grid.Column="0"
+                        Background="{DynamicResource Bg2}"
+                        BorderBrush="{DynamicResource Border1}"
+                        BorderThickness="0,0,1,0">
+                    <Grid RowDefinitions="Auto,*,Auto" Margin="12">
+                        <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,10">
+                            <TextBox Classes="PanelTextBox BitField"
+                                     Watermark="Search tools…"
+                                     Text="{Binding SearchText, Mode=TwoWay}"/>
+                            <ComboBox Classes="BitField"
+                                      ItemsSource="{x:Static vm:MillBitLibraryViewModel.TypeFilterOptions}"
+                                      SelectedItem="{Binding TypeFilter, Mode=TwoWay}"/>
+                        </StackPanel>
+
+                        <ListBox Grid.Row="1"
+                                 ItemsSource="{Binding FilteredTools}"
+                                 SelectedItem="{Binding SelectedTool, Mode=TwoWay}"
+                                 Background="Transparent"
+                                 Margin="0,0,0,10">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Spacing="3" Margin="6,8">
+                                        <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                                   TextWrapping="Wrap"/>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Opacity="0.75">
+                                            <Border Background="{DynamicResource Bg3}" CornerRadius="3" Padding="6,2">
+                                                <TextBlock Text="{Binding TypeDisplayName}" FontSize="10"/>
+                                            </Border>
+                                            <TextBlock FontSize="11" VerticalAlignment="Center"
+                                                       Text="{Binding DiameterMm, StringFormat={}{0:F1} mm}"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <StackPanel Grid.Row="2" Spacing="8">
+                            <Button Classes="PrimaryButton"
+                                    Content="Create new +"
+                                    Command="{Binding CreateToolCommand}"
+                                    HorizontalAlignment="Stretch"
+                                    HorizontalContentAlignment="Center"
+                                    Padding="12,9"/>
+                            <Grid ColumnDefinitions="*,8,*">
+                                <Button Classes="SecondaryButton"
+                                        Content="Duplicate"
+                                        Command="{Binding DuplicateToolCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Padding="10,8"/>
+                                <Button Grid.Column="2" Classes="SecondaryButton"
+                                        Content="Delete"
+                                        Command="{Binding DeleteToolCommand}"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Padding="10,8"/>
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Right: editor -->
+                <Grid Grid.Column="1" RowDefinitions="Auto,Auto,*" IsEnabled="{Binding HasSelection}">
+                    <TextBlock Grid.Row="0" Margin="20,16,20,10"
+                               Text="{Binding EditorTitle}" FontSize="15" FontWeight="SemiBold"
+                               TextWrapping="Wrap"/>
+
+                    <!-- Tabs -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="16,0,16,0" Spacing="2">
+                        <Button Classes="TabButton" Content="Cutter" Padding="14,8"
+                                Classes.active="{Binding IsCutterTab}"
+                                Command="{Binding ShowCutterTabCommand}"/>
+                        <Button Classes="TabButton" Content="Holder" Padding="14,8"
+                                Classes.active="{Binding IsHolderTab}"
+                                Command="{Binding ShowHolderTabCommand}"/>
+                        <Button Classes="TabButton" Content="Cutting data" Padding="14,8"
+                                Classes.active="{Binding IsCuttingTab}"
+                                Command="{Binding ShowCuttingTabCommand}"/>
+                    </StackPanel>
+                    <Border Grid.Row="1" Height="1" VerticalAlignment="Bottom"
+                            Background="{DynamicResource Border1}" Margin="16,0"/>
+
+                    <ScrollViewer Grid.Row="2"
+                                  VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Padding="0,0,4,0">
+                        <StackPanel Margin="20,16,20,20">
+
+                            <!-- CUTTER -->
+                            <StackPanel IsVisible="{Binding IsCutterTab}" Spacing="12">
+                                <Grid ColumnDefinitions="*,12,88,12,140">
+                                    <StackPanel>
+                                        <TextBlock Text="Identifier" Classes="LabelMuted" FontSize="11" Margin="0,0,0,4"/>
+                                        <TextBox Classes="PanelTextBox BitField"
+                                                 Text="{Binding SelectedTool.Identifier, Mode=TwoWay}"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Tool #" Classes="LabelMuted" FontSize="11" Margin="0,0,0,4"/>
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.ToolNumber, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="999" Increment="1" FormatString="F0"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Type" Classes="LabelMuted" FontSize="11" Margin="0,0,0,4"/>
+                                        <ComboBox Classes="BitField"
+                                                  ItemsSource="{x:Static vm:MillBitLibraryViewModel.TypeOptions}"
+                                                  SelectedItem="{Binding SelectedToolType, Mode=TwoWay}"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock Text="GEOMETRY" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2" Margin="0,8,0,0"/>
+
+                                <Grid ColumnDefinitions="168,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                                      RowSpacing="10">
+                                    <TextBlock Grid.Row="0" Text="Diameter" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="0" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.DiameterMm, Mode=TwoWay}"
+                                                       Minimum="0.1" Maximum="200" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="1" Text="Shaft diameter" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="1" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.ShaftDiameterMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="200" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="2" Text="Total cutter length" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="2" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.TotalLengthMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="500" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="3" Text="Flute length" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="3" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.FluteLengthMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="300" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="4" Text="Shoulder length" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="4" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.ShoulderLengthMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="300" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="5" Text="Length below holder" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <Grid Grid.Row="5" Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                        <NumericUpDown Classes="BitField"
+                                                       Value="{Binding SelectedTool.LengthBelowHolderMm, Mode=TwoWay}"
+                                                       Minimum="0" Maximum="300" Increment="0.05" FormatString="F2"/>
+                                        <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted" Width="36" VerticalAlignment="Center"/>
+                                    </Grid>
+
+                                    <TextBlock Grid.Row="6" Text="Number of flutes" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="6" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedTool.FluteCount, Mode=TwoWay}"
+                                                   Minimum="1" Maximum="20" Increment="1" FormatString="F0"/>
+
+                                    <TextBlock Grid.Row="7" Text="List name" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Row="7" Grid.Column="1" Classes="PanelTextBox BitField"
+                                             Text="{Binding SelectedTool.Name, Mode=TwoWay}"
+                                             ToolTip.Tip="Name shown in the BITS dropdown"/>
+                                </Grid>
+
+                                <CheckBox Content="Default spindle bit (LFAM 3 mounted)"
+                                          IsChecked="{Binding SelectedTool.IsDefaultSpindleBit, Mode=TwoWay}"
+                                          FontSize="12" Margin="0,4,0,0"/>
+                            </StackPanel>
+
+                            <!-- HOLDER -->
+                            <StackPanel IsVisible="{Binding IsHolderTab}" Spacing="12">
+                                <Grid ColumnDefinitions="*,Auto">
+                                    <TextBlock Text="GEOMETRY" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2"
+                                               VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Classes="SecondaryButton" Content="Add segment"
+                                            Command="{Binding AddHolderSegmentCommand}"
+                                            Padding="12,6"/>
+                                </Grid>
+                                <Grid ColumnDefinitions="*,*,*,40" ColumnSpacing="10" Margin="0,0,0,4">
+                                    <TextBlock Text="Height (mm)" Classes="LabelMuted" FontSize="11"/>
+                                    <TextBlock Grid.Column="1" Text="Top Ø (mm)" Classes="LabelMuted" FontSize="11"/>
+                                    <TextBlock Grid.Column="2" Text="Bottom Ø (mm)" Classes="LabelMuted" FontSize="11"/>
+                                </Grid>
+                                <ItemsControl ItemsSource="{Binding SelectedTool.HolderSegments}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid ColumnDefinitions="*,*,*,40" ColumnSpacing="10" Margin="0,0,0,10">
+                                                <NumericUpDown Classes="BitField"
+                                                               Value="{Binding HeightMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="500" Increment="0.1" FormatString="F2"/>
+                                                <NumericUpDown Grid.Column="1" Classes="BitField"
+                                                               Value="{Binding TopDiameterMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="200" Increment="0.1" FormatString="F2"/>
+                                                <NumericUpDown Grid.Column="2" Classes="BitField"
+                                                               Value="{Binding BottomDiameterMm, Mode=TwoWay}"
+                                                               Minimum="0" Maximum="200" Increment="0.1" FormatString="F2"/>
+                                                <Button Grid.Column="3" Classes="ToolbarButton"
+                                                        Command="{Binding $parent[Window].DataContext.RemoveHolderSegmentCommand}"
+                                                        CommandParameter="{Binding}"
+                                                        Padding="6,6" ToolTip.Tip="Remove segment"
+                                                        HorizontalAlignment="Stretch">
+                                                    <ia:Icon Value="mdi-delete-outline" FontSize="16"/>
+                                                </Button>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <TextBlock Classes="LabelMuted" FontSize="11" TextWrapping="Wrap" Opacity="0.65"
+                                           Text="Holder stack segments from top to bottom. Leave zeros if unused."/>
+                            </StackPanel>
+
+                            <!-- CUTTING DATA -->
+                            <StackPanel IsVisible="{Binding IsCuttingTab}" Spacing="14">
+                                <!-- Header row: label left, +/− right (never over the list) -->
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="12">
+                                    <TextBlock Text="PRESETS" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                        <Button Classes="SecondaryButton"
+                                                Width="36" Height="32" Padding="0"
+                                                HorizontalContentAlignment="Center"
+                                                VerticalContentAlignment="Center"
+                                                Command="{Binding AddPresetCommand}"
+                                                ToolTip.Tip="Add cutting-data preset">
+                                            <TextBlock Text="+" FontSize="16" FontWeight="SemiBold"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Button>
+                                        <Button Classes="SecondaryButton"
+                                                Width="36" Height="32" Padding="0"
+                                                HorizontalContentAlignment="Center"
+                                                VerticalContentAlignment="Center"
+                                                Command="{Binding DeletePresetCommand}"
+                                                ToolTip.Tip="Remove selected preset">
+                                            <TextBlock Text="−" FontSize="16" FontWeight="SemiBold"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                                <!-- Full-width preset list below the header -->
+                                <ListBox MinHeight="40" MaxHeight="140"
+                                         Margin="0,0,0,0"
+                                         ItemsSource="{Binding SelectedTool.CuttingPresets}"
+                                         SelectedItem="{Binding SelectedPreset, Mode=TwoWay}"
+                                         Background="{DynamicResource Bg1}"
+                                         Padding="6"
+                                         HorizontalAlignment="Stretch">
+                                    <ListBox.Styles>
+                                        <Style Selector="ListBoxItem">
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="Margin" Value="0,2"/>
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                        </Style>
+                                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                                            <Setter Property="Background" Value="#2640b840"/>
+                                        </Style>
+                                    </ListBox.Styles>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Padding="12,10" CornerRadius="6"
+                                                    Background="Transparent">
+                                                <TextBlock Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+
+                                <TextBlock Text="DATA" Classes="LabelMuted" FontSize="10" LetterSpacing="1.2"/>
+
+                                <Grid ColumnDefinitions="150,*,Auto"
+                                      RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto"
+                                      RowSpacing="12"
+                                      ColumnSpacing="12"
+                                      IsEnabled="{Binding SelectedPreset, Converter={x:Static ObjectConverters.IsNotNull}}">
+
+                                    <TextBlock Grid.Row="0" Text="Name" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <TextBox Grid.Row="0" Grid.Column="1" Grid.ColumnSpan="2"
+                                             Classes="PanelTextBox BitField"
+                                             Text="{Binding SelectedPreset.Name, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="1" Text="Spindle speed" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="1" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.SpindleRpm, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="60000" Increment="1" FormatString="F0"/>
+                                    <TextBlock Grid.Row="1" Grid.Column="2" Text="rpm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="2" Text="Surface speed" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="2" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.SurfaceSpeedMPerMin, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="5000" Increment="0.001" FormatString="F3"/>
+                                    <TextBlock Grid.Row="2" Grid.Column="2" Text="m/min" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="3" Text="Cutting feed rate" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="3" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.CuttingFeedMmS, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="500" Increment="0.001" FormatString="F3"/>
+                                    <TextBlock Grid.Row="3" Grid.Column="2" Text="mm/s" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="4" Text="Feed per tooth" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="4" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.FeedPerToothMm, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="10" Increment="0.001" FormatString="F3"/>
+                                    <TextBlock Grid.Row="4" Grid.Column="2" Text="mm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="5" Text="Spindle direction" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <ComboBox Grid.Row="5" Grid.Column="1" Grid.ColumnSpan="2" Classes="BitField"
+                                              ItemsSource="{x:Static vm:MillBitLibraryViewModel.DirectionOptions}"
+                                              SelectedItem="{Binding SelectedPreset.SpindleDirection, Mode=TwoWay}"/>
+
+                                    <TextBlock Grid.Row="6" Text="Plunge feed" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="6" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.PlungeFeedMmMin, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="15000" Increment="10" FormatString="F0"/>
+                                    <TextBlock Grid.Row="6" Grid.Column="2" Text="mm/min" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="7" Text="Stepover" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="7" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.StepoverMm, Mode=TwoWay}"
+                                                   Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2"/>
+                                    <TextBlock Grid.Row="7" Grid.Column="2" Text="mm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="8" Text="Stepdown" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="8" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.StepdownMm, Mode=TwoWay}"
+                                                   Minimum="0.05" Maximum="100" Increment="0.1" FormatString="F2"/>
+                                    <TextBlock Grid.Row="8" Grid.Column="2" Text="mm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="9" Text="Finish allowance" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="9" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.FinishAllowanceMm, Mode=TwoWay}"
+                                                   Minimum="0" Maximum="20" Increment="0.05" FormatString="F2"/>
+                                    <TextBlock Grid.Row="9" Grid.Column="2" Text="mm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+
+                                    <TextBlock Grid.Row="10" Text="Rapid Z" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                    <NumericUpDown Grid.Row="10" Grid.Column="1" Classes="BitField"
+                                                   Value="{Binding SelectedPreset.RapidZMm, Mode=TwoWay}"
+                                                   Minimum="1" Maximum="500" Increment="1" FormatString="F0"/>
+                                    <TextBlock Grid.Row="10" Grid.Column="2" Text="mm" Classes="LabelMuted" Width="48" VerticalAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Grid>
+
+            <!-- Footer -->
+            <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    BorderBrush="{DynamicResource Border1}"
+                    BorderThickness="0,1,0,0">
+                <Grid Margin="20,0" ColumnDefinitions="*,Auto">
+                    <TextBlock Text="Save writes the library and applies the selected tool to Mill → BITS."
+                               Classes="LabelMuted" FontSize="11"
+                               VerticalAlignment="Center" Opacity="0.7"
+                               TextWrapping="Wrap" Margin="0,0,16,0"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+                        <Button Classes="SecondaryButton BitFooter"
+                                Content="Close"
+                                Click="OnClose"/>
+                        <Button Classes="PrimaryButton BitFooter"
+                                Content="Save &amp; select"
+                                Click="OnSave"
+                                ToolTip.Tip="Save library and use the selected tool on the Mill panel"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+        </Grid>
+    </Border>
+</Window>

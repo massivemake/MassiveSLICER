@@ -14,11 +14,11 @@ public class BedScanCalSweepTest
     }
 
     [Fact]
-    public void VantageOffsetsY_Defaults_To_Centre_And_Minus300()
+    public void VantageOffsetsY_Defaults_To_Centre_Only()
     {
+        // Safe default: no side-step when scanner is already aimed at bed.
         var v = BedScanCalSweep.VantageOffsetsY(null);
-        Assert.Equal(2, v.Count);
+        Assert.Single(v);
         Assert.Equal(0f, v[0]);
-        Assert.Equal(-300f, v[1]);
     }
 }

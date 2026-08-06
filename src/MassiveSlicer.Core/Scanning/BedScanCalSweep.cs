@@ -1,7 +1,7 @@
 namespace MassiveSlicer.Core.Scanning;
 
 /// <summary>
-/// E1 sweep schedule for app-orchestrated bed calibration (driven via CELL MS_AXIS — no separate KRL).
+/// E1 sweep schedule for app-orchestrated bed calibration (MassiveDRIVE MS_CMD=93 axes).
 /// </summary>
 public static class BedScanCalSweep
 {
@@ -18,12 +18,17 @@ public static class BedScanCalSweep
     public static IReadOnlyList<double> E1AnglesForCell(Models.BedScanConfig? _)
         => DefaultE1Angles();
 
-    /// <summary>Y vantage offsets (mm) for multi-pose bed cal; defaults to centre + −300 mm Y.</summary>
+    /// <summary>
+    /// Y vantage offsets (mm) for multi-pose bed cal.
+    /// Default is <b>centre only (0)</b> so we do not side-step the scanner when the
+    /// operator already has a good down-on-bed pose. Set <c>bedScan.bedCalVantageOffsetsY</c>
+    /// (e.g. <c>[0, -300]</c>) only when a deliberate multi-vantage sweep is wanted.
+    /// </summary>
     public static IReadOnlyList<float> VantageOffsetsY(Models.BedScanConfig? bedScan)
     {
         var o = bedScan?.BedCalVantageOffsetsY;
         if (o is { Length: > 0 })
             return o;
-        return [0f, -300f];
+        return [0f];
     }
 }

@@ -1595,7 +1595,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _layerLeanPercent, Math.Clamp(value, 0.0, 100.0));
     }
 
-    private double _layerLeanMaxTiltDeg = 20.0;
+    private double _layerLeanMaxTiltDeg = 0.0;
 
     /// <summary>Hard cap on layer-lean tilt from vertical (degrees).</summary>
     public double LayerLeanMaxTiltDeg

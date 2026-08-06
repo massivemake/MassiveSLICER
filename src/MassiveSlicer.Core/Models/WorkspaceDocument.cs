@@ -267,6 +267,19 @@ public sealed class WorkspaceModelEntry
     /// ViewportViewModel.CreateAppliedPiecesGroup), or null for a model that isn't a Cut
     /// modifier's output piece. Entries sharing the same name are re-grouped together on load.</summary>
     public string? PiecesGroupName { get; set; }
+
+    /// <summary>
+    /// True when this entry is a Zivid / bed scan (outliner under the rotary group), not a
+    /// print CAD import. Scans must be restored with <c>AddScanNode</c> so they stay selectable
+    /// and track E1; omitting this used to drop every scan on Save Workspace.
+    /// </summary>
+    public bool IsScan { get; set; }
+
+    /// <summary>
+    /// Optional absolute or workspace-relative path to a captured <c>.zdf</c> (and sidecar
+    /// <c>.json</c>) for re-meshing if the embedded STL is missing.
+    /// </summary>
+    public string? ScanZdfPath { get; set; }
 }
 
 /// <summary>Serialized Cut modifier (plane position, orientation, size bounds).</summary>
