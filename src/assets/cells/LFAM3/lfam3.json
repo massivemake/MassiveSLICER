@@ -190,7 +190,7 @@
   },
   "tools": [
     {
-      "name": "HV Extruder",
+      "name": "Extruder",
       "modelPath": "assets/cells/LFAM3/Toolheads/hv_extruder.glb",
       "tcpX": 677.94,
       "tcpY": -163.2,
@@ -199,7 +199,8 @@
       "tcpB": 0,
       "tcpC": 0,
       "toolFrameRoll": -90,
-      "krlIndex": 2,
+      "krlIndex": 1,
+      "default": true,
       "dock": {
         "x": 236.36894,
         "y": -2633.3901,
@@ -207,38 +208,31 @@
         "a": 28.063517,
         "b": 88.72588,
         "c": 117.37034
-      },
-      "default": true
+      }
     },
     {
-      "name": "Scanner",
-      "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
-      "tcpX": -55.3,
-      "tcpY": -103.64,
-      "tcpZ": 260.18,
-      "tcpA": 0.084,
-      "tcpB": 2.457,
-      "tcpC": -1.211,
+      "name": "Spindle (No Bit)",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 694.76,
+      "tcpY": 17.74,
+      "tcpZ": 312.44,
+      "tcpA": 15,
+      "tcpB": 0,
+      "tcpC": 0,
       "toolFrameRoll": 0,
-      "krlIndex": 6,
-      "sensorOriginX": -55.3,
-      "sensorOriginY": -103.64,
-      "sensorOriginZ": 260.18,
-      "sensorOriginA": 0.084,
-      "sensorOriginB": 2.457,
-      "sensorOriginC": -1.211,
+      "krlIndex": 2,
+      "default": false,
       "dock": {
-        "x": 1340.3301,
-        "y": -2028.6117,
-        "z": -100.89441,
-        "a": -75.55139,
-        "b": -0.5073994,
-        "c": -179.70712
-      },
-      "default": false
+        "x": -768.6094,
+        "y": -2027.8746,
+        "z": -219.42023,
+        "a": -52.249447,
+        "b": 89.66839,
+        "c": -53.10206
+      }
     },
     {
-      "name": "Spindle",
+      "name": "Spindle (Probe)",
       "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
       "tcpX": 694.76,
       "tcpY": 17.74,
@@ -248,6 +242,7 @@
       "tcpC": 0,
       "toolFrameRoll": 0,
       "krlIndex": 3,
+      "default": false,
       "dock": {
         "x": -768.6094,
         "y": -2027.8746,
@@ -255,11 +250,23 @@
         "a": -52.249447,
         "b": 89.66839,
         "c": -53.10206
-      },
+      }
+    },
+    {
+      "name": "No Tool",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 0,
+      "tcpY": 0,
+      "tcpZ": 0,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 4,
       "default": false
     },
     {
-      "name": "ZividScanner",
+      "name": "Scanner (No Calibration)",
       "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
       "tcpX": 694.76,
       "tcpY": 17.74,
@@ -270,31 +277,98 @@
       "toolFrameRoll": 0,
       "krlIndex": 5,
       "default": false
+    },
+    {
+      "name": "Scanner (Calibrated)",
+      "modelPath": "assets/cells/LFAM3/Toolheads/scanner.glb",
+      "tcpX": -55.3,
+      "tcpY": -103.64,
+      "tcpZ": 260.18,
+      "tcpA": 0.084,
+      "tcpB": 2.457,
+      "tcpC": -1.211,
+      "toolFrameRoll": 0,
+      "krlIndex": 6,
+      "default": false,
+      "dock": {
+        "x": 1340.3301,
+        "y": -2028.6117,
+        "z": -100.89441,
+        "a": -75.55139,
+        "b": -0.5073994,
+        "c": -179.70712
+      },
+      "sensorOriginX": -55.3,
+      "sensorOriginY": -103.64,
+      "sensorOriginZ": 260.18,
+      "sensorOriginA": 0.084,
+      "sensorOriginB": 2.457,
+      "sensorOriginC": -1.211
+    },
+    {
+      "name": "End Mill 20mm",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 0,
+      "tcpY": 0,
+      "tcpZ": 0,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 7,
+      "default": false
+    },
+    {
+      "name": "Ball Mill 16mm",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 0,
+      "tcpY": 0,
+      "tcpZ": 0,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 8,
+      "default": false
+    },
+    {
+      "name": "Ball Mill 6mm",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 0,
+      "tcpY": 0,
+      "tcpZ": 0,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 9,
+      "default": false
+    },
+    {
+      "name": "Face Mill 3in",
+      "modelPath": "assets/cells/LFAM3/Toolheads/spindle.glb",
+      "tcpX": 0,
+      "tcpY": 0,
+      "tcpZ": 0,
+      "tcpA": 0,
+      "tcpB": 0,
+      "tcpC": 0,
+      "toolFrameRoll": 0,
+      "krlIndex": 10,
+      "default": false
     }
   ],
   "krlBases": [
     {
-      "name": "ROBROOT",
+      "name": "Rotary Table (Wood)",
       "index": 1
     },
     {
-      "name": "Base Rotary",
+      "name": "Rotary Table",
       "index": 2
-    },
-    {
-      "name": "KP1-MB2000 HW-2",
-      "index": 3
-    },
-    {
-      "name": "Base 4",
-      "index": 4
-    },
-    {
-      "name": "Base 5",
-      "index": 5
     }
   ],
-  "scanToolName": "Scanner",
+  "scanToolName": "Scanner (Calibrated)",
   "bridgeIp": "192.168.0.153",
   "bridgePort": 7000,
   "massiveDriveUrl": "http://192.168.0.233:8080",

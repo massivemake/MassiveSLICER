@@ -1958,6 +1958,33 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "recover-scans",
+            Aliases = ["import-zdf", "recover zdf"],
+            Description = "Re-import .zdf scans from the scan output folder (or path) into the viewport, then Save Workspace to keep them. Usage: recover-scans [dir] [since-hours]",
+            Execute = (ctx, args) =>
+            {
+                string? dir = null;
+                double hours = 24;
+                if (!string.IsNullOrWhiteSpace(args))
+                {
+                    var parts = args.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1 && !double.TryParse(parts[0], out _))
+                        dir = parts[0].Trim('"');
+                    if (parts.Length >= 1 && double.TryParse(parts[^1], out var h) && h > 0 && h < 24 * 90)
+                        hours = h;
+                    if (parts.Length >= 2 && double.TryParse(parts[1], out var h2))
+                        hours = h2;
+                }
+                _ = ctx.Main.RecoverScansFromDirectoryAsync(dir, hours).ContinueWith(t =>
+                {
+                    if (t.IsFaulted && t.Exception is { } ex)
+                        ctx.LogError($"[recover-scans] {ex.GetBaseException().Message}");
+                }, TaskScheduler.FromCurrentSynchronizationContext());
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "check-build-freshness",
             Aliases = ["build-freshness", "check-baseline"],
             Description = "Re-run the origin/main freshness check now (same one that fires once at launch)",

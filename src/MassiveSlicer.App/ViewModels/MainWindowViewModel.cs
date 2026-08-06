@@ -460,7 +460,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var toolName = RightPanel.ActiveTab switch
                 {
                     RightPanelTab.Scan     => Viewport.ActiveCell?.ScanToolName,
-                    RightPanelTab.Additive => "HV Extruder",
+                    RightPanelTab.Additive => "Extruder",
                     _                      => null,
                 };
                 if (toolName is not null)
@@ -517,7 +517,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var toolName = RightPanel.ActiveTab switch
                 {
                     RightPanelTab.Scan     => cell?.ScanToolName,
-                    RightPanelTab.Additive => "HV Extruder",
+                    RightPanelTab.Additive => "Extruder",
                     _                      => null,
                 };
                 if (toolName is not null)
@@ -658,6 +658,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (cameraPose is not null && node.PendingMesh is { } stashMesh)
                 Viewport.StashScanDiag(name, (float)robot.E1, stashMesh.Positions, node.LocalTransform);
 
+            // Persist path so Save Workspace can embed the mesh + copy the .zdf beside the .mass.
+            if (result.SavedZdfPath is { } zdf && System.IO.File.Exists(zdf))
+                node.SourceFilePath = System.IO.Path.GetFullPath(zdf);
+
             // On a rotary cell the scan nests under the turntable group and tracks E1 (so multiple
             // scans at different E1 angles stay registered to one another); else attaches to the root.
             Viewport.AddScanNode(node);
@@ -666,7 +670,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var saved = result.SavedZdfPath is { } p
                 ? $", saved {System.IO.Path.GetFileName(p)}{(result.SavedMetadataPath is not null ? " + .json" : "")}"
                 : "";
-            scan.ScanStatus = $"Added \"{name}\" â€” {result.ValidPointCount:N0} points{saved}";
+            scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
         catch (Exception ex)
@@ -1892,7 +1896,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (tools is null) return null;
         int krl = ScanToolCalSweep.ResultToolIndex;
         return tools.FirstOrDefault(t => t.KrlIndex == krl)
-            ?? tools.FirstOrDefault(t => string.Equals(t.Name, "Scanner", StringComparison.OrdinalIgnoreCase));
+            ?? tools.FirstOrDefault(t => string.Equals(t.Name, "Scanner (Calibrated)", StringComparison.OrdinalIgnoreCase))
+            ?? tools.FirstOrDefault(t => t.Name.Contains("Scanner", StringComparison.OrdinalIgnoreCase));
     }
 
     void EnsureCalibratedScannerToolSelected(string logPrefix)
@@ -1996,8 +2001,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
             }
 
+            if (result.SavedZdfPath is { } zdf2 && System.IO.File.Exists(zdf2))
+                node.SourceFilePath = System.IO.Path.GetFullPath(zdf2);
+
             Viewport.AddScanNode(node);
-            scan.ScanStatus = $"Added \"{nodeName}\" â€” {result.ValidPointCount:N0} points";
+            scan.ScanStatus = $"Added \"{nodeName}\" — {result.ValidPointCount:N0} points";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
         catch (Exception ex)
@@ -2378,6 +2386,114 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Re-imports <c>.zdf</c> captures from disk (default: scan output folder) into the viewport
+    /// as scan nodes with best-effort placement from the JSON sidecar. Then <b>Save Workspace</b>
+    /// to persist them in the .mass (fix: scans were previously excluded from save).
+    /// </summary>
+    public async Task RecoverScansFromDirectoryAsync(string? directory = null, double sinceHours = 24)
+    {
+        var scan = RightPanel.Scan;
+        string dir = string.IsNullOrWhiteSpace(directory)
+            ? scan.OutputDirectory
+            : directory!;
+        if (!System.IO.Directory.Exists(dir))
+        {
+            Console.LogError($"[recover-scans] Directory not found: {dir}");
+            return;
+        }
+
+        var cutoff = DateTime.Now.AddHours(-Math.Abs(sinceHours));
+        var zdfs = System.IO.Directory.GetFiles(dir, "scan_*.zdf")
+            .Select(p => new System.IO.FileInfo(p))
+            .Where(f => f.LastWriteTime >= cutoff)
+            .OrderBy(f => f.LastWriteTime)
+            .ToList();
+
+        if (zdfs.Count == 0)
+        {
+            // Fallback: entire folder if nothing in window
+            zdfs = System.IO.Directory.GetFiles(dir, "scan_*.zdf")
+                .Select(p => new System.IO.FileInfo(p))
+                .OrderBy(f => f.LastWriteTime)
+                .ToList();
+        }
+
+        if (zdfs.Count == 0)
+        {
+            Console.LogError($"[recover-scans] No scan_*.zdf under {dir}");
+            return;
+        }
+
+        Console.Log($"[recover-scans] Importing {zdfs.Count} ZDF(s) from {dir} (since {cutoff:g} or all)…");
+        int ok = 0, fail = 0;
+        var robot = RightPanel.Settings.Robot;
+        double a1 = robot.A1, a2 = robot.A2, a3 = robot.A3, a4 = robot.A4, a5 = robot.A5, a6 = robot.A6, e1 = robot.E1;
+
+        foreach (var fi in zdfs)
+        {
+            try
+            {
+                scan.ScanStatus = $"Recovering {fi.Name}…";
+                var result = await Task.Run(() => ZividScanService.LoadFromZdf(fi.FullName,
+                    msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
+
+                var name = $"Scan {fi.LastWriteTime:HH-mm-ss}";
+                var node = await Task.Run(() => PointCloudMesher.Build(
+                    result.PointsXYZ, result.Width, result.Height, name));
+                if (node is null)
+                {
+                    fail++;
+                    Console.Log($"[recover-scans] No meshable points in {fi.Name}");
+                    continue;
+                }
+
+                node.CullFaces = false;
+                node.SourceFilePath = fi.FullName;
+
+                // Best-effort registration: temporarily apply capture joints and sample scanner pose.
+                if (result.Metadata is { } m)
+                {
+                    robot.A1 = m.A1; robot.A2 = m.A2; robot.A3 = m.A3;
+                    robot.A4 = m.A4; robot.A5 = m.A5; robot.A6 = m.A6;
+                    robot.E1 = m.E1;
+                    await Task.Delay(30);
+                    EnsureCalibratedScannerToolSelected("[recover-scans]");
+                    if (ResolveCalibratedScannerTool() is { } st
+                        && Viewport.GetToolWorldPose?.Invoke(st) is { } pose)
+                    {
+                        node.LocalTransform = pose;
+                    }
+                    else
+                    {
+                        node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                        ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+                    }
+                }
+                else
+                {
+                    node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                    ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+                }
+
+                Viewport.AddScanNode(node);
+                ok++;
+                Console.Log($"[recover-scans] Added \"{name}\" from {fi.Name} ({result.ValidPointCount:N0} pts)");
+            }
+            catch (Exception ex)
+            {
+                fail++;
+                Console.LogError($"[recover-scans] {fi.Name}: {ex.Message}");
+            }
+        }
+
+        // Restore live joints
+        robot.A1 = a1; robot.A2 = a2; robot.A3 = a3; robot.A4 = a4; robot.A5 = a5; robot.A6 = a6; robot.E1 = e1;
+
+        scan.ScanStatus = $"Recovered {ok} scan(s), {fail} failed — Save Workspace to keep them.";
+        Console.Log($"[recover-scans] Done: {ok} recovered, {fail} failed. Save the .mass to persist.");
+    }
+
+    /// <summary>
     /// Exports the rotary scans stashed this session (world points + capture E1) plus the rotary
     /// rotation centre/sign to a <c>diag/</c> folder under the scan output directory, for offline
     /// calibration analysis. Returns a summary line.
@@ -2385,7 +2501,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string ExportScanDiagnostics()
     {
         if (Viewport.ScanDiagCount == 0)
-            return "No scans stashed this session â€” run `scan`, auto bed-cal, or registered scans first.";
+            return "No scans stashed this session — run `scan`, auto bed-cal, or registered scans first.";
 
         var robot = RightPanel.Settings.Robot;
         float sign = (float)robot.BedRotationSign;

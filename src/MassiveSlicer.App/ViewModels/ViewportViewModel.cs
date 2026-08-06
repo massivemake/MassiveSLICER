@@ -1360,7 +1360,7 @@ public sealed class ViewportViewModel : ViewModelBase
         if (!ShowLfam3ToolPicker) return;
         int? phase = MountedToolName switch
         {
-            "HV Extruder" => PrintPhaseIndex,
+            "Extruder" or "HV Extruder" => PrintPhaseIndex,
             "Spindle"     => MillPhaseIndex,
             _             => null,
         };
@@ -1414,17 +1414,17 @@ public sealed class ViewportViewModel : ViewModelBase
 
     static string PickSequenceId(string cellToolName) => cellToolName switch
     {
-        "HV Extruder" => "Extruder_Pick",
-        "Scanner"     => "Scanner_Pick",
-        "Spindle"     => "Spindle_Pick",
+        "Extruder" or "HV Extruder" => "Extruder_Pick",
+        "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => "Scanner_Pick",
+        "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => "Spindle_Pick",
         _             => "",
     };
 
     static string DepositSequenceId(string cellToolName) => cellToolName switch
     {
-        "HV Extruder" => "Extruder_Deposit",
-        "Scanner"     => "Scanner_Deposit",
-        "Spindle"     => "Spindle_Deposit",
+        "Extruder" or "HV Extruder" => "Extruder_Deposit",
+        "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => "Scanner_Deposit",
+        "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => "Spindle_Deposit",
         _             => "",
     };
 
@@ -5097,35 +5097,35 @@ public sealed class ViewportViewModel : ViewModelBase
         TogglePrePrintScanStepCommand = new RelayCommand(
             () => HasPrePrintScanStep = !HasPrePrintScanStep, () => ShowLfam3ToolPicker);
         SelectPrePrintScanPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(0, "Scanner"),
+            () => SelectLfam3WorkflowPhase(0, "Scanner (Calibrated)"),
             () => ShowLfam3ToolPicker && HasPrePrintScanStep);
         SelectPrintPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(PrintPhaseIndex, "HV Extruder"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(PrintPhaseIndex, "Extruder"), () => ShowLfam3ToolPicker);
         SelectVerifyScanPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner (Calibrated)"), () => ShowLfam3ToolPicker);
         SelectMillPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle (No Bit)"), () => ShowLfam3ToolPicker);
         ToggleLfam3WorkflowCommand = new RelayCommand(
             () => IsLfam3WorkflowExpanded = !IsLfam3WorkflowExpanded, () => ShowLfam3ToolPicker);
 
         SimulateExtruderPickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Extruder_Pick"),
-            () => CanSimulateToolPick("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Extruder", MountedToolName, ShowLfam3ToolPicker));
         SimulateExtruderDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Extruder_Deposit"),
-            () => CanSimulateToolDeposit("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Extruder", MountedToolName, ShowLfam3ToolPicker));
         SimulateScannerPickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Scanner_Pick"),
-            () => CanSimulateToolPick("Scanner", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Scanner (Calibrated)", MountedToolName, ShowLfam3ToolPicker));
         SimulateScannerDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Scanner_Deposit"),
-            () => CanSimulateToolDeposit("Scanner", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Scanner (Calibrated)", MountedToolName, ShowLfam3ToolPicker));
         SimulateSpindlePickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Spindle_Pick"),
-            () => CanSimulateToolPick("Spindle", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Spindle (No Bit)", MountedToolName, ShowLfam3ToolPicker));
         SimulateSpindleDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Spindle_Deposit"),
-            () => CanSimulateToolDeposit("Spindle", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Spindle (No Bit)", MountedToolName, ShowLfam3ToolPicker));
 
         ExtruderToolPanel = new ToolChangePanelBinding(
             this, "HV EXTRUDER", "Extruder_Pick", "Extruder_Deposit",
@@ -6386,6 +6386,8 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddScanNode(SceneNode node)
     {
+        // Ensure lime translucent look even for restored STLs / re-meshed ZDFs.
+        ApplyScanAppearance(node);
         FlattenScansToBedGroup();
         var parentObject = _rotaryGroupItem;
         EnqueueRotarySceneNode(node);
@@ -6404,6 +6406,34 @@ public sealed class ViewportViewModel : ViewModelBase
 
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Lime green (opaque) scan look. Applied for live captures, ZDF recover, and workspace restore.
+    /// </summary>
+    internal static void ApplyScanAppearance(SceneNode node)
+    {
+        // #8CFF26 ≈ (0.55, 1.00, 0.15)
+        var lime = new OpenTK.Mathematics.Vector4(0.55f, 1.00f, 0.15f, 1f);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            n.CullFaces       = false;
+            n.TranslucentPass = false;
+            n.KeepOwnMaterial = true;
+            if (n.Mesh is { } gpu)
+            {
+                gpu.Color        = lime;
+                gpu.AlphaModeInt = (int)MassiveSlicer.Viewport.Scene.AlphaMode.Opaque;
+            }
+            // Restored STLs often have non-lime PendingMesh — re-stamp before GPU upload.
+            if (n.PendingMesh is { } pm
+                && (pm.BaseColor.X < 0.5f || pm.BaseColor.Y < 0.9f || pm.BaseColor.W < 0.99f))
+            {
+                n.PendingMesh = new MassiveSlicer.Viewport.Scene.MeshData(
+                    pm.Positions, pm.Normals, pm.Indices, pm.Name,
+                    lime, 0f, 0.85f);
+            }
+        }
     }
 
     private void EnqueueRotarySceneNode(SceneNode node)

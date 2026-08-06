@@ -225,6 +225,70 @@ public static class ZividScanService
     }
 
     /// <summary>
+    /// Loads a previously saved <c>.zdf</c> frame (no camera required) and returns the
+    /// organized point cloud in the camera frame. Used for workspace recovery and re-mesh.
+    /// </summary>
+    public static ScanCaptureResult LoadFromZdf(string zdfPath, Action<string>? progress = null)
+    {
+        if (string.IsNullOrWhiteSpace(zdfPath) || !File.Exists(zdfPath))
+            throw new FileNotFoundException("ZDF not found", zdfPath);
+
+        lock (Sync)
+        {
+            _app ??= new Zivid.NET.Application();
+            progress?.Invoke($"Loading {Path.GetFileName(zdfPath)}…");
+            using var frame = new Zivid.NET.Frame(zdfPath);
+            var pointCloud = frame.PointCloud;
+            int width  = checked((int)pointCloud.Width);
+            int height = checked((int)pointCloud.Height);
+            var grid = pointCloud.CopyPointsXYZ();
+            var flat = new float[width * height * 3];
+            Buffer.BlockCopy(grid, 0, flat, 0, flat.Length * sizeof(float));
+            int valid = 0;
+            for (int i = 0; i < flat.Length; i += 3)
+                if (!float.IsNaN(flat[i])) valid++;
+
+            ScanMetadata? meta = null;
+            string? metaPath = Path.ChangeExtension(zdfPath, ".json");
+            if (File.Exists(metaPath))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(File.ReadAllText(metaPath));
+                    var root = doc.RootElement;
+                    float J(string g, string k) =>
+                        root.TryGetProperty(g, out var o) && o.TryGetProperty(k, out var p)
+                        && p.ValueKind == JsonValueKind.Number
+                            ? p.GetSingle() : 0f;
+                    meta = new ScanMetadata
+                    {
+                        A1 = J("Joints", "A1"), A2 = J("Joints", "A2"), A3 = J("Joints", "A3"),
+                        A4 = J("Joints", "A4"), A5 = J("Joints", "A5"), A6 = J("Joints", "A6"),
+                        E1 = J("Joints", "E1"),
+                        TcpX = J("Tcp", "X"), TcpY = J("Tcp", "Y"), TcpZ = J("Tcp", "Z"),
+                        TcpA = J("Tcp", "A"), TcpB = J("Tcp", "B"), TcpC = J("Tcp", "C"),
+                        CameraWorldX = J("CameraWorldMm", "X"),
+                        CameraWorldY = J("CameraWorldMm", "Y"),
+                        CameraWorldZ = J("CameraWorldMm", "Z"),
+                    };
+                }
+                catch { /* optional sidecar */ }
+            }
+
+            return new ScanCaptureResult
+            {
+                Width               = width,
+                Height              = height,
+                PointsXYZ           = flat,
+                ValidPointCount     = valid,
+                SavedZdfPath        = Path.GetFullPath(zdfPath),
+                SavedMetadataPath   = File.Exists(metaPath) ? metaPath : null,
+                Metadata            = meta,
+            };
+        }
+    }
+
+    /// <summary>
     /// Disconnects and releases the camera and SDK application instance.
     /// Call on app shutdown to ensure the camera is not left in a busy state.
     /// </summary>

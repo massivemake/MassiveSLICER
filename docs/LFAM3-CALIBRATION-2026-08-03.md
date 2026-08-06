@@ -31,8 +31,8 @@ Pendant program: `LFAM3_RSI_BulkPTP` (AUT, drives on, path idle).
 | tcpB / sensorOriginB | 2.457° |
 | tcpC / sensorOriginC | −1.211° |
 
-Tool **#5** (`ZividScanner`) remains the uncalibrated working frame used during the sweep.
-Hand-eye **result** lives on tool **#6** (`Scanner`).
+Tool **#5** (`Scanner (No Calibration)`) is the uncalibrated working frame used during the sweep.
+Hand-eye **result** lives on tool **#6** (`Scanner (Calibrated)`).
 
 ### Rotary bed
 
