@@ -353,6 +353,7 @@ public partial class ViewportView : UserControl
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -718,6 +719,10 @@ public partial class ViewportView : UserControl
 
             additive.PropertyChanged += (_, pe) =>
             {
+                // Any settings edit may move the RPM. Re-check on the next frame — the
+                // recompute itself is skipped unless the RPM inputs really changed.
+                _rpmDirty = true;
+
                 // Recompute layer-preview heatmap when any relevant setting changes.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ShowLayerPreview)
                                     or nameof(AdditiveSettingsViewModel.LayerHeight)
@@ -1628,6 +1633,8 @@ public partial class ViewportView : UserControl
             // Apply any completed reachability results on the GL thread.
             while (_pendingReachability.TryDequeue(out var reach))
                 _renderer.UpdateToolpathReachability(reach.node, reach.reachable);
+
+            RefreshToolpathRpm(vm);
 
             while (_pendingSingularityPoints.TryDequeue(out var sing))
                 _renderer.UpdateToolpathSingularityPoints(sing.node, sing.singularity);
@@ -4363,6 +4370,7 @@ public partial class ViewportView : UserControl
 
     private void StageToolpathMaps(PendingToolpathEntry entry)
     {
+        _rpmDirty = true;   // new/re-sliced geometry needs its RPM highlight recomputed
         _toolpathByNode[entry.Node]     = entry.Toolpath;
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
@@ -15043,6 +15051,7 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
@@ -15084,8 +15093,7 @@ public partial class ViewportView : UserControl
         // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
         // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
         string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
-        return path;
+        return await WriteKrlAsync(vm, toolpath, node, cell, settings, path) ? path : null;
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -15119,6 +15127,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
@@ -15139,7 +15148,7 @@ public partial class ViewportView : UserControl
         {
             fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
-            await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
+            if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath)) return;
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
@@ -15455,7 +15464,197 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private async Task WriteKrlAsync(
+    /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
+    /// or a settings edit re-runs exactly the toolpaths that changed, and nothing else.
+    private readonly Dictionary<SceneNode, (Toolpath Tp, float Base, float FirstRpm, float FirstSpeed)>
+        _rpmApplied = new();
+
+    /// <summary>Set when settings or toolpaths change; cleared once the highlight catches up.</summary>
+    private volatile bool _rpmDirty = true;
+
+    /// <summary>
+    /// Keeps every toolpath's RPM colouring in step with the current settings. Runs on the GL
+    /// thread each frame but only touches VBOs when the inputs actually changed — the analysis
+    /// itself is one multiply per move.
+    /// </summary>
+    private void RefreshToolpathRpm(ViewportViewModel vm)
+    {
+        _renderer.SetToolpathRpmOverLimitVisible(vm.ShowRpmOverLimit);
+
+        // Polling the settings every frame would re-parse the extrusion offset string 60×/s
+        // for nothing. Settings edits and toolpath uploads raise the flag instead.
+        if (!_rpmDirty) return;
+        _rpmDirty = false;
+
+        if (vm.AdditiveSettings is not { } settings) return;
+        var inputs = RpmInputs(settings);
+        float basePct  = ToolpathRpm.BasePercent(inputs);
+        float firstRpm = inputs.FirstLayerRpmPercent;
+        float firstSpd = inputs.FirstLayerSpeedMps;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            var key = (tp, basePct, firstRpm, firstSpd);
+            if (_rpmApplied.TryGetValue(node, out var prev) && prev == key)
+                continue;
+            var analysis = ToolpathRpm.Analyze(tp, inputs);
+            _renderer.UpdateToolpathRpm(node, analysis.PerMovePercent, ToolpathRpm.MaxRpmPercent);
+            _rpmApplied[node] = key;
+        }
+
+        // Drop entries for toolpaths that no longer exist so the map can't grow forever.
+        if (_rpmApplied.Count > _toolpathByNode.Count)
+            foreach (var stale in _rpmApplied.Keys.Where(k => !_toolpathByNode.ContainsKey(k)).ToList())
+                _rpmApplied.Remove(stale);
+    }
+
+    /// <summary>
+    /// The one place UI settings become RPM inputs. Export and the viewport highlight both
+    /// go through here, so the RPM drawn on screen is the RPM written to the .src — there is
+    /// no second calculation that could drift.
+    /// </summary>
+    private static KrlExportSettings RpmInputs(AdditiveSettingsViewModel s)
+        => new()
+        {
+            ProgramName          = "rpm",
+            BeadWidthMm          = (float)s.BeadWidth,
+            LayerHeightMm        = (float)s.LayerHeight,
+            PrintSpeedMps        = (float)(s.PrintSpeed / 1000.0),
+            // Per-head flow: an HF toolhead has its own rate. Only a fallback for RPM
+            // (ExtrusionRpmPercent is always set below) but rpm-report prints it, and a
+            // report naming the wrong head's flow is the sort of small lie this avoids.
+            FlowRate             = (float)(s.SelectedPreset?.FlowRateFor(s.ActiveExtruderIsHf) ?? 0.463),
+            ExtrusionRpmPercent  = s.GetEffectiveExtrusionSpeedPercent(),
+            FirstLayerSpeedMps   = s.FirstLayerAdjustmentsEnabled && s.FirstLayerSpeed > 0.0
+                                       ? (float)(s.FirstLayerSpeedEffective / 1000.0) : 0f,
+            FirstLayerRpmPercent = s.FirstLayerAdjustmentsEnabled && s.FirstLayerRpm > 0.0
+                                       ? (float)s.FirstLayerRpmEffective : 0f,
+        };
+
+    /// <summary>Copies the shared RPM inputs onto a full export settings record.</summary>
+    private static KrlExportSettings WithRpmInputs(KrlExportSettings s, AdditiveSettingsViewModel a)
+    {
+        var r = RpmInputs(a);
+        return s with
+        {
+            BeadWidthMm          = r.BeadWidthMm,
+            LayerHeightMm        = r.LayerHeightMm,
+            PrintSpeedMps        = r.PrintSpeedMps,
+            FlowRate             = r.FlowRate,
+            ExtrusionRpmPercent  = r.ExtrusionRpmPercent,
+            FirstLayerSpeedMps   = r.FirstLayerSpeedMps,
+            FirstLayerRpmPercent = r.FirstLayerRpmPercent,
+        };
+    }
+
+    /// <summary>Per-move exported RPM for a toolpath under the current settings.</summary>
+    private static ToolpathRpm.Analysis AnalyzeRpm(Toolpath toolpath, AdditiveSettingsViewModel settings)
+        => ToolpathRpm.Analyze(toolpath, RpmInputs(settings));
+
+    /// <summary>Console rpm-report: what the extruder is actually being asked to do.</summary>
+    private string BuildRpmReport(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || settings is null)
+            return "[rpm-report] select a sliced toolpath first.";
+
+        var inputs = RpmInputs(settings);
+        var a      = AnalyzeRpm(toolpath, settings);
+        var sb     = new System.Text.StringBuilder();
+
+        sb.AppendLine($"[rpm-report] nominal {ToolpathRpm.BasePercent(inputs):0.##} % " +
+                      $"(bead {inputs.BeadWidthMm:0.##} mm, layer {inputs.LayerHeightMm:0.##} mm, " +
+                      $"speed {inputs.PrintSpeedMps * 1000f:0.#} mm/s, flow {inputs.FlowRate:0.###})");
+        if (inputs.FirstLayerRpmPercent > 0f)
+            sb.AppendLine($"[rpm-report] first layer override {inputs.FirstLayerRpmPercent:0.##} %");
+        sb.AppendLine($"[rpm-report] limit {ToolpathRpm.MaxRpmPercent:0} %   peak {a.PeakPercent:0.##} %");
+
+        if (!a.HasOverLimit)
+        {
+            sb.AppendLine("[rpm-report] no moves over the limit — exportable.");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"[rpm-report] OVER LIMIT: {a.OverCount:N0} move(s) in {a.Spans.Count:N0} stretch(es) " +
+                      "— export is blocked.");
+        sb.AppendLine($"[rpm-report] worst stretches first (earliest is layer {a.Spans[0].LayerIndex}, " +
+                      $"Z {a.Spans[0].LayerZ:0.#} mm):");
+        int shown = 0;
+        foreach (var s in ToolpathRpm.WorstFirst(a))
+        {
+            if (shown++ == 10) { sb.AppendLine($"[rpm-report] … and {a.Spans.Count - 10:N0} more."); break; }
+            sb.AppendLine($"[rpm-report]   layer {s.LayerIndex,5}  Z {s.LayerZ,8:0.#} mm  " +
+                          $"moves {s.FirstMoveIndex}-{s.LastMoveIndex} ({s.MoveCount:N0})  peak {s.PeakPercent:0.##} %");
+        }
+        sb.AppendLine(" ");   // trailing spacer: the console clips its last line
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Hard pre-export gate: a program asking for more than the extruder can turn is not
+    /// exportable. Deliberately offers no "export anyway" — over-limit moves would come out
+    /// as silent under-extrusion on the part. Returns true when export may proceed.
+    /// </summary>
+    private async Task<bool> BlockExportOnRpmLimitAsync(
+        ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel settings)
+    {
+        var rpm = AnalyzeRpm(toolpath, settings);
+        if (!rpm.HasOverLimit) return true;
+
+        string summary = ToolpathRpm.Describe(rpm);
+        LogToConsole($"[rpm] EXPORT BLOCKED — {summary}");
+        SetSliceStatus(vm, $"⚠ Export blocked: {summary}", isError: true);
+
+        // Make the problem findable even if the operator dismisses the dialog.
+        if (!vm.ShowRpmOverLimit) vm.ShowRpmOverLimit = true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return false;
+
+        var first = rpm.Spans[0];
+        var dlg = new Window
+        {
+            Title = "Extruder RPM Over Limit",
+            Width = 480, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"⚠ {summary}\n\n" +
+                   $"The extruder motor tops out at {ToolpathRpm.MaxRpmPercent:0} %. Those moves would " +
+                   "run at the cap and under-extrude, so this program cannot be exported.\n\n" +
+                   "Lower the print speed, layer height or bead width — or pick a material with a " +
+                   "lower flow rate — until the peak drops to the limit.\n\n" +
+                   "Over-limit moves are now highlighted magenta in the viewport.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Thickness(20, 18, 20, 12),
+        };
+        var gotoBtn  = new Button { Content = "Go to first over-RPM move", Padding = new Thickness(14, 6, 14, 6) };
+        var closeBtn = new Button { Content = "Close",                     Padding = new Thickness(14, 6, 14, 6) };
+        gotoBtn.Click  += (_, _) => { dlg.Close(); vm.ToolpathScrubIndex = first.FirstMoveIndex; };
+        closeBtn.Click += (_, _) => dlg.Close();
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Thickness(20, 0, 20, 16),
+                    Children = { closeBtn, gotoBtn },
+                },
+            },
+        };
+        await dlg.ShowDialog(owner);
+        return false;
+    }
+
+    private async Task<bool> WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
         SceneNode node,
@@ -15543,7 +15742,7 @@ public partial class ViewportView : UserControl
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
             await File.WriteAllTextAsync(path, millKrl);
-            return;
+            return true;
         }
 
         var selectedPreset = settings.SelectedPreset;
@@ -15603,22 +15802,30 @@ public partial class ViewportView : UserControl
             // only if it is still URM-shaped (else falls back to the Caracol URM default).
             HeaderTemplate = postProcess.HeaderText,
             FooterTemplate = postProcess.FooterText,
-            ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
-            // First-layer overrides: only pass a value when the operator set an override
-            // (or it differs from the normal), so a plain print is unchanged. The exporter
-            // treats 0 as "use the normal speed/RPM".
-            FirstLayerSpeedMps      = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerSpeed > 0.0
-                                          ? (float)(settings.FirstLayerSpeedEffective / 1000.0) : 0f,
-            FirstLayerRpmPercent    = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerRpm > 0.0
-                                          ? (float)settings.FirstLayerRpmEffective : 0f,
+            // Bead / layer / speed / flow / RPM and the first-layer overrides are all filled
+            // in by WithRpmInputs below — one definition shared with the viewport highlight.
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
+        exportSettings = WithRpmInputs(exportSettings, settings);
 
-        var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        string krl;
+        try
+        {
+            krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        }
+        catch (RpmLimitExceededException ex)
+        {
+            // Backstop for any path that skipped BlockExportOnRpmLimitAsync. Nothing is
+            // written — a half-honest program is worse than no program.
+            LogToConsole($"[export] REFUSED: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ Export refused: {ToolpathRpm.Describe(ex.Analysis)}", isError: true);
+            return false;
+        }
         await File.WriteAllTextAsync(path, krl);
+        return true;
     }
 }

@@ -767,6 +767,7 @@ public sealed class SceneRenderer : IDisposable
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
+        renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -785,6 +786,29 @@ public sealed class SceneRenderer : IDisposable
         if (found)
             entry.Renderer.UpdateReachability(reachable);
     }
+
+    /// <summary>
+    /// Supplies a registered toolpath with the RPM (%) each move exports with, and the limit
+    /// above which it is highlighted. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathRpm(SceneNode node, float[]? rpmPercent, float limit)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateRpm(rpmPercent, limit);
+    }
+
+    /// <summary>
+    /// Turns the over-limit RPM highlight on or off for every registered toolpath.
+    /// Must be called on the GL thread.
+    /// </summary>
+    public void SetToolpathRpmOverLimitVisible(bool visible)
+    {
+        if (_toolpathRpmOverLimitVisible == visible) return;
+        _toolpathRpmOverLimitVisible = visible;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetRpmOverLimitVisible(visible);
+    }
+    private bool _toolpathRpmOverLimitVisible;
 
     /// <summary>
     /// Builds or rebuilds the singularity-point VBO for a registered toolpath.
@@ -826,6 +850,7 @@ public sealed class SceneRenderer : IDisposable
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
+        renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
