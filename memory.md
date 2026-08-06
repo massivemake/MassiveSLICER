@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-06** (Auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+Last updated: **2026-08-06** (Seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
 
 ---
 
@@ -483,6 +483,39 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-06 — Seam edit tool showed no line on a sliced part
+
+**Symptom:** click **Edit** next to Seam position guides and no line appears — the tool
+looked dead. Reported the same day auto-slice on import was restored.
+
+**Cause:** not a regression in the seam code — `git diff 1febe52..HEAD` over
+`ViewportView.axaml.cs` and `RightPanelView.axaml` showed **zero** seam-related changes since
+the version that was confirmed working. The scene state changed, not the code.
+`TrySeamGuideOnModel` only accepts a ray/face hit on a non-toolpath node, and
+`Picker.PickFaceDetailed` skips any node that is invisible or has no uploaded
+`Mesh.PickingData`. Toolpath nodes carry no mesh at all. So once a part is sliced and the
+model is hidden, **nothing in the scene is pickable** → no preview column is built → the
+render pass at `SceneRenderer.cs:1620` is gated on
+`_seamGuidePoints.Count > 0 || _seamGuidePreview.HasValue`, so it draws nothing. With no
+guides placed yet, the viewport is simply empty. Restoring auto-slice on import made this
+the normal landing state, which is why it surfaced now.
+
+**Fix:** `TrySeamGuideOnToolpath` in `ViewportView.axaml.cs` — when the face pick finds
+nothing, snap to the nearest visible **extrusion** point (`ToolpathMoveKinds.IsCutSegment`,
+travels excluded). Moves are subsampled to ~20k points because this runs on every mouse
+move and a metre-scale part holds hundreds of thousands. The accept radius is
+`max(25mm, 15% of part height)` so it behaves the same on a 200mm bracket and a 3m panel;
+off-part hover still falls through to the held on-wall position rather than snapping across
+the scene. Both the hover preview and the committing click go through this helper.
+
+**Key files:** `src/MassiveSlicer.App/Views/ViewportView.axaml.cs` (`TrySeamGuideOnModel`,
+`TrySeamGuideOnToolpath`), `src/MassiveSlicer.Viewport/Scene/Picker.cs:220-224` (the
+visible + `PickingData` gate).
+
+**Worth remembering:** when a UI feature "stops working," diff it against the commit where
+it was confirmed working *before* reading the subsystem. Zero diff redirects the search from
+the feature to its inputs, and it costs one command.
 
 ### 2026-08-06 — Auto-slice on import restored (and why it went missing)
 
