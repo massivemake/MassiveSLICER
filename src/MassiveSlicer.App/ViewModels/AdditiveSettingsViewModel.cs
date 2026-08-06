@@ -1873,8 +1873,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Extrusion motor speed (%) written to KRL after applying <see cref="ExtrusionSpeedOffset"/>.</summary>
     public float GetEffectiveExtrusionSpeedPercent()
     {
+        // Calibration override wins outright — geometry is deliberately meaningless there.
+        if (ExtrusionRpmOverridePercent > 0.0)
+            return (float)ExtrusionRpmOverridePercent;
         float pct = (float)ComputeExtrusionSpeedPercent() + (float)ParseSignedOffset(_extrusionSpeedOffset);
         return Math.Max(0f, pct);
+    }
+
+    private double _extrusionRpmOverridePercent;
+
+    /// <summary>Calibration-only forced screw speed (%); 0 = off. See AppPreferences.</summary>
+    public double ExtrusionRpmOverridePercent
+    {
+        get => _extrusionRpmOverridePercent;
+        set => SetField(ref _extrusionRpmOverridePercent, value);
     }
 
     // -- First layer speed / RPM (override the first layer only) ---------------

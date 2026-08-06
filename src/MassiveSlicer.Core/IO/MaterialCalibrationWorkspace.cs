@@ -122,7 +122,11 @@ public static class MaterialCalibrationWorkspace
         prefs.PrintSpeed  = 50;
         prefs.TravelSpeed = 80;
         prefs.ApproachZ   = request.ApproachZMm;
-        prefs.ExtrusionSpeedOffset = motor.ToString("0.###", CultureInfo.InvariantCulture);
+        // Force the screw speed through a dedicated calibration override, NOT
+        // ExtrusionSpeedOffset — that field is used on real jobs, and leaving a calibration
+        // value in it silently inflated the flow of everything sliced afterwards.
+        prefs.ExtrusionRpmOverridePercent = motor;
+        prefs.ExtrusionSpeedOffset = "";
         prefs.ExtrusionStartWaitSec = time;
         prefs.ExtrusionResumeWaitSec = 0;
         prefs.WipeModeDisplay = "Off";

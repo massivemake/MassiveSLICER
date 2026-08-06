@@ -1339,6 +1339,46 @@
                                     IsVisible="{Binding Additive.ShowTiltAngle}"
                                     Command="{Binding Additive.ReverseTiltDirectionCommand}"
                                     ToolTip.Tip="Flip the angled-slice direction (negates the X and Y tilt). The perimeter arrow shows the current slice direction."/>
+
+                            <!-- Adaptive layer height (moved out of EFFECTS) -->
+                            <Expander Classes="SectionExpander" Header="ADVANCED" IsExpanded="False"
+                                      Margin="0,4,0,2"
+                                      ToolTip.Tip="Adaptive layer height — vary layer thickness with surface slope.">
+                                <StackPanel Margin="0,2,0,6">
+                                    <!-- Adaptive layer height -->
+                                    <CheckBox Margin="8,2,8,4"
+                                              Content="Adaptive layer height"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
+                                              IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
+                                              ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
+
+                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
+                                    </Grid>
+
+                                    <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center" Margin="8,0,4,0"/>
+                                        <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                                   Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
+                                        <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
                         </StackPanel>
                     </Expander>                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
@@ -1423,6 +1463,88 @@
                                 <TextBlock Grid.Column="0" Text="Travel speed (mm/s)" VerticalAlignment="Center" Classes="LabelMuted"/>
                                 <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.TravelSpeed}"/>
                             </Grid>
+                        <Expander Classes="SectionExpander" Header="ADVANCED SETTINGS" IsExpanded="False" Margin="0,0,0,4">
+                        <Border Margin="8,4,8,6" CornerRadius="8"
+                                Background="{DynamicResource Bg3}"
+                                BorderBrush="{DynamicResource Border1}"
+                                BorderThickness="1"
+                                Padding="10,8">
+                            <StackPanel Spacing="6">
+                                <CheckBox Content="Adaptive Speed and Flow"
+                                          IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
+                                          Margin="0,0,0,2"/>
+                                <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
+
+                                <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
+                                    <Grid Margin="0,2,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Scale by" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                        <ComboBox Grid.Column="1" MinWidth="120"
+                                                  ItemsSource="{Binding Additive.LayerSpeedBasisOptions}"
+                                                  SelectedItem="{Binding Additive.LayerSpeedBasisDisplay, Mode=TwoWay}"/>
+                                    </Grid>
+
+                                    <Border Height="10" CornerRadius="5" ClipToBounds="True">
+                                        <Border.Background>
+                                            <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
+                                                <!-- Matches the viewport Speed/RPM/Thermal gradient (ToolpathRenderer.GradientColor): blue = low/slow/cold → red = high/fast/hot. -->
+                                                <GradientStop Color="#3373FF" Offset="0"/>
+                                                <GradientStop Color="#40D94D" Offset="0.5"/>
+                                                <GradientStop Color="#FF4026" Offset="1"/>
+                                            </LinearGradientBrush>
+                                        </Border.Background>
+                                    </Border>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Short layers (low)" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBlock Grid.Column="2" Text="Long layers (high)" Classes="LabelMuted" FontSize="10" HorizontalAlignment="Right"/>
+                                    </Grid>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="72"/>
+                                            <ColumnDefinition Width="20"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="72"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Low speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center"/>
+                                        <NumericUpDown Grid.Column="1"
+                                                       Value="{Binding Additive.LayerSpeedMinMmS, Mode=TwoWay}"
+                                                       Minimum="0.1" Maximum="2000" Increment="1"
+                                                       FormatString="F0" FontSize="11"/>
+                                        <TextBlock Grid.Column="2" Text="→" Classes="LabelMuted"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                        <TextBlock Grid.Column="3" Text="High speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                        <NumericUpDown Grid.Column="4"
+                                                       Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
+                                                       Minimum="0.1" Maximum="2000" Increment="1"
+                                                       FormatString="F0" FontSize="11"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                                <Button Content="Simulate Thermomechanical"
+                                        HorizontalAlignment="Stretch"
+                                        HorizontalContentAlignment="Center"
+                                        Command="{Binding Additive.SimulateThermalCommand}"
+                                        ToolTip.Tip="Analytical interlayer-cooling simulation: predicts the temperature each layer lands on, derives the safe layer-time window between sag and bonding limits, and sets the Adaptive Speed low/high values. View the result with the Thermal view pill."/>
+                                <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           IsVisible="{Binding Additive.HasThermalSummary}"
+                                           Text="{Binding Additive.ThermalSummary}"/>
+                            </StackPanel>
+                        </Border>
+                        </Expander>
                         </StackPanel>
                     </Expander>
                     <Expander Classes="SectionExpander" Header="MOVEMENT" IsExpanded="False">
@@ -1928,38 +2050,6 @@
                             <Expander Classes="SectionExpander" Header="EFFECTS" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
 
-                            <!-- Adaptive layer height -->
-                            <CheckBox Margin="8,2,8,4"
-                                      Content="Adaptive layer height"
-                                      FontSize="11"
-                                      IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
-                                      IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
-                                      ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
-
-                            <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
-                            </Grid>
-
-                            <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
-                                           VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
-                                           Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
-                                           VerticalAlignment="Center"
-                                           ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
-                                <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
-                                           VerticalAlignment="Center" Margin="4,0,8,0"/>
-                            </Grid>
 
                             <!-- X-Bracing Wall (collapsible group under EFFECTS) -->
                             <Expander Classes="SectionExpander" Header="X-BRACING" IsExpanded="False"
@@ -2473,88 +2563,6 @@
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                     </StackPanel>
 
-                    <Expander Classes="SectionExpander" Header="ADVANCED SETTINGS" IsExpanded="False" Margin="0,0,0,4">
-                    <Border Margin="8,4,8,6" CornerRadius="8"
-                            Background="{DynamicResource Bg3}"
-                            BorderBrush="{DynamicResource Border1}"
-                            BorderThickness="1"
-                            Padding="10,8">
-                        <StackPanel Spacing="6">
-                            <CheckBox Content="Adaptive Speed and Flow"
-                                      IsChecked="{Binding Additive.LayerSpeedAdaptEnabled, Mode=TwoWay}"
-                                      Margin="0,0,0,2"/>
-                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                       Text="Interpolate robot speed and extrusion RPM per layer. Enabling fills low and high speeds from the current print speed — adjust either end as needed."/>
-
-                            <StackPanel IsVisible="{Binding Additive.LayerSpeedAdaptEnabled}" Spacing="8">
-                                <Grid Margin="0,2,0,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Scale by" Classes="LabelMuted" VerticalAlignment="Center"/>
-                                    <ComboBox Grid.Column="1" MinWidth="120"
-                                              ItemsSource="{Binding Additive.LayerSpeedBasisOptions}"
-                                              SelectedItem="{Binding Additive.LayerSpeedBasisDisplay, Mode=TwoWay}"/>
-                                </Grid>
-
-                                <Border Height="10" CornerRadius="5" ClipToBounds="True">
-                                    <Border.Background>
-                                        <LinearGradientBrush StartPoint="0%,50%" EndPoint="100%,50%">
-                                            <!-- Matches the viewport Speed/RPM/Thermal gradient (ToolpathRenderer.GradientColor): blue = low/slow/cold → red = high/fast/hot. -->
-                                            <GradientStop Color="#3373FF" Offset="0"/>
-                                            <GradientStop Color="#40D94D" Offset="0.5"/>
-                                            <GradientStop Color="#FF4026" Offset="1"/>
-                                        </LinearGradientBrush>
-                                    </Border.Background>
-                                </Border>
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                        <ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Short layers (low)" Classes="LabelMuted" FontSize="10"/>
-                                    <TextBlock Grid.Column="2" Text="Long layers (high)" Classes="LabelMuted" FontSize="10" HorizontalAlignment="Right"/>
-                                </Grid>
-
-                                <Grid>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="72"/>
-                                        <ColumnDefinition Width="20"/>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="72"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="Low speed (mm/s)" Classes="LabelMuted" FontSize="10"
-                                               VerticalAlignment="Center"/>
-                                    <NumericUpDown Grid.Column="1"
-                                                   Value="{Binding Additive.LayerSpeedMinMmS, Mode=TwoWay}"
-                                                   Minimum="0.1" Maximum="2000" Increment="1"
-                                                   FormatString="F0" FontSize="11"/>
-                                    <TextBlock Grid.Column="2" Text="→" Classes="LabelMuted"
-                                               VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                                    <TextBlock Grid.Column="3" Text="High speed (mm/s)" Classes="LabelMuted" FontSize="10"
-                                               VerticalAlignment="Center" HorizontalAlignment="Right"/>
-                                    <NumericUpDown Grid.Column="4"
-                                                   Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
-                                                   Minimum="0.1" Maximum="2000" Increment="1"
-                                                   FormatString="F0" FontSize="11"/>
-                                </Grid>
-                            </StackPanel>
-
-                            <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
-                            <Button Content="Simulate Thermomechanical"
-                                    HorizontalAlignment="Stretch"
-                                    HorizontalContentAlignment="Center"
-                                    Command="{Binding Additive.SimulateThermalCommand}"
-                                    ToolTip.Tip="Analytical interlayer-cooling simulation: predicts the temperature each layer lands on, derives the safe layer-time window between sag and bonding limits, and sets the Adaptive Speed low/high values. View the result with the Thermal view pill."/>
-                            <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
-                                       IsVisible="{Binding Additive.HasThermalSummary}"
-                                       Text="{Binding Additive.ThermalSummary}"/>
-                        </StackPanel>
-                    </Border>
-                    </Expander>
 
                     <Expander Classes="SectionExpander" Header="GLOBAL"
                               IsExpanded="{Binding GlobalSectionExpanded, Mode=TwoWay}" Margin="0,0,0,4">

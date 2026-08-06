@@ -37,7 +37,12 @@ public class MaterialCalibrationWorkspaceTest
             Assert.NotNull(doc);
             Assert.Single(doc!.Models);
             Assert.Single(doc.Models[0].Toolpaths);
-            Assert.Equal(50.ToString(System.Globalization.CultureInfo.InvariantCulture), doc.Settings.ExtrusionSpeedOffset);
+            // The motor % must ride a dedicated calibration override, never the operator's
+            // ExtrusionSpeedOffset — leaving a calibration value in that field silently
+            // inflated the flow of every job sliced afterwards.
+            Assert.Equal(50, doc.Settings.ExtrusionRpmOverridePercent);
+            Assert.True(string.IsNullOrEmpty(doc.Settings.ExtrusionSpeedOffset),
+                $"calibration must not write ExtrusionSpeedOffset, found \"{doc.Settings.ExtrusionSpeedOffset}\"");
             Assert.Equal(60, doc.Settings.ExtrusionStartWaitSec);
             Assert.Equal("ASA - Black", doc.Settings.SelectedMaterialPresetName);
             Assert.Contains("Material Calibration", doc.Models[0].Toolpaths[0].Name);
