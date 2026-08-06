@@ -5679,6 +5679,10 @@ public sealed class ViewportViewModel : ViewModelBase
     /// stitching, with heights. Set by the viewport.</summary>
     internal Func<string>? OnSeamReportRequested { get; set; }
 
+    /// <summary>Exports the active toolpath as KRL straight to a path, bypassing the file
+    /// picker. Used by the export-krl console command so the export path is testable.</summary>
+    internal Func<string, Task<string>>? OnExportKrlToPathRequested { get; set; }
+
     internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>

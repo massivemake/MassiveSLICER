@@ -360,6 +360,7 @@ public partial class ViewportView : UserControl
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
             vm.OnValidationReportRequested = BuildValidationReport;
             vm.OnSeamReportRequested = BuildSeamReport;
+            vm.OnExportKrlToPathRequested = p => ExportKrlToPathAsync(vm, p);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -15289,6 +15290,109 @@ public partial class ViewportView : UserControl
         }
     }
 
+    /// <summary>
+    /// Exports the active toolpath as KRL to an explicit path, using the same WriteKrlAsync
+    /// funnel the UI uses, so the provenance header and settings snapshot are identical.
+    /// </summary>
+    private async Task<string> ExportKrlToPathAsync(ViewportViewModel vm, string path)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var node     = _activeScrubNode;
+        var cell     = vm.ActiveCell;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || node is null || cell is null || settings is null)
+            return "[export-krl] need a selected toolpath, an active cell and settings.";
+        try
+        {
+            await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
+            var fi = new System.IO.FileInfo(path);
+            return $"[export-krl] wrote {fi.Name} ({fi.Length / 1024.0 / 1024.0:0.##} MB) to {fi.DirectoryName}";
+        }
+        catch (Exception ex) { return $"[export-krl] FAILED: {ex.Message}"; }
+    }
+
+    /// <summary>
+    /// Builds a KRL comment block describing exactly how this program was produced: build,
+    /// workspace, cell, tool, slicing and seam settings, rail state, toolhead angles, and the
+    /// robot-analysis verdict at the moment of export -- including a loud marker when the
+    /// program was never analysed. Comment lines are ignored by the controller.
+    ///
+    /// The point: a .src handed over days later should explain itself. Two files with identical
+    /// geometry but different rail and tool settings are otherwise indistinguishable without
+    /// parsing tens of megabytes of moves.
+    /// </summary>
+    private string BuildProvenanceBlock(
+        ViewportViewModel vm, Toolpath toolpath, SceneNode node,
+        CellConfig cell, AdditiveSettingsViewModel settings)
+    {
+        int moves = 0;
+        foreach (var l in toolpath.Layers) moves += l.Moves.Count;
+
+        string analysis, repair;
+        if (_validationIssuesByNode.TryGetValue(node, out var vi))
+        {
+            _collisionByNode.TryGetValue(node, out var coll);
+            int cc = 0; if (coll is not null) foreach (var c in coll) if (c) cc++;
+            analysis = $"{vi.Singular:N0} singularity-risk, {vi.Unreachable:N0} unreachable, {cc:N0} collision";
+            if (_repairSpansByNode.TryGetValue(node, out var rs) && rs.Length > 0)
+            {
+                int fixedN = 0, gaveUp = 0;
+                foreach (var sp in rs) { if (sp.Fixed) fixedN++; else gaveUp++; }
+                repair = gaveUp > 0
+                    ? $"{fixedN:N0} area(s) fixed, {gaveUp:N0} COULD NOT BE FIXED"
+                    : $"all {fixedN:N0} area(s) fixed by nozzle spin";
+            }
+            else repair = "not needed";
+        }
+        else
+        {
+            analysis = "*** NOT ANALYSED - exported without a completed robot check ***";
+            repair   = "*** unknown - no analysis on record ***";
+        }
+
+        float bead = settings.BeadWidth > 0 ? (float)settings.BeadWidth : 6f;
+        int jumps = 0;
+        foreach (var layer in toolpath.Layers)
+        {
+            if (layer.Moves.Count == 0) continue;
+            var f = layer.Moves[0];
+            if (f.Kind != MoveKind.Travel) continue;
+            float dx = f.To.X - f.From.X, dy = f.To.Y - f.From.Y;
+            if (MathF.Sqrt(dx * dx + dy * dy) > bead) jumps++;
+        }
+
+        string ws = (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext as MainWindowViewModel)
+                    ?.AppPreferences.LastWorkspacePath ?? "(unsaved)";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine(";===== MassiveSlicer provenance =========================================");
+        sb.AppendLine($"; generated       {System.DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"; app build       baseline {BuildInfo.Baseline}, branch {BuildInfo.Branch}, delta {BuildInfo.Delta}");
+        sb.AppendLine($"; workspace       {ws}");
+        sb.AppendLine($"; toolpath        {node.Name}  -  {toolpath.Layers.Count:N0} layers, {moves:N0} moves");
+        sb.AppendLine($"; cell            {cell.Name}   tool index {settings.ToolDataIndex}");
+        sb.AppendLine($"; slicing         {settings.SlicingMode}   seam {settings.SeamMode}");
+        sb.AppendLine($"; bead / layer    {settings.BeadWidth:0.##} mm / {settings.LayerHeight:0.##} mm   print speed {settings.PrintSpeed:0.##} mm/s");
+        sb.AppendLine($"; rail motion     {(settings.E1MotionEnabled ? "ON" : "OFF")}   limits +{settings.E1YPlusMm:0.#} / -{settings.E1YMinusMm:0.#} mm");
+        sb.AppendLine($"; toolhead        A {settings.ToolheadA:0.##}  B {settings.ToolheadB:0.##}  C {settings.ToolheadC:0.##}");
+        sb.AppendLine($"; ROBOT ANALYSIS  {analysis}");
+        sb.AppendLine($"; auto-repair     {repair}");
+        sb.AppendLine($"; seam jumps      {jumps:N0}   (extrusion stops and the head travels)");
+        sb.AppendLine(";=======================================================================");
+        return sb.ToString();
+    }
+
+    /// <summary>Inserts the provenance block after the DEF declaration so the program header
+    /// stays valid KRL.</summary>
+    private static string WithProvenance(string krl, string block)
+    {
+        int defAt = krl.IndexOf("DEF ", StringComparison.Ordinal);
+        if (defAt < 0) return block + krl;
+        int eol = krl.IndexOf((char)10, defAt);
+        if (eol < 0) return krl + (char)10 + block;
+        return krl.Substring(0, eol + 1) + block + krl.Substring(eol + 1);
+    }
+
     private async Task WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
@@ -15376,6 +15480,7 @@ public partial class ViewportView : UserControl
                 FooterTemplate   = string.IsNullOrWhiteSpace(sub.FooterTemplate) ? null : sub.FooterTemplate,
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
+            millKrl = WithProvenance(millKrl, BuildProvenanceBlock(vm, toolpath, node, cell, settings));
             await File.WriteAllTextAsync(path, millKrl);
             return;
         }
@@ -15454,6 +15559,8 @@ public partial class ViewportView : UserControl
         };
 
         var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        krl = WithProvenance(krl, BuildProvenanceBlock(vm, toolpath, node, cell, settings));
+        LogToConsole($"[export] wrote {System.IO.Path.GetFileName(path)} with provenance header.");
         await File.WriteAllTextAsync(path, krl);
     }
 }

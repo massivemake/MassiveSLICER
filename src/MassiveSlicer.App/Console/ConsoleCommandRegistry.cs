@@ -1578,6 +1578,26 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "export-krl",
+            Description = "Exports the selected toolpath as a KRL .src to an explicit path, using the "
+                        + "same code path as the toolbar export (provenance header included). Lets the "
+                        + "export be exercised without the file picker",
+            Usage = "export-krl <path>",
+            Execute = (ctx, args) =>
+            {
+                var path = args.Trim().Trim((char)34);
+                if (path.Length == 0) { ctx.LogError("usage: export-krl <path>"); return; }
+                var fn = ctx.Main.Viewport.OnExportKrlToPathRequested;
+                if (fn is null) { ctx.LogError("[export-krl] viewport is not ready yet."); return; }
+                ctx.Log($"[export-krl] exporting to {path} ...");
+                _ = fn(path).ContinueWith(t => ctx.Log(t.IsFaulted
+                    ? $"[export-krl] FAILED: {t.Exception?.GetBaseException().Message}"
+                    : t.Result));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "logs",
             Aliases = ["log", "logfile"],
             Description = "Shows where the on-disk log lives. Everything in this console is also "
