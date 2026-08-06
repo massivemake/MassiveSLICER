@@ -13,6 +13,10 @@ public partial class ConsoleView : UserControl
         InitializeComponent();
         ConsoleInput.AddHandler(InputElement.KeyDownEvent, OnInputKeyDown, RoutingStrategies.Tunnel);
         DataContextChanged += OnDataContextChanged;
+        // Scroll on the layout pass that follows a history change. Deferred
+        // ScrollToEnd calls run against a stale extent when several lines arrive
+        // at once, which left the final line just below the viewport.
+        HistoryScroll.LayoutUpdated += OnHistoryLayoutUpdated;
     }
 
     /// <summary>Copies that history line's full text (without the ▶ command prefix).</summary>
@@ -67,10 +71,22 @@ public partial class ConsoleView : UserControl
             vm.History.CollectionChanged += OnHistoryChanged;
     }
 
+    /// <summary>Set when new history arrived; cleared by the next layout pass that scrolls.</summary>
+    private bool _scrollPending;
+
     private void OnHistoryChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
     {
-        // Defer until layout completes — immediate ScrollToEnd leaves the newest line under the input.
+        // Mark, then let the layout pass do the scrolling. The deferred posts below are
+        // kept as a belt-and-braces path for the single-line case.
+        _scrollPending = true;
         Avalonia.Threading.Dispatcher.UIThread.Post(ScrollHistoryToEnd, Avalonia.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void OnHistoryLayoutUpdated(object? sender, System.EventArgs e)
+    {
+        if (!_scrollPending || HistoryScroll is null) return;
+        _scrollPending = false;
+        HistoryScroll.ScrollToEnd();
     }
 
     void ScrollHistoryToEnd()
