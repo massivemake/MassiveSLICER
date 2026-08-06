@@ -5394,6 +5394,27 @@ public partial class ViewportView : UserControl
         _realtimeSliceTimer.Start();
     }
 
+    /// <summary>
+    /// Above this triangle count a fresh import is NOT auto-sliced — slicing a very dense
+    /// mesh the instant it appears could freeze or crash the app (the reason the blanket
+    /// guard was added on 2026-08-01). Typical production parts here run 145k–160k tris,
+    /// so this clears normal work by a wide margin and only catches heavy STEP imports.
+    /// </summary>
+    private const int AutoSliceMaxTriangles = 1_000_000;
+
+    /// <summary>Triangles across a node's subtree, for the auto-slice size guard.</summary>
+    private static int SubtreeTriangleCount(SceneNode root)
+    {
+        int n = 0;
+        foreach (var node in root.SelfAndDescendants())
+        {
+            var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+            if (mesh is null) continue;
+            n += mesh.Indices is { } idx ? idx.Length / 3 : mesh.Positions.Length / 3;
+        }
+        return n;
+    }
+
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
         if (HasProtectedBakedToolpath(vm))
@@ -5404,10 +5425,22 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
-        // Only re-slice when a toolpath already exists. Auto-slicing a fresh import
-        // (esp. dense STEP meshes) can freeze or crash right after the geometry appears.
         if (toolpathChild is null)
+        {
+            // No toolpath yet — this is a fresh import, so produce the FIRST slice rather
+            // than re-slicing. The 2026-08-01 guard returned here unconditionally, which
+            // fixed dense STEP imports freezing but also removed auto-slice on import
+            // entirely. Keep that protection as a size check instead of a blanket refusal.
+            int tris = SubtreeTriangleCount(item.Node);
+            if (tris > AutoSliceMaxTriangles)
+            {
+                SetSliceStatus(vm,
+                    $"Auto-slice skipped — {tris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). Press Slice to run it.");
+                return;
+            }
+            await RunSliceAsync(vm);
             return;
+        }
 
         await RunUpdateSliceAsync(vm, (item, toolpathChild));
     }
