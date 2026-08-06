@@ -42,6 +42,15 @@ public sealed class ExtruderBridgeClient
         }
     }
 
+    /// <summary>Send a raw one-line JSON command and return the response body.</summary>
+    public Task<string> SendCommandAsync(
+        string host,
+        string requestJson,
+        int port = DefaultPort,
+        int maxBytes = 8192,
+        CancellationToken ct = default)
+        => ExchangeAsync(host, port, requestJson, maxBytes, ct);
+
     static async Task<string> ExchangeAsync(
         string host,
         int port,

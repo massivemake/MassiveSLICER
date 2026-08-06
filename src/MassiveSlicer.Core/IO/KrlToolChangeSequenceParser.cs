@@ -12,12 +12,12 @@ public static class KrlToolChangeSequenceParser
 {
     static readonly ToolChangeSequenceDef[] Catalog =
     [
-        new("Extruder_Pick",    "Extruder · Pick",    "extruder", "HV Extruder"),
-        new("Extruder_Deposit", "Extruder · Deposit", "extruder", "HV Extruder"),
-        new("Spindle_Pick",     "Spindle · Pick",     "spindle",  "Spindle"),
-        new("Spindle_Deposit",  "Spindle · Deposit",  "spindle",  "Spindle"),
-        new("Scanner_Pick",     "Scanner · Pick",     "scanner",  "Scanner"),
-        new("Scanner_Deposit",  "Scanner · Deposit",  "scanner",  "Scanner"),
+        new("Extruder_Pick",    "Extruder · Pick",    "extruder", "Extruder"),
+        new("Extruder_Deposit", "Extruder · Deposit", "extruder", "Extruder"),
+        new("Spindle_Pick",     "Spindle · Pick",     "spindle",  "Spindle (No Bit)"),
+        new("Spindle_Deposit",  "Spindle · Deposit",  "spindle",  "Spindle (No Bit)"),
+        new("Scanner_Pick",     "Scanner · Pick",     "scanner",  "Scanner (Calibrated)"),
+        new("Scanner_Deposit",  "Scanner · Deposit",  "scanner",  "Scanner (Calibrated)"),
     ];
 
     /// <summary>Per-cell override (from cell JSON <c>krcRoot</c>). Checked before built-in candidates.</summary>

@@ -3,45 +3,60 @@ using MassiveSlicer.Core.Models;
 namespace MassiveSlicer.Core.IO;
 
 /// <summary>
-/// LFAM 3 live I/O map sourced from MassiveCONNECT
-/// (<c>reference/MassiveCONNECT-V2/MassiveCONNECT/monitor.py</c> and
-/// <c>lfam_src/modbus_monitor_gui_original.py</c>).
+/// LFAM 3 live I/O map. Robot DI/DO display names match MassiveDRIVE
+/// <c>configs/cells/lfam3.yaml</c> <c>robot.io_names</c>. Extruder/milling
+/// sections still follow RevPi bridge / PiCtory channel names.
 /// </summary>
 public static class Lfam3LiveIoCatalog
 {
     public static LiveIoConfig Default { get; } = new(
     [
         RobotSection(),
-        ScanSection(),
         ExtruderSection(),
-        MillingSection(),
+        MillingSection(), // Spindle column (right of KUKA + Extruder)
+        ScanSection(),
     ]);
 
     static LiveIoSectionConfig RobotSection() => new("Robot (KUKA)",
     [
-        // Digital inputs — tool changer / flange interlocks (MassiveCONNECT KUKA panel)
-        new("Extruder ready",      "$IN[6]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Normal),
-        new("Extruder dock occ.",  "$IN[10]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
-        new("Spindle dock occ.",   "$IN[11]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
-        new("Flange unlocked",     "$IN[12]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
-        new("Flange locked",       "$IN[13]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
-        new("Tool mounted",        "$IN[14]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
-        new("Pressure OK",         "$IN[15]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
-        new("Scanner dock occ.",   "$IN[17]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
-        new("Flange detached",     "$IN[7]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
+        // Digital inputs — labels match MassiveDRIVE configs/cells/lfam3.yaml robot.io_names.di
+        new("Spindle Bit Unlocked", "$IN[1]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Bit Locked",   "$IN[2]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Rotating",     "$IN[3]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Fan",          "$IN[4]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Electronics",  "$IN[5]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Kuka Comms",           "$IN[6]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Anti-Collision",       "$IN[7]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Safety),
+        new("DI8",                  "$IN[8]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Overheat",     "$IN[9]",  LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka, LiveIoHighlight.Fault),
+        new("Extruder Docked",      "$IN[10]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Spindle Docked",       "$IN[11]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("DI12",                 "$IN[12]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("DI13",                 "$IN[13]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("DI14",                 "$IN[14]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("DI15",                 "$IN[15]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("DI16",                 "$IN[16]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
+        new("Scanner Docked",       "$IN[17]", LiveIoSignalKind.DigitalInput,  LiveIoSource.Kuka),
 
-        // Digital outputs — writable via C3Bridge Message #1
-        new("Output 1",            "$OUT[1]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Output 3",            "$OUT[3]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Air / cooling",       "$OUT[5]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Print enable",        "$OUT[7]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("MIO request",         "$OUT[9]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Gripper close",       "$OUT[11]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Gripper open",        "$OUT[12]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("EV flange",           "$OUT[13]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("EV extruder",         "$OUT[14]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("EV spindle",          "$OUT[15]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
-        new("Tool-change enable",  "$OUT[16]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        // Digital outputs — labels match MassiveDRIVE robot.io_names.do (writable via C3Bridge)
+        new("DO1",                  "$OUT[1]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("DO2",                  "$OUT[2]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Material Feeder",      "$OUT[3]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("DO4",                  "$OUT[4]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Extruder Cooling",     "$OUT[5]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle Air Clearing", "$OUT[6]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Kuka Comms",           "$OUT[7]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("URM",                  "$OUT[8]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("MIO Request",          "$OUT[9]",  LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle CW Dir",       "$OUT[10]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle Bit Release",  "$OUT[11]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle Bit Pick",     "$OUT[12]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("EV Flange",            "$OUT[13]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("EV Extruder",          "$OUT[14]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("EV Spindle",           "$OUT[15]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle Air",          "$OUT[16]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("EV Scanner",           "$OUT[17]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
+        new("Spindle",              "$OUT[51]", LiveIoSignalKind.DigitalOutput, LiveIoSource.Kuka, Writable: true),
 
         // Analog outputs — zone heater + extruder RPM commands
         new("Zone 1 temp cmd",     "$ANOUT[1]", LiveIoSignalKind.AnalogOutput, LiveIoSource.Kuka, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
@@ -96,7 +111,8 @@ public static class Lfam3LiveIoCatalog
         new("Nozzle RTD 2",        "RTDValue_2",                 LiveIoSignalKind.AnalogInput, LiveIoSource.ExtruderBridge, Unit: "°C", ValueFormat: LiveIoValueFormat.TempC),
     ]);
 
-    static LiveIoSectionConfig MillingSection() => new("Milling Spindle",
+    /// <summary>Spindle cabinet (milling RevPi) — shown as its own Live I/O column.</summary>
+    static LiveIoSectionConfig MillingSection() => new("Spindle",
     [
         // Milling cabinet RevPi — lfam-monitor bridge on millIp:8765 (LFAM3 only)
         new("Gate open stop",      "DI_04_gateOpenStop",    LiveIoSignalKind.DigitalInput,  LiveIoSource.MillingModbus, LiveIoHighlight.Safety),
@@ -117,11 +133,14 @@ public static class Lfam3LiveIoCatalog
         "DO_01_redLamp", "DO_02_yellowLamp", "DO_03_greenLamp",
     ];
 
-    /// <summary>Flat list of all KUKA variables MassiveCONNECT batch-reads for LFAM3.</summary>
+    /// <summary>Flat list of all KUKA variables batch-read for LFAM3 Live I/O (aligned with MassiveDRIVE DI1–17 / DO1–17 / DO51).</summary>
     public static IReadOnlyList<string> KukaPollVariables { get; } =
     [
-        "$IN[6]", "$IN[7]", "$IN[10]", "$IN[11]", "$IN[12]", "$IN[13]", "$IN[14]", "$IN[15]", "$IN[17]",
-        "$OUT[5]", "$OUT[7]", "$OUT[9]", "$OUT[11]", "$OUT[12]", "$OUT[13]", "$OUT[14]", "$OUT[15]", "$OUT[16]",
+        "$IN[1]", "$IN[2]", "$IN[3]", "$IN[4]", "$IN[5]", "$IN[6]", "$IN[7]", "$IN[8]", "$IN[9]",
+        "$IN[10]", "$IN[11]", "$IN[12]", "$IN[13]", "$IN[14]", "$IN[15]", "$IN[16]", "$IN[17]",
+        "$OUT[1]", "$OUT[2]", "$OUT[3]", "$OUT[4]", "$OUT[5]", "$OUT[6]", "$OUT[7]", "$OUT[8]", "$OUT[9]",
+        "$OUT[10]", "$OUT[11]", "$OUT[12]", "$OUT[13]", "$OUT[14]", "$OUT[15]", "$OUT[16]", "$OUT[17]",
+        "$OUT[51]",
         "$ANOUT[1]", "$ANOUT[2]", "$ANOUT[3]", "$ANOUT[4]",
     ];
 }

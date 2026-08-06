@@ -49,7 +49,10 @@ public sealed class ScanCalibrationViewModel : ViewModelBase
     /// <summary>Called when the user clicks "Apply to TCP". Args: x, y, z, a, b, c (mm / °).</summary>
     internal Action<double, double, double, double, double, double>? OnApplyCalibration { get; set; }
 
-    /// <summary>Runs the automated pose sweep (CELL MS_AXIS wrist nutation, scan ×N, calibrate). Wired by MainWindowViewModel.</summary>
+    /// <summary>
+    /// Runs automated hand-eye via MassiveDRIVE Movements master (notes=scan capture) + Zivid
+    /// (wired by MainWindowViewModel). Coordinates come from Drive, not local cell waypoints.
+    /// </summary>
     internal Func<Task>? OnAutoCalibrateRequested { get; set; }
 
     /// <summary>Console logger for success/diagnostic feedback (wired by MainWindowViewModel).</summary>

@@ -13,7 +13,7 @@ public sealed class KrlToolChangeSequenceParserTest
 
         var seq = KrlToolChangeSequenceParser.Parse("Extruder_Pick");
         Assert.Equal("extruder", seq.Definition.ToolKey);
-        Assert.Equal("HV Extruder", seq.Definition.CellToolName);
+        Assert.Equal("Extruder", seq.Definition.CellToolName);
         Assert.True(seq.Waypoints.Count >= 4);
         Assert.Contains(seq.Waypoints, w => w.Kind == "cart");
     }
@@ -41,7 +41,7 @@ public sealed class KrlToolChangeSequenceParserTest
         var path = ToolChangeSequencePathBuilder.Build(seq);
         Assert.NotNull(path?.ToolEvent);
         Assert.True(path!.ToolEvent!.Attach);
-        Assert.Equal("Scanner", path.ToolEvent.CellToolName);
+        Assert.Equal("Scanner (Calibrated)", path.ToolEvent.CellToolName);
     }
 
     [Fact]

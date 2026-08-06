@@ -90,6 +90,10 @@ public partial class ViewportView : UserControl
     private Point     _kbTransformStartPos;
     private Matrix4   _kbTransformInitialLocal;
     private Vector2   _kbObjScreenCenter;
+    /// <summary>World-space pivot for keyboard rotate (R) — under the mouse when R is pressed.</summary>
+    private Vector3   _kbRotatePivotWorld;
+    /// <summary>Screen-space polar reference once the cursor has left the press point (NaN until set).</summary>
+    private float     _kbRotateRefAngle = float.NaN;
 
     // Transform undo (panel numeric edits debounced; gizmo commits immediately)
     private SceneNode? _lastCommittedTransformNode;
@@ -1560,6 +1564,7 @@ public partial class ViewportView : UserControl
             else
                 UpdateAnglePlanePreview(vm);
             UpdatePaintOverlay(vm);
+            UpdateMillAreaOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -2700,6 +2705,59 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
+        // (imports & scans). Robot, bed, and cell environment never receive hits.
+        if (DataContext is ViewportViewModel millPtrVm
+            && millPtrVm.IsMillAreaSelectActive
+            && !_spaceHeld)
+        {
+            if (kind == PointerUpdateKind.LeftButtonPressed)
+            {
+                bool erase = mods.HasFlag(KeyModifiers.Alt);
+                if (millPtrVm.IsMillAreaBox || millPtrVm.IsMillAreaLasso)
+                {
+                    _millAreaBoxDragging = true;
+                    _millAreaBoxStart = pos;
+                    _paintLassoPts.Clear();
+                    if (millPtrVm.IsMillAreaLasso)
+                    {
+                        millPtrVm.PaintMarqueeVisible = false;
+                        _paintLassoPts.Add(pos);
+                        millPtrVm.SetPaintLassoPoints(_paintLassoPts);
+                        millPtrVm.PaintLassoVisible = true;
+                    }
+                    else
+                    {
+                        millPtrVm.PaintLassoVisible = false;
+                        millPtrVm.ClearPaintLassoPoints();
+                        millPtrVm.PaintMarqueeX = pos.X;
+                        millPtrVm.PaintMarqueeY = pos.Y;
+                        millPtrVm.PaintMarqueeW = 0;
+                        millPtrVm.PaintMarqueeH = 0;
+                        millPtrVm.PaintMarqueeVisible = true;
+                    }
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                if (millPtrVm.IsMillAreaBrush)
+                {
+                    _millAreaStroking = true;
+                    _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                    TryMillAreaBrushAt(millPtrVm, pos, erase);
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                // Face click
+                TryMillAreaFaceAt(millPtrVm, pos, erase);
+                e.Handled = true;
+                return;
+            }
+        }
+
         // 2D slice plane: right-drag pans (orbit is locked; this is the primary pan).
         if (kind == PointerUpdateKind.RightButtonPressed && IsSlicePlaneNavLocked)
         {
@@ -2922,6 +2980,35 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill area marquee / brush drag (before toolpath paint so Mill mode owns the pointer).
+        if (_millAreaBoxDragging && DataContext is ViewportViewModel millBoxVm)
+        {
+            if (millBoxVm.IsMillAreaLasso)
+            {
+                if (_paintLassoPts.Count == 0 || Dist2D(_paintLassoPts[^1], pos) >= 4.0)
+                {
+                    _paintLassoPts.Add(pos);
+                    millBoxVm.SetPaintLassoPoints(_paintLassoPts);
+                }
+            }
+            else
+            {
+                millBoxVm.PaintMarqueeX = Math.Min(pos.X, _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeY = Math.Min(pos.Y, _millAreaBoxStart.Y);
+                millBoxVm.PaintMarqueeW = Math.Abs(pos.X - _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeH = Math.Abs(pos.Y - _millAreaBoxStart.Y);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking && DataContext is ViewportViewModel millStrokeVm)
+        {
+            if (Math.Abs(pos.X - _lastPaintPx.X) + Math.Abs(pos.Y - _lastPaintPx.Y) >= 5)
+                TryMillAreaBrushAt(millStrokeVm, pos, erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
         if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
         {
             if (pbxVm.PaintRegionSelectIsLasso)
@@ -3078,6 +3165,44 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+
+        if (_millAreaBoxDragging)
+        {
+            _millAreaBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel millBoxVm)
+            {
+                bool erase = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+                if (millBoxVm.IsMillAreaLasso)
+                {
+                    millBoxVm.PaintLassoVisible = false;
+                    if (_paintLassoPts.Count >= 3)
+                        SelectMillFacesInLasso(millBoxVm, _paintLassoPts, erase);
+                    _paintLassoPts.Clear();
+                    millBoxVm.ClearPaintLassoPoints();
+                }
+                else
+                {
+                    millBoxVm.PaintMarqueeVisible = false;
+                    var rect = new Avalonia.Rect(
+                        Math.Min(pt.Position.X, _millAreaBoxStart.X),
+                        Math.Min(pt.Position.Y, _millAreaBoxStart.Y),
+                        Math.Abs(pt.Position.X - _millAreaBoxStart.X),
+                        Math.Abs(pt.Position.Y - _millAreaBoxStart.Y));
+                    if (rect.Width > 4 && rect.Height > 4)
+                        SelectMillFacesInRect(millBoxVm, rect, erase);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking)
+        {
+            _millAreaStroking = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            e.Handled = true;
+            return;
+        }
 
         if (_paintBoxDragging)
         {
@@ -5279,10 +5404,12 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
-        if (toolpathChild is not null)
-            await RunUpdateSliceAsync(vm, (item, toolpathChild));
-        else
-            await RunSliceAsync(vm);
+        // Only re-slice when a toolpath already exists. Auto-slicing a fresh import
+        // (esp. dense STEP meshes) can freeze or crash right after the geometry appears.
+        if (toolpathChild is null)
+            return;
+
+        await RunUpdateSliceAsync(vm, (item, toolpathChild));
     }
 
     /// <summary>Begin a new slice cancellation token (cancels any previous).</summary>
@@ -6858,12 +6985,19 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
+        _kbRotateRefAngle        = float.NaN;
 
-        // Project the node's world position to screen so KbRotate can use atan2.
         float vpW0 = (float)GlCanvas.Bounds.Width;
         float vpH0 = (float)GlCanvas.Bounds.Height;
-        if (vpW0 > 0 && vpH0 > 0)
+        if (op is GizmoMode.Rotate or GizmoMode.Scale)
         {
+            // R and S: pivot under the mouse at press (top + side views).
+            _kbObjScreenCenter = new Vector2((float)_lastMousePos.X, (float)_lastMousePos.Y);
+            _kbRotatePivotWorld = PickKbTransformPivotWorld(node, (float)_lastMousePos.X, (float)_lastMousePos.Y, vpW0, vpH0);
+        }
+        else if (vpW0 > 0 && vpH0 > 0)
+        {
+            // Translate: keep screen center on the object pivot for any helpers.
             float aspect0  = vpW0 / vpH0;
             var   vp0      = _renderer.Camera.GetViewMatrix() * _renderer.Camera.GetProjectionMatrix(aspect0);
             var   nodePos0 = GetGizmoPivotWorld(node);
@@ -6873,10 +7007,12 @@ public partial class ViewportView : UserControl
                     (clip0.X / clip0.W * 0.5f + 0.5f) * vpW0,
                     (1f - (clip0.Y / clip0.W * 0.5f + 0.5f)) * vpH0)
                 : new Vector2(vpW0 * 0.5f, vpH0 * 0.5f);
+            _kbRotatePivotWorld = nodePos0;
         }
         else
         {
-            _kbObjScreenCenter = Vector2.Zero;
+            _kbObjScreenCenter  = Vector2.Zero;
+            _kbRotatePivotWorld = GetGizmoPivotWorld(node);
         }
 
         BeginToolIkDrag(node);
@@ -6884,6 +7020,46 @@ public partial class ViewportView : UserControl
         // Prime the view-plane state so unconstrained translate tracks exactly from the start.
         if (op == GizmoMode.Translate)
             SetupKbViewPlane(node);
+    }
+
+    /// <summary>
+    /// World point under the mouse for keyboard rotate/scale.
+    /// Top/bottom views use the bed (or object-height) plane; side/front views use the
+    /// camera view plane through the object so the pivot sits under the cursor, not on the bed far away.
+    /// </summary>
+    private Vector3 PickKbTransformPivotWorld(SceneNode node, float mx, float my, float vpW, float vpH)
+    {
+        var objectPivot = GetGizmoPivotWorld(node);
+        if (vpW <= 1f || vpH <= 1f)
+            return objectPivot;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        var viewDir = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+        // Looking mostly along ±Z → top/bottom (number-key "1" style).
+        bool topOrBottom = MathF.Abs(viewDir.Z) > 0.85f;
+
+        if (topOrBottom)
+        {
+            if (SceneRenderer.TryPickHorizontalPlane(ray, _renderer.BedZ, out var onBed))
+                return onBed;
+            if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onObjectZ))
+                return onObjectZ;
+        }
+
+        // Side / front / 3D: intersect the view plane through the object pivot.
+        float denom = Vector3.Dot(ray.Direction, viewDir);
+        if (MathF.Abs(denom) > 1e-5f)
+        {
+            float t = Vector3.Dot(objectPivot - ray.Origin, viewDir) / denom;
+            if (t > 0f)
+                return ray.At(t);
+        }
+
+        // Last resort: horizontal plane at object height.
+        if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onZ))
+            return onZ;
+
+        return objectPivot;
     }
 
     // Stores the camera view-plane (normal + anchor + start-hit) for unconstrained translate.
@@ -6971,6 +7147,210 @@ public partial class ViewportView : UserControl
     private bool _paintBoxDragging;
     private Avalonia.Point _paintBoxStart;
     private readonly List<Avalonia.Point> _paintLassoPts = [];
+
+    // ── Mill OPERATION → SELECT AREA (soft vertex paint on workpiece only) ───
+    private bool _millAreaStroking, _millAreaBoxDragging;
+    private Avalonia.Point _millAreaBoxStart;
+    private MillSurfacePaint? _millSurfacePaint;
+    private bool _millPaintHooked;
+
+    MillSurfacePaint MillPaint
+    {
+        get
+        {
+            _millSurfacePaint ??= new MillSurfacePaint();
+            return _millSurfacePaint;
+        }
+    }
+
+    void EnsureMillPaintHook(ViewportViewModel vm)
+    {
+        if (_millPaintHooked) return;
+        _millPaintHooked = true;
+        vm.ClearMillSurfacePaint = () =>
+        {
+            _pendingMillPaintClear = true;
+            vm.NotifyRenderNeeded();
+        };
+        vm.DescribeMillPaint = () => _millSurfacePaint?.Describe() ?? "no paint";
+    }
+
+    bool _pendingMillPaintClear;
+
+    /// <summary>
+    /// Ray-pick a face exclusively on millable user workpieces (imports / scans).
+    /// Robot, bed, toolheads, and other cell environment never qualify.
+    /// </summary>
+    Picker.FaceHit? PickMillableFace(ViewportViewModel vm, Avalonia.Point pos)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return null;
+        var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+        return Picker.PickFaceDetailed(ray, _renderer.SceneRoot, vm.IsMillableWorkpiece);
+    }
+
+    void EnsureMillAreaTarget(ViewportViewModel vm, SceneNode meshLeaf)
+    {
+        if (vm.MillAreaTargetRoot is not null) return;
+        var root = meshLeaf;
+        for (var c = meshLeaf; c is not null; c = c.Parent)
+        {
+            if (vm.FindUserMeshOutlinerItem(c) is { } item
+                && !item.IsToolpath && !item.IsEffector
+                && !item.IsModifier && !item.IsModifiersGroup)
+            {
+                root = item.Node;
+                break;
+            }
+        }
+        vm.SetMillAreaTargetRoot(root);
+    }
+
+    void SyncMillPaintStats(ViewportViewModel vm)
+    {
+        var paint = _millSurfacePaint;
+        if (paint is null) { vm.UpdateMillPaintStats(0, 0); return; }
+        vm.UpdateMillPaintStats(paint.PaintedVertexCount, paint.Coverage01);
+    }
+
+    void TryMillAreaFaceAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+        {
+            ConsoleLogMill($"[mill-paint] face miss (no workpiece under cursor)");
+            return;
+        }
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+        if (hit.Value.MeshNode.Mesh?.PickingData is not { } mesh) return;
+
+        MillPaint.StampTriangle(hit.Value.MeshNode, mesh, hit.Value.TriangleIndex, erase);
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] face tri={hit.Value.TriangleIndex} on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void TryMillAreaBrushAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        _lastPaintPx = pos;
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+            return;
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+
+        // World-space soft brush — works without material UVs (STEP/STL/GLB).
+        int before = MillPaint.PaintedVertexCount;
+        MillPaint.StampWorld(
+            hit.Value.MeshNode,
+            hit.Value.WorldHit,
+            radiusMm: (float)vm.MillBrushRadiusMm,
+            falloff: (float)vm.MillBrushFalloff,
+            strength: erase ? 1f : 1f,
+            erase: erase,
+            hitTriangleIndex: hit.Value.TriangleIndex);
+        SyncMillPaintStats(vm);
+        if (vm.MillPaintedVertices != before)
+            ConsoleLogMill($"[mill-paint] brush on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void SelectMillFacesInRect(ViewportViewModel vm, Avalonia.Rect rect, bool erase)
+        => SelectMillPaintInScreenRegion(vm, erase, p => rect.Contains(p));
+
+    void SelectMillFacesInLasso(ViewportViewModel vm, List<Avalonia.Point> loop, bool erase)
+    {
+        if (loop.Count < 3) return;
+        SelectMillPaintInScreenRegion(vm, erase, p => PointInPolygon(p, loop));
+    }
+
+    static bool PointInPolygon(Avalonia.Point p, List<Avalonia.Point> poly)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y;
+            double xj = poly[j].X, yj = poly[j].Y;
+            if (((yi > p.Y) != (yj > p.Y))
+                && (p.X < (xj - xi) * (p.Y - yi) / (yj - yi + 1e-30) + xi))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    void SelectMillPaintInScreenRegion(
+        ViewportViewModel vm, bool erase, Func<Avalonia.Point, bool> inside)
+    {
+        EnsureMillPaintHook(vm);
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return;
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is null) continue;
+            var selectable = Picker.FindSelectableRoot(node);
+            if (selectable is null) continue;
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            if (vm.MillAreaTargetRoot is null)
+                EnsureMillAreaTarget(vm, node);
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            MillPaint.StampScreenRegion(
+                node,
+                world =>
+                {
+                    var scr = _renderer.ProjectToScreen(world, viewProj, vpW, vpH);
+                    if (float.IsNaN(scr.X)) return false;
+                    return inside(new Avalonia.Point(scr.X, scr.Y));
+                },
+                strength: 0.95f,
+                erase: erase);
+        }
+
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] region → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Upload vertex paint weights to GPU (selection wash is in the mesh shader).</summary>
+    void UpdateMillAreaOverlay(ViewportViewModel vm)
+    {
+        EnsureMillPaintHook(vm);
+
+        if (_pendingMillPaintClear)
+        {
+            _pendingMillPaintClear = false;
+            _millSurfacePaint?.Clear();
+            vm.UpdateMillPaintStats(0, 0);
+        }
+
+        if (_millSurfacePaint is not null)
+        {
+            _millSurfacePaint.UploadDirty();
+            _millSurfacePaint.RebindAll();
+        }
+    }
+
+    void ConsoleLogMill(string msg)
+    {
+        System.Console.WriteLine(msg);
+        if (DataContext is ViewportViewModel vm)
+            vm.LogMill?.Invoke(msg);
+    }
+
     /// <summary>Applied modifications (reselectable from the MODIFICATIONS panel).</summary>
     private readonly List<PaintModificationRecord> _paintModifications = [];
 
@@ -7217,7 +7597,9 @@ public partial class ViewportView : UserControl
                 || (vm.AdditiveSettings?.PaintMarks.Count ?? 0) > 0);
         if (!show)
         {
-            _renderer.SetPaintOverlay([], null);
+            // Leave the buffer alone when mill SELECT AREA owns the brush-cursor overlay.
+            if (!vm.IsMillAreaSelectActive && vm.MillPaintedTexels == 0)
+                _renderer.SetPaintOverlay([], null);
             return;
         }
         var add = vm.AdditiveSettings!;
@@ -10509,7 +10891,6 @@ public partial class ViewportView : UserControl
         float my  = (float)mousePos.Y;
         float vpW = (float)GlCanvas.Bounds.Width;
         float vpH = (float)GlCanvas.Bounds.Height;
-        float dx  = (float)(mousePos.X - _kbTransformStartPos.X);
 
         switch (_kbTransformOp)
         {
@@ -10527,7 +10908,7 @@ public partial class ViewportView : UserControl
                 break;
 
             case GizmoMode.Scale:
-                KbScale(node, dx, vpW);
+                KbScale(node, mousePos, vpW, vpH);
                 break;
         }
         ApplyTransformLink(node);
@@ -10569,28 +10950,26 @@ public partial class ViewportView : UserControl
             GizmoAxis.X => Vector3.UnitX,
             GizmoAxis.Y => Vector3.UnitY,
             GizmoAxis.Z => Vector3.UnitZ,
+            // Unconstrained: view axis (top view ≈ world Z) so the model spins on the plate.
             _           => Vector3.Normalize(_renderer.Camera.Eye - _renderer.Camera.Target),
         };
 
-        // Compute rotation as the 2-D angle swept around the object's screen center.
-        // This makes the object "track" the mouse regardless of which axis is constrained.
-        var vStart = new Vector2((float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y)
-                   - _kbObjScreenCenter;
-        var vCurr  = new Vector2((float)mousePos.X, (float)mousePos.Y)
-                   - _kbObjScreenCenter;
+        // Polar angle around the mouse position where R was pressed (_kbObjScreenCenter).
+        // At press, start == center so we lock a reference direction on the first real move.
+        var vCurr = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
 
         float angle;
-        if (vStart.LengthSquared < 4f || vCurr.LengthSquared < 4f)
+        if (vCurr.LengthSquared < 16f) // ~4 px
         {
-            // Too close to center -- fall back to pure horizontal drag.
-            angle = (float)(mousePos.X - _kbTransformStartPos.X) * 0.01f;
+            angle = 0f;
         }
         else
         {
-            // Negate Y to convert screen-space (Y-down) to math-space (Y-up) before atan2,
-            // so the resulting angle follows the right-hand rule used by CreateFromAxisAngle.
-            angle = MathF.Atan2(-vCurr.Y, vCurr.X) - MathF.Atan2(-vStart.Y, vStart.X);
-            // Wrap to [-π, π] to avoid a sudden jump when crossing the ±180deg boundary.
+            // Negate Y: screen Y-down → math Y-up for right-hand CreateFromAxisAngle.
+            float curr = MathF.Atan2(-vCurr.Y, vCurr.X);
+            if (float.IsNaN(_kbRotateRefAngle))
+                _kbRotateRefAngle = curr;
+            angle = curr - _kbRotateRefAngle;
             if (angle >  MathF.PI) angle -= MathF.Tau;
             if (angle < -MathF.PI) angle += MathF.Tau;
         }
@@ -10614,39 +10993,73 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var rotNode = Matrix4.CreateFromAxisAngle(axisDir, angle);
-        var lt  = _kbTransformInitialLocal;
-        var p   = new Vector3(lt.M41, lt.M42, lt.M43);
-        lt      = lt * rotNode;
-        lt.M41  = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
-        node.LocalTransform = lt;
+        // Rotate about the world pivot under the mouse (not the local origin), so in top view
+        // the selection orbits the cursor / plate point under the cursor.
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var rotWorld   = Matrix4.CreateFromAxisAngle(axisDir, angle);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * R * T(pivot)
+        var worldRot = toOrigin * rotWorld * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        // L' = L0 * P * W * P⁻¹  (same conjugation as ApplyWorldTransformToNode)
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldRot * invParent;
     }
 
-    private void KbScale(SceneNode node, float dx, float vpW)
+    private void KbScale(SceneNode node, Point mousePos, float vpW, float vpH)
     {
-        float t     = dx / (vpW * 0.5f);
-        float ratio = MathF.Exp(t * MathF.Log(3f));
-        if (ratio <= 0f) return;
+        // Scale factor from mouse motion relative to the press point (same pivot as R).
+        // Radial distance from the press cursor: outward = grow, toward press = shrink.
+        // When press == pivot center, use a virtual base radius so the first move is well-defined.
+        var v = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
+        float basePx = MathF.Max(64f, MathF.Min(vpW, vpH) * 0.12f);
+        float currPx = MathF.Max(1f, v.Length);
+        // Signed radial scale: start at ratio 1 when still near the press point; dragging
+        // away increases size, dragging back toward the press point decreases it.
+        float ratio;
+        if (v.LengthSquared < 16f)
+        {
+            ratio = 1f;
+        }
+        else
+        {
+            // Mix radial Blender-style factor with a gentle horizontal bias so tiny motions work
+            // even before a clear radial direction is established.
+            float radial = currPx / basePx;
+            float horiz  = MathF.Exp(((float)mousePos.X - (float)_kbTransformStartPos.X) / (vpW * 0.35f) * MathF.Log(3f));
+            // Prefer radial once the cursor has moved enough off the press point.
+            ratio = currPx >= basePx * 0.35f ? radial : horiz;
+            ratio = Math.Clamp(ratio, 0.05f, 20f);
+        }
 
-        var lt = _kbTransformInitialLocal;
+        if (_toolIsDragging)
+        {
+            // Tool TCP scale is not meaningful — keep orientation-only IK path inert.
+            return;
+        }
+
+        // World-space scale about the mouse pivot (works in top + side views).
+        float sx = 1f, sy = 1f, sz = 1f;
         switch (_kbTransformAxis)
         {
-            case GizmoAxis.X:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                break;
-            case GizmoAxis.Y:
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                break;
-            case GizmoAxis.Z:
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
-            default:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
+            case GizmoAxis.X: sx = ratio; break;
+            case GizmoAxis.Y: sy = ratio; break;
+            case GizmoAxis.Z: sz = ratio; break;
+            default:          sx = sy = sz = ratio; break;
         }
-        node.LocalTransform = lt;
+
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var scaleMat   = Matrix4.CreateScale(sx, sy, sz);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * S * T(pivot)
+        var worldScale = toOrigin * scaleMat * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldScale * invParent;
     }
 
     private static string TransformUndoLabel(GizmoMode mode) => mode switch

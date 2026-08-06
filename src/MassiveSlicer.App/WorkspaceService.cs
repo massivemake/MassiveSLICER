@@ -163,6 +163,65 @@ internal static class WorkspaceService
             doc.Models.Add(entry);
         }
 
+        // Zivid / bed scans live under the rotary group and are intentionally excluded from
+        // EnumerateUserModelItems() (they are not print CAD). Persist them too or Save Workspace
+        // drops every scan while keeping only imports (e.g. rock.gltf).
+        string scanSidecarDir = Path.Combine(Path.GetDirectoryName(savePath)!, "workspace_scans");
+        foreach (var item in viewport.GetBedLevelScanItems())
+        {
+            var node = item.Node;
+            var entry = new WorkspaceModelEntry
+            {
+                Name           = node.Name,
+                Visible        = node.Visible,
+                LayerPreview   = node.LayerPreview,
+                LocalTransform = ToArray(node.WorldTransform),
+                IsScan         = true,
+            };
+
+            if (OutlinerModelOps.ResolveSourceFilePath(node) is { } src && File.Exists(src))
+                entry.SourcePath = src;
+
+            // Prefer embedding the meshable scan so the .mass reloads without the Zivid SDK.
+            if (TryGetMesh(node) is { } mesh)
+            {
+                string fileName = $"scan_{Guid.NewGuid():N}.stl";
+                string meshPath = Path.Combine(meshDir, fileName);
+                StlExporter.Write(meshPath, mesh);
+                entry.EmbeddedMeshPath = WorkspaceLoader.ToRelativeMeshPath(fileName);
+            }
+            else if (entry.SourcePath is null)
+            {
+                continue;
+            }
+
+            // Copy .zdf (+ .json sidecar) beside the workspace for recovery / re-mesh.
+            if (entry.SourcePath is { } zdfSrc
+                && zdfSrc.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(zdfSrc))
+            {
+                try
+                {
+                    Directory.CreateDirectory(scanSidecarDir);
+                    string destName = Path.GetFileName(zdfSrc);
+                    string dest = Path.Combine(scanSidecarDir, destName);
+                    if (!string.Equals(Path.GetFullPath(zdfSrc), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+                        File.Copy(zdfSrc, dest, overwrite: true);
+                    string jsonSrc = Path.ChangeExtension(zdfSrc, ".json");
+                    if (File.Exists(jsonSrc))
+                        File.Copy(jsonSrc, Path.ChangeExtension(dest, ".json"), overwrite: true);
+                    entry.ScanZdfPath = Path.Combine("workspace_scans", destName).Replace('\\', '/');
+                    entry.SourcePath  = Path.GetFullPath(dest);
+                }
+                catch
+                {
+                    entry.ScanZdfPath = entry.SourcePath;
+                }
+            }
+
+            doc.Models.Add(entry);
+        }
+
         if (doc.UiSession is not null)
         {
             doc.UiSession.ScrubModelName = scrubModelName;
@@ -249,32 +308,85 @@ internal static class WorkspaceService
                     loadPath = embedded;
             }
 
+            bool isScan = entry.IsScan
+                          || OutlinerModelOps.IsScan(new SceneNode { Name = entry.Name });
+
+            // Prefer mesh paths ImportHelper understands; remember ZDF for re-mesh fallback.
+            string? zdfPath = null;
+            if (loadPath is not null && loadPath.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase))
+            {
+                zdfPath = loadPath;
+                loadPath = null;
+            }
+            if (zdfPath is null && entry.ScanZdfPath is { } zdfRel)
+            {
+                string zdfAbs = Path.IsPathRooted(zdfRel)
+                    ? zdfRel
+                    : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(workspacePath)!, zdfRel));
+                if (File.Exists(zdfAbs))
+                    zdfPath = zdfAbs;
+            }
+            if (zdfPath is null && entry.SourcePath is { } srcZ
+                && srcZ.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(srcZ))
+                zdfPath = srcZ;
+
             SceneNode? node = null;
             ViewModels.OutlinerItemViewModel? parentItem = null;
-            if (loadPath is not null)
-            {
-                var transform = FromArray(entry.LocalTransform);
-                node = ImportHelper.LoadAtTransform(loadPath, transform);
-                if (node is not null)
-                {
-                    node.Name         = entry.Name;
-                    node.Visible      = entry.Visible;
-                    node.LayerPreview = entry.LayerPreview;
+            var transform = FromArray(entry.LocalTransform);
 
-                    if (entry.PiecesGroupName is { } groupName)
+            if (loadPath is not null)
+                node = ImportHelper.LoadAtTransform(loadPath, transform);
+
+            // Re-mesh from ZDF when the embedded STL is missing (or was never written).
+            if (node is null && zdfPath is not null && File.Exists(zdfPath))
+            {
+                try
+                {
+                    var cap = Core.Scanning.ZividScanService.LoadFromZdf(zdfPath);
+                    var name = string.IsNullOrEmpty(entry.Name)
+                        ? Path.GetFileNameWithoutExtension(zdfPath)
+                        : entry.Name;
+                    node = PointCloudMesher.Build(
+                        cap.PointsXYZ, cap.Width, cap.Height, name);
+                    if (node is not null)
+                        node.LocalTransform = transform;
+                }
+                catch (Exception ex)
+                {
+                    viewport.OnDevLog?.Invoke(
+                        $"[workspace] ZDF re-mesh failed for '{entry.Name}': {ex.Message}");
+                }
+            }
+
+            if (node is not null)
+            {
+                node.Name         = entry.Name;
+                node.Visible      = entry.Visible;
+                node.LayerPreview = entry.LayerPreview;
+                if (zdfPath is not null)
+                    node.SourceFilePath = zdfPath;
+                else if (entry.SourcePath is { } sp && File.Exists(sp))
+                    node.SourceFilePath = sp;
+
+                if (isScan)
+                {
+                    node.CullFaces = false;
+                    viewport.AddScanNode(node);
+                }
+                else if (entry.PiecesGroupName is { } groupName)
+                {
+                    if (!piecesGroups.TryGetValue(groupName, out var groupItem))
                     {
-                        if (!piecesGroups.TryGetValue(groupName, out var groupItem))
-                        {
-                            groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
-                            groupItem.Visible = entry.Visible;
-                            piecesGroups[groupName] = groupItem;
-                        }
-                        parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                        groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
+                        groupItem.Visible = entry.Visible;
+                        piecesGroups[groupName] = groupItem;
                     }
-                    else
-                    {
-                        viewport.AddImportNode(node);
-                    }
+                    parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                }
+                else
+                {
+                    viewport.AddImportNode(node);
                 }
             }
 

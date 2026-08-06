@@ -75,6 +75,13 @@ public sealed class AppPreferences
     /// </summary>
     public Dictionary<string, string> DefaultHomePositionNames { get; set; } = [];
 
+    /// <summary>
+    /// Preferred cell to open on a cold start (no workspace on the command line).
+    /// Matched against discovered cell display names (case-insensitive contains).
+    /// Stored in local prefs.json only — per machine. Null/empty falls back to LFAM 2.
+    /// </summary>
+    public string? DefaultCellName { get; set; }
+
     /// <summary>Name of the last selected material preset, or null for none.</summary>
     public string? SelectedMaterialPresetName { get; set; }
 

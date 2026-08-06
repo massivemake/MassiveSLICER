@@ -11,37 +11,27 @@
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
   </ItemGroup>
 
-  <!-- Occt.NET (Open CASCADE) ships Windows-only x64 C++/CLI natives, so it is
-       referenced only on Windows. The OCCT-backed STEP loader compiles on Windows;
-       macOS/Linux use the StepLoader.NonWindows.cs stub instead. -->
+  <!-- STEP import uses open-source cascadio (Python) on all platforms. Occt.NET was
+       removed: its license MessageBox garbles on non-CJK locales and was crashing the host. -->
   <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
-    <PackageReference Include="Occt.NET" Version="7.9.0" />
     <Compile Remove="Loading\StepLoader.NonWindows.cs" />
   </ItemGroup>
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
     <Compile Remove="Loading\StepLoader.cs" />
+  </ItemGroup>
+  <!-- Legacy Occt.NET helpers — kept on disk for reference, not compiled. -->
+  <ItemGroup>
     <Compile Remove="Loading\OcctBootstrap.cs" />
+    <Compile Remove="Loading\OcctUiSuppressor.cs" />
   </ItemGroup>
 
   <PropertyGroup>
-    <!-- Windows-only TFM on Windows; cross-platform net8.0 elsewhere (Occt.NET STEP
-         import is Windows-only and loads lazily, so the rest runs on macOS/Linux). -->
     <TargetFramework Condition="$([MSBuild]::IsOSPlatform('Windows'))">net8.0-windows</TargetFramework>
     <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <!-- x64 forced only on Windows for the Occt.NET native libs. -->
-    <PlatformTarget Condition="$([MSBuild]::IsOSPlatform('Windows'))">x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
-
-  <!-- Ijwhost.dll must sit next to Occt.NET.dll for the C++/CLI loader. -->
-  <Target Name="CopyIjwhostToOutput" AfterTargets="Build">
-    <Copy SourceFiles="$(OutDir)occt\x64\Ijwhost.dll"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="Exists('$(OutDir)occt\x64\Ijwhost.dll')" />
-  </Target>
 
 </Project>

@@ -97,18 +97,33 @@ public static class CellLoader
     /// <summary>
     /// Writes updated home positions and selected default back into the cell JSON at
     /// <paramref name="cellPath"/>, preserving all other cell settings.
+    /// Also mirrors the default entry into <c>robot.homePosition</c> (A1–A6 fallback array).
     /// </summary>
     public static void SavePositionData(string cellPath, CellPositionData data)
     {
         try
         {
-            var cell    = Load(cellPath);
+            var cell = Load(cellPath);
+            float[]? primary = null;
+            if (!string.IsNullOrWhiteSpace(data.Default))
+            {
+                primary = data.Positions
+                    .FirstOrDefault(p => p.Name.Equals(data.Default, StringComparison.OrdinalIgnoreCase))
+                    ?.Angles;
+            }
+            primary ??= data.Positions.FirstOrDefault()?.Angles;
+            if (primary is not { Length: >= 6 })
+                primary = cell.Robot.HomePosition;
+
             var updated = cell with
             {
                 Robot = cell.Robot with
                 {
                     HomePositions       = data.Positions,
                     DefaultHomePosition = data.Default,
+                    HomePosition        = primary.Length >= 6
+                        ? [primary[0], primary[1], primary[2], primary[3], primary[4], primary[5]]
+                        : cell.Robot.HomePosition,
                 },
             };
             File.WriteAllText(cellPath, JsonSerializer.Serialize(updated, WriteOptions));

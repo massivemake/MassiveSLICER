@@ -1,9 +1,11 @@
 ﻿using System.Text.Json;
+using System.Windows.Input;
 using Avalonia;
 using Avalonia.Threading;
 using MassiveSlicer.App;
 using MassiveSlicer.App.Console;
 using MassiveSlicer.App.Undo;
+using MassiveSlicer.Commands;
 using MassiveSlicer.Core.C3Bridge;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Kinematics;
@@ -42,6 +44,21 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Gets the ViewModel for the floating command console.</summary>
     public ConsoleViewModel Console { get; } = new();
 
+    /// <summary>
+    /// Full LFAM3 calibration wizard (scan-cal → bed-cal). Bound from left panel
+    /// <c>CALIBRATE LFAM3</c> button.
+    /// </summary>
+    public ICommand StartLfam3CalibrationCommand { get; }
+
+    /// <summary>Teach current live pose as the scan/bed-cal waypoint (<c>scanner-down-bed</c>).</summary>
+    public ICommand MarkScanPositionCommand { get; }
+
+    /// <summary>Teach current live joints as the default <c>Home</c> position.</summary>
+    public ICommand MarkHomePositionCommand { get; }
+
+    /// <summary>PTP to the saved cell Home via MassiveDRIVE (MS_CMD=93).</summary>
+    public ICommand GoHomeCommand { get; }
+
     /// <summary>Shared application preferences instance, loaded from disk at startup.</summary>
     public AppPreferences AppPreferences { get; } = PreferencesLoader.Load();
 
@@ -79,6 +96,26 @@ public sealed class MainWindowViewModel : ViewModelBase
     /// <summary>Initialises the ViewModel and wires child ViewModels.</summary>
     public MainWindowViewModel()
     {
+        StartLfam3CalibrationCommand = new RelayCommand(() => StartLfam3CalibrationWizard(null));
+        MarkScanPositionCommand = new RelayCommand(
+            () => _ = MarkScanPositionAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception is { } ex)
+                    Console.LogError($"[scan-pose] Unhandled: {ex.GetBaseException().Message}");
+            }, TaskScheduler.FromCurrentSynchronizationContext()));
+        MarkHomePositionCommand = new RelayCommand(
+            () => _ = MarkHomePositionAsync("Home").ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception is { } ex)
+                    Console.LogError($"[home] Unhandled: {ex.GetBaseException().Message}");
+            }, TaskScheduler.FromCurrentSynchronizationContext()));
+        GoHomeCommand = new RelayCommand(
+            () => _ = GoToSavedHomeAsync().ContinueWith(t =>
+            {
+                if (t.IsFaulted && t.Exception is { } ex)
+                    Console.LogError($"[home] Unhandled: {ex.GetBaseException().Message}");
+            }, TaskScheduler.FromCurrentSynchronizationContext()));
+
         // One-shot, off-to-the-side check for whether origin/main has moved past this
         // build's baseline. Never awaited here — must never add even a millisecond to
         // startup. Silently does nothing if it can't reach git or the network.
@@ -155,6 +192,47 @@ public sealed class MainWindowViewModel : ViewModelBase
         // Give the viewport direct access to additive + subtractive settings for the slice/mill commands.
         Viewport.AdditiveSettings = RightPanel.Additive;
         Viewport.SubtractiveSettings = RightPanel.Subtractive;
+
+        // Mill OPERATION → SELECT AREA tools arm mesh-face picking on the workpiece only
+        // (user imports/scans — never robot, bed, or cell environment).
+        RightPanel.Subtractive.ApplyAreaSelectTool = tool =>
+        {
+            Viewport.MillAreaSelectTool = tool;
+            Viewport.ActiveTool = TransformTool.Select;
+            switch (tool)
+            {
+                case Core.Models.MillAreaSelectTool.WholeModel:
+                    Viewport.SelectionMode = SelectionMode.Object;
+                    Viewport.ClearMillAreaSelection();
+                    break;
+                case Core.Models.MillAreaSelectTool.Face:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    break;
+                case Core.Models.MillAreaSelectTool.Box:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    Viewport.PaintRegionSelectMode = "Square";
+                    break;
+                case Core.Models.MillAreaSelectTool.Lasso:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    Viewport.PaintRegionSelectMode = "Lasso";
+                    break;
+                case Core.Models.MillAreaSelectTool.Brush:
+                    Viewport.SelectionMode = SelectionMode.Face;
+                    break;
+            }
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        };
+        RightPanel.Subtractive.ClearAreaSelection = () =>
+        {
+            Viewport.MillAreaSelectTool = Core.Models.MillAreaSelectTool.WholeModel;
+            Viewport.SelectionMode = SelectionMode.Object;
+            Viewport.ActiveTool = TransformTool.Select;
+            Viewport.ClearMillAreaSelection();
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        };
+        Viewport.OnMillAreaSelectionChanged = () =>
+            RightPanel.Subtractive.AreaSelectStatus = Viewport.MillAreaStatusText;
+        Viewport.LogMill = msg => Console.Log(msg);
 
         // Modifiers panel reads the current selection back from the viewport, and the
         // viewport reads back which modifier is selected, to draw its plane preview.
@@ -342,7 +420,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             r.EditTcpB = b;
             r.EditTcpC = c;
         };
-        calib.OnAutoCalibrateRequested = RunAutoScanToolCalibration;
+        calib.OnAutoCalibrateRequested = async () => { await RunAutoScanToolCalibrationAsync(); };
         calib.Log = Console.Log;
 
         // Wire rotary-bed (E1) calibration: capture the board centroid in world via the
@@ -369,7 +447,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             // motion matches the model â€” not just the app's cell. Fire-and-forget with logging.
             _ = WriteRotaryBaseToControllerAsync(x, y, z);
         };
-        bedCal.OnAutoCalibrateRequested = RunAutoBedCalibration;
+        bedCal.OnAutoCalibrateRequested = async () => { await RunAutoBedCalibrationAsync(); };
         bedCal.Log = Console.Log;
 
         // Swap the displayed end-effector to match the active sidebar tab (non-LFAM 3).
@@ -382,7 +460,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var toolName = RightPanel.ActiveTab switch
                 {
                     RightPanelTab.Scan     => Viewport.ActiveCell?.ScanToolName,
-                    RightPanelTab.Additive => "HV Extruder",
+                    RightPanelTab.Additive => "Extruder",
                     _                      => null,
                 };
                 if (toolName is not null)
@@ -439,7 +517,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                 var toolName = RightPanel.ActiveTab switch
                 {
                     RightPanelTab.Scan     => cell?.ScanToolName,
-                    RightPanelTab.Additive => "HV Extruder",
+                    RightPanelTab.Additive => "Extruder",
                     _                      => null,
                 };
                 if (toolName is not null)
@@ -580,6 +658,10 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (cameraPose is not null && node.PendingMesh is { } stashMesh)
                 Viewport.StashScanDiag(name, (float)robot.E1, stashMesh.Positions, node.LocalTransform);
 
+            // Persist path so Save Workspace can embed the mesh + copy the .zdf beside the .mass.
+            if (result.SavedZdfPath is { } zdf && System.IO.File.Exists(zdf))
+                node.SourceFilePath = System.IO.Path.GetFullPath(zdf);
+
             // On a rotary cell the scan nests under the turntable group and tracks E1 (so multiple
             // scans at different E1 angles stay registered to one another); else attaches to the root.
             Viewport.AddScanNode(node);
@@ -588,7 +670,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             var saved = result.SavedZdfPath is { } p
                 ? $", saved {System.IO.Path.GetFileName(p)}{(result.SavedMetadataPath is not null ? " + .json" : "")}"
                 : "";
-            scan.ScanStatus = $"Added \"{name}\" â€” {result.ValidPointCount:N0} points{saved}";
+            scan.ScanStatus = $"Added \"{name}\" — {result.ValidPointCount:N0} points{saved}";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
         catch (Exception ex)
@@ -673,113 +755,662 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
-    private async Task RunAutoBedCalibration()
+    /// <summary>
+    /// Calibration motion runs through MassiveDRIVE + <c>LFAM3_RSI_BulkPTP</c> (not CELL/MS_CMD 1–5).
+    /// Requires DRIVE reachable, path executor idle, RSI stream live.
+    /// </summary>
+    async Task<bool> EnsureMassiveDriveReadyForCalibrationAsync(string logPrefix, Action<string>? setStatus = null)
+    {
+        var cell = ActiveCellConfig();
+        var url = cell?.MassiveDriveUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            string msg = "massiveDriveUrl not set on cell — cannot run cal via MassiveDRIVE.";
+            setStatus?.Invoke(msg);
+            Console.LogError($"{logPrefix} {msg}");
+            return false;
+        }
+
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(6));
+            var status = await client.QueryPathStatusAsync();
+            if (!status.Reachable)
+            {
+                string msg = $"MassiveDRIVE unreachable ({status.Detail}) — start massivedrive on 233.";
+                setStatus?.Invoke(msg);
+                Console.LogError($"{logPrefix} {msg}");
+                return false;
+            }
+            if (status.PathActive)
+            {
+                string msg =
+                    "MassiveDRIVE path is ACTIVE — stop it first (UI Stop or console `drive-stop`), then retry. "
+                    + status.Summary;
+                setStatus?.Invoke(msg);
+                Console.LogError($"{logPrefix} {msg}");
+                return false;
+            }
+            Console.Log($"{logPrefix} MassiveDRIVE ready ({status.Summary}). Pendant: LFAM3_RSI_BulkPTP + AUT + drives ON.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            string msg = $"MassiveDRIVE check failed: {ex.Message}";
+            setStatus?.Invoke(msg);
+            Console.LogError($"{logPrefix} {msg}");
+            return false;
+        }
+    }
+
+    string? MassiveDriveUrlOrNull() => ActiveCellConfig()?.MassiveDriveUrl?.Trim();
+
+    /// <summary>
+    /// Joint angles via MassiveDRIVE first (<c>/api/robot</c> axes), then C3 <c>$AXIS_ACT</c>.
+    /// </summary>
+    async Task<double[]?> ReadAxesForCalAsync(RobotPanelViewModel robot, string logPrefix)
+    {
+        var url = MassiveDriveUrlOrNull();
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            try
+            {
+                using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(8));
+                var axes = await client.ReadAxesAsync();
+                if (axes is { Length: >= 6 })
+                {
+                    ApplyAxesToRobotPanel(robot, axes);
+                    return axes;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Log($"{logPrefix} Drive axes read failed ({ex.Message}) — trying C3…");
+            }
+        }
+
+        if (robot.IsConnected)
+        {
+            try
+            {
+                var axes = await robot.ReadAxesAsync();
+                if (axes is { Length: >= 6 })
+                {
+                    ApplyAxesToRobotPanel(robot, axes);
+                    return axes;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.LogError($"{logPrefix} C3 axes read failed: {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    static void ApplyAxesToRobotPanel(RobotPanelViewModel robot, double[] axes)
+    {
+        robot.A1 = Math.Round(axes[0], 2);
+        robot.A2 = Math.Round(axes[1], 2);
+        robot.A3 = Math.Round(axes[2], 2);
+        robot.A4 = Math.Round(axes[3], 2);
+        robot.A5 = Math.Round(axes[4], 2);
+        robot.A6 = Math.Round(axes[5], 2);
+        if (axes.Length > 6)
+            robot.E1 = Math.Round(axes[6], 2);
+    }
+
+    /// <summary>
+    /// Wait until MassiveDRIVE reports capture-ready (phase waiting_capture + motion_settled)
+    /// and joint feedback is stable (esp. E1 for bed cal). Prevents Zivid frames mid-move.
+    /// </summary>
+    async Task<bool> WaitForDriveCaptureReadyAsync(
+        MassiveDriveClient client,
+        RobotPanelViewModel robot,
+        string logPrefix,
+        string? expectedToken,
+        TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        double? lastE1 = null;
+        int stableReads = 0;
+        bool loggedWait = false;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                using var stDoc = await client.SequenceRunStatusAsync();
+                if (!stDoc.RootElement.TryGetProperty("run", out var run))
+                {
+                    await Task.Delay(100);
+                    continue;
+                }
+
+                string phase = run.TryGetProperty("phase", out var ph) ? ph.GetString() ?? "" : "";
+                if (!string.Equals(phase, "waiting_capture", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                if (!string.IsNullOrEmpty(expectedToken)
+                    && run.TryGetProperty("capture_token", out var tokEl))
+                {
+                    string tok = tokEl.GetString() ?? "";
+                    if (!string.IsNullOrEmpty(tok) && !string.Equals(tok, expectedToken, StringComparison.Ordinal))
+                        return false;
+                }
+
+                bool settled = true;
+                if (run.TryGetProperty("motion_settled", out var ms))
+                {
+                    settled = ms.ValueKind == System.Text.Json.JsonValueKind.True
+                        || (ms.ValueKind == System.Text.Json.JsonValueKind.Number && ms.GetDouble() != 0);
+                }
+                if (!settled)
+                {
+                    if (!loggedWait)
+                    {
+                        Console.Log($"{logPrefix} Waiting for Drive motion_settled before capture…");
+                        loggedWait = true;
+                    }
+                    stableReads = 0;
+                    await Task.Delay(100);
+                    continue;
+                }
+
+                var axes = await client.ReadAxesAsync();
+                if (axes is not { Length: >= 6 })
+                {
+                    await Task.Delay(100);
+                    continue;
+                }
+                ApplyAxesToRobotPanel(robot, axes);
+                double e1 = axes.Length > 6 ? axes[6] : 0;
+
+                if (lastE1 is double le && Math.Abs(e1 - le) <= 0.12)
+                    stableReads++;
+                else
+                    stableReads = 1;
+                lastE1 = e1;
+
+                if (stableReads >= 3)
+                {
+                    await Task.Delay(200);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Log($"{logPrefix} settle poll: {ex.Message}");
+            }
+
+            await Task.Delay(120);
+        }
+
+        Console.LogError($"{logPrefix} Timed out waiting for settled capture window.");
+        return false;
+    }
+
+    /// <summary>Cartesian pose (x,y,z,a,b,c[,e1]) from MassiveDRIVE, else C3 <c>$POS_ACT</c>.</summary>
+    async Task<(double X, double Y, double Z, double A, double B, double C, double E1)?> ReadPoseForCalAsync(
+        RobotPanelViewModel robot, string logPrefix)
+    {
+        var url = MassiveDriveUrlOrNull();
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            try
+            {
+                using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(8));
+                using var doc = await client.RobotStatusAsync(force: true);
+                var root = doc.RootElement;
+                var robotEl = root.TryGetProperty("robot", out var r) ? r : root;
+                if (robotEl.TryGetProperty("pose", out var pose) && pose.ValueKind == JsonValueKind.Object)
+                {
+                    double G(string k) =>
+                        pose.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.Number
+                            ? p.GetDouble() : double.NaN;
+                    double x = G("x"), y = G("y"), z = G("z"), a = G("a"), b = G("b"), c = G("c");
+                    if (!double.IsNaN(x) && !double.IsNaN(y) && !double.IsNaN(z))
+                    {
+                        double e1 = 0;
+                        if (robotEl.TryGetProperty("axes", out var axes)
+                            && axes.ValueKind == JsonValueKind.Object
+                            && axes.TryGetProperty("e1", out var e1p)
+                            && e1p.ValueKind == JsonValueKind.Number)
+                            e1 = e1p.GetDouble();
+                        robot.TcpX = Math.Round(x, 1);
+                        robot.TcpY = Math.Round(y, 1);
+                        robot.TcpZ = Math.Round(z, 1);
+                        return (x, y, z, a, b, c, e1);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Log($"{logPrefix} Drive pose read failed ({ex.Message}) — trying C3…");
+            }
+        }
+
+        if (robot.IsConnected)
+        {
+            try
+            {
+                var posStr = await robot.ReadVarAsync("$POS_ACT");
+                var (x, y, z, a, b, c) = KrlVarParser.ParsePosAct(posStr);
+                double e1 = 0;
+                try
+                {
+                    var axes = await robot.ReadAxesAsync();
+                    if (axes.Length > 6) e1 = axes[6];
+                }
+                catch { /* optional */ }
+                return (x, y, z, a, b, c, e1);
+            }
+            catch (Exception ex)
+            {
+                Console.LogError($"{logPrefix} C3 pose read failed: {ex.Message}");
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Cartesian bulk LIN via MassiveDRIVE (<c>MS_CMD=99</c>) — the proven working motion path.
+    /// Prefer this over joint PTP (<c>MS_CMD=93</c>) until joint moves are reliable.
+    /// </summary>
+    async Task<bool> DriveMovePoseAsync(
+        double x, double y, double z, double a, double b, double c,
+        double? e1, double speedMmS, int tool, int baseIdx, string logPrefix)
+    {
+        var url = MassiveDriveUrlOrNull();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.LogError($"{logPrefix} No massiveDriveUrl — cannot bulk move.");
+            return false;
+        }
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(3));
+            // Tight ori tolerance so pure ABC reorients actually complete (default 1° was too loose)
+            using var doc = await client.MoveBulkPoseAsync(
+                x, y, z, a, b, c, e1, speedMmS, tool, baseIdx,
+                waitS: 120, tolMm: 3, tolDeg: 0.6);
+            bool ok = doc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            if (!ok)
+            {
+                string err = doc.RootElement.TryGetProperty("error", out var e)
+                    ? e.GetString() ?? doc.RootElement.GetRawText()
+                    : doc.RootElement.GetRawText();
+                Console.LogError($"{logPrefix} Drive bulk pose failed: {err}");
+                return false;
+            }
+            // Log actual end pose when present
+            if (doc.RootElement.TryGetProperty("to", out var to) && to.ValueKind == JsonValueKind.Object)
+            {
+                double G(string k) => to.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.Number ? p.GetDouble() : double.NaN;
+                Console.Log($"{logPrefix} bulk at ({G("x"):F1},{G("y"):F1},{G("z"):F1}) " +
+                            $"ABC=({G("a"):F1},{G("b"):F1},{G("c"):F1})");
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"{logPrefix} Drive bulk pose error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>Relative bulk jump (dx/dy/dz mm) via MassiveDRIVE <c>MS_CMD=99</c>.</summary>
+    async Task<bool> DriveBulkDeltaAsync(
+        double dx, double dy, double dz, double speedMmS, string logPrefix)
+    {
+        var url = MassiveDriveUrlOrNull();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.LogError($"{logPrefix} No massiveDriveUrl.");
+            return false;
+        }
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(3));
+            using var doc = await client.MoveBulkDeltaAsync(dx, dy, dz, speedMmS);
+            bool ok = doc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            if (!ok)
+            {
+                string err = doc.RootElement.TryGetProperty("error", out var e)
+                    ? e.GetString() ?? doc.RootElement.GetRawText()
+                    : doc.RootElement.GetRawText();
+                Console.LogError($"{logPrefix} Drive bulk delta failed: {err}");
+                return false;
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"{logPrefix} Drive bulk delta error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Joint PTP via MassiveDRIVE <c>POST /api/motion/axes</c> → BulkPTP <c>MS_CMD=93</c>
+    /// (<c>SPTP MS_AXIS</c>). Required for scanner hand-eye wrist nutation (legacy path).
+    /// </summary>
+    async Task<bool> DriveMoveAxesAsync(
+        double a1, double a2, double a3, double a4, double a5, double a6, double e1,
+        int velPct, int tool, int baseIdx, string logPrefix)
+    {
+        var url = MassiveDriveUrlOrNull();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.LogError($"{logPrefix} No massiveDriveUrl — cannot joint-move.");
+            return false;
+        }
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(3));
+            using var doc = await client.MoveAxesAsync(
+                a1, a2, a3, a4, a5, a6, e1, velPct, tool, baseIdx,
+                tolDeg: 0.6, waitS: 90);
+            bool ok = doc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            if (!ok)
+            {
+                string err = doc.RootElement.TryGetProperty("error", out var e)
+                    ? e.GetString() ?? doc.RootElement.GetRawText()
+                    : doc.RootElement.GetRawText();
+                Console.LogError($"{logPrefix} Drive joint move failed: {err}");
+                return false;
+            }
+            if (doc.RootElement.TryGetProperty("to", out var to) && to.ValueKind == JsonValueKind.Object)
+            {
+                double G(string k, double fb) =>
+                    to.TryGetProperty(k, out var p) && p.ValueKind == JsonValueKind.Number
+                        ? p.GetDouble() : fb;
+                ApplyAxesToRobotPanel(RightPanel.Settings.Robot, new[]
+                {
+                    G("a1", a1), G("a2", a2), G("a3", a3),
+                    G("a4", a4), G("a5", a5), G("a6", a6),
+                    G("e1", e1),
+                });
+            }
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"{logPrefix} Drive joint move error: {ex.Message}");
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Automated rotary bed calibration.
+    /// <b>Motion master = MassiveDRIVE Movements</b> (sequence "Bed Calibration":
+    /// fixed scanner TCP + taught E1 per waypoint). SLICER does not need local E1
+    /// schedules — it follows Drive and captures when waypoint notes request bed
+    /// (<c>bed</c> / <c>bedscan</c>). Same handshake as scan-cal (<c>waiting_capture</c>
+    /// + capture-ack). After the movement, fits centre from board samples and
+    /// estimates rotation phase from surface clouds.
+    /// </summary>
+    /// <returns><c>true</c> when a bed centre fit was applied (or already had a usable result).</returns>
+    private async Task<bool> RunAutoBedCalibrationAsync()
     {
         var robot   = RightPanel.Settings.Robot;
         var bedCal  = robot.BedCalibration;
         var scanCal = RightPanel.Scan.Calibration;
         var scan    = RightPanel.Scan;
 
-        if (!robot.IsConnected)
-        {
-            bedCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
-            Console.LogError("[bedcal] Robot not connected — run `sync` first.");
-            return;
-        }
         if (bedCal.IsAutoRunning)
         {
             Console.LogError("[bedcal] Auto calibration already running — wait for it to finish.");
-            return;
+            return false;
         }
         if (scanCal.IsAutoRunning)
         {
             Console.LogError("[bedcal] scan-cal is still running — wait for `=== Done ===` before bed-cal.");
-            return;
+            return false;
         }
         if (scan.IsScanning)
         {
             Console.LogError("[bedcal] A Zivid capture is in progress — wait for it to finish.");
-            return;
+            return false;
         }
+        if (!await EnsureMassiveDriveReadyForCalibrationAsync("[bedcal]", bedCal.SetStatus))
+            return false;
+
+        if (!robot.IsConnected)
+            Console.Log("[bedcal] C3 not synced — using MassiveDRIVE for motion + joint feedback.");
 
         bedCal.SetAutoRunning(true);
-        robot.PauseStreaming();
+        if (robot.IsConnected)
+            robot.PauseStreaming();
         int captured = 0;
+        bool applied = false;
+        var url = MassiveDriveUrlOrNull();
+        var phaseClouds = new List<(double E1, float[] World, float YOffsetMm)>();
         try
         {
-            Console.Log("[bedcal] === Auto bed calibration (CELL MS_AXIS E1 sweep) ===");
+            Console.Log("[bedcal] === AUTO BED CAL (MassiveDRIVE Movements master) ===");
+            Console.Log("[bedcal] Coordinates/E1 live on MassiveDRIVE — not in this SLICER install.");
+            Console.Log("[bedcal] Capture trigger: waypoint notes containing 'bed' (or bedscan / bed-cal).");
+            Console.Log("[bedcal] Pendant: LFAM3_RSI_BulkPTP, AUT, drives ON, path idle. Board off-centre on bed.");
 
-            bedCal.SetStatus("Moving to bed-cal waypoint…");
-            Console.Log("[bedcal] Step 1: pre-cal waypoint (scanner-down-bed)…");
-            if (!await GoToCalWaypointAsync("bed-cal", bedCal.SetStatus, "[bedcal]"))
-                return;
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                bedCal.SetStatus("massiveDriveUrl not set on cell — cannot follow Drive movements.");
+                Console.LogError("[bedcal] No massiveDriveUrl.");
+                return false;
+            }
 
             Viewport.ClearScanDiag();
             bedCal.ClearSamples();
-
-            var cell = ActiveCellConfig();
-            var wp = cell is not null ? CellLoader.FindWaypointByTag(cell, "bed-cal") : null;
-            if (wp?.Joints is not { Length: >= 6 })
-            {
-                bedCal.SetStatus("No bed-cal waypoint with joints — teach scanner-down-bed first.");
-                Console.LogError("[bedcal] Missing waypoint tagged bed-cal (need joints for E1 sweep).");
-                return;
-            }
-
-            int tool = wp.Tool, baseIdx = wp.Base, vel = wp.VelocityPct;
-            var e1Angles = BedScanCalSweep.E1AnglesForCell(cell?.BedScan);
-            var yVantages = BedScanCalSweep.VantageOffsetsY(cell?.BedScan);
-            // Surface scans for rotation-phase fit; YOffsetMm tags the vantage (phase uses Y0 only).
-            var phaseClouds = new List<(double E1, float[] World, float YOffsetMm)>();
-            int totalStops = yVantages.Count * e1Angles.Count;
-
-            Console.Log("[bedcal] Step 2: activate scanner tool on controller…");
             EnsureCalibratedScannerToolSelected("[bedcal]");
-            await robot.InitCommandServerAsync();
-            if (!await robot.SetFrameAsync(tool, baseIdx, timeoutMs: 30000))
+
+            using var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(5));
+            string? sequenceId = null;
+            string sequenceName = MassiveDriveWaypointNotes.BedCalibrationSequenceName;
+
+            // Prefer attaching to a movement already started on the Drive UI
+            using (var st0 = await client.SequenceRunStatusAsync())
             {
-                bedCal.SetStatus($"Couldn't activate tool #{tool} — is CELL selected, AUTO, drives on?");
-                Console.LogError($"[bedcal] SetFrame tool #{tool} base #{baseIdx} timed out.");
-                return;
+                if (st0.RootElement.TryGetProperty("run", out var run0)
+                    && run0.TryGetProperty("active", out var act0) && act0.GetBoolean())
+                {
+                    sequenceId = run0.TryGetProperty("sequence_id", out var sid) ? sid.GetString() : null;
+                    sequenceName = run0.TryGetProperty("name", out var nm) ? nm.GetString() ?? sequenceName : sequenceName;
+                    Console.Log($"[bedcal] Attaching to active Drive movement \"{sequenceName}\" ({sequenceId}) — DRIVE is master.");
+                    bedCal.SetStatus($"Following active Drive movement: {sequenceName}…");
+                }
             }
 
-            bedCal.SetStatus($"Step 3: {yVantages.Count} Y × {e1Angles.Count} E1 — keep CELL selected…");
-            Console.Log($"[bedcal] Step 3: multi-vantage E1 sweep — Y [{string.Join(", ", yVantages)}] mm, " +
-                        $"{e1Angles.Count} E1/step, tool #{tool} base #{baseIdx}.");
-
-            bool aborted = false;
-            for (int v = 0; v < yVantages.Count && !aborted; v++)
+            if (sequenceId is null)
             {
-                float yOff = yVantages[v];
-                bedCal.SetStatus($"Vantage {v + 1}/{yVantages.Count}: Y offset {yOff:F0} mm…");
-                Console.Log($"[bedcal] === Vantage {v + 1}/{yVantages.Count} (Y {(yOff >= 0 ? "+" : "")}{yOff:F0} mm) ===");
-
-                if (!await BedCalMoveToVantageAsync(robot, wp, yOff, vel, tool, baseIdx))
+                using var listDoc = await client.ListSequencesAsync();
+                if (!listDoc.RootElement.TryGetProperty("sequences", out var seqs)
+                    || seqs.ValueKind != System.Text.Json.JsonValueKind.Array)
                 {
-                    bedCal.SetStatus($"Couldn't reach Y offset {yOff:F0} mm (captured {captured}).");
-                    Console.LogError($"[bedcal] Vantage Y{yOff:F0} move failed.");
-                    aborted = true;
+                    bedCal.SetStatus("MassiveDRIVE returned no Movements — teach Bed Calibration on Drive first.");
+                    Console.LogError("[bedcal] GET /api/sequences missing sequences[] — teach on MassiveDRIVE.");
+                    return false;
+                }
+
+                foreach (var s in seqs.EnumerateArray())
+                {
+                    string name = s.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    if (name.Equals(MassiveDriveWaypointNotes.BedCalibrationSequenceName,
+                            StringComparison.OrdinalIgnoreCase)
+                        || name.Contains("bed cal", StringComparison.OrdinalIgnoreCase)
+                        || name.Equals("Bed Scan", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sequenceId = s.TryGetProperty("sequence_id", out var id) ? id.GetString() : null;
+                        sequenceName = name;
+                        break;
+                    }
+                }
+
+                // Prefer not to steal Scanner Calibration if name match failed
+                if (sequenceId is null)
+                {
+                    foreach (var s in seqs.EnumerateArray())
+                    {
+                        string name = s.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                        if (name.Contains("scanner", StringComparison.OrdinalIgnoreCase))
+                            continue;
+                        if (name.Contains("bed", StringComparison.OrdinalIgnoreCase))
+                        {
+                            sequenceId = s.TryGetProperty("sequence_id", out var id) ? id.GetString() : null;
+                            sequenceName = name;
+                            break;
+                        }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(sequenceId))
+                {
+                    bedCal.SetStatus("No Bed Calibration movement on MassiveDRIVE — create it there first.");
+                    Console.LogError("[bedcal] No bed movement found. Teach waypoints (with e1) + notes=bed on MassiveDRIVE.");
+                    return false;
+                }
+
+                Console.Log($"[bedcal] Starting Drive movement \"{sequenceName}\" ({sequenceId}) as master…");
+                bedCal.SetStatus($"Starting Drive movement: {sequenceName}…");
+                using var startDoc = await client.StartSequenceAsync(sequenceId, async: true);
+                bool startedOk = startDoc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+                bool startedFlag = startDoc.RootElement.TryGetProperty("started", out var stEl) && stEl.GetBoolean();
+                if (!startedOk && !startedFlag)
+                {
+                    string err = startDoc.RootElement.TryGetProperty("error", out var e)
+                        ? e.GetString() ?? startDoc.RootElement.GetRawText()
+                        : startDoc.RootElement.GetRawText();
+                    bedCal.SetStatus($"Could not start Drive movement: {err}");
+                    Console.LogError($"[bedcal] Start sequence failed: {err}");
+                    return false;
+                }
+            }
+
+            bedCal.SetStatus($"Following Drive movement \"{sequenceName}\" — capturing on notes=bed…");
+            Console.Log("[bedcal] Listening for waiting_capture (notes=bed). Board sample + surface at each stop.");
+
+            var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(40);
+            string lastPhase = "";
+            while (DateTime.UtcNow < deadline)
+            {
+                using var stDoc = await client.SequenceRunStatusAsync();
+                if (!stDoc.RootElement.TryGetProperty("run", out var run))
+                {
+                    await Task.Delay(200);
+                    continue;
+                }
+
+                string phase = run.TryGetProperty("phase", out var ph) ? ph.GetString() ?? "" : "";
+                bool active = run.TryGetProperty("active", out var act) && act.GetBoolean();
+                int stepIdx = run.TryGetProperty("step_index", out var si) && si.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? si.GetInt32() : -1;
+                int stepsTotal = run.TryGetProperty("steps_total", out var stt) && stt.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? stt.GetInt32() : 0;
+                string wpName = run.TryGetProperty("waypoint_name", out var wn) ? wn.GetString() ?? "" : "";
+                string notes = run.TryGetProperty("notes", out var no) ? no.GetString() ?? "" : "";
+
+                if (!string.Equals(phase, lastPhase, StringComparison.Ordinal))
+                {
+                    Console.Log($"[bedcal] Drive phase={phase} step {stepIdx + 1}/{stepsTotal} {wpName}" +
+                                (string.IsNullOrEmpty(notes) ? "" : $" notes={notes}"));
+                    lastPhase = phase;
+                    bedCal.SetStatus($"Drive: {phase} · step {stepIdx + 1}/{stepsTotal} · {wpName}" +
+                                     (string.IsNullOrEmpty(notes) ? "" : $" · {notes}"));
+                }
+
+                // Only after Drive finished motion (never during moving/settling)
+                bool captureWindow =
+                    string.Equals(phase, "waiting_capture", StringComparison.OrdinalIgnoreCase);
+
+                // Only bed notes — never treat hand-eye 'scan' as a bed sample
+                if (captureWindow && MassiveDriveWaypointNotes.RequestsBed(notes))
+                {
+                    string token = run.TryGetProperty("capture_token", out var tok)
+                        ? tok.GetString() ?? "" : "";
+                    string key = string.IsNullOrEmpty(token)
+                        ? $"{stepIdx}:{wpName}:{notes}"
+                        : token;
+                    if (!seenTokens.Contains(key))
+                    {
+                        bool ready = await WaitForDriveCaptureReadyAsync(
+                            client, robot, "[bedcal]",
+                            string.IsNullOrEmpty(token) ? null : token,
+                            TimeSpan.FromSeconds(60));
+                        if (ready && seenTokens.Add(key))
+                        {
+                        Console.Log($"[bedcal] Settled @ {wpName} (notes={notes}, E1={robot.E1:F1}°) — board + surface…");
+
+                        int before = bedCal.SampleCount;
+                        await bedCal.AddSampleAsync();
+                        if (bedCal.SampleCount > before)
+                        {
+                            captured++;
+                            Console.Log($"[bedcal] Board sample {captured} at {wpName} (E1={robot.E1:F1}°).");
+                        }
+                        else
+                        {
+                            Console.Log($"[bedcal] Board not detected at {wpName}: {bedCal.Status}");
+                        }
+
+                        // Surface cloud for rotation-phase estimate (same as legacy E1 sweep)
+                        try
+                        {
+                            if (bedCal.GetCameraToWorld?.Invoke() is { } camW)
+                            {
+                                double e1 = robot.E1;
+                                var sres = await Task.Run(() => ZividScanService.Capture(null, null, null));
+                                var (world, valid) = ScanPointCloudTransform.ToWorld(sres.PointsXYZ, camW);
+                                phaseClouds.Add((e1, world, 0f));
+                                Viewport.StashScanDiagWorld($"bedcal_drive_E1_{e1:F0}", (float)e1, world);
+                                Console.Log($"[bedcal] Surface scan @ E1={e1:F1}° ({valid:N0} pts).");
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.Log($"[bedcal] Surface scan skipped @ {wpName}: {ex.Message}");
+                        }
+
+                        try
+                        {
+                            await client.SequenceCaptureAckAsync(string.IsNullOrEmpty(token) ? null : token);
+                        }
+                        catch (Exception ackEx)
+                        {
+                            Console.Log($"[bedcal] capture-ack: {ackEx.Message}");
+                        }
+                        }
+                    }
+                }
+                else if (captureWindow && MassiveDriveWaypointNotes.RequestsScan(notes)
+                         && !MassiveDriveWaypointNotes.RequestsBed(notes))
+                {
+                    // Drive is waiting for scan-cal; do not steal the dwell — wait only
+                    await Task.Delay(150);
+                    continue;
+                }
+
+                if (!active && phase is "done" or "error" or "stopped" or "idle")
+                {
+                    if (phase is "error" or "stopped")
+                    {
+                        string err = run.TryGetProperty("error", out var er) ? er.GetString() ?? phase : phase;
+                        Console.LogError($"[bedcal] Drive movement ended: {err}");
+                    }
+                    else
+                        Console.Log($"[bedcal] Drive movement finished (phase={phase}).");
                     break;
                 }
 
-                var park = await robot.ReadAxesAsync();
-                (int vantageCaptured, captured) = await BedCalRunE1SweepAsync(
-                    robot, bedCal, e1Angles, park, phaseClouds, v, yOff, vel, tool, baseIdx,
-                    captured, totalStops);
-                Console.Log($"[bedcal] Vantage Y{yOff:F0}: {vantageCaptured} board samples this ring.");
-
-                Console.Log("[bedcal] E1 → 0° before next vantage…");
-                await robot.SendAxesAsync(park[0], park[1], park[2], park[3], park[4], park[5], 0, vel, tool, baseIdx);
-                await SyncRobotAxesFromControllerAsync(robot);
+                await Task.Delay(150);
             }
-
-            Console.Log("[bedcal] Returning to bed-cal waypoint…");
-            await ExecuteWaypointMoveAsync(robot, wp, "[bedcal]", vel);
-            await SyncRobotAxesFromControllerAsync(robot);
 
             if (captured >= 3)
             {
-                Console.Log($"[bedcal] Step 4: fit from {captured} board samples, {phaseClouds.Count} surface scans…");
+                Console.Log($"[bedcal] Fitting centre from {captured} board samples, {phaseClouds.Count} surface scans…");
+                bedCal.SetStatus($"Fitting centre from {captured} samples…");
                 bedCal.Compute();
                 if (bedCal.HasResult)
                 {
@@ -787,6 +1418,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                                 $"R {bedCal.Radius:F0} mm, residual {bedCal.Residual:F2} mm, " +
                                 $"rotation {(bedCal.RotationSign < 0 ? "CW" : "CCW")}.");
                     bedCal.Apply();
+                    applied = true;
                     Console.Log("[bedcal] Centre + rotation sign applied. Estimating rotation phase…");
                     if (phaseClouds.Count >= 2)
                         await EstimateAndApplyBedPhaseAsync(phaseClouds, bedCal);
@@ -795,28 +1427,40 @@ public sealed class MainWindowViewModel : ViewModelBase
                 }
                 else
                 {
-                    Console.Log($"[bedcal] Sweep captured {captured} samples but the fit failed — not applied.");
+                    Console.Log($"[bedcal] Captured {captured} samples but the fit failed — not applied.");
                 }
             }
             else
             {
-                Console.Log($"[bedcal] Sweep ended with {captured} samples (need >=3) — nothing applied.");
-                bedCal.SetStatus($"Bed-cal ended with {captured} samples (need >=3).");
+                Console.Log($"[bedcal] Ended with {captured} samples (need >=3) — nothing applied.");
+                bedCal.SetStatus($"Bed-cal ended with {captured} samples (need >=3). Check notes=bed + board on bed.");
             }
 
             if (Viewport.ScanDiagCount > 0)
                 Console.Log($"[bedcal] {Viewport.ScanDiagCount} surface scans stashed — run `diag-scans` to export.");
+            return applied;
         }
         catch (Exception ex)
         {
             bedCal.SetStatus($"Auto-cal error: {ex.Message}");
             Console.LogError($"[bedcal] ERROR: {ex.GetType().Name}: {ex.Message}");
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(8));
+                    await client.SequenceRunStopAsync();
+                }
+            }
+            catch { /* best-effort stop */ }
+            return false;
         }
         finally
         {
-            robot.ResumeStreaming();
+            if (robot.IsConnected)
+                robot.ResumeStreaming();
             bedCal.SetAutoRunning(false);
-            Console.Log("[bedcal] === Done ===");
+            Console.Log("[bedcal] === Done (MassiveDRIVE Movements master) ===");
         }
     }
 
@@ -891,91 +1535,241 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Automated 3D scan-tool (hand-eye) calibration via CELL <c>MS_AXIS</c> wrist nutation — no
-    /// <c>SCAN_TOOL_CAL</c> program. At each pose the calibration card must be fully in frame; if not,
-    /// wrist tilt is halved and the pose is retried until in frame or <see cref="ScanToolCalSweep.MinScale"/>.
+    /// Automated 3D scan-tool (hand-eye) calibration.
+    /// <b>Motion master = MassiveDRIVE Movements</b> (taught waypoints; sequence
+    /// "Scanner Calibration"). SLICER does not need local cal coordinates — it
+    /// loads the sequence from Drive and captures when waypoint notes request a
+    /// scan (<c>scan</c> / <c>capture</c> / <c>slicer:scan</c>).
     /// </summary>
-    private async Task RunAutoScanToolCalibration()
+    /// <returns><c>true</c> when hand-eye result was computed and saved.</returns>
+    private async Task<bool> RunAutoScanToolCalibrationAsync()
     {
         var robot   = RightPanel.Settings.Robot;
         var scanCal = RightPanel.Scan.Calibration;
 
-        if (!robot.IsConnected)
-        {
-            scanCal.SetStatus("Sync the robot first — C3Bridge must be connected.");
-            Console.LogError("[scancal] Robot not connected — run `sync` first.");
-            return;
-        }
         if (scanCal.IsAutoRunning)
         {
             Console.LogError("[scancal] Auto calibration already running — wait for it to finish (or restart the app if stuck).");
-            return;
+            return false;
         }
         if (robot.BedCalibration.IsAutoRunning)
         {
             Console.LogError("[scancal] bed-cal is running — wait for it to finish before scan-cal.");
-            return;
+            return false;
         }
 
+        if (!await EnsureMassiveDriveReadyForCalibrationAsync("[scancal]", scanCal.SetStatus))
+            return false;
+
+        if (!robot.IsConnected)
+            Console.Log("[scancal] C3 not synced — flange FK uses Drive axes; `sync` improves live feedback.");
+
         scanCal.SetAutoRunning(true);
-        robot.PauseStreaming();
+        if (robot.IsConnected)
+            robot.PauseStreaming();
         int captured = 0;
+        bool applied = false;
+        var url = MassiveDriveUrlOrNull();
         try
         {
-            Console.Log("[scancal] === Auto scan-tool calibration (CELL MS_AXIS, no SCAN_TOOL_CAL) ===");
+            Console.Log("[scancal] === AUTO-CALIBRATE SCAN TOOL (MassiveDRIVE Movements master) ===");
+            Console.Log("[scancal] Coordinates live on MassiveDRIVE — not in this SLICER install.");
+            Console.Log("[scancal] Capture trigger: waypoint notes containing 'scan' (or capture / slicer:scan).");
+            Console.Log("[scancal] Pendant: LFAM3_RSI_BulkPTP, AUT, drives ON, path idle.");
 
-            scanCal.SetStatus("Moving to scan-cal waypoint…");
-            Console.Log("[scancal] Step 1/4: pre-cal waypoint (scanner-down-bed)…");
-            if (!await GoToCalWaypointAsync("scan-cal", scanCal.SetStatus, "[scancal]"))
-                return;
+            if (string.IsNullOrWhiteSpace(url))
+            {
+                scanCal.SetStatus("massiveDriveUrl not set on cell — cannot follow Drive movements.");
+                Console.LogError("[scancal] No massiveDriveUrl.");
+                return false;
+            }
 
-            scanCal.ClearForAuto();
-
-            var cell = ActiveCellConfig();
-            var wp = cell is not null ? CellLoader.FindWaypointByTag(cell, "scan-cal") : null;
             int calTool = ScanToolCalSweep.CalToolIndex;
             int resultTool = ScanToolCalSweep.ResultToolIndex;
-            int baseIdx = wp?.Base ?? robot.KrlBaseIndex;
-            int vel = wp?.VelocityPct > 0
-                ? Math.Min(wp.VelocityPct, ScanToolCalSweep.DefaultVelPct)
-                : ScanToolCalSweep.DefaultVelPct;
-
-            Console.Log("[scancal] Step 2/4: activate tool #5 on controller (sweep uses uncalibrated scan tool)…");
-            if (!await ScanCalActivateToolAsync(robot, scanCal, calTool, baseIdx))
-                return;
-
-            var home = await robot.ReadAxesAsync();
-            Console.Log($"[scancal] Home joints: A1={home[0]:F1}…A6={home[5]:F1} A4={home[3]:F1} A5={home[4]:F1} A6={home[5]:F1} E1={home[6]:F1}.");
-
-            var wristDeltas = ScanToolCalSweep.PoseDeltasForCell(cell?.BedScan);
-            bool usingLearned = cell?.BedScan?.ScanCalWristDeltas is { Length: ScanToolCalSweep.PoseCount };
-            scanCal.SetStatus($"Step 3/4: {wristDeltas.Count} wrist poses — CELL selected, card visible…");
-            Console.Log($"[scancal] Step 3/4: wrist nutation — tool #{calTool} base #{baseIdx} @ {vel}% " +
-                        $"({(usingLearned ? "learned" : "default")} deltas from cell).");
-
-            string? cellPath = Viewport.ActiveCellPath;
-            (captured, _) = await ScanCalRunWristSweepAsync(
-                robot, scanCal, home, vel, calTool, baseIdx, wristDeltas, cellPath);
-
-            Console.Log("[scancal] Returning to home pose…");
-            await robot.SendAxesAsync(
-                home[0], home[1], home[2], home[3], home[4], home[5], home[6], vel, calTool, baseIdx);
-            await SyncRobotAxesFromControllerAsync(robot);
-
-            if (wp is not null)
+            await Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(() =>
             {
-                Console.Log("[scancal] Returning to scan-cal waypoint…");
-                await ExecuteWaypointMoveAsync(robot, wp, "[scancal]", vel);
-                await SyncRobotAxesFromControllerAsync(robot);
+                if (robot.SelectToolByKrlIndex(calTool))
+                    Console.Log($"[scancal] UI tool → #{calTool} (uncalibrated scan tool for hand-eye).");
+            });
+
+            scanCal.ClearForAuto();
+            scanCal.SetStatus("MassiveDRIVE: loading Scanner Calibration movement…");
+
+            using var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(5));
+            string? sequenceId = null;
+            string sequenceName = MassiveDriveWaypointNotes.ScannerCalibrationSequenceName;
+
+            // Prefer attaching to a movement already started on the Drive UI
+            using (var st0 = await client.SequenceRunStatusAsync())
+            {
+                if (st0.RootElement.TryGetProperty("run", out var run0)
+                    && run0.TryGetProperty("active", out var act0) && act0.GetBoolean())
+                {
+                    sequenceId = run0.TryGetProperty("sequence_id", out var sid) ? sid.GetString() : null;
+                    sequenceName = run0.TryGetProperty("name", out var nm) ? nm.GetString() ?? sequenceName : sequenceName;
+                    Console.Log($"[scancal] Attaching to active Drive movement \"{sequenceName}\" ({sequenceId}) — DRIVE is master.");
+                    scanCal.SetStatus($"Following active Drive movement: {sequenceName}…");
+                }
+            }
+
+            if (sequenceId is null)
+            {
+                using var listDoc = await client.ListSequencesAsync();
+                if (!listDoc.RootElement.TryGetProperty("sequences", out var seqs)
+                    || seqs.ValueKind != System.Text.Json.JsonValueKind.Array)
+                {
+                    scanCal.SetStatus("MassiveDRIVE returned no Movements — teach Scanner Calibration on Drive first.");
+                    Console.LogError("[scancal] GET /api/sequences missing sequences[] — teach on MassiveDRIVE.");
+                    return false;
+                }
+
+                foreach (var s in seqs.EnumerateArray())
+                {
+                    string name = s.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
+                    if (name.Equals(MassiveDriveWaypointNotes.ScannerCalibrationSequenceName,
+                            StringComparison.OrdinalIgnoreCase)
+                        || name.Contains("scanner cal", StringComparison.OrdinalIgnoreCase)
+                        || name.Contains("scan cal", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sequenceId = s.TryGetProperty("sequence_id", out var id) ? id.GetString() : null;
+                        sequenceName = name;
+                        break;
+                    }
+                }
+
+                if (sequenceId is null && seqs.GetArrayLength() > 0)
+                {
+                    var s0 = seqs[0];
+                    sequenceId = s0.TryGetProperty("sequence_id", out var id) ? id.GetString() : null;
+                    sequenceName = s0.TryGetProperty("name", out var n) ? n.GetString() ?? "?" : "?";
+                    Console.Log($"[scancal] No named Scanner Calibration — using first Drive movement \"{sequenceName}\".");
+                }
+
+                if (string.IsNullOrEmpty(sequenceId))
+                {
+                    scanCal.SetStatus("No Movements on MassiveDRIVE — create Scanner Calibration there first.");
+                    Console.LogError("[scancal] Empty sequences list. Teach waypoints + movement on MassiveDRIVE (notes=scan on capture poses).");
+                    return false;
+                }
+
+                Console.Log($"[scancal] Starting Drive movement \"{sequenceName}\" ({sequenceId}) as master…");
+                scanCal.SetStatus($"Starting Drive movement: {sequenceName}…");
+                using var startDoc = await client.StartSequenceAsync(sequenceId, async: true);
+                bool startedOk = startDoc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+                bool startedFlag = startDoc.RootElement.TryGetProperty("started", out var stEl) && stEl.GetBoolean();
+                if (!startedOk && !startedFlag)
+                {
+                    string err = startDoc.RootElement.TryGetProperty("error", out var e)
+                        ? e.GetString() ?? startDoc.RootElement.GetRawText()
+                        : startDoc.RootElement.GetRawText();
+                    scanCal.SetStatus($"Could not start Drive movement: {err}");
+                    Console.LogError($"[scancal] Start sequence failed: {err}");
+                    return false;
+                }
+            }
+
+            scanCal.SetStatus($"Following Drive movement \"{sequenceName}\" — capturing on notes=scan…");
+            Console.Log("[scancal] Listening for waiting_capture (notes=scan). No local pose list used.");
+
+            var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+            var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(40);
+            string lastPhase = "";
+            while (DateTime.UtcNow < deadline)
+            {
+                using var stDoc = await client.SequenceRunStatusAsync();
+                if (!stDoc.RootElement.TryGetProperty("run", out var run))
+                {
+                    await Task.Delay(200);
+                    continue;
+                }
+
+                string phase = run.TryGetProperty("phase", out var ph) ? ph.GetString() ?? "" : "";
+                bool active = run.TryGetProperty("active", out var act) && act.GetBoolean();
+                int stepIdx = run.TryGetProperty("step_index", out var si) && si.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? si.GetInt32() : -1;
+                int stepsTotal = run.TryGetProperty("steps_total", out var stt) && stt.ValueKind == System.Text.Json.JsonValueKind.Number
+                    ? stt.GetInt32() : 0;
+                string wpName = run.TryGetProperty("waypoint_name", out var wn) ? wn.GetString() ?? "" : "";
+                string notes = run.TryGetProperty("notes", out var no) ? no.GetString() ?? "" : "";
+
+                if (!string.Equals(phase, lastPhase, StringComparison.Ordinal))
+                {
+                    Console.Log($"[scancal] Drive phase={phase} step {stepIdx + 1}/{stepsTotal} {wpName}" +
+                                (string.IsNullOrEmpty(notes) ? "" : $" notes={notes}"));
+                    lastPhase = phase;
+                    scanCal.SetStatus($"Drive: {phase} · step {stepIdx + 1}/{stepsTotal} · {wpName}" +
+                                      (string.IsNullOrEmpty(notes) ? "" : $" · {notes}"));
+                }
+
+                // Only after Drive finished motion (never during moving/settling)
+                bool scanCaptureWindow =
+                    string.Equals(phase, "waiting_capture", StringComparison.OrdinalIgnoreCase)
+                    && MassiveDriveWaypointNotes.RequestsScan(notes);
+
+                if (scanCaptureWindow)
+                {
+                    string token = run.TryGetProperty("capture_token", out var tok)
+                        ? tok.GetString() ?? "" : "";
+                    string key = string.IsNullOrEmpty(token)
+                        ? $"{stepIdx}:{wpName}:{notes}"
+                        : token;
+                    if (!seenTokens.Contains(key))
+                    {
+                        bool ready = await WaitForDriveCaptureReadyAsync(
+                            client, robot, "[scancal]",
+                            string.IsNullOrEmpty(token) ? null : token,
+                            TimeSpan.FromSeconds(60));
+                        if (ready && seenTokens.Add(key))
+                        {
+                        Console.Log($"[scancal] Settled @ {wpName} (notes={notes}) — Zivid hand-eye pose…");
+                        bool inFrame = await scanCal.CapturePoseAutoAsync();
+                        if (inFrame)
+                        {
+                            captured++;
+                            Console.Log($"[scancal] Captured pose {captured} at {wpName}.");
+                        }
+                        else
+                        {
+                            Console.Log($"[scancal] Board not in frame at {wpName}: {scanCal.LastCaptureStatus}");
+                        }
+
+                        try
+                        {
+                            await client.SequenceCaptureAckAsync(string.IsNullOrEmpty(token) ? null : token);
+                        }
+                        catch (Exception ackEx)
+                        {
+                            Console.Log($"[scancal] capture-ack: {ackEx.Message}");
+                        }
+                        }
+                    }
+                }
+
+                if (!active && phase is "done" or "error" or "stopped" or "idle")
+                {
+                    if (phase is "error" or "stopped")
+                    {
+                        string err = run.TryGetProperty("error", out var er) ? er.GetString() ?? phase : phase;
+                        Console.LogError($"[scancal] Drive movement ended: {err}");
+                    }
+                    else
+                        Console.Log($"[scancal] Drive movement finished (phase={phase}).");
+                    break;
+                }
+
+                await Task.Delay(150);
             }
 
             if (captured >= 3)
             {
-                scanCal.SetStatus($"Step 4/4: computing hand-eye from {captured} poses…");
-                Console.Log($"[scancal] Step 4/4: hand-eye fit ({captured} poses) → save to tool #{resultTool}…");
+                scanCal.SetStatus($"Computing hand-eye from {captured} Drive-triggered poses…");
+                Console.Log($"[scancal] Hand-eye fit ({captured} poses) → save to tool #{resultTool}…");
                 await scanCal.ComputeCalibrationAsync();
                 if (scanCal.HasResult)
+                {
                     await ApplyScanCalibrationResultAsync(robot, scanCal, resultTool);
+                    applied = true;
+                }
                 else
                 {
                     Console.Log($"[scancal] Captured {captured} poses but the hand-eye fit failed — not applied.");
@@ -984,23 +1778,35 @@ public sealed class MainWindowViewModel : ViewModelBase
             else
             {
                 Console.Log($"[scancal] Ended with {captured} poses (need >=3) — nothing computed.");
-                scanCal.SetStatus($"Scan-cal ended with {captured} poses (need >=3 in frame).");
+                scanCal.SetStatus($"Scan-cal ended with {captured} poses (need >=3). Check notes=scan on Drive waypoints + board in frame.");
             }
+            return applied;
         }
         catch (Exception ex)
         {
             scanCal.SetStatus($"Auto scan-cal error: {ex.Message}");
             Console.LogError($"[scancal] ERROR: {ex.GetType().Name}: {ex.Message}");
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(url))
+                {
+                    using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(8));
+                    await client.SequenceRunStopAsync();
+                }
+            }
+            catch { /* best-effort stop */ }
+            return false;
         }
         finally
         {
-            robot.ResumeStreaming();
+            if (robot.IsConnected)
+                robot.ResumeStreaming();
             scanCal.SetAutoRunning(false);
-            Console.Log("[scancal] === Done ===");
+            Console.Log("[scancal] === Done (MassiveDRIVE Movements master) ===");
         }
     }
 
-    /// <summary>MS_CMD=5 tool #{5} + UI selection — sweep runs on uncalibrated scan tool; result goes to #6.</summary>
+    /// <summary>Legacy CELL tool select (unused by Drive scan-cal).</summary>
     async Task<bool> ScanCalActivateToolAsync(
         RobotPanelViewModel robot, ScanCalibrationViewModel scanCal, int tool, int baseIdx)
     {
@@ -1090,7 +1896,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         if (tools is null) return null;
         int krl = ScanToolCalSweep.ResultToolIndex;
         return tools.FirstOrDefault(t => t.KrlIndex == krl)
-            ?? tools.FirstOrDefault(t => string.Equals(t.Name, "Scanner", StringComparison.OrdinalIgnoreCase));
+            ?? tools.FirstOrDefault(t => string.Equals(t.Name, "Scanner (Calibrated)", StringComparison.OrdinalIgnoreCase))
+            ?? tools.FirstOrDefault(t => t.Name.Contains("Scanner", StringComparison.OrdinalIgnoreCase));
     }
 
     void EnsureCalibratedScannerToolSelected(string logPrefix)
@@ -1194,8 +2001,11 @@ public sealed class MainWindowViewModel : ViewModelBase
                 ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
             }
 
+            if (result.SavedZdfPath is { } zdf2 && System.IO.File.Exists(zdf2))
+                node.SourceFilePath = System.IO.Path.GetFullPath(zdf2);
+
             Viewport.AddScanNode(node);
-            scan.ScanStatus = $"Added \"{nodeName}\" â€” {result.ValidPointCount:N0} points";
+            scan.ScanStatus = $"Added \"{nodeName}\" — {result.ValidPointCount:N0} points";
             Console.Log($"[scan] {scan.ScanStatus}");
         }
         catch (Exception ex)
@@ -1213,7 +2023,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void StartBedCalibration()
     {
         Console.Log("[bedcal] Starting auto bed calibration from console…");
-        _ = RunAutoBedCalibration().ContinueWith(t =>
+        _ = RunAutoBedCalibrationAsync().ContinueWith(t =>
         {
             if (t.IsFaulted && t.Exception is { } ex)
                 Console.LogError($"[bedcal] Unhandled: {ex.GetBaseException().Message}");
@@ -1224,11 +2034,116 @@ public sealed class MainWindowViewModel : ViewModelBase
     public void StartScanCalibration()
     {
         Console.Log("[scancal] Starting auto scan-tool calibration from console…");
-        _ = RunAutoScanToolCalibration().ContinueWith(t =>
+        _ = RunAutoScanToolCalibrationAsync().ContinueWith(t =>
         {
             if (t.IsFaulted && t.Exception is { } ex)
                 Console.LogError($"[scancal] Unhandled: {ex.GetBaseException().Message}");
         }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>
+    /// Full LFAM3 calibration wizard: MassiveDRIVE idle check → scan-cal (hand-eye) → bed-cal.
+    /// Console: <c>calibrate</c>, <c>calibrate scan</c>, <c>calibrate bed</c>.
+    /// </summary>
+    public void StartLfam3CalibrationWizard(string? mode = null)
+    {
+        string m = (mode ?? "full").Trim().ToLowerInvariant();
+        if (m is "scan" or "scancal" or "hand-eye" or "handeye")
+        {
+            StartScanCalibration();
+            return;
+        }
+        if (m is "bed" or "bedcal" or "rotary")
+        {
+            StartBedCalibration();
+            return;
+        }
+
+        Console.Log("[cal] === LFAM3 calibration wizard (scan-cal → bed-cal via MassiveDRIVE) ===");
+        Console.Log("[cal] Pendant: LFAM3_RSI_BulkPTP selected, AUT, drives ON. Path executor idle.");
+        _ = RunLfam3CalibrationWizardAsync().ContinueWith(t =>
+        {
+            if (t.IsFaulted && t.Exception is { } ex)
+                Console.LogError($"[cal] Unhandled: {ex.GetBaseException().Message}");
+        }, TaskScheduler.FromCurrentSynchronizationContext());
+    }
+
+    /// <summary>Query MassiveDRIVE path busy state (console <c>drive-status</c>).</summary>
+    public async Task ReportMassiveDriveStatusAsync()
+    {
+        var cell = ActiveCellConfig();
+        var url = cell?.MassiveDriveUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.Log("[drive] No massiveDriveUrl on active cell.");
+            return;
+        }
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(5));
+            var status = await client.QueryPathStatusAsync();
+            Console.Log($"[drive] {url} — {status.Summary}" +
+                        (status.SafeForCalibration ? " (safe for CELL cal)" : status.PathActive ? " (block cal)" : " (check connectivity)"));
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[drive] status failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Stop MassiveDRIVE path executor (console <c>drive-stop</c>).</summary>
+    public async Task StopMassiveDrivePathAsync(string reason = "slicer-cal")
+    {
+        var cell = ActiveCellConfig();
+        var url = cell?.MassiveDriveUrl?.Trim();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.LogError("[drive] No massiveDriveUrl on active cell.");
+            return;
+        }
+        try
+        {
+            using var client = new MassiveDriveClient(url, TimeSpan.FromSeconds(8));
+            using var doc = await client.StopAsync(reason);
+            Console.Log($"[drive] Stop requested ({reason}): {doc.RootElement.GetRawText()}");
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[drive] stop failed: {ex.Message}");
+        }
+    }
+
+    async Task RunLfam3CalibrationWizardAsync()
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected)
+        {
+            Console.LogError("[cal] Robot not connected — run `sync` first.");
+            return;
+        }
+        if (!await EnsureMassiveDriveReadyForCalibrationAsync("[cal]"))
+            return;
+
+        Console.Log("[cal] Phase 1/2: scan-tool hand-eye…");
+        bool scanOk = await RunAutoScanToolCalibrationAsync();
+        Console.Log(scanOk
+            ? "[cal] Phase 1/2: scan-cal OK."
+            : "[cal] Phase 1/2: scan-cal did not apply a result — continuing to bed-cal anyway (existing tool #6 TCP).");
+
+        // Small pause so streaming can resume between phases
+        await Task.Delay(500);
+
+        if (!await EnsureMassiveDriveReadyForCalibrationAsync("[cal]"))
+            return;
+
+        Console.Log("[cal] Phase 2/2: rotary bed…");
+        bool bedOk = await RunAutoBedCalibrationAsync();
+        Console.Log(bedOk
+            ? "[cal] Phase 2/2: bed-cal OK."
+            : "[cal] Phase 2/2: bed-cal did not apply a centre.");
+
+        Console.Log($"[cal] === Wizard done — scan={(scanOk ? "ok" : "skip/fail")}, bed={(bedOk ? "ok" : "fail")} ===");
+        Console.Log("[cal] Keep LFAM3_RSI_BulkPTP running for MassiveDRIVE paths.");
     }
 
     /// <summary>Moves E1 (deg on rotary cells, mm on rail cells) while holding A1â€“A6.</summary>
@@ -1471,6 +2386,114 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
+    /// Re-imports <c>.zdf</c> captures from disk (default: scan output folder) into the viewport
+    /// as scan nodes with best-effort placement from the JSON sidecar. Then <b>Save Workspace</b>
+    /// to persist them in the .mass (fix: scans were previously excluded from save).
+    /// </summary>
+    public async Task RecoverScansFromDirectoryAsync(string? directory = null, double sinceHours = 24)
+    {
+        var scan = RightPanel.Scan;
+        string dir = string.IsNullOrWhiteSpace(directory)
+            ? scan.OutputDirectory
+            : directory!;
+        if (!System.IO.Directory.Exists(dir))
+        {
+            Console.LogError($"[recover-scans] Directory not found: {dir}");
+            return;
+        }
+
+        var cutoff = DateTime.Now.AddHours(-Math.Abs(sinceHours));
+        var zdfs = System.IO.Directory.GetFiles(dir, "scan_*.zdf")
+            .Select(p => new System.IO.FileInfo(p))
+            .Where(f => f.LastWriteTime >= cutoff)
+            .OrderBy(f => f.LastWriteTime)
+            .ToList();
+
+        if (zdfs.Count == 0)
+        {
+            // Fallback: entire folder if nothing in window
+            zdfs = System.IO.Directory.GetFiles(dir, "scan_*.zdf")
+                .Select(p => new System.IO.FileInfo(p))
+                .OrderBy(f => f.LastWriteTime)
+                .ToList();
+        }
+
+        if (zdfs.Count == 0)
+        {
+            Console.LogError($"[recover-scans] No scan_*.zdf under {dir}");
+            return;
+        }
+
+        Console.Log($"[recover-scans] Importing {zdfs.Count} ZDF(s) from {dir} (since {cutoff:g} or all)…");
+        int ok = 0, fail = 0;
+        var robot = RightPanel.Settings.Robot;
+        double a1 = robot.A1, a2 = robot.A2, a3 = robot.A3, a4 = robot.A4, a5 = robot.A5, a6 = robot.A6, e1 = robot.E1;
+
+        foreach (var fi in zdfs)
+        {
+            try
+            {
+                scan.ScanStatus = $"Recovering {fi.Name}…";
+                var result = await Task.Run(() => ZividScanService.LoadFromZdf(fi.FullName,
+                    msg => Dispatcher.UIThread.Post(() => scan.ScanStatus = msg)));
+
+                var name = $"Scan {fi.LastWriteTime:HH-mm-ss}";
+                var node = await Task.Run(() => PointCloudMesher.Build(
+                    result.PointsXYZ, result.Width, result.Height, name));
+                if (node is null)
+                {
+                    fail++;
+                    Console.Log($"[recover-scans] No meshable points in {fi.Name}");
+                    continue;
+                }
+
+                node.CullFaces = false;
+                node.SourceFilePath = fi.FullName;
+
+                // Best-effort registration: temporarily apply capture joints and sample scanner pose.
+                if (result.Metadata is { } m)
+                {
+                    robot.A1 = m.A1; robot.A2 = m.A2; robot.A3 = m.A3;
+                    robot.A4 = m.A4; robot.A5 = m.A5; robot.A6 = m.A6;
+                    robot.E1 = m.E1;
+                    await Task.Delay(30);
+                    EnsureCalibratedScannerToolSelected("[recover-scans]");
+                    if (ResolveCalibratedScannerTool() is { } st
+                        && Viewport.GetToolWorldPose?.Invoke(st) is { } pose)
+                    {
+                        node.LocalTransform = pose;
+                    }
+                    else
+                    {
+                        node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                        ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+                    }
+                }
+                else
+                {
+                    node.LocalTransform = Matrix4.CreateRotationX(MathF.PI);
+                    ImportHelper.PlaceOnBed(node, Viewport.ActiveCell);
+                }
+
+                Viewport.AddScanNode(node);
+                ok++;
+                Console.Log($"[recover-scans] Added \"{name}\" from {fi.Name} ({result.ValidPointCount:N0} pts)");
+            }
+            catch (Exception ex)
+            {
+                fail++;
+                Console.LogError($"[recover-scans] {fi.Name}: {ex.Message}");
+            }
+        }
+
+        // Restore live joints
+        robot.A1 = a1; robot.A2 = a2; robot.A3 = a3; robot.A4 = a4; robot.A5 = a5; robot.A6 = a6; robot.E1 = e1;
+
+        scan.ScanStatus = $"Recovered {ok} scan(s), {fail} failed — Save Workspace to keep them.";
+        Console.Log($"[recover-scans] Done: {ok} recovered, {fail} failed. Save the .mass to persist.");
+    }
+
+    /// <summary>
     /// Exports the rotary scans stashed this session (world points + capture E1) plus the rotary
     /// rotation centre/sign to a <c>diag/</c> folder under the scan output directory, for offline
     /// calibration analysis. Returns a summary line.
@@ -1478,7 +2501,7 @@ public sealed class MainWindowViewModel : ViewModelBase
     public string ExportScanDiagnostics()
     {
         if (Viewport.ScanDiagCount == 0)
-            return "No scans stashed this session â€” run `scan`, auto bed-cal, or registered scans first.";
+            return "No scans stashed this session — run `scan`, auto bed-cal, or registered scans first.";
 
         var robot = RightPanel.Settings.Robot;
         float sign = (float)robot.BedRotationSign;
@@ -1809,40 +2832,72 @@ public sealed class MainWindowViewModel : ViewModelBase
     }
 
     /// <summary>
-    /// Moves to the cell waypoint tagged for a calibration workflow (<c>bed-cal</c>, <c>scan-cal</c>).
-    /// Returns false when the move was required but failed; true when skipped (no tag) or successful.
+    /// Joint-angle tolerance (deg) for treating current pose as already at the cal waypoint.
+    /// If within this band we <b>do not move</b> — operator often has scanner already aimed at bed.
+    /// </summary>
+    const double CalWaypointSkipTolDeg = 4.0;
+
+    /// <summary>
+    /// Soft cap on cal approach moves so we never race to a taught waypoint.
+    /// </summary>
+    const int CalApproachVelPctMax = 12;
+
+    /// <summary>
+    /// Optionally approaches the cell waypoint tagged for cal (<c>bed-cal</c>, <c>scan-cal</c>).
+    /// If the arm is already near the taught joints (or no joints taught), keeps the current pose.
     /// </summary>
     async Task<bool> GoToCalWaypointAsync(string tag, Action<string> setStatus, string logPrefix)
     {
         if (ActiveCellConfig() is not { } cell)
         {
-            Console.Log($"{logPrefix} No active cell â€” skipping pre-cal waypoint.");
+            Console.Log($"{logPrefix} No active cell — starting from current pose.");
             return true;
         }
 
         if (CellLoader.FindWaypointByTag(cell, tag) is not { } wp)
         {
-            Console.Log($"{logPrefix} No waypoint tagged '{tag}' â€” skipping pre-cal move.");
+            Console.Log($"{logPrefix} No waypoint tagged '{tag}' — keeping current pose (scanner already set up).");
             return true;
         }
 
         var robot = RightPanel.Settings.Robot;
-        setStatus($"Moving to {wp.Name}â€¦");
-        Console.Log($"{logPrefix} Pre-cal â†’ {wp.Name} (tag {tag}, tool #{wp.Tool}, base #{wp.Base})");
-
         try
         {
-            bool ok = await ExecuteWaypointMoveAsync(robot, wp, logPrefix);
+            // Prefer staying put when already near the taught TCP (bulk Cartesian distance).
+            var curPose = await ReadPoseForCalAsync(robot, logPrefix);
+            if (curPose is { } cp)
+            {
+                double d = Math.Sqrt(
+                    Math.Pow(cp.X - wp.TcpX, 2) +
+                    Math.Pow(cp.Y - wp.TcpY, 2) +
+                    Math.Pow(cp.Z - wp.TcpZ, 2));
+                const double skipMm = 25.0;
+                if (d <= skipMm)
+                {
+                    setStatus($"Already near {wp.Name} ({d:F0} mm) — keeping current scanner pose.");
+                    Console.Log($"{logPrefix} Skip pre-cal bulk: within {skipMm:F0} mm of '{wp.Name}' (d={d:F1} mm). Holding your setup.");
+                    return true;
+                }
+                Console.Log($"{logPrefix} {d:F0} mm from '{wp.Name}' — slow bulk approach.");
+            }
+            else
+            {
+                Console.Log($"{logPrefix} No pose feedback — slow bulk approach to '{wp.Name}'.");
+            }
+
+            setStatus($"Slow bulk approach to {wp.Name}…");
+            int vel = Math.Min(wp.VelocityPct > 0 ? wp.VelocityPct : CalApproachVelPctMax, CalApproachVelPctMax);
+            bool ok = await ExecuteWaypointMoveAsync(robot, wp, logPrefix, vel);
             if (!ok)
             {
-                setStatus($"Couldn't reach {wp.Name} â€” check MASSIVE_SERVER / CELL.");
-                Console.Log($"{logPrefix} Pre-cal move to {wp.Name} timed out.");
+                setStatus($"Couldn't reach {wp.Name} — check LFAM3_RSI_BulkPTP + MassiveDRIVE, or jog closer and retry.");
+                Console.Log($"{logPrefix} Pre-cal bulk to {wp.Name} failed — abort (won't invent another pose).");
                 return false;
             }
 
-            await SyncRobotAxesFromControllerAsync(robot);
-            setStatus($"At {wp.Name} â€” starting calibrationâ€¦");
-            Console.Log($"{logPrefix} At {wp.Name} â€” proceeding with calibration.");
+            await ReadPoseForCalAsync(robot, logPrefix);
+            setStatus($"At {wp.Name} — starting calibration…");
+            Console.Log($"{logPrefix} At {wp.Name} — proceeding with calibration.");
             return true;
         }
         catch (Exception ex)
@@ -1853,48 +2908,72 @@ public sealed class MainWindowViewModel : ViewModelBase
         }
     }
 
+    static bool JointsNear(IReadOnlyList<double> cur, IReadOnlyList<float> target, double tolDeg)
+        => MaxJointDeltaDeg(cur, target) <= tolDeg;
+
+    static double MaxJointDeltaDeg(IReadOnlyList<double> cur, IReadOnlyList<float> target)
+    {
+        int n = Math.Min(6, Math.Min(cur.Count, target.Count));
+        double max = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double d = Math.Abs(cur[i] - target[i]);
+            // wrap A4/A6-style large angles into shortest arc
+            if (d > 180) d = 360 - d;
+            if (d > max) max = d;
+        }
+        return max;
+    }
+
     async Task<bool> ExecuteWaypointMoveAsync(
         RobotPanelViewModel robot, CellWaypointConfig wp, string logPrefix, int velOverride = -1)
     {
         int vel = velOverride >= 0 ? velOverride : wp.VelocityPct;
-        await robot.InitCommandServerAsync();
-        Console.Log($"{logPrefix} â†’ {wp.Name} @ {vel}% ({(wp.PreferJoints ? "joints" : "pose")})");
-
-        if (wp.PreferJoints && wp.Joints is { Length: >= 6 } j)
-        {
-            double e1 = j.Length >= 7 ? j[6] : 0;
-            return await robot.SendAxesAsync(j[0], j[1], j[2], j[3], j[4], j[5], e1, vel, wp.Tool, wp.Base);
-        }
-
-        return await robot.SendPoseAsync(false, wp.TcpX, wp.TcpY, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC, vel, wp.Tool, wp.Base);
+        if (vel < 1) vel = CalApproachVelPctMax;
+        vel = Math.Min(vel, CalApproachVelPctMax);
+        // Always bulk LIN (MS_CMD=99) — joint PTP is unreliable on this cell.
+        double speed = Math.Clamp(vel * 1.5, 10, 30);
+        double? e1 = wp.Joints is { Length: >= 7 } j ? j[6] : null;
+        Console.Log($"{logPrefix} → {wp.Name} bulk LIN @ {speed:F0} mm/s " +
+                    $"(TCP {wp.TcpX:F0},{wp.TcpY:F0},{wp.TcpZ:F0})");
+        return await DriveMovePoseAsync(
+            wp.TcpX, wp.TcpY, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC,
+            e1: e1, speedMmS: speed, tool: wp.Tool, baseIdx: wp.Base, logPrefix: logPrefix);
     }
 
-    /// <summary>Parks TCP at bed-cal waypoint + <paramref name="yOffsetMm"/> on Y (active base frame).</summary>
+    /// <summary>
+    /// Parks TCP at bed-cal home + optional Y offset.
+    /// Y+0 keeps current / park joints — does not re-drive the waypoint.
+    /// Non-zero Y is a deliberate side-step (only if cell configures multi-vantage).
+    /// </summary>
     async Task<bool> BedCalMoveToVantageAsync(
         RobotPanelViewModel robot, CellWaypointConfig wp, float yOffsetMm, int vel, int tool, int baseIdx)
     {
         if (Math.Abs(yOffsetMm) < 0.5f)
         {
-            Console.Log("[bedcal] Vantage Y+0 — using bed-cal waypoint joints.");
-            return await ExecuteWaypointMoveAsync(robot, wp, "[bedcal]", vel);
+            Console.Log("[bedcal] Vantage Y+0 — holding current arm pose (scanner stays on bed).");
+            return true;
         }
 
+        // Side-step: keep A1–A3/A5-ish by bulk Cartesian only when operator opted in via cell config.
         double y = wp.TcpY + yOffsetMm;
-        Console.Log($"[bedcal] MS_POSE Y offset {yOffsetMm:F0} mm → ({wp.TcpX:F1}, {y:F1}, {wp.TcpZ:F1})");
-        bool ok = await robot.SendPoseAsync(
-            false, wp.TcpX, y, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC, vel, tool, baseIdx, timeoutMs: 120000);
+        int slow = Math.Min(vel > 0 ? vel : CalApproachVelPctMax, CalApproachVelPctMax);
+        double speed = Math.Clamp(slow * 1.0, 8, 25);
+        Console.Log($"[bedcal] CAUTION: multi-vantage Y offset {yOffsetMm:F0} mm → ({wp.TcpX:F1}, {y:F1}, {wp.TcpZ:F1}) @ {speed:F0} mm/s");
+        bool ok = await DriveMovePoseAsync(
+            wp.TcpX, y, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC,
+            e1: null, speedMmS: speed, tool: tool, baseIdx: baseIdx, logPrefix: "[bedcal]");
         if (ok)
         {
             await Task.Delay(500);
-            await SyncRobotAxesFromControllerAsync(robot);
+            await ReadAxesForCalAsync(robot, "[bedcal]");
         }
         return ok;
     }
 
     /// <summary>
-    /// Nine wrist nutation poses about <paramref name="home"/>; halves tilt when the calibration card
-    /// is out of frame until in frame or <see cref="ScanToolCalSweep.MinScale"/>. Successful gentler
-    /// angles are persisted to <c>bedScan.scanCalWristDeltas</c> so the next run starts closer.
+    /// Wrist nutation in <b>joint space</b> (A4/A5/A6) via MassiveDRIVE MS_CMD=93 SPTP MS_AXIS.
+    /// Halves tilt when calibration card is out of frame.
     /// </summary>
     async Task<(int Captured, int Skipped)> ScanCalRunWristSweepAsync(
         RobotPanelViewModel robot,
@@ -1923,20 +3002,22 @@ public sealed class MainWindowViewModel : ViewModelBase
                 double a6 = home[5] + delta.A6 * scale;
 
                 scanCal.SetStatus(
-                    $"Pose {n + 1}/{target}: scale {scale:P0} — moving wrist (card must be in frame)…");
-                Console.Log($"[scancal] Pose {n + 1}/{target} scale={scale:F3} → A4={a4:F1} A5={a5:F1} A6={a6:F1}");
+                    $"Pose {n + 1}/{target}: scale {scale:P0} — joint wrist (card must be in frame)…");
+                Console.Log($"[scancal] Pose {n + 1}/{target} scale={scale:F3} joints → " +
+                            $"A4={a4:F1} A5={a5:F1} A6={a6:F1}");
 
-                bool moved = await robot.SendAxesAsync(
-                    home[0], home[1], home[2], a4, a5, a6, home[6], vel, tool, baseIdx, timeoutMs: 120000);
+                bool moved = await DriveMoveAxesAsync(
+                    home[0], home[1], home[2], a4, a5, a6, home.Length > 6 ? home[6] : 0,
+                    vel, tool, baseIdx, "[scancal]");
                 if (!moved)
                 {
-                    Console.Log($"[scancal] Pose {n + 1}: wrist move timed out — skipping.");
+                    Console.Log($"[scancal] Pose {n + 1}: joint SPTP failed — skipping.");
                     skipped++;
                     break;
                 }
 
                 await Task.Delay(500);
-                await SyncRobotAxesFromControllerAsync(robot);
+                await ReadAxesForCalAsync(robot, "[scancal]");
                 await Task.Delay(400);
 
                 bool inFrame = await scanCal.CapturePoseAutoAsync();
@@ -1949,7 +3030,7 @@ public sealed class MainWindowViewModel : ViewModelBase
                             delta.A4 * scale, delta.A5 * scale, delta.A6 * scale);
                         learned[n] = true;
                         Console.Log($"[scancal] Pose {n + 1}: learned ΔA4={deltas[n].A4:F2} ΔA5={deltas[n].A5:F2} ΔA6={deltas[n].A6:F2}° " +
-                                    $"(was scale {scale:F3} of ΔA4={delta.A4:F1} ΔA5={delta.A5:F1} ΔA6={delta.A6:F1}).");
+                                    $"(scale {scale:F3}).");
                     }
                     scanCal.SetStatus($"Pose {n + 1}/{target}: card in frame — captured ({captured} good)…");
                     Console.Log($"[scancal] Pose {n + 1}: card in frame — pose {captured} accepted.");
@@ -1966,7 +3047,7 @@ public sealed class MainWindowViewModel : ViewModelBase
 
                 scale *= 0.5;
                 Console.Log($"[scancal] Pose {n + 1}: card out of frame ({scanCal.LastCaptureStatus}); re-aiming at scale {scale:F3}.");
-                scanCal.SetStatus($"Pose {n + 1}/{target}: card out of frame — gentler wrist angle…");
+                scanCal.SetStatus($"Pose {n + 1}/{target}: card out of frame — gentler wrist…");
             }
         }
 
@@ -1978,7 +3059,7 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (CellLoader.TrySaveScanCalWristDeltas(cellPath, deltas, out var saveErr))
             {
                 int nLearned = learned.Count(l => l);
-                Console.Log($"[scancal] Saved {nLearned} learned wrist delta(s) to {cellPath} — next scan-cal will start gentler.");
+                Console.Log($"[scancal] Saved {nLearned} learned wrist delta(s) to {cellPath}.");
                 MassiveSlicer.App.CellSceneCache.Invalidate(cellPath);
                 Viewport.ActiveCell = CellLoader.Load(cellPath);
                 Viewport.OnDevCellReloadRequested?.Invoke(cellPath);
@@ -1990,12 +3071,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         return (captured, skipped);
     }
 
-    /// <summary>Full E1 sweep at the current parked arm pose; merges captures into bed-cal + phase clouds.</summary>
+    /// <summary>Full E1 sweep via bulk LIN (same XYZABC, vary MS_POSE.E1).</summary>
     async Task<(int VantageCaptured, int CapturedTotal)> BedCalRunE1SweepAsync(
         RobotPanelViewModel robot,
         RotaryBedCalibrationViewModel bedCal,
         IReadOnlyList<double> e1Angles,
-        double[] parkJoints,
+        (double X, double Y, double Z, double A, double B, double C) parkPose,
         List<(double E1, float[] World, float YOffsetMm)> phaseClouds,
         int vantageIndex,
         float yOffsetMm,
@@ -2007,25 +3088,26 @@ public sealed class MainWindowViewModel : ViewModelBase
     {
         int vantageCaptured = 0;
         string yTag = $"Y{yOffsetMm:F0}";
+        double speed = Math.Clamp(vel * 1.5, 12, 40);
 
         for (int n = 0; n < e1Angles.Count; n++)
         {
             double e1 = e1Angles[n];
             int stopNum = vantageIndex * e1Angles.Count + n + 1;
             bedCal.SetStatus($"[{yTag}] E1 {e1:F0}° ({stopNum}/{totalStops})…");
-            Console.Log($"[bedcal] [{yTag}] {n + 1}/{e1Angles.Count} — MS_AXIS E1={e1:F1}°");
+            Console.Log($"[bedcal] [{yTag}] {n + 1}/{e1Angles.Count} — bulk E1={e1:F1}°");
 
-            bool moved = await robot.SendAxesAsync(
-                parkJoints[0], parkJoints[1], parkJoints[2], parkJoints[3], parkJoints[4], parkJoints[5],
-                e1, vel, tool, baseIdx, timeoutMs: 120000);
+            bool moved = await DriveMovePoseAsync(
+                parkPose.X, parkPose.Y, parkPose.Z, parkPose.A, parkPose.B, parkPose.C,
+                e1, speed, tool, baseIdx, "[bedcal]");
             if (!moved)
             {
-                Console.Log($"[bedcal] [{yTag}] E1 move timed out at {e1:F0}°.");
+                Console.Log($"[bedcal] [{yTag}] E1 bulk move failed at {e1:F0}°.");
                 break;
             }
 
             await Task.Delay(500);
-            await SyncRobotAxesFromControllerAsync(robot);
+            await ReadPoseForCalAsync(robot, "[bedcal]");
 
             int before = bedCal.SampleCount;
             await bedCal.AddSampleAsync();
@@ -2060,16 +3142,12 @@ public sealed class MainWindowViewModel : ViewModelBase
         return (vantageCaptured, capturedTotal);
     }
 
-    static async Task SyncRobotAxesFromControllerAsync(RobotPanelViewModel robot)
+    async Task SyncRobotAxesFromControllerAsync(RobotPanelViewModel robot)
     {
-        var axes = await robot.ReadAxesAsync();
-        robot.A1 = Math.Round(axes[0], 2);
-        robot.A2 = Math.Round(axes[1], 2);
-        robot.A3 = Math.Round(axes[2], 2);
-        robot.A4 = Math.Round(axes[3], 2);
-        robot.A5 = Math.Round(axes[4], 2);
-        robot.A6 = Math.Round(axes[5], 2);
-        robot.E1 = Math.Round(axes[6], 2);
+        // Prefer MassiveDRIVE joints; C3 only if Drive has no axes / offline
+        var axes = await ReadAxesForCalAsync(robot, "[sync-axes]");
+        if (axes is null)
+            return;
     }
 
     /// <summary>Captures the live robot pose and saves it as a named waypoint in the active cell JSON.</summary>
@@ -2091,7 +3169,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         var robot = RightPanel.Settings.Robot;
         if (!robot.IsConnected)
         {
-            Console.LogError("[waypoint] Robot not connected â€” Sync first.");
+            Console.LogError("[waypoint] Robot not connected — Sync first.");
             return false;
         }
 
@@ -2109,17 +3187,34 @@ public sealed class MainWindowViewModel : ViewModelBase
             if (int.TryParse(toolStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var t)) actTool = t;
             if (int.TryParse(baseStr.Trim(), System.Globalization.NumberStyles.Integer, inv, out var bIdx)) actBase = bIdx;
 
+            // Merge tags with any existing waypoint of the same name (keep extras).
+            var existing = CellLoader.FindWaypoint(CellLoader.Load(path), name);
+            var tagList = new List<string>();
+            if (existing?.Tags is { Count: > 0 } oldTags)
+                tagList.AddRange(oldTags);
+            if (tags is not null)
+            {
+                foreach (var tag in tags)
+                {
+                    if (string.IsNullOrWhiteSpace(tag)) continue;
+                    if (!tagList.Any(t => t.Equals(tag, StringComparison.OrdinalIgnoreCase)))
+                        tagList.Add(tag.Trim());
+                }
+            }
+
             var wp = new CellWaypointConfig
             {
                 Name = name,
-                Description = description,
-                Tags = tags ?? [],
+                Description = description ?? existing?.Description,
+                Tags = tagList,
                 TcpX = (float)x, TcpY = (float)y, TcpZ = (float)z,
                 TcpA = (float)a, TcpB = (float)b, TcpC = (float)c,
                 Joints = [(float)j[0], (float)j[1], (float)j[2], (float)j[3], (float)j[4], (float)j[5], (float)e1],
                 Tool = actTool,
                 Base = actBase,
-                VelocityPct = 20,
+                VelocityPct = Math.Min(
+                    existing is { VelocityPct: > 0 } ex ? ex.VelocityPct : 12,
+                    20),
                 PreferJoints = true,
             };
 
@@ -2146,6 +3241,168 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
         finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>
+    /// Teach current live pose as the scan/bed calibration waypoint
+    /// (<c>scanner-down-bed</c>, tags <c>scan-cal</c> + <c>bed-cal</c>).
+    /// </summary>
+    public async Task<bool> MarkScanPositionAsync()
+    {
+        Console.Log("[scan-pose] Marking current pose as scan position (scanner-down-bed)…");
+        bool ok = await SaveWaypointFromRobotAsync(
+            "scanner-down-bed",
+            "Scanner aimed down on bed — taught live for scan-cal + bed-cal",
+            ["scan-cal", "bed-cal"]);
+        if (ok)
+            Console.Log("[scan-pose] Done. Auto-cal will prefer this pose (skip move if already near).");
+        return ok;
+    }
+
+    /// <summary>
+    /// Teach current live joints as a named home (default <c>Home</c>) and a recall waypoint.
+    /// Mirrors KUKA XHOME intent: joint PTP home, stored in the cell for MassiveDRIVE go-home.
+    /// </summary>
+    public async Task<bool> MarkHomePositionAsync(string name = "Home")
+    {
+        name = string.IsNullOrWhiteSpace(name) ? "Home" : name.Trim();
+        if (Viewport.ActiveCellPath is not { } path)
+        {
+            Console.LogError("[home] No active cell.");
+            return false;
+        }
+
+        var robot = RightPanel.Settings.Robot;
+        if (!robot.IsConnected)
+        {
+            Console.LogError("[home] Robot not connected — Sync first.");
+            return false;
+        }
+
+        robot.PauseStreaming();
+        try
+        {
+            var axes = await robot.ReadAxesAsync();
+            if (axes is not { Length: >= 6 })
+            {
+                Console.LogError("[home] Could not read $AXIS_ACT.");
+                return false;
+            }
+
+            var angles = new float[]
+            {
+                (float)axes[0], (float)axes[1], (float)axes[2],
+                (float)axes[3], (float)axes[4], (float)axes[5],
+            };
+
+            var data = CellLoader.LoadPositionData(path);
+            int idx = data.Positions.FindIndex(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            var cfg = new HomePositionConfig { Name = name, Angles = angles };
+            if (idx >= 0) data.Positions[idx] = cfg;
+            else data.Positions.Add(cfg);
+            data.Default = name;
+            CellLoader.SavePositionData(path, data);
+
+            // Viewport / additive dropdown
+            Viewport.AdditiveSettings?.AddHomePosition(name, angles);
+            if (Viewport.AdditiveSettings is not null)
+                Viewport.AdditiveSettings.SelectedHomePositionName = name;
+            robot.SetNextPositionName(data.Positions.Count + 1);
+
+            // Also a joint waypoint for MassiveDRIVE go (includes E1 when available)
+            await SaveWaypointFromRobotAsync(
+                "home",
+                $"Home taught live ({name}) — PTP via MassiveDRIVE",
+                ["home", "xhome"]);
+
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            Console.Log($"[home] Saved '{name}' as default home + waypoint 'home'.");
+            Console.Log(string.Format(inv,
+                "  A1={0:F2} A2={1:F2} A3={2:F2} A4={3:F2} A5={4:F2} A6={5:F2} E1={6:F2}",
+                axes[0], axes[1], axes[2], axes[3], axes[4], axes[5],
+                axes.Length > 6 ? axes[6] : 0));
+            Console.Log("[home] Go with: home go  ·  UI GO HOME  ·  waypoint go home");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.LogError($"[home] {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+        finally { robot.ResumeStreaming(); }
+    }
+
+    /// <summary>
+    /// Go home via MassiveDRIVE: prefer controller <c>SPTP XHOME</c> (<c>/api/motion/home</c>),
+    /// else bulk LIN to taught waypoint <c>home</c> TCP.
+    /// </summary>
+    public async Task GoToSavedHomeAsync(int velPct = 20)
+    {
+        var robot = RightPanel.Settings.Robot;
+        if (!await EnsureMassiveDriveReadyForCalibrationAsync("[home]"))
+            return;
+
+        velPct = Math.Clamp(velPct, 1, 30);
+        var url = MassiveDriveUrlOrNull();
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.LogError("[home] No massiveDriveUrl.");
+            return;
+        }
+
+        if (robot.IsConnected)
+            robot.PauseStreaming();
+        try
+        {
+            // Primary: controller XHOME (same as Drive UI Home button)
+            Console.Log("[home] MassiveDRIVE SPTP XHOME…");
+            using (var client = new MassiveDriveClient(url, TimeSpan.FromMinutes(3)))
+            {
+                try
+                {
+                    using var doc = await client.GoHomeAsync();
+                    if (doc.RootElement.TryGetProperty("ok", out var okEl) && okEl.GetBoolean())
+                    {
+                        Console.Log("[home] At controller XHOME.");
+                        await ReadPoseForCalAsync(robot, "[home]");
+                        return;
+                    }
+                    var raw = doc.RootElement.GetRawText();
+                    Console.Log($"[home] XHOME API: {raw[..Math.Min(200, raw.Length)]}");
+                }
+                catch (Exception ex)
+                {
+                    Console.Log($"[home] XHOME API failed ({ex.Message}) — trying bulk to waypoint…");
+                }
+            }
+
+            var cell = ActiveCellConfig();
+            CellWaypointConfig? wp = cell is not null
+                ? CellLoader.FindWaypoint(cell, "home") ?? CellLoader.FindWaypointByTag(cell, "home")
+                : null;
+            if (wp is not null)
+            {
+                double speed = Math.Clamp(velPct * 1.5, 15, 40);
+                Console.Log($"[home] Bulk LIN → waypoint '{wp.Name}' @ {speed:F0} mm/s…");
+                bool ok = await DriveMovePoseAsync(
+                    wp.TcpX, wp.TcpY, wp.TcpZ, wp.TcpA, wp.TcpB, wp.TcpC,
+                    wp.Joints is { Length: >= 7 } j ? j[6] : null,
+                    speed, wp.Tool, wp.Base, "[home]");
+                if (ok)
+                {
+                    await ReadPoseForCalAsync(robot, "[home]");
+                    Console.Log("[home] At taught home waypoint.");
+                }
+                return;
+            }
+
+            Console.LogError("[home] No XHOME response and no 'home' waypoint — use Drive UI Home or MARK HOME.");
+        }
+        finally
+        {
+            if (robot.IsConnected)
+                robot.ResumeStreaming();
+        }
     }
 
     /// <summary>Resets the viewport robot to the selected home preset (no real-robot move).</summary>
@@ -2340,6 +3597,62 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        // STEP tessellation is heavy (cascadio/OCCT subprocess); keep it off the UI thread.
+        var ext = System.IO.Path.GetExtension(path).ToLowerInvariant();
+        if (ext is ".stp" or ".step")
+        {
+            _ = ImportStepModelAsync(path);
+            return true;
+        }
+
+        return FinishImport(path, loadSync: true);
+    }
+
+    async Task ImportStepModelAsync(string path)
+    {
+        var fileName = System.IO.Path.GetFileName(path);
+        ShowBusy("Importing STEP", $"Tessellating {fileName}… (first run may install converter)");
+        Console.Log($"[import] STEP load started: {fileName}");
+
+        SceneNode? node = null;
+        string? error = null;
+        try
+        {
+            var cell = Viewport.ActiveCell;
+            node = await Task.Run(() =>
+            {
+                try
+                {
+                    return ImportHelper.LoadAndPlace(path, cell, msg =>
+                        Dispatcher.UIThread.Post(() => Console.Log(msg)));
+                }
+                catch (Exception ex)
+                {
+                    error = ex.ToString();
+                    return null;
+                }
+            }).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            error = ex.ToString();
+        }
+        finally
+        {
+            HideBusy();
+        }
+
+        if (node is null)
+        {
+            Console.LogError($"[import] Failed to load '{path}'{(error is null ? "" : $": {error}")}.");
+            return;
+        }
+
+        FinishImportWithNode(path, node);
+    }
+
+    bool FinishImport(string path, bool loadSync)
+    {
         SceneNode? node;
         try
         {
@@ -2357,6 +3670,12 @@ public sealed class MainWindowViewModel : ViewModelBase
             return false;
         }
 
+        FinishImportWithNode(path, node);
+        return true;
+    }
+
+    void FinishImportWithNode(string path, SceneNode node)
+    {
         MarkWorkspaceDirty();
         // Inspect BEFORE enqueuing: AddImportNode hands the node to the GL upload thread,
         // which clears PendingMesh once uploaded -- for small meshes that can happen before
@@ -2373,7 +3692,6 @@ public sealed class MainWindowViewModel : ViewModelBase
         RightPanel.StepSliceExpanded = true;
 
         Console.Log($"[import] Added '{node.Name}' to scene.");
-        return true;
     }
 
     /// <summary>Called when a cell load begins so workspace restore waits for the bed scene.</summary>
