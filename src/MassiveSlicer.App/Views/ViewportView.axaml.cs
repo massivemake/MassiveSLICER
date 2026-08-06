@@ -5205,6 +5205,10 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
+        // Raised only by SetSeamGuides (seam editor Save, project load). Without it, saving a
+        // seam guide changed nothing on screen — the toolpath kept the seam from the previous
+        // slice, so the green guide and the yellow seam sat on different sides of the part.
+        nameof(AdditiveSettingsViewModel.SeamGuideSummary),
         nameof(AdditiveSettingsViewModel.ZigZagAllowSameLayerTravel),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
