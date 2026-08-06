@@ -1042,6 +1042,17 @@ public partial class ViewportView : UserControl
             return true;
         }
 
+        // Once the part is sliced the model is usually hidden and only the toolpath is on
+        // screen. Toolpath nodes carry no pickable mesh, so the face pick above finds nothing
+        // and the editor drew no line at all — it looked like the tool had stopped working.
+        // The printed outline IS the wall here, so seam onto it.
+        if (TrySeamGuideOnToolpath(ray, out var tpHit))
+        {
+            _lastSeamGuideSurfacePoint = tpHit;
+            hit = tpHit;
+            return true;
+        }
+
         // Cursor left the silhouette: hold the last on-surface position. Snapping to the
         // nearest sampled vertex instead made the column jitter between scattered vertices
         // and occasionally land off the visible wall.
@@ -1053,6 +1064,68 @@ public partial class ViewportView : UserControl
 
         hit = default;
         return false;
+    }
+
+    /// <summary>
+    /// Nearest visible toolpath extrusion point to the cursor ray, used when no model mesh is
+    /// hittable (hidden after slicing, or a toolpath-only project). Returns false when the
+    /// cursor is well off the part, so hover there still holds the last on-wall position
+    /// rather than snapping across the scene.
+    /// </summary>
+    private bool TrySeamGuideOnToolpath(Ray ray, out TkVector3 hit)
+    {
+        hit = default;
+        if (_toolpathByNode.IsEmpty) return false;
+
+        var dir = ray.Direction.LengthSquared > 1e-12f
+            ? TkVector3.Normalize(ray.Direction)
+            : new TkVector3(0f, 0f, -1f);
+
+        float bestDist2 = float.MaxValue;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible || tp.Layers.Count == 0) continue;
+            var world = node.WorldTransform;
+
+            // A metre-scale part holds hundreds of thousands of moves and this runs on every
+            // mouse move. A few mm of slop is invisible on a seam column, so subsample.
+            int total = 0;
+            foreach (var layer in tp.Layers) total += layer.Moves.Count;
+            int stride = Math.Max(1, total / 20_000);
+
+            int i = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                for (int m = 0; m < moves.Count; m++, i++)
+                {
+                    if (i % stride != 0) continue;
+                    var move = moves[m];
+                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;   // travels aren't wall
+
+                    var p = TkVector3.TransformPosition(
+                        new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
+                    var v = p - ray.Origin;
+                    float t = TkVector3.Dot(v, dir);
+                    if (t <= 0f) continue;                                       // behind the camera
+                    float d2 = (v - dir * t).LengthSquared;
+                    if (d2 < bestDist2) { bestDist2 = d2; hit = p; }
+                }
+            }
+        }
+
+        if (bestDist2 == float.MaxValue) return false;
+
+        // Scale the accept radius to the part, so it behaves the same on a 200mm bracket and a
+        // 3m panel. Off-part hover falls through to the held position instead of jumping.
+        float tol = 25f;
+        if ((_vm ?? DataContext as ViewportViewModel) is { } tolVm)
+        {
+            var (zLo, zHi) = SeamGuideHeightRange(tolVm);
+            tol = MathF.Max(25f, (zHi - zLo) * 0.15f);
+        }
+        return bestDist2 <= tol * tol;
     }
 
 
