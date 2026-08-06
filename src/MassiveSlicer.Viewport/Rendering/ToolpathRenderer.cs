@@ -262,6 +262,10 @@ void main() {
 
     private static readonly Vector3 UnreachableColor = new(0.9f, 0.18f, 0.1f);
 
+    /// <summary>Moves demanding more RPM than the extruder can deliver. Magenta so it reads
+    /// as its own fault, distinct from unreachable red and from anything in the gradient.</summary>
+    private static readonly Vector3 RpmOverLimitColor = new(1.0f, 0.0f, 0.85f);
+
     private Vector3 _extrudeColor     = new(1f, 1f, 1f);
     private Vector3 _millColor        = new(0.95f, 0.6f,  0.1f);
     private Vector3 _travelColor      = new(0.85f, 0.18f, 0.18f);
@@ -292,6 +296,16 @@ void main() {
     private Toolpath _toolpath;
     private NVec3    _origin;
     private bool[]?  _reachability;  // per flat-move index; null = all reachable
+
+    /// <summary>
+    /// Exported RPM (%) per flat-move index, straight from <c>ToolpathRpm.Analyze</c> —
+    /// the same numbers the .src is written with. NaN on non-extrusion moves,
+    /// null before the first analysis. Drives both the RPM gradient and the over-limit
+    /// highlight, so the viewport cannot show an RPM the exporter disagrees with.
+    /// </summary>
+    private float[]? _rpmPercent;
+    private float    _rpmLimit = float.PositiveInfinity;
+    private bool     _showRpmOverLimit;
 
     /// <summary>Total flat move count (scrub/simulation range).</summary>
     public int TotalMoveCount => _totalMoveCount;
@@ -364,6 +378,33 @@ void main() {
             _wipeCount = wpData.Length / 6;
         }
     }
+
+    /// <summary>
+    /// Supplies the per-move exported RPM (%) and the limit above which a move is flagged.
+    /// <paramref name="rpmPercent"/> is indexed by flat move index; NaN where no RPM is written.
+    /// Rebuilds the extrude VBOs. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateRpm(float[]? rpmPercent, float limit)
+    {
+        _rpmPercent = rpmPercent;
+        _rpmLimit   = limit;
+        RebuildLineVbos();
+    }
+
+    /// <summary>Shows or hides the over-limit RPM highlight. GL thread only.</summary>
+    public void SetRpmOverLimitVisible(bool visible)
+    {
+        if (_showRpmOverLimit == visible) return;
+        _showRpmOverLimit = visible;
+        // With no analysis yet nothing can be flagged, so skip the rebuild —
+        // this runs on every newly uploaded toolpath and they can be huge.
+        if (_rpmPercent is not null) RebuildLineVbos();
+    }
+
+    /// <summary>True when this move's exported RPM exceeds the limit.</summary>
+    private bool IsRpmOverLimit(int flatIndex)
+        => _rpmPercent is { } r && flatIndex < r.Length
+           && !float.IsNaN(r[flatIndex]) && r[flatIndex] > _rpmLimit;
 
     /// <summary>
     /// Sets the bead surface colour. Applied as a shader uniform at draw time —
@@ -497,14 +538,18 @@ void main() {
         float scalarMin = float.MaxValue, scalarMax = float.MinValue;
         if (_colorMode != ToolpathColorMode.Normal)
         {
+            int si = 0;
             foreach (var layer in _toolpath.Layers)
                 foreach (var move in layer.Moves)
+                {
                     if (move.Kind == MoveKind.Extrude)
                     {
-                        float v = MoveScalar(move, layer);
+                        float v = MoveScalar(move, layer, si);
                         if (v < scalarMin) scalarMin = v;
                         if (v > scalarMax) scalarMax = v;
                     }
+                    si++;
+                }
         }
         float scalarRange = scalarMax - scalarMin;
 
@@ -518,12 +563,14 @@ void main() {
                     Vector3 color;
                     if (_reachability is not null && mi < _reachability.Length && !_reachability[mi])
                         color = UnreachableColor;
+                    else if (_showRpmOverLimit && IsRpmOverLimit(mi))
+                        color = RpmOverLimitColor;
                     else if (move.Kind == MoveKind.Mill)
                         color = _millColor;
                     else if (_colorMode != ToolpathColorMode.Normal)
                         color = scalarRange < 1e-6f
                             ? GradientColor(0.5f)
-                            : GradientColor((MoveScalar(move, layer) - scalarMin) / scalarRange);
+                            : GradientColor((MoveScalar(move, layer, mi) - scalarMin) / scalarRange);
                     else if (lightningOnly)
                         color = LightningColor;
                     else if (move.IsWipe)
@@ -539,19 +586,21 @@ void main() {
         return extData;
     }
 
-    /// <summary>Per-move factor for the active gradient mode (relative units — normalised later).</summary>
-    private float MoveScalar(ToolpathMove move, ToolpathLayer layer)
+    /// <summary>Per-move factor for the active gradient mode (normalised later).</summary>
+    private float MoveScalar(ToolpathMove move, ToolpathLayer layer, int flatIndex)
     {
         if (_colorMode == ToolpathColorMode.Thermal)
             return float.IsNaN(layer.ThermalTempC) ? 0f : layer.ThermalTempC;
         float speed = move.PrintSpeedScale * (move.IsResumeRamp ? move.ResumeSpeedScale : 1f);
         if (_colorMode == ToolpathColorMode.Speed) return speed;
-        // RPM demand ∝ speed · layer height (bead width constant per slice) · ramp/wipe scales.
-        float rpm = speed
-                  * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
-                  * (move.IsWipe ? move.WipeRpmScale : 1f)
-                  * MathF.Max(0.1f, layer.Height * move.HeightScale);
-        return rpm;
+        // RPM: the real exported percentage when the analysis has run, so the gradient and
+        // the .src agree. Falls back to a proportional estimate only before the first slice.
+        if (_rpmPercent is { } r && flatIndex < r.Length && !float.IsNaN(r[flatIndex]))
+            return r[flatIndex];
+        return speed
+             * (move.IsResumeRamp ? move.ResumeRpmScale : 1f)
+             * (move.IsWipe ? move.WipeRpmScale : 1f)
+             * MathF.Max(0.1f, layer.Height * move.HeightScale);
     }
 
     /// <summary>Blue → green → red gradient over t ∈ [0,1].</summary>

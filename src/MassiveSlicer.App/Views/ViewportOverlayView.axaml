@@ -875,6 +875,9 @@
                                 <CheckBox Content="Bead surface" FontSize="11"
                                           IsChecked="{Binding ShowBead, Mode=TwoWay}"
                                           ToolTip.Tip="Solid extruded-bead preview (printed-part look)"/>
+                                <CheckBox Content="RPM over limit" FontSize="11"
+                                          IsChecked="{Binding ShowRpmOverLimit, Mode=TwoWay}"
+                                          ToolTip.Tip="Magenta on every move demanding more than 99 % extruder RPM — the extruder cannot deliver it, and these block export. On by default in the RPM view."/>
                                 <CheckBox Content="Bead overhang heatmap" FontSize="11"
                                           IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
                                           ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>

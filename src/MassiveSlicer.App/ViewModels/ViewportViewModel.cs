@@ -464,6 +464,18 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    private bool _showRpmOverLimit;
+    /// <summary>
+    /// Highlight extrusion moves whose exported RPM exceeds
+    /// <see cref="MassiveSlicer.Core.IO.ToolpathRpm.MaxRpmPercent"/>. Per-view setting
+    /// (on by default in the RPM view); those moves also block export.
+    /// </summary>
+    public bool ShowRpmOverLimit
+    {
+        get => _showRpmOverLimit;
+        set { if (SetField(ref _showRpmOverLimit, value)) NotifyRenderNeeded(); }
+    }
+
     private bool _showExtrusionMoves = true;
     public bool ShowExtrusionMoves
     {
@@ -4596,6 +4608,11 @@ public sealed class ViewportViewModel : ViewModelBase
         public float BackdropOpacity { get; set; } = 1f;
         public float BackdropBlur { get; set; } = 2.5f;
         public float ToolpathLineOpacity { get; set; } = 1f;
+
+        /// <summary>Null = never chosen for this view; falls back to the per-view default
+        /// (on in RPM). Nullable so profiles saved before this setting existed don't
+        /// deserialize to false and silently turn the highlight off.</summary>
+        public bool? ShowRpmOverLimit { get; set; }
     }
 
     private static readonly string[] ViewModeNames = ["Body", "Toolpath", "Speed", "RPM", "Thermal", "Preview"];
@@ -4635,6 +4652,7 @@ public sealed class ViewportViewModel : ViewModelBase
         nameof(ShowContactShadows), nameof(ShowTcpFrame), nameof(CavityEnabled),
         nameof(DarkViewportBackground), nameof(ActiveShaderMode),
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
+        nameof(ShowRpmOverLimit),
     ];
 
     /// <summary>
@@ -4664,6 +4682,7 @@ public sealed class ViewportViewModel : ViewModelBase
             prof.BackdropOpacity    = BackdropOpacity;
             prof.BackdropBlur       = BackdropBlur;
             prof.ToolpathLineOpacity = ToolpathLineOpacity;
+            prof.ShowRpmOverLimit   = ShowRpmOverLimit;
         };
     }
 
@@ -4684,6 +4703,9 @@ public sealed class ViewportViewModel : ViewModelBase
             BackdropOpacity    = prof.BackdropOpacity;
             BackdropBlur       = prof.BackdropBlur;
             ToolpathLineOpacity = prof.ToolpathLineOpacity;
+            // The RPM view is where an over-limit stretch matters most, so it starts on
+            // there and off elsewhere — until the operator ticks it for a view themselves.
+            ShowRpmOverLimit   = prof.ShowRpmOverLimit ?? (EffectiveProfileKey == "RPM");
             if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
                 ActiveShaderMode = sm;
         }
@@ -5861,6 +5883,10 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
+    /// <summary>Per-move extruder RPM report for the selected toolpath, including every
+    /// stretch above the export limit. Wired by the viewport for the rpm-report command.</summary>
+    internal Func<string>? OnRpmReportRequested { get; set; }
+
     internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>

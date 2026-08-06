@@ -1681,6 +1681,22 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "rpm-report",
+            Description = "Extruder RPM for the selected toolpath, as it will be exported: the nominal "
+                        + "percentage, the peak, and every stretch demanding more than the extruder can "
+                        + "turn. Those stretches are highlighted magenta in the viewport and block export",
+            Usage = "rpm-report",
+            Execute = (ctx, args) =>
+            {
+                var fn = ctx.Main.Viewport.OnRpmReportRequested;
+                if (fn is null) { ctx.LogError("[rpm-report] viewport is not ready yet."); return; }
+                foreach (var line in fn().Split((char)10))
+                    ctx.Log(line.TrimEnd((char)13));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "align-debug",
             Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
             Usage = "align-debug <name>",
