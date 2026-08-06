@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-07-31** (SPSM mill SELECT AREA soft paint + STEP cascadio + phase-switch no TCP select)
+Last updated: **2026-08-06** (Auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
 
 ---
 
@@ -483,6 +483,56 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-06 — Auto-slice on import restored (and why it went missing)
+
+**Symptom:** drop in a model with the top-bar toggle on "Realtime" and nothing slices.
+
+**Cause:** `955e898` (2026-08-01, SPSM batch) added an early return to
+`ViewportView.RunRealtimeSliceAsync` — *"Only re-slice when a toolpath already exists.
+Auto-slicing a fresh import (esp. dense STEP meshes) can freeze or crash."* Correct for
+**re-slicing**, but a fresh import has no toolpath by definition, so the same return also
+removed the **first** slice and nothing was left to create one. It arrived in the 08-06 pull,
+so it looked like a merge regression — it is not.
+
+**Fix:** no toolpath → run a full `RunSliceAsync`. Crash protection kept as a size check
+rather than a blanket refusal: above `AutoSliceMaxTriangles` (1,000,000) the import is skipped
+and the status bar reports the actual triangle count instead of failing silently. Production
+parts here are 145k–160k tris, so normal work clears it ~6×. Confirmed with the SPSM author
+that auto-slicing is wanted; anyone who prefers it off can pause the Realtime toggle, which is
+the existing control for exactly that. **If a dense STEP import still hangs, lower the
+threshold — do not restore the blanket guard.**
+
+### 2026-08-06 — Material presets: per-head calibration, flow-offset leak, user storage
+
+- **Calibration inputs never saved.** `MaterialPreset` stored only `CalibratedOn`/
+  `CalibrationNote`, so Edit always reset motor speed / run time / purge weight to defaults.
+  Now persisted and round-tripped.
+- **"RPM at 100% output" removed** — the operator reads a percentage off the drive and the
+  slicer exports a percentage; the extra field only allowed the two to disagree.
+- **Calibration no longer hijacks `ExtrusionSpeedOffset`.** `MaterialCalibrationWorkspace`
+  forced the motor value through that field to bypass geometry-based flow. It is a field used
+  on real jobs, it persists into `prefs.json`, and it then silently added itself to the flow of
+  everything sliced afterwards — the likely source of a 65% screw value on a 6×3 bead that
+  computes to 27%. Now uses `ExtrusionRpmOverridePercent` and clears the offset; test asserts
+  both halves.
+- **HV and HF calibrate separately.** `ApplyCalibration` always wrote the HV flow rate, and
+  `FlowRateFor()` falls back to HV when HF is 0 — so an uncalibrated HF printed with the wrong
+  screw's number, silently. Each head now keeps its own inputs and provenance; the selector
+  defaults to the active cell's extruder. Tests: `MaterialCalibrationPerHeadTest` ×4.
+- **Library moved** to `%AppData%/MassiveSlicer/materials.json` beside `prefs.json`. The old
+  `assets/materials.json` was resolved by searching upward from the working directory, so one
+  machine had two libraries (repo and `bin/`) and which you saw depended on how the app was
+  launched; edits could be wiped by a rebuild and could reach the team through git. The repo
+  file is now read-only seed data. `Save()` no longer swallows errors.
+
+**Related trap seen the same day:** the app rewrote the git-tracked `assets/krl_postprocess.json`
+after the KRL post-process dialog was opened, replacing the stored header with the URM one. A
+stored header overrides the default (unconditionally on the analog branch), so a snapshot taken
+by one person can reach everyone through git. Reverted, not pushed. Shared repo assets should
+not be used as live user state.
+
+
 
 ### 2026-07-31 — `feature/spsm`: Mill BITS/OPERATION/paint, STEP cascadio, no TCP on phase switch
 
