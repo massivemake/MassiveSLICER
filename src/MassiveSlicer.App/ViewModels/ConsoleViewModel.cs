@@ -105,6 +105,11 @@ public sealed class ConsoleViewModel : ViewModelBase
 
     private void AppendHistory(ConsoleHistoryEntry entry)
     {
+        // Mirror to disk: the in-app console is memory-only, so without this every
+        // line is gone the moment the app closes -- exactly when it is needed.
+        MassiveSlicer.App.Diagnostics.SliceLogger.Line(
+            string.IsNullOrEmpty(entry.Text) ? entry.DisplayLine : entry.Text, entry.IsError);
+
         if (Dispatcher.UIThread.CheckAccess())
             History.Add(entry);
         else

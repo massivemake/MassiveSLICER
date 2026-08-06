@@ -1578,6 +1578,34 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "logs",
+            Aliases = ["log", "logfile"],
+            Description = "Shows where the on-disk log lives. Everything in this console is also "
+                        + "written there with timestamps, along with the settings each slice and "
+                        + "export ran with, so a failed print can be diagnosed afterwards. "
+                        + "Pass open to open the folder",
+            Usage = "logs [open]",
+            Execute = (ctx, args) =>
+            {
+                var dir  = MassiveSlicer.App.Diagnostics.SliceLogger.Directory_;
+                var last = MassiveSlicer.App.Diagnostics.SliceLogger.LatestFile;
+                ctx.Log($"[logs] folder   : {dir}");
+                ctx.Log($"[logs] this run : {last}");
+                ctx.Log("[logs] after a failed print, send latest.log");
+                if (args.Trim().Equals("open", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        { FileName = dir, UseShellExecute = true });
+                    }
+                    catch (Exception ex) { ctx.LogError($"[logs] could not open folder: {ex.Message}"); }
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "seam-report",
             Description = "Lists every layer where the spiral/vase seam jumped instead of stitching "
                         + "continuously, with layer number, height in mm and inches, and how far it "

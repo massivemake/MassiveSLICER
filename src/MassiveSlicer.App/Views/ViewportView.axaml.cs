@@ -4488,6 +4488,7 @@ public partial class ViewportView : UserControl
         SetSliceStatus(vm, "Slicing…");
         _sliceWatch.Restart();
         LogToConsole("[slice] full slice started…");
+        LogRunState(vm, "slice requested");
 
         try
         {
@@ -5364,6 +5365,7 @@ public partial class ViewportView : UserControl
         SetSliceStatus(vm, "Updating slice…");
         _sliceWatch.Restart();
         LogToConsole("[slice] update started…");
+        LogRunState(vm, "re-slice requested");
         try
         {
             var (parentItem, toolpathItem) = source;
@@ -11719,6 +11721,40 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
+    /// Writes the settings a slice or export actually ran with into the log file. A log that
+    /// records results but not inputs cannot be diagnosed after the fact -- this is what turns
+    /// "the seam jumped at layer 552" into something actionable a day later.
+    /// </summary>
+    private void LogRunState(ViewportViewModel vm, string what)
+    {
+        try
+        {
+            var s = vm.AdditiveSettings;
+            var pairs = new List<(string, string)>
+            {
+                ("cell",         vm.ActiveCell?.Name ?? "(none)"),
+                ("workspace",    (Avalonia.Controls.TopLevel.GetTopLevel(this)?.DataContext
+                                  as MainWindowViewModel)?.AppPreferences.LastWorkspacePath ?? "(unsaved)"),
+                ("app build",    $"baseline {BuildInfo.Baseline}, branch {BuildInfo.Branch}, delta {BuildInfo.Delta}"),
+            };
+            if (s is not null)
+            {
+                pairs.Add(("tool index",   s.ToolDataIndex.ToString()));
+                pairs.Add(("slicing mode", s.SlicingMode ?? "(none)"));
+                pairs.Add(("seam mode",    s.SeamMode ?? "(none)"));
+                pairs.Add(("bead width",   $"{s.BeadWidth:0.##} mm"));
+                pairs.Add(("layer height", $"{s.LayerHeight:0.##} mm"));
+                pairs.Add(("print speed",  $"{s.PrintSpeed:0.##} mm/s"));
+                pairs.Add(("rail motion",  s.E1MotionEnabled ? "ON" : "OFF"));
+                pairs.Add(("rail limits",  $"+{s.E1YPlusMm:0.#} / -{s.E1YMinusMm:0.#} mm"));
+                pairs.Add(("toolhead",     $"A {s.ToolheadA:0.##}  B {s.ToolheadB:0.##}  C {s.ToolheadC:0.##}"));
+            }
+            MassiveSlicer.App.Diagnostics.SliceLogger.State(what, pairs);
+        }
+        catch { /* diagnostics must never break a slice */ }
+    }
+
+    /// <summary>
     /// Reports where the spiral/vase seam jumped instead of stitching continuously.
     /// PlanarSlicer stitches layer to layer while the start of the next layer is within one
     /// bead width of the end of the last; past that it inserts a travel, which stops
@@ -14838,6 +14874,7 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        LogRunState(vm, "EXPORT / SEND requested");
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
@@ -14914,6 +14951,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        LogRunState(vm, "EXPORT / SEND requested");
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
@@ -14991,6 +15029,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        LogRunState(vm, "EXPORT / SEND requested");
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
