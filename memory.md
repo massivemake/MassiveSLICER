@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-06** (Seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+Last updated: **2026-08-07** (Seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
 
 ---
 
@@ -483,6 +483,52 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-07 — Seam guide traces the model surface (merged; five failed attempts first)
+
+**Shipped:** `BuildSeamGuideSurfaceProfile` in `ViewportView.axaml.cs`. Cuts the model with a
+vertical plane through the part axis and the guide, keeps the intersection points on the
+guide's side, and takes the outer edge per height band. Exact plane/triangle intersection —
+one pass over triangles, strided to 60k on big meshes. Confirmed working end to end: Edit →
+guide follows the surface → click → Save → re-slices with the seam at the guide.
+
+**Viewport only. The slicer was NOT changed** (verified: `git diff origin/main...branch` was a
+single file). An experiment that made the guide anchor every layer instead of only the birth
+layer was reverted — see below.
+
+**Two bugs found after the profile worked:**
+- *Worked once, never again.* The profile only collected **visible** models. Slicing hides the
+  model and shows the toolpath, so re-opening the editor on a sliced part found no mesh and
+  fell back to a straight column. Now prefers shown models, falls back to hidden.
+- *One guide only.* `AddSeamGuidePoint` clears before adding. The slicer resolves one guide per
+  closed contour, so extra points on a single-island part were dead weight that stacked in the
+  list and blocked each other from deletion. Placing again moves the seam.
+
+**Four approaches that FAILED — do not retry these:**
+1. Nearest printed extrude point per layer → snapped to solid-cap/infill beside the axis; drew
+   a line straight up the middle. `ToolpathMove` has **no wall-vs-infill flag**.
+2. Outermost printed point in the guide's compass direction → jagged, because the ±0.02 cosine
+   tolerance spans a wide arc on a big part and flips between corners.
+3. Mesh **vertices** banded by height → sparse scatter per band, selection flipped between
+   distant vertices, produced a zigzag scribble.
+4. First-contour-only nearest point → sound idea, but tangled with a stale hidden toolpath and
+   produced a curve floating clear of the part.
+
+**The lesson:** 1–4 all *sampled* points and scored them with an invented heuristic. Sampling
+plus a heuristic is what produced every artefact. The fix was exact geometry (plane section),
+where there is no scoring rule to get wrong.
+
+**Reverted — the every-layer seam experiment.** Making a guide re-solve on every layer rather
+than only the birth layer *seemed* to explain guide/seam drift on a flared column. Tests
+written for it (`SeamGuideEveryLayerTest`, now deleted) **passed against the unmodified slicer
+too** — neither a flaring tube nor a 90° twisting tube separates the two rules, because
+nearest-point inheritance holds a near-constant XY on both. Shipped anyway, did not fix the
+symptom, reverted. **If guide/seam drift is reported again, get the `.mass` file and measure
+the per-layer seam positions — do not reason from screenshots.** Five attempts in this session
+were screenshot-driven and every one was wrong.
+
+**Also fixed earlier in the same run:** guide markers rebuild in `StageToolpathMaps` after a
+slice (the curve is traced from geometry that a re-slice replaces).
 
 ### 2026-08-06 — Seam guides follow the wall (and why guide ≠ seam on a flare)
 

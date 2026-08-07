@@ -133,7 +133,8 @@ Key facts:
 ### Built ✅
 - Slicing: Planar / Angled / Geodesic / Curved; adaptive layer height; infill;
   Normal + Surface modes; contour-offset control; simplification
-- Seams: direction control, guides, visual seam editor, zig-zag
+- Seams: direction control, visual seam editor, zig-zag; one seam guide per part,
+  drawn along the model's own surface profile (placing again moves it)
 - Supports & structure: TreeSupport / Target Support Selections, Formbound,
   X-bracing
 - Wave effects: sine/sawtooth/triangle; **Fixed + Dynamic** phase methods;
