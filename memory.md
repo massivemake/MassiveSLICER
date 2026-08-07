@@ -484,6 +484,27 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-08-06 — Seam guides follow the wall (and why guide ≠ seam on a flare)
+
+**Change:** a guide drew as a straight vertical column at one XY. It now draws as a polyline —
+for each printed layer, the extrusion point nearest the guide's XY, swept as a tube bottom to
+top (`BuildSeamGuidePath` in `ViewportView.axaml.cs`, `AppendTube` in
+`SeamGuideColumnRenderer`). `SetSeamGuides`/`SetSeamGuidePreview` take paths;
+`PickSeamGuide` hit-tests every projected segment. Falls back to the straight column when
+nothing is sliced; the separate toolpath seam-drag tool gets a short vertex tick
+(`SeamVertexTick`) because it marks one loop, not a wall.
+
+**Why it mattered beyond looks:** on a flaring part the straight line stands well off the
+surface, so guide and seam could not be visually compared at all — every report of "the seam
+isn't where the guide is" was unmeasurable. The curve traces the same column of wall the
+slicer picks, so the two are finally comparable.
+
+**Still expect divergence up high, by design:** the guide is consulted only on a *birth* layer
+(`PlanarSlicer.cs` ~1211); every layer above projects the parent's seam onto its own contour
+for continuity. On a strongly changing cross-section the seam can drift as it rises. Not
+changed — it affects print output and is the developer's call whether every layer should
+re-align to the guide.
+
 ### 2026-08-06 — Seam guide and actual seam on different sides of the part
 
 Three reports, two real causes, both in the placement/commit path rather than the slicer.
