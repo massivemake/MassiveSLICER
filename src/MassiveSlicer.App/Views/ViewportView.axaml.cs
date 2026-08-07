@@ -852,18 +852,129 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// Shape a guide draws: a straight vertical column at the guide's XY over the part's height.
-    /// <para>
-    /// Three attempts to make this trace the wall all shipped artefacts — a line up the axis, a
-    /// jagged staircase, and a curve floating clear of the part. Reverted to the straight column,
-    /// which is at least honest about what a guide is: an XY, since the slicer discards guide Z.
-    /// Doing it properly means previewing the seam from a real slice rather than reconstructing
-    /// it from rendered moves.
-    /// </para>
+    /// Shape a guide draws: the model's own surface profile at the guide's compass bearing,
+    /// bottom to top, falling back to a straight column when there is no mesh to cut.
     /// </summary>
     private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
-        => [new TkVector3(guide.X, guide.Y, zLo),
-            new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
+        => BuildSeamGuideSurfaceProfile(guide) is { Count: >= 2 } profile
+            ? profile
+            : [new TkVector3(guide.X, guide.Y, zLo),
+               new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
+
+    /// <summary>
+    /// Cuts the visible model with a vertical plane through the part axis and the guide, and
+    /// returns the outer edge of that cut on the guide's side — the silhouette the guide should
+    /// lie along.
+    /// <para>
+    /// Exact geometry, deliberately: every earlier attempt <i>sampled</i> something (printed
+    /// moves, then mesh vertices) and scored the samples with a heuristic, which produced a line
+    /// up the axis, a jagged staircase, and a curve floating clear of the part. A plane/triangle
+    /// intersection yields the true section outline instead of a vote over scattered points.
+    /// </para>
+    /// </summary>
+    private List<TkVector3>? BuildSeamGuideSurfaceProfile(TkVector3 guide)
+    {
+        const int Bands = 240;
+
+        if ((_vm ?? DataContext as ViewportViewModel) is not { } vm) return null;
+
+        // Part axis = centre of the models' footprint. The bearing is measured from here, so the
+        // profile is the outline you see looking along it.
+        float aMinX = float.MaxValue, aMinY = float.MaxValue;
+        float aMaxX = float.MinValue, aMaxY = float.MinValue;
+        var meshes = new List<(MassiveSlicer.Viewport.Scene.MeshData Mesh, Matrix4 World)>();
+
+        // Prefer shown models, but fall back to hidden ones. Slicing hides the model and shows
+        // the toolpath, so re-opening the editor on an already-sliced part found no mesh to cut
+        // and dropped the guide back to a straight column — it worked the first time and never
+        // again. The part's shape does not depend on whether its layer is switched on.
+        bool anyVisible = vm.EnumerateUserModelItems().Any(i => i.Visible);
+
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            if (anyVisible && !item.Visible) continue;
+            var (mn, mx) = ImportHelper.ComputeSubtreeWorldAabb(item.Node);
+            if (mn.X > mx.X) continue;
+            aMinX = MathF.Min(aMinX, mn.X); aMaxX = MathF.Max(aMaxX, mx.X);
+            aMinY = MathF.Min(aMinY, mn.Y); aMaxY = MathF.Max(aMaxY, mx.Y);
+
+            foreach (var n in item.Node.SelfAndDescendants())
+                if ((n.Mesh?.PickingData ?? n.PendingMesh) is { } md && md.Positions.Length >= 3)
+                    meshes.Add((md, n.WorldTransform));
+        }
+
+        if (meshes.Count == 0 || aMinX > aMaxX) return null;
+
+        float axX = (aMinX + aMaxX) * 0.5f, axY = (aMinY + aMaxY) * 0.5f;
+        float dx = guide.X - axX, dy = guide.Y - axY;
+        float dLen = MathF.Sqrt(dx * dx + dy * dy);
+        if (dLen < 1e-3f) return null;                       // guide on the axis: no bearing
+        dx /= dLen; dy /= dLen;
+        float nx = -dy, ny = dx;                             // cutting plane normal, in XY
+
+        // Section outline: every triangle edge crossing the plane contributes a point.
+        var rOf = new float[Bands];
+        var zOf = new float[Bands];
+        var has = new bool[Bands];
+        Array.Fill(rOf, float.MinValue);
+
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        var pts = new List<(float R, float Z)>(4096);
+
+        foreach (var (mesh, world) in meshes)
+        {
+            int triCount = mesh.Indices is { } ix ? ix.Length / 3 : mesh.Positions.Length / 3;
+            if (triCount == 0) continue;
+            int stride = Math.Max(1, triCount / 60_000);     // caps work on million-triangle parts
+
+            for (int t = 0; t < triCount; t += stride)
+            {
+                Span<TkVector3> v = stackalloc TkVector3[3];
+                Span<float>     s = stackalloc float[3];
+                for (int k = 0; k < 3; k++)
+                {
+                    int pi = mesh.Indices is { } idx ? (int)idx[t * 3 + k] : t * 3 + k;
+                    var src = mesh.Positions[pi];
+                    v[k] = TkVector3.TransformPosition(new TkVector3(src.X, src.Y, src.Z), world);
+                    s[k] = (v[k].X - axX) * nx + (v[k].Y - axY) * ny;
+                }
+
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = e, b = (e + 1) % 3;
+                    if ((s[a] < 0f) == (s[b] < 0f)) continue;          // edge does not cross
+                    float denom = s[a] - s[b];
+                    if (MathF.Abs(denom) < 1e-9f) continue;
+                    float f = s[a] / denom;
+                    var p = v[a] + (v[b] - v[a]) * f;
+
+                    float r = (p.X - axX) * dx + (p.Y - axY) * dy;
+                    if (r <= 0f) continue;                             // far side of the part
+                    pts.Add((r, p.Z));
+                    if (p.Z < zMin) zMin = p.Z;
+                    if (p.Z > zMax) zMax = p.Z;
+                }
+            }
+        }
+
+        if (pts.Count < 8 || zMax - zMin < 1e-3f) return null;
+
+        // Outer edge per height band. The input is a continuous section outline, not scattered
+        // vertices, so the maximum in each band lands on the surface rather than jittering.
+        float invH = (Bands - 1) / (zMax - zMin);
+        foreach (var (r, z) in pts)
+        {
+            int b = Math.Clamp((int)((z - zMin) * invH), 0, Bands - 1);
+            if (r > rOf[b]) { rOf[b] = r; zOf[b] = z; has[b] = true; }
+        }
+
+        var profile = new List<TkVector3>(Bands);
+        for (int b = 0; b < Bands; b++)
+            if (has[b])
+                profile.Add(new TkVector3(axX + dx * rOf[b], axY + dy * rOf[b], zOf[b]));
+
+        return profile.Count >= 2 ? profile : null;
+    }
 
     /// <summary>
     /// Z extent the seam guide columns span: the visible user models' world height, falling
