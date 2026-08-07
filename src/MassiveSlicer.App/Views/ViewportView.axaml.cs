@@ -878,15 +878,21 @@ public partial class ViewportView : UserControl
 
         if ((_vm ?? DataContext as ViewportViewModel) is not { } vm) return null;
 
-        // Part axis = centre of the visible models' footprint. The bearing is measured from here,
-        // so the profile is the outline you see looking along it.
+        // Part axis = centre of the models' footprint. The bearing is measured from here, so the
+        // profile is the outline you see looking along it.
         float aMinX = float.MaxValue, aMinY = float.MaxValue;
         float aMaxX = float.MinValue, aMaxY = float.MinValue;
         var meshes = new List<(MassiveSlicer.Viewport.Scene.MeshData Mesh, Matrix4 World)>();
 
+        // Prefer shown models, but fall back to hidden ones. Slicing hides the model and shows
+        // the toolpath, so re-opening the editor on an already-sliced part found no mesh to cut
+        // and dropped the guide back to a straight column — it worked the first time and never
+        // again. The part's shape does not depend on whether its layer is switched on.
+        bool anyVisible = vm.EnumerateUserModelItems().Any(i => i.Visible);
+
         foreach (var item in vm.EnumerateUserModelItems())
         {
-            if (!item.Visible) continue;
+            if (anyVisible && !item.Visible) continue;
             var (mn, mx) = ImportHelper.ComputeSubtreeWorldAabb(item.Node);
             if (mn.X > mx.X) continue;
             aMinX = MathF.Min(aMinX, mn.X); aMaxX = MathF.Max(aMaxX, mx.X);
