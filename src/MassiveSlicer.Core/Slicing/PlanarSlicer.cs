@@ -1215,9 +1215,19 @@ public static class PlanarSlicer
 
             if (closedFlags[i])
             {
-                if (float.IsNaN(seamRef.X) && seamGuides.Count > 0)
+                if (seamGuides.Count > 0)
                 {
+                    // A guide anchors EVERY layer, not just the one where a contour is born.
+                    // Previously only birth layers consulted the guide and everything above
+                    // inherited its parent's seam, which walks around the part as the cross
+                    // section changes: on a flaring column the seam agreed with the guide at
+                    // the base and sat well away from it by the top. Clearing the inherited
+                    // reference makes AlignSeamToGuide re-solve against the guide each layer.
+                    // NOTE: SeamGuideEveryLayerTest passes against the OLD code too — neither a
+                    // flaring nor a twisting tube separates the two rules, so those tests guard
+                    // the property but do NOT prove this is what fixes the reported drift.
                     var guide = ContourSeamPlanner.NearestGuideToContour(contour, seamGuides);
+                    seamRef = new Vector2(float.NaN, float.NaN);
                     ContourSeamPlanner.AlignSeamToGuide(contour, guide, ref seamRef);
                 }
                 else
