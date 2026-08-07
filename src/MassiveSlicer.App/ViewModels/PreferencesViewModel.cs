@@ -20,6 +20,29 @@ public sealed class PreferencesViewModel : ViewModelBase
     private readonly Action         _onChanged;
     private bool                    _loading;
 
+    // -- Keep on bed -------------------------------------------------------
+
+    private bool _keepOnBedWhenMoving;
+    public bool KeepOnBedWhenMoving
+    {
+        get => _keepOnBedWhenMoving;
+        set { if (SetField(ref _keepOnBedWhenMoving, value)) Commit(() => _prefs.KeepOnBedWhenMoving = value); }
+    }
+
+    private bool _keepOnBedWhenRotating;
+    public bool KeepOnBedWhenRotating
+    {
+        get => _keepOnBedWhenRotating;
+        set { if (SetField(ref _keepOnBedWhenRotating, value)) Commit(() => _prefs.KeepOnBedWhenRotating = value); }
+    }
+
+    private bool _keepOnBedWhenScaling;
+    public bool KeepOnBedWhenScaling
+    {
+        get => _keepOnBedWhenScaling;
+        set { if (SetField(ref _keepOnBedWhenScaling, value)) Commit(() => _prefs.KeepOnBedWhenScaling = value); }
+    }
+
     // -- Navigation --------------------------------------------------------
 
     private bool _autoDepth;
@@ -193,6 +216,9 @@ public sealed class PreferencesViewModel : ViewModelBase
     public void LoadFromPrefs()
     {
         _loading                = true;
+        KeepOnBedWhenMoving     = _prefs.KeepOnBedWhenMoving;
+        KeepOnBedWhenRotating   = _prefs.KeepOnBedWhenRotating;
+        KeepOnBedWhenScaling    = _prefs.KeepOnBedWhenScaling;
         AutoDepth               = _prefs.AutoDepth;
         OrbitAroundSelection    = _prefs.OrbitAroundSelection;
         ActivePreset            = _prefs.ActivePreset;

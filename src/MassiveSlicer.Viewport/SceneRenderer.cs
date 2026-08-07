@@ -518,15 +518,37 @@ public sealed class SceneRenderer : IDisposable
     public bool GizmoEnabled { get; set; } = true;
 
     /// <summary>
+    /// True while the Move Origin chooser is up. Only suppresses the scale gizmo's centre cube,
+    /// which would otherwise sit on top of the chooser's gold centre marker; the handles stay
+    /// drawn so the tool still reads as present, and they cannot be grabbed anyway because
+    /// Move Origin swallows the click before gizmo hit-testing.
+    /// </summary>
+    public bool MoveOriginActive { get; set; }
+
+    /// <summary>
     /// Optional world-space gizmo pivot (e.g. robot TCP). When set, overrides the
     /// selected node's origin for gizmo display and hit-testing.
     /// </summary>
     public Vector3? GizmoPivotWorld { get; set; }
 
     /// <summary>Optional rotation-only basis (no translation) the gizmo is drawn/hit-tested in,
-    /// instead of always being world-axis-aligned — set when the selection is a Vertical Cut
-    /// modifier so its gizmo's X/Y follow the plane's own RotationDegrees.</summary>
+    /// instead of always being world-axis-aligned — set from the selection's own rotation so the
+    /// arrows stay stuck to the object, or from a Vertical Cut modifier's own RotationDegrees.</summary>
     public Matrix4? GizmoAxisBasis { get; set; }
+
+    /// <summary>
+    /// Where a node's gizmo belongs: its own pivot, in world space.
+    /// </summary>
+    /// <remarks>
+    /// Nodes driven straight from a matrix (the robot rig, cell fixtures) have no pivot of their
+    /// own and fall back to the matrix's translation column — which is also what every node used to
+    /// do, and why the gizmo appeared unrelated to the mesh: that column holds the file's own
+    /// origin, and most exports leave it nowhere near the geometry.
+    /// </remarks>
+    private static Vector3 PivotWorldOf(SceneNode node)
+        => node.Placement is { } p
+            ? Vector3.TransformPosition(p.Origin, node.WorldTransform)
+            : node.WorldTransform.Row3.Xyz;
 
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
@@ -751,6 +773,14 @@ public sealed class SceneRenderer : IDisposable
     /// <summary>Simulate-timeline progress (0–1) applied to every visible toolpath;
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
+
+    /// <summary>
+    /// Whether the scrub window governs how much of a toolpath is drawn. False in Body view, which
+    /// carries no timeline and therefore shows the whole path — otherwise it silently renders
+    /// through a scrubber belonging to a mode the user has left, and the part looks half printed
+    /// with nothing on screen to explain it.
+    /// </summary>
+    public bool ScrubWindowApplies { get; set; } = true;
 
     /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
     /// full selected appearance — colours, travels, seams — regardless of selection.
@@ -1349,9 +1379,10 @@ public sealed class SceneRenderer : IDisposable
             bool isSelected = IsToolpathHighlighted(tpNode);
             // Sticky scrub / edit mode: apply the layer window to the scrubbed
             // toolpath even when the mesh (or another node) is the selection.
-            bool applyScrub = isSelected
-                || (ToolpathActiveScrubNode is not null
-                    && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
+            bool applyScrub = ScrubWindowApplies
+                && (isSelected
+                    || (ToolpathActiveScrubNode is not null
+                        && ReferenceEquals(tpNode, ToolpathActiveScrubNode)));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
 
             // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
@@ -1519,7 +1550,7 @@ public sealed class SceneRenderer : IDisposable
                         if (n.Mesh is null) continue;
                         var nodeMvp = n.WorldTransform * mvp;
                         _maskShader.SetMatrix4("uMVP", ref nodeMvp);
-                        // Same always-on-top exemption as the main draw above -- otherwise the
+                        // Same always-on-top exemption as SceneNode.Draw -- otherwise the
                         // mask (and thus the selection outline) would still only cover whichever
                         // part of the marker isn't occluded by real geometry behind it, even
                         // though the marker itself now renders fully visible on top of it.
@@ -1741,7 +1772,7 @@ public sealed class SceneRenderer : IDisposable
         // (even when gizmo handles are hidden). Handles only render when GizmoEnabled.
         if (SelectedNode is { } sel && _gizmo is not null)
         {
-            var nodePos = GizmoPivotWorld ?? sel.WorldTransform.Row3.Xyz;
+            var nodePos = GizmoPivotWorld ?? PivotWorldOf(sel);
             float dist  = (Camera.Eye - nodePos).Length;
             float scale = MathF.Max(dist * 0.12f, 1f);
 
@@ -1753,7 +1784,8 @@ public sealed class SceneRenderer : IDisposable
 
             if (GizmoEnabled && GizmoMode != GizmoMode.None)
             {
-                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis);
+                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis,
+                            drawScaleCenter: !MoveOriginActive);
                 if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
                     _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp, GizmoAxisBasis);
             }
@@ -2225,7 +2257,7 @@ public sealed class SceneRenderer : IDisposable
         if (SelectedNode is null || _gizmo is null || vpW <= 0 || vpH <= 0 || GizmoMode == GizmoMode.None)
             return GizmoAxis.None;
 
-        var nodePos = GizmoPivotWorld ?? SelectedNode.WorldTransform.Row3.Xyz;
+        var nodePos = GizmoPivotWorld ?? PivotWorldOf(SelectedNode);
         float dist  = (Camera.Eye - nodePos).Length;
         float scale = MathF.Max(dist * 0.12f, 1f);
 

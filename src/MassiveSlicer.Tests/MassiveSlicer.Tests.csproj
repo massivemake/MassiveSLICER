@@ -18,6 +18,13 @@
     <PackageReference Include="SharpGLTF.Core" Version="1.0.6" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <!-- Drives real pointer input at the transform number boxes. Their click behaviour was
+         guessed at twice and fixed neither time, because nothing could actually observe a
+         click: the console bridge cannot reach the Avalonia overlay layer. Test-only. -->
+    <!-- Deliberately NOT Avalonia.Headless.XUnit: it depends on xunit.v3, which collides with
+         this project's xunit 2.5.3 and fails every other test in the suite with CS0433. The
+         session is driven by hand instead — see TransformNumberBoxClickTest. -->
+    <PackageReference Include="Avalonia.Headless" Version="12.0.4" />
   </ItemGroup>
 
   <ItemGroup>

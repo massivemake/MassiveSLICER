@@ -16,6 +16,10 @@ public sealed class GizmoRenderer : IDisposable
     private int _transLinesVao, _transLinesVbo, _transLineCount;
     private int _transConesVao, _transConesVbo, _transConeCount;
 
+    // Planar bands (XY / YZ / XZ) — drag two axes at once
+    private int _bandFillVao, _bandFillVbo, _bandFillCount;
+    private int _bandEdgeVao, _bandEdgeVbo, _bandEdgeCount;
+
     // Scale
     private int _scaleShaftsVao, _scaleShaftsVbo, _scaleShaftCount;
     private int _scaleBoxesVao,  _scaleBoxesVbo,  _scaleBoxCount;
@@ -37,6 +41,12 @@ public sealed class GizmoRenderer : IDisposable
     private const float BoxHalf  = 0.06f;  // half-size of scale box tip
     private const float RingR    = 0.90f;  // rotate ring radius (< 1 so tips are clear)
     private const int   RingSegs = 48;
+
+    /// <summary>Inner and outer extent of a planar band along each of its two axes. Offset from the
+    /// origin so the band never sits under the centre, and stopping well short of the arrow tips so
+    /// grabbing a single axis stays easy.</summary>
+    private const float BandNear = 0.28f;
+    private const float BandFar  = 0.58f;
 
     private static readonly Vector3 ColX   = new(1.00f, 0.20f, 0.20f);
     private static readonly Vector3 ColY   = new(0.20f, 1.00f, 0.20f);
@@ -68,9 +78,75 @@ public sealed class GizmoRenderer : IDisposable
     {
         _shader = new Shader(VertSrc, FragSrc);
         BuildTranslate();
+        BuildBands();
         BuildScale();
         BuildRotate();
         BuildAxisHighlight();
+    }
+
+    /// <summary>
+    /// The three planar bands. Each is a small square spanning two axes, filled in a dim blend of
+    /// their two colours with a brighter outline so it reads as a grabbable surface rather than as
+    /// part of the model.
+    /// </summary>
+    private void BuildBands()
+    {
+        var fill = new List<float>();
+        var edge = new List<float>();
+
+        void Band(Vector3 a, Vector3 b, Vector3 colA, Vector3 colB)
+        {
+            var c  = (colA + colB) * 0.5f;
+            var dim    = c * 0.45f;
+            var bright = c * 1.00f;
+
+            var p00 = a * BandNear + b * BandNear;
+            var p10 = a * BandFar  + b * BandNear;
+            var p11 = a * BandFar  + b * BandFar;
+            var p01 = a * BandNear + b * BandFar;
+
+            void Vert(List<float> sink, Vector3 p, Vector3 col)
+            {
+                sink.Add(p.X); sink.Add(p.Y); sink.Add(p.Z);
+                sink.Add(col.X); sink.Add(col.Y); sink.Add(col.Z);
+            }
+
+            // Two triangles for the fill.
+            Vert(fill, p00, dim); Vert(fill, p10, dim); Vert(fill, p11, dim);
+            Vert(fill, p00, dim); Vert(fill, p11, dim); Vert(fill, p01, dim);
+
+            // Outline.
+            foreach (var (s, e) in new[] { (p00, p10), (p10, p11), (p11, p01), (p01, p00) })
+            {
+                Vert(edge, s, bright);
+                Vert(edge, e, bright);
+            }
+        }
+
+        Band(Vector3.UnitX, Vector3.UnitY, ColX, ColY);   // XY
+        Band(Vector3.UnitY, Vector3.UnitZ, ColY, ColZ);   // YZ
+        Band(Vector3.UnitX, Vector3.UnitZ, ColX, ColZ);   // XZ
+
+        Upload(out _bandFillVao, out _bandFillVbo, fill.ToArray());
+        _bandFillCount = fill.Count / 6;
+        Upload(out _bandEdgeVao, out _bandEdgeVbo, edge.ToArray());
+        _bandEdgeCount = edge.Count / 6;
+    }
+
+    /// <summary>The four corners of a band, in gizmo-local space, in winding order.</summary>
+    private static Vector3[] BandCorners(GizmoAxis axis)
+    {
+        var (ia, ib, _) = axis.PlaneAxes();
+        Vector3 Unit(int i) => i switch { 0 => Vector3.UnitX, 1 => Vector3.UnitY, _ => Vector3.UnitZ };
+        var a = Unit(ia);
+        var b = Unit(ib);
+        return
+        [
+            a * BandNear + b * BandNear,
+            a * BandFar  + b * BandNear,
+            a * BandFar  + b * BandFar,
+            a * BandNear + b * BandFar,
+        ];
     }
 
     // -- Draw -----------------------------------------------------------------
@@ -81,7 +157,13 @@ public sealed class GizmoRenderer : IDisposable
     /// modifier's gizmo can show/hit-test its own local X/Y (aligned to its RotationDegrees)
     /// instead of always being world-axis-aligned like every other selectable object.
     /// </summary>
-    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode, Matrix4? axisBasis = null)
+    /// <param name="drawScaleCenter">
+    /// False while Move Origin is choosing a pivot. The scale gizmo's white centre cube sits exactly
+    /// where that tool's gold centre marker does, and the gizmo pass clears the depth buffer before
+    /// drawing, so the cube would always win and hide the point the user is aiming at.
+    /// </param>
+    public void Draw(Vector3 worldPos, float scale, Matrix4 viewProj, GizmoMode mode,
+                     Matrix4? axisBasis = null, bool drawScaleCenter = true)
     {
         var mvp = Matrix4.CreateScale(scale)
                 * (axisBasis ?? Matrix4.Identity)
@@ -98,6 +180,11 @@ public sealed class GizmoRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, _transLineCount);
                 GL.BindVertexArray(_transConesVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, _transConeCount);
+                // Bands last so their outline sits over the shafts that run along their edges.
+                GL.BindVertexArray(_bandFillVao);
+                GL.DrawArrays(PrimitiveType.Triangles, 0, _bandFillCount);
+                GL.BindVertexArray(_bandEdgeVao);
+                GL.DrawArrays(PrimitiveType.Lines, 0, _bandEdgeCount);
                 break;
 
             case GizmoMode.Scale:
@@ -105,8 +192,11 @@ public sealed class GizmoRenderer : IDisposable
                 GL.DrawArrays(PrimitiveType.Lines, 0, _scaleShaftCount);
                 GL.BindVertexArray(_scaleBoxesVao);
                 GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleBoxCount);
-                GL.BindVertexArray(_scaleCenterVao);
-                GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleCenterCount);
+                if (drawScaleCenter)
+                {
+                    GL.BindVertexArray(_scaleCenterVao);
+                    GL.DrawArrays(PrimitiveType.Triangles, 0, _scaleCenterCount);
+                }
                 break;
 
             case GizmoMode.Rotate:
@@ -206,6 +296,23 @@ public sealed class GizmoRenderer : IDisposable
 
         if (mode == GizmoMode.Scale && (mouse - origin).Length < 10f)
             return GizmoAxis.All;
+
+        // Bands are tested before the shafts: a shaft runs along two edges of each band, so
+        // whichever is checked first wins the overlap, and inside a band the plane is what the user
+        // is reaching for. Translate only — a band means nothing for scale or rotate.
+        if (mode == GizmoMode.Translate)
+        {
+            foreach (var band in new[] { GizmoAxis.XY, GizmoAxis.YZ, GizmoAxis.XZ })
+            {
+                var c = BandCorners(band);
+                var s0 = ToScreen(worldPos + Rotated(c[0] * scale), viewProj, vpW, vpH);
+                var s1 = ToScreen(worldPos + Rotated(c[1] * scale), viewProj, vpW, vpH);
+                var s2 = ToScreen(worldPos + Rotated(c[2] * scale), viewProj, vpW, vpH);
+                var s3 = ToScreen(worldPos + Rotated(c[3] * scale), viewProj, vpW, vpH);
+                if (PointInTriangle(mouse, s0, s1, s2) || PointInTriangle(mouse, s0, s2, s3))
+                    return band;
+            }
+        }
 
         float dX    = SegDist(mouse, origin, tipX);
         float dY    = SegDist(mouse, origin, tipY);
@@ -462,6 +569,26 @@ public sealed class GizmoRenderer : IDisposable
     }
 
     // -- Screen-space utilities ------------------------------------------------
+
+    /// <summary>Screen-space point-in-triangle by consistent edge sign, so it works whichever way
+    /// the projected band happens to wind as the camera moves around it.</summary>
+    private static bool PointInTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+    {
+        static float Edge(Vector2 p, Vector2 a, Vector2 b)
+            => (p.X - b.X) * (a.Y - b.Y) - (a.X - b.X) * (p.Y - b.Y);
+
+        float d1 = Edge(p, a, b);
+        float d2 = Edge(p, b, c);
+        float d3 = Edge(p, c, a);
+        bool anyNeg = d1 < 0f || d2 < 0f || d3 < 0f;
+        bool anyPos = d1 > 0f || d2 > 0f || d3 > 0f;
+        return !(anyNeg && anyPos);
+    }
+
+    /// <summary>Projects a world point to viewport pixels — shared so overlays that hit-test in
+    /// screen space agree exactly with the gizmo's own projection.</summary>
+    public static Vector2 WorldToScreen(Vector3 world, Matrix4 vp, float vpW, float vpH)
+        => ToScreen(world, vp, vpW, vpH);
 
     private static Vector2 ToScreen(Vector3 world, Matrix4 vp, float vpW, float vpH)
     {
