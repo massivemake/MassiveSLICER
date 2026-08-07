@@ -844,8 +844,64 @@ public partial class ViewportView : UserControl
         }
 
         var (zLo, zHi) = SeamGuideHeightRange(vm);
-        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex, zLo, zHi);
+        var paths = new List<IReadOnlyList<TkVector3>>(guides.Count);
+        foreach (var g in guides)
+            paths.Add(BuildSeamGuidePath(g, zLo, zHi));
+        _renderer.SetSeamGuides(guides, paths, vm.SelectedSeamGuideIndex, zLo, zHi);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// The wall curve a guide marks: for each printed layer, the extrusion point nearest the
+    /// guide's XY, bottom to top. The slicer uses only a guide's XY, so this traces the same
+    /// column of wall the seam will run down — on a flaring part a straight vertical line stood
+    /// well off the surface and could not be compared against the actual seam.
+    /// <para>Falls back to a straight column when nothing is sliced yet.</para>
+    /// </summary>
+    private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
+    {
+        var path = new List<TkVector3>();
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible || tp.Layers.Count == 0) continue;
+            var world = node.WorldTransform;
+
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                if (moves.Count == 0) continue;
+
+                // Subsample: this runs per guide on every hover and a metre-scale part holds
+                // hundreds of thousands of moves. A few mm along the wall is invisible.
+                int stride = Math.Max(1, moves.Count / 400);
+
+                float best = float.MaxValue;
+                TkVector3 bestPt = default;
+                bool found = false;
+
+                for (int m = 0; m < moves.Count; m += stride)
+                {
+                    var move = moves[m];
+                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;
+
+                    var p = TkVector3.TransformPosition(
+                        new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
+                    float dx = p.X - guide.X, dy = p.Y - guide.Y;
+                    float d2 = dx * dx + dy * dy;          // XY only — the slicer ignores guide Z
+                    if (d2 < best) { best = d2; bestPt = p; found = true; }
+                }
+
+                if (found) path.Add(bestPt);
+            }
+        }
+
+        if (path.Count < 2)
+            return [new TkVector3(guide.X, guide.Y, zLo),
+                    new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
+
+        path.Sort((a, b) => a.Z.CompareTo(b.Z));
+        return path;
     }
 
     /// <summary>
@@ -3187,10 +3243,14 @@ public partial class ViewportView : UserControl
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
-                _renderer.SetSeamGuidePreview(
-                    TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit)
-                        ? previewHit
-                        : null);
+                if (TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit))
+                {
+                    var (pLo, pHi) = SeamGuideHeightRange(hoverVm);
+                    _renderer.SetSeamGuidePreview(
+                        previewHit, BuildSeamGuidePath(previewHit, pLo, pHi));
+                }
+                else
+                    _renderer.SetSeamGuidePreview(null);
                 GlCanvas.RequestNextFrameRendering();
             }
             else
@@ -10876,10 +10936,17 @@ public partial class ViewportView : UserControl
         _seamDragCumLen    = cum;
         _seamDragOffsetMm  = 0f;
         _seamDragVertex    = 0;
-        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], 0);
+        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], [SeamVertexTick(_seamDragLoopWorld[0])], 0);
         GlCanvas.RequestNextFrameRendering();
         return true;
     }
+
+    /// <summary>
+    /// Short vertical tick at one contour vertex. The toolpath seam-drag tool marks a spot on a
+    /// single loop, not a whole wall, so it gets a marker rather than a full-height guide.
+    /// </summary>
+    private static IReadOnlyList<TkVector3> SeamVertexTick(TkVector3 at)
+        => [new TkVector3(at.X, at.Y, at.Z - 15f), new TkVector3(at.X, at.Y, at.Z + 15f)];
 
     /// <summary>Slides the seam preview along the grabbed contour by the horizontal mouse delta.</summary>
     private void UpdateSeamPointDrag(float deltaX)
@@ -10902,7 +10969,8 @@ public partial class ViewportView : UserControl
         if (vertex != _seamDragVertex)
         {
             _seamDragVertex = vertex;
-            _renderer.SetSeamGuides([_seamDragLoopWorld[vertex]], 0);
+            _renderer.SetSeamGuides(
+                [_seamDragLoopWorld[vertex]], [SeamVertexTick(_seamDragLoopWorld[vertex])], 0);
         }
         GlCanvas.RequestNextFrameRendering();
     }
