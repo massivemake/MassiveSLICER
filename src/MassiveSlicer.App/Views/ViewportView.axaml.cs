@@ -865,11 +865,6 @@ public partial class ViewportView : UserControl
     /// </summary>
     private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
     {
-        // The model's own surface is the truth when it is on screen, and it stays smooth through
-        // solid caps and dense fill where the printed path gives no usable outline.
-        if (BuildSeamGuidePathFromMesh(guide) is { Count: >= 2 } meshPath)
-            return meshPath;
-
         var path    = new List<TkVector3>();
         var samples = new List<TkVector3>(512);
 
@@ -937,98 +932,6 @@ public partial class ViewportView : UserControl
             return [new TkVector3(guide.X, guide.Y, zLo),
                     new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
 
-        path.Sort((a, b) => a.Z.CompareTo(b.Z));
-        return path;
-    }
-
-    /// <summary>
-    /// Traces the guide down the visible model's own surface: slice the mesh's height into bands
-    /// and, in each band, take the surface point lying in the guide's compass direction from that
-    /// band's centre. Returns an empty list when no user model is visible.
-    /// </summary>
-    private List<TkVector3> BuildSeamGuidePathFromMesh(TkVector3 guide)
-    {
-        const int Bands = 160;
-
-        if ((_vm ?? DataContext as ViewportViewModel) is not { } vm) return [];
-
-        // Collect a bounded sample of world-space surface points. A metre-scale import can carry
-        // a million triangles and this runs on every hover, so stride rather than read them all.
-        var pts = new List<TkVector3>(24_000);
-        float zMin = float.MaxValue, zMax = float.MinValue;
-
-        foreach (var item in vm.EnumerateUserModelItems())
-        {
-            if (!item.Visible) continue;
-            foreach (var n in item.Node.SelfAndDescendants())
-            {
-                var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
-                if (mesh is null || mesh.Positions.Length == 0) continue;
-
-                var world  = n.WorldTransform;
-                int stride = Math.Max(1, mesh.Positions.Length / 20_000);
-                for (int i = 0; i < mesh.Positions.Length; i += stride)
-                {
-                    var src = mesh.Positions[i];
-                    var p = TkVector3.TransformPosition(new TkVector3(src.X, src.Y, src.Z), world);
-                    pts.Add(p);
-                    if (p.Z < zMin) zMin = p.Z;
-                    if (p.Z > zMax) zMax = p.Z;
-                }
-            }
-        }
-
-        if (pts.Count < 8 || zMax - zMin < 1e-3f) return [];
-
-        // Per band: centre, then the point best aligned with the guide's direction, outermost first.
-        var sumX   = new float[Bands];
-        var sumY   = new float[Bands];
-        var counts = new int[Bands];
-        float invH = Bands / (zMax - zMin);
-
-        foreach (var p in pts)
-        {
-            int b = Math.Clamp((int)((p.Z - zMin) * invH), 0, Bands - 1);
-            sumX[b] += p.X; sumY[b] += p.Y; counts[b]++;
-        }
-
-        var bestCos = new float[Bands];
-        var bestRad = new float[Bands];
-        var bestPt  = new TkVector3[Bands];
-        var hasPt   = new bool[Bands];
-        Array.Fill(bestCos, -2f);
-        Array.Fill(bestRad, -1f);
-
-        foreach (var p in pts)
-        {
-            int b = Math.Clamp((int)((p.Z - zMin) * invH), 0, Bands - 1);
-            if (counts[b] == 0) continue;
-
-            float cx = sumX[b] / counts[b], cy = sumY[b] / counts[b];
-            float gx = guide.X - cx, gy = guide.Y - cy;
-            float gLen = MathF.Sqrt(gx * gx + gy * gy);
-            if (gLen < 1e-3f) continue;                 // guide sits on the axis: no direction
-            gx /= gLen; gy /= gLen;
-
-            float vx = p.X - cx, vy = p.Y - cy;
-            float r = MathF.Sqrt(vx * vx + vy * vy);
-            if (r < 1e-3f) continue;
-            float cos = (vx * gx + vy * gy) / r;
-
-            if (cos > bestCos[b] + 0.02f || (cos > bestCos[b] - 0.02f && r > bestRad[b]))
-            {
-                if (cos > bestCos[b]) bestCos[b] = cos;
-                bestRad[b] = r;
-                bestPt[b]  = p;
-                hasPt[b]   = true;
-            }
-        }
-
-        var path = new List<TkVector3>(Bands);
-        for (int b = 0; b < Bands; b++)
-            if (hasPt[b]) path.Add(bestPt[b]);
-
-        if (path.Count < 2) return [];
         path.Sort((a, b) => a.Z.CompareTo(b.Z));
         return path;
     }
