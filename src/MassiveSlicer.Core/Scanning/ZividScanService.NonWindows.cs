@@ -76,6 +76,9 @@ public static class ZividScanService
         Action<string>? progress = null)
         => throw Unsupported();
 
+    public static ScanCaptureResult LoadFromZdf(string zdfPath, Action<string>? progress = null)
+        => throw Unsupported();
+
     public static void Disconnect() { }
 
     public sealed class BoardCentroidResult

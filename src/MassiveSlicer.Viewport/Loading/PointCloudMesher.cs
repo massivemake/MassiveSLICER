@@ -69,10 +69,19 @@ public static class PointCloudMesher
                 ? normals[i].Normalized()
                 : -Vector3.UnitZ;
 
+        // Lime green (opaque) so scans are easy to distinguish from CAD/rock imports.
+        var lime = new Vector4(0.55f, 1.00f, 0.15f, 1f);
         var mesh = new MeshData(verts, normals, indices.ToArray(), name,
-                                baseColor: new Vector4(0.62f, 0.78f, 0.92f, 1f),
-                                roughness: 0.9f);
-        return new SceneNode { Name = name, PendingMesh = mesh, Selectable = true, PickTier = PickTier.Content };
+                                baseColor: lime, metallic: 0f, roughness: 0.85f);
+        return new SceneNode
+        {
+            Name            = name,
+            PendingMesh     = mesh,
+            Selectable      = true,
+            PickTier        = PickTier.Content,
+            CullFaces       = false,
+            KeepOwnMaterial = true,
+        };
     }
 
     private static void TryAddTriangle(Vector3[] verts, List<uint> indices,

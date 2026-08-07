@@ -32,7 +32,7 @@ public sealed class MillingBridgeSnapshotTest
     public void MillingPollKeys_match_catalog()
     {
         var catalogKeys = Lfam3LiveIoCatalog.Default.Sections
-            .First(s => s.Title == "Milling Spindle")
+            .First(s => s.Title is "Spindle" or "Milling Spindle")
             .Signals.Select(s => s.Key)
             .ToHashSet(StringComparer.Ordinal);
 

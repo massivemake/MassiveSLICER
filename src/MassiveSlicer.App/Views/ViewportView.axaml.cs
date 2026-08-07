@@ -127,6 +127,10 @@ public partial class ViewportView : UserControl
     private Point     _kbTransformStartPos;
     private Matrix4   _kbTransformInitialLocal;
     private Vector2   _kbObjScreenCenter;
+    /// <summary>World-space pivot for keyboard rotate (R) — under the mouse when R is pressed.</summary>
+    private Vector3   _kbRotatePivotWorld;
+    /// <summary>Screen-space polar reference once the cursor has left the press point (NaN until set).</summary>
+    private float     _kbRotateRefAngle = float.NaN;
 
     // Transform undo (panel numeric edits debounced; gizmo commits immediately).
     // The primary node's own baseline is NOT kept here: every caller already knows the pose it is
@@ -389,6 +393,7 @@ public partial class ViewportView : UserControl
                 _toolpathOriginByNode.TryGetValue(n, out var o) ? o : null;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -982,6 +987,10 @@ public partial class ViewportView : UserControl
 
             additive.PropertyChanged += (_, pe) =>
             {
+                // Any settings edit may move the RPM. Re-check on the next frame — the
+                // recompute itself is skipped unless the RPM inputs really changed.
+                _rpmDirty = true;
+
                 // Recompute layer-preview heatmap when any relevant setting changes.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ShowLayerPreview)
                                     or nameof(AdditiveSettingsViewModel.LayerHeight)
@@ -1103,8 +1112,136 @@ public partial class ViewportView : UserControl
         }
 
         var (zLo, zHi) = SeamGuideHeightRange(vm);
-        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex, zLo, zHi);
+        var paths = new List<IReadOnlyList<TkVector3>>(guides.Count);
+        foreach (var g in guides)
+            paths.Add(BuildSeamGuidePath(g, zLo, zHi));
+        _renderer.SetSeamGuides(guides, paths, vm.SelectedSeamGuideIndex, zLo, zHi);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Shape a guide draws: the model's own surface profile at the guide's compass bearing,
+    /// bottom to top, falling back to a straight column when there is no mesh to cut.
+    /// </summary>
+    private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
+        => BuildSeamGuideSurfaceProfile(guide) is { Count: >= 2 } profile
+            ? profile
+            : [new TkVector3(guide.X, guide.Y, zLo),
+               new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
+
+    /// <summary>
+    /// Cuts the visible model with a vertical plane through the part axis and the guide, and
+    /// returns the outer edge of that cut on the guide's side — the silhouette the guide should
+    /// lie along.
+    /// <para>
+    /// Exact geometry, deliberately: every earlier attempt <i>sampled</i> something (printed
+    /// moves, then mesh vertices) and scored the samples with a heuristic, which produced a line
+    /// up the axis, a jagged staircase, and a curve floating clear of the part. A plane/triangle
+    /// intersection yields the true section outline instead of a vote over scattered points.
+    /// </para>
+    /// </summary>
+    private List<TkVector3>? BuildSeamGuideSurfaceProfile(TkVector3 guide)
+    {
+        const int Bands = 240;
+
+        if ((_vm ?? DataContext as ViewportViewModel) is not { } vm) return null;
+
+        // Part axis = centre of the models' footprint. The bearing is measured from here, so the
+        // profile is the outline you see looking along it.
+        float aMinX = float.MaxValue, aMinY = float.MaxValue;
+        float aMaxX = float.MinValue, aMaxY = float.MinValue;
+        var meshes = new List<(MassiveSlicer.Viewport.Scene.MeshData Mesh, Matrix4 World)>();
+
+        // Prefer shown models, but fall back to hidden ones. Slicing hides the model and shows
+        // the toolpath, so re-opening the editor on an already-sliced part found no mesh to cut
+        // and dropped the guide back to a straight column — it worked the first time and never
+        // again. The part's shape does not depend on whether its layer is switched on.
+        bool anyVisible = vm.EnumerateUserModelItems().Any(i => i.Visible);
+
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            if (anyVisible && !item.Visible) continue;
+            var (mn, mx) = ImportHelper.ComputeSubtreeWorldAabb(item.Node);
+            if (mn.X > mx.X) continue;
+            aMinX = MathF.Min(aMinX, mn.X); aMaxX = MathF.Max(aMaxX, mx.X);
+            aMinY = MathF.Min(aMinY, mn.Y); aMaxY = MathF.Max(aMaxY, mx.Y);
+
+            foreach (var n in item.Node.SelfAndDescendants())
+                if ((n.Mesh?.PickingData ?? n.PendingMesh) is { } md && md.Positions.Length >= 3)
+                    meshes.Add((md, n.WorldTransform));
+        }
+
+        if (meshes.Count == 0 || aMinX > aMaxX) return null;
+
+        float axX = (aMinX + aMaxX) * 0.5f, axY = (aMinY + aMaxY) * 0.5f;
+        float dx = guide.X - axX, dy = guide.Y - axY;
+        float dLen = MathF.Sqrt(dx * dx + dy * dy);
+        if (dLen < 1e-3f) return null;                       // guide on the axis: no bearing
+        dx /= dLen; dy /= dLen;
+        float nx = -dy, ny = dx;                             // cutting plane normal, in XY
+
+        // Section outline: every triangle edge crossing the plane contributes a point.
+        var rOf = new float[Bands];
+        var zOf = new float[Bands];
+        var has = new bool[Bands];
+        Array.Fill(rOf, float.MinValue);
+
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        var pts = new List<(float R, float Z)>(4096);
+
+        foreach (var (mesh, world) in meshes)
+        {
+            int triCount = mesh.Indices is { } ix ? ix.Length / 3 : mesh.Positions.Length / 3;
+            if (triCount == 0) continue;
+            int stride = Math.Max(1, triCount / 60_000);     // caps work on million-triangle parts
+
+            for (int t = 0; t < triCount; t += stride)
+            {
+                Span<TkVector3> v = stackalloc TkVector3[3];
+                Span<float>     s = stackalloc float[3];
+                for (int k = 0; k < 3; k++)
+                {
+                    int pi = mesh.Indices is { } idx ? (int)idx[t * 3 + k] : t * 3 + k;
+                    var src = mesh.Positions[pi];
+                    v[k] = TkVector3.TransformPosition(new TkVector3(src.X, src.Y, src.Z), world);
+                    s[k] = (v[k].X - axX) * nx + (v[k].Y - axY) * ny;
+                }
+
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = e, b = (e + 1) % 3;
+                    if ((s[a] < 0f) == (s[b] < 0f)) continue;          // edge does not cross
+                    float denom = s[a] - s[b];
+                    if (MathF.Abs(denom) < 1e-9f) continue;
+                    float f = s[a] / denom;
+                    var p = v[a] + (v[b] - v[a]) * f;
+
+                    float r = (p.X - axX) * dx + (p.Y - axY) * dy;
+                    if (r <= 0f) continue;                             // far side of the part
+                    pts.Add((r, p.Z));
+                    if (p.Z < zMin) zMin = p.Z;
+                    if (p.Z > zMax) zMax = p.Z;
+                }
+            }
+        }
+
+        if (pts.Count < 8 || zMax - zMin < 1e-3f) return null;
+
+        // Outer edge per height band. The input is a continuous section outline, not scattered
+        // vertices, so the maximum in each band lands on the surface rather than jittering.
+        float invH = (Bands - 1) / (zMax - zMin);
+        foreach (var (r, z) in pts)
+        {
+            int b = Math.Clamp((int)((z - zMin) * invH), 0, Bands - 1);
+            if (r > rOf[b]) { rOf[b] = r; zOf[b] = z; has[b] = true; }
+        }
+
+        var profile = new List<TkVector3>(Bands);
+        for (int b = 0; b < Bands; b++)
+            if (has[b])
+                profile.Add(new TkVector3(axX + dx * rOf[b], axY + dy * rOf[b], zOf[b]));
+
+        return profile.Count >= 2 ? profile : null;
     }
 
     /// <summary>
@@ -1306,6 +1443,17 @@ public partial class ViewportView : UserControl
             return true;
         }
 
+        // Once the part is sliced the model is usually hidden and only the toolpath is on
+        // screen. Toolpath nodes carry no pickable mesh, so the face pick above finds nothing
+        // and the editor drew no line at all — it looked like the tool had stopped working.
+        // The printed outline IS the wall here, so seam onto it.
+        if (TrySeamGuideOnToolpath(mx, my, out var tpHit))
+        {
+            _lastSeamGuideSurfacePoint = tpHit;
+            hit = tpHit;
+            return true;
+        }
+
         // Cursor left the silhouette: hold the last on-surface position. Snapping to the
         // nearest sampled vertex instead made the column jitter between scattered vertices
         // and occasionally land off the visible wall.
@@ -1317,6 +1465,79 @@ public partial class ViewportView : UserControl
 
         hit = default;
         return false;
+    }
+
+    /// <summary>
+    /// Visible toolpath extrusion point nearest the cursor <b>in screen pixels</b>, used when no
+    /// model mesh is hittable (hidden after slicing, or a toolpath-only project). Returns false
+    /// when the cursor is not near a printed line, so hover off the part holds the last on-wall
+    /// position instead of snapping across the scene.
+    /// <para>
+    /// The radius must be in pixels, not millimetres: a world-space tolerance that feels right on
+    /// a 200mm bracket is a couple of pixels on a 3m cell, so the snap silently never fired and
+    /// clicks committed the stale held position instead — every guide landed on the same wrong
+    /// spot off the part.
+    /// </para>
+    /// </summary>
+    private bool TrySeamGuideOnToolpath(float mx, float my, out TkVector3 hit)
+    {
+        hit = default;
+        if (_toolpathByNode.IsEmpty) return false;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW <= 0f || vpH <= 0f) return false;
+
+        // One matrix for the whole sweep — ProjectToScreen would rebuild it per point.
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        const float grabPx    = 40f;   // forgiving: printed lines are thin on screen
+        const float tieSlopPx = 6f;    // within this, prefer the line nearest the camera
+
+        float bestPx2  = float.MaxValue;
+        float bestDepth = float.MaxValue;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible || tp.Layers.Count == 0) continue;
+            var world = node.WorldTransform;
+
+            // A metre-scale part holds hundreds of thousands of moves and this runs on every
+            // mouse move. A few mm of slop is invisible on a seam column, so subsample.
+            int total = 0;
+            foreach (var layer in tp.Layers) total += layer.Moves.Count;
+            int stride = Math.Max(1, total / 20_000);
+
+            int i = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                for (int m = 0; m < moves.Count; m++, i++)
+                {
+                    if (i % stride != 0) continue;
+                    var move = moves[m];
+                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;   // travels aren't wall
+
+                    var p = TkVector3.TransformPosition(
+                        new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
+                    var s = _renderer.ProjectToScreenDepth(p, viewProj, vpW, vpH);
+                    if (float.IsNaN(s.X)) continue;                              // behind the camera
+
+                    float dx = s.X - mx, dy = s.Y - my;
+                    float px2 = dx * dx + dy * dy;
+                    if (px2 > grabPx * grabPx) continue;
+
+                    // The toolpath draws as lines, so the far wall is visible through the near
+                    // one. Nearest pixel wins; when two are effectively under the same pixel,
+                    // take the one closest to the camera — that's the wall you can see.
+                    bool better = px2 < bestPx2 - tieSlopPx * tieSlopPx
+                               || (MathF.Abs(px2 - bestPx2) <= tieSlopPx * tieSlopPx && s.Z < bestDepth);
+                    if (better) { bestPx2 = px2; bestDepth = s.Z; hit = p; }
+                }
+            }
+        }
+
+        return bestPx2 < float.MaxValue;
     }
 
 
@@ -1843,6 +2064,8 @@ public partial class ViewportView : UserControl
             while (_pendingReachability.TryDequeue(out var reach))
                 _renderer.UpdateToolpathReachability(reach.node, reach.reachable);
 
+            RefreshToolpathRpm(vm);
+
             while (_pendingSingularityPoints.TryDequeue(out var sing))
                 _renderer.UpdateToolpathSingularityPoints(sing.node, sing.singularity);
 
@@ -1851,6 +2074,7 @@ public partial class ViewportView : UserControl
             else
                 UpdateAnglePlanePreview(vm);
             UpdatePaintOverlay(vm);
+            UpdateMillAreaOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -3017,6 +3241,59 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
+        // (imports & scans). Robot, bed, and cell environment never receive hits.
+        if (DataContext is ViewportViewModel millPtrVm
+            && millPtrVm.IsMillAreaSelectActive
+            && !_spaceHeld)
+        {
+            if (kind == PointerUpdateKind.LeftButtonPressed)
+            {
+                bool erase = mods.HasFlag(KeyModifiers.Alt);
+                if (millPtrVm.IsMillAreaBox || millPtrVm.IsMillAreaLasso)
+                {
+                    _millAreaBoxDragging = true;
+                    _millAreaBoxStart = pos;
+                    _paintLassoPts.Clear();
+                    if (millPtrVm.IsMillAreaLasso)
+                    {
+                        millPtrVm.PaintMarqueeVisible = false;
+                        _paintLassoPts.Add(pos);
+                        millPtrVm.SetPaintLassoPoints(_paintLassoPts);
+                        millPtrVm.PaintLassoVisible = true;
+                    }
+                    else
+                    {
+                        millPtrVm.PaintLassoVisible = false;
+                        millPtrVm.ClearPaintLassoPoints();
+                        millPtrVm.PaintMarqueeX = pos.X;
+                        millPtrVm.PaintMarqueeY = pos.Y;
+                        millPtrVm.PaintMarqueeW = 0;
+                        millPtrVm.PaintMarqueeH = 0;
+                        millPtrVm.PaintMarqueeVisible = true;
+                    }
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                if (millPtrVm.IsMillAreaBrush)
+                {
+                    _millAreaStroking = true;
+                    _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                    TryMillAreaBrushAt(millPtrVm, pos, erase);
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                // Face click
+                TryMillAreaFaceAt(millPtrVm, pos, erase);
+                e.Handled = true;
+                return;
+            }
+        }
+
         // 2D slice plane: right-drag pans (orbit is locked; this is the primary pan).
         if (kind == PointerUpdateKind.RightButtonPressed && IsSlicePlaneNavLocked)
         {
@@ -3250,6 +3527,35 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill area marquee / brush drag (before toolpath paint so Mill mode owns the pointer).
+        if (_millAreaBoxDragging && DataContext is ViewportViewModel millBoxVm)
+        {
+            if (millBoxVm.IsMillAreaLasso)
+            {
+                if (_paintLassoPts.Count == 0 || Dist2D(_paintLassoPts[^1], pos) >= 4.0)
+                {
+                    _paintLassoPts.Add(pos);
+                    millBoxVm.SetPaintLassoPoints(_paintLassoPts);
+                }
+            }
+            else
+            {
+                millBoxVm.PaintMarqueeX = Math.Min(pos.X, _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeY = Math.Min(pos.Y, _millAreaBoxStart.Y);
+                millBoxVm.PaintMarqueeW = Math.Abs(pos.X - _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeH = Math.Abs(pos.Y - _millAreaBoxStart.Y);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking && DataContext is ViewportViewModel millStrokeVm)
+        {
+            if (Math.Abs(pos.X - _lastPaintPx.X) + Math.Abs(pos.Y - _lastPaintPx.Y) >= 5)
+                TryMillAreaBrushAt(millStrokeVm, pos, erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
         if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
         {
             if (pbxVm.PaintRegionSelectIsLasso)
@@ -3338,10 +3644,14 @@ public partial class ViewportView : UserControl
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
-                _renderer.SetSeamGuidePreview(
-                    TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit)
-                        ? previewHit
-                        : null);
+                if (TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit))
+                {
+                    var (pLo, pHi) = SeamGuideHeightRange(hoverVm);
+                    _renderer.SetSeamGuidePreview(
+                        previewHit, BuildSeamGuidePath(previewHit, pLo, pHi));
+                }
+                else
+                    _renderer.SetSeamGuidePreview(null);
                 GlCanvas.RequestNextFrameRendering();
             }
             else
@@ -3410,6 +3720,44 @@ public partial class ViewportView : UserControl
         // Consume the flag up front so every early return below still resets it.
         bool sawLeftPress = _leftPressSeen;
         if (kind == PointerUpdateKind.LeftButtonReleased) _leftPressSeen = false;
+
+        if (_millAreaBoxDragging)
+        {
+            _millAreaBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel millBoxVm)
+            {
+                bool erase = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+                if (millBoxVm.IsMillAreaLasso)
+                {
+                    millBoxVm.PaintLassoVisible = false;
+                    if (_paintLassoPts.Count >= 3)
+                        SelectMillFacesInLasso(millBoxVm, _paintLassoPts, erase);
+                    _paintLassoPts.Clear();
+                    millBoxVm.ClearPaintLassoPoints();
+                }
+                else
+                {
+                    millBoxVm.PaintMarqueeVisible = false;
+                    var rect = new Avalonia.Rect(
+                        Math.Min(pt.Position.X, _millAreaBoxStart.X),
+                        Math.Min(pt.Position.Y, _millAreaBoxStart.Y),
+                        Math.Abs(pt.Position.X - _millAreaBoxStart.X),
+                        Math.Abs(pt.Position.Y - _millAreaBoxStart.Y));
+                    if (rect.Width > 4 && rect.Height > 4)
+                        SelectMillFacesInRect(millBoxVm, rect, erase);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking)
+        {
+            _millAreaStroking = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            e.Handled = true;
+            return;
+        }
 
         if (_paintBoxDragging)
         {
@@ -4552,10 +4900,21 @@ public partial class ViewportView : UserControl
 
     private void StageToolpathMaps(PendingToolpathEntry entry)
     {
+        _rpmDirty = true;   // new/re-sliced geometry needs its RPM highlight recomputed
         _toolpathByNode[entry.Node]     = entry.Toolpath;
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
         _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+
+        // A guide's curve is traced from the printed wall, so it goes stale the moment the
+        // toolpath is replaced. Nothing rebuilt it after a slice, so the guide kept whatever
+        // shape it had when it was placed — a straight column if the part was not yet sliced —
+        // while the seam beside it followed the new geometry.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is ViewportViewModel vmGuides)
+                UpdateSeamGuideMarkers(vmGuides);
+        });
 
         // The timeline must always follow the DISPLAYED toolpath. Some replace
         // paths (workspace-restore ordering, background re-uploads) staged a new
@@ -5392,6 +5751,10 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
+        // Raised only by SetSeamGuides (seam editor Save, project load). Without it, saving a
+        // seam guide changed nothing on screen — the toolpath kept the seam from the previous
+        // slice, so the green guide and the yellow seam sat on different sides of the part.
+        nameof(AdditiveSettingsViewModel.SeamGuideSummary),
         nameof(AdditiveSettingsViewModel.ZigZagAllowSameLayerTravel),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
@@ -5673,6 +6036,27 @@ public partial class ViewportView : UserControl
         _realtimeSliceTimer.Start();
     }
 
+    /// <summary>
+    /// Above this triangle count a fresh import is NOT auto-sliced — slicing a very dense
+    /// mesh the instant it appears could freeze or crash the app (the reason the blanket
+    /// guard was added on 2026-08-01). Typical production parts here run 145k–160k tris,
+    /// so this clears normal work by a wide margin and only catches heavy STEP imports.
+    /// </summary>
+    private const int AutoSliceMaxTriangles = 1_000_000;
+
+    /// <summary>Triangles across a node's subtree, for the auto-slice size guard.</summary>
+    private static int SubtreeTriangleCount(SceneNode root)
+    {
+        int n = 0;
+        foreach (var node in root.SelfAndDescendants())
+        {
+            var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+            if (mesh is null) continue;
+            n += mesh.Indices is { } idx ? idx.Length / 3 : mesh.Positions.Length / 3;
+        }
+        return n;
+    }
+
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
         if (HasProtectedBakedToolpath(vm))
@@ -5683,10 +6067,24 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
-        if (toolpathChild is not null)
-            await RunUpdateSliceAsync(vm, (item, toolpathChild));
-        else
+        if (toolpathChild is null)
+        {
+            // No toolpath yet — this is a fresh import, so produce the FIRST slice rather
+            // than re-slicing. The 2026-08-01 guard returned here unconditionally, which
+            // fixed dense STEP imports freezing but also removed auto-slice on import
+            // entirely. Keep that protection as a size check instead of a blanket refusal.
+            int tris = SubtreeTriangleCount(item.Node);
+            if (tris > AutoSliceMaxTriangles)
+            {
+                SetSliceStatus(vm,
+                    $"Auto-slice skipped — {tris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). Press Slice to run it.");
+                return;
+            }
             await RunSliceAsync(vm);
+            return;
+        }
+
+        await RunUpdateSliceAsync(vm, (item, toolpathChild));
     }
 
     /// <summary>Begin a new slice cancellation token (cancels any previous).</summary>
@@ -7552,6 +7950,8 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
+        _kbRotateRefAngle        = float.NaN;
+
         // Must be sampled before anything moves — it is the question the Keep on bed preferences
         // answer, and it is unanswerable once the gesture has started.
         _kbWasRestingAtStart     = IsRestingOnBed(node);
@@ -7568,11 +7968,17 @@ public partial class ViewportView : UserControl
         if (op != GizmoMode.Scale) BeginTransformLink(node);
         else                       EndTransformLink();
 
-        // Project the node's world position to screen so KbRotate can use atan2.
         float vpW0 = (float)GlCanvas.Bounds.Width;
         float vpH0 = (float)GlCanvas.Bounds.Height;
-        if (vpW0 > 0 && vpH0 > 0)
+        if (op is GizmoMode.Rotate or GizmoMode.Scale)
         {
+            // R and S: pivot under the mouse at press (top + side views).
+            _kbObjScreenCenter = new Vector2((float)_lastMousePos.X, (float)_lastMousePos.Y);
+            _kbRotatePivotWorld = PickKbTransformPivotWorld(node, (float)_lastMousePos.X, (float)_lastMousePos.Y, vpW0, vpH0);
+        }
+        else if (vpW0 > 0 && vpH0 > 0)
+        {
+            // Translate: keep screen center on the object pivot for any helpers.
             float aspect0  = vpW0 / vpH0;
             var   vp0      = _renderer.Camera.GetViewMatrix() * _renderer.Camera.GetProjectionMatrix(aspect0);
             var   nodePos0 = GetGizmoPivotWorld(node);
@@ -7582,10 +7988,12 @@ public partial class ViewportView : UserControl
                     (clip0.X / clip0.W * 0.5f + 0.5f) * vpW0,
                     (1f - (clip0.Y / clip0.W * 0.5f + 0.5f)) * vpH0)
                 : new Vector2(vpW0 * 0.5f, vpH0 * 0.5f);
+            _kbRotatePivotWorld = nodePos0;
         }
         else
         {
-            _kbObjScreenCenter = Vector2.Zero;
+            _kbObjScreenCenter  = Vector2.Zero;
+            _kbRotatePivotWorld = GetGizmoPivotWorld(node);
         }
 
         BeginToolIkDrag(node);
@@ -7593,6 +8001,46 @@ public partial class ViewportView : UserControl
         // Prime the view-plane state so unconstrained translate tracks exactly from the start.
         if (op == GizmoMode.Translate)
             SetupKbViewPlane(node);
+    }
+
+    /// <summary>
+    /// World point under the mouse for keyboard rotate/scale.
+    /// Top/bottom views use the bed (or object-height) plane; side/front views use the
+    /// camera view plane through the object so the pivot sits under the cursor, not on the bed far away.
+    /// </summary>
+    private Vector3 PickKbTransformPivotWorld(SceneNode node, float mx, float my, float vpW, float vpH)
+    {
+        var objectPivot = GetGizmoPivotWorld(node);
+        if (vpW <= 1f || vpH <= 1f)
+            return objectPivot;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        var viewDir = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+        // Looking mostly along ±Z → top/bottom (number-key "1" style).
+        bool topOrBottom = MathF.Abs(viewDir.Z) > 0.85f;
+
+        if (topOrBottom)
+        {
+            if (SceneRenderer.TryPickHorizontalPlane(ray, _renderer.BedZ, out var onBed))
+                return onBed;
+            if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onObjectZ))
+                return onObjectZ;
+        }
+
+        // Side / front / 3D: intersect the view plane through the object pivot.
+        float denom = Vector3.Dot(ray.Direction, viewDir);
+        if (MathF.Abs(denom) > 1e-5f)
+        {
+            float t = Vector3.Dot(objectPivot - ray.Origin, viewDir) / denom;
+            if (t > 0f)
+                return ray.At(t);
+        }
+
+        // Last resort: horizontal plane at object height.
+        if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onZ))
+            return onZ;
+
+        return objectPivot;
     }
 
     // Stores the camera view-plane (normal + anchor + start-hit) for unconstrained translate.
@@ -7699,6 +8147,210 @@ public partial class ViewportView : UserControl
     private bool _paintBoxDragging;
     private Avalonia.Point _paintBoxStart;
     private readonly List<Avalonia.Point> _paintLassoPts = [];
+
+    // ── Mill OPERATION → SELECT AREA (soft vertex paint on workpiece only) ───
+    private bool _millAreaStroking, _millAreaBoxDragging;
+    private Avalonia.Point _millAreaBoxStart;
+    private MillSurfacePaint? _millSurfacePaint;
+    private bool _millPaintHooked;
+
+    MillSurfacePaint MillPaint
+    {
+        get
+        {
+            _millSurfacePaint ??= new MillSurfacePaint();
+            return _millSurfacePaint;
+        }
+    }
+
+    void EnsureMillPaintHook(ViewportViewModel vm)
+    {
+        if (_millPaintHooked) return;
+        _millPaintHooked = true;
+        vm.ClearMillSurfacePaint = () =>
+        {
+            _pendingMillPaintClear = true;
+            vm.NotifyRenderNeeded();
+        };
+        vm.DescribeMillPaint = () => _millSurfacePaint?.Describe() ?? "no paint";
+    }
+
+    bool _pendingMillPaintClear;
+
+    /// <summary>
+    /// Ray-pick a face exclusively on millable user workpieces (imports / scans).
+    /// Robot, bed, toolheads, and other cell environment never qualify.
+    /// </summary>
+    Picker.FaceHit? PickMillableFace(ViewportViewModel vm, Avalonia.Point pos)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return null;
+        var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+        return Picker.PickFaceDetailed(ray, _renderer.SceneRoot, vm.IsMillableWorkpiece);
+    }
+
+    void EnsureMillAreaTarget(ViewportViewModel vm, SceneNode meshLeaf)
+    {
+        if (vm.MillAreaTargetRoot is not null) return;
+        var root = meshLeaf;
+        for (var c = meshLeaf; c is not null; c = c.Parent)
+        {
+            if (vm.FindUserMeshOutlinerItem(c) is { } item
+                && !item.IsToolpath && !item.IsEffector
+                && !item.IsModifier && !item.IsModifiersGroup)
+            {
+                root = item.Node;
+                break;
+            }
+        }
+        vm.SetMillAreaTargetRoot(root);
+    }
+
+    void SyncMillPaintStats(ViewportViewModel vm)
+    {
+        var paint = _millSurfacePaint;
+        if (paint is null) { vm.UpdateMillPaintStats(0, 0); return; }
+        vm.UpdateMillPaintStats(paint.PaintedVertexCount, paint.Coverage01);
+    }
+
+    void TryMillAreaFaceAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+        {
+            ConsoleLogMill($"[mill-paint] face miss (no workpiece under cursor)");
+            return;
+        }
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+        if (hit.Value.MeshNode.Mesh?.PickingData is not { } mesh) return;
+
+        MillPaint.StampTriangle(hit.Value.MeshNode, mesh, hit.Value.TriangleIndex, erase);
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] face tri={hit.Value.TriangleIndex} on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void TryMillAreaBrushAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        _lastPaintPx = pos;
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+            return;
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+
+        // World-space soft brush — works without material UVs (STEP/STL/GLB).
+        int before = MillPaint.PaintedVertexCount;
+        MillPaint.StampWorld(
+            hit.Value.MeshNode,
+            hit.Value.WorldHit,
+            radiusMm: (float)vm.MillBrushRadiusMm,
+            falloff: (float)vm.MillBrushFalloff,
+            strength: erase ? 1f : 1f,
+            erase: erase,
+            hitTriangleIndex: hit.Value.TriangleIndex);
+        SyncMillPaintStats(vm);
+        if (vm.MillPaintedVertices != before)
+            ConsoleLogMill($"[mill-paint] brush on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void SelectMillFacesInRect(ViewportViewModel vm, Avalonia.Rect rect, bool erase)
+        => SelectMillPaintInScreenRegion(vm, erase, p => rect.Contains(p));
+
+    void SelectMillFacesInLasso(ViewportViewModel vm, List<Avalonia.Point> loop, bool erase)
+    {
+        if (loop.Count < 3) return;
+        SelectMillPaintInScreenRegion(vm, erase, p => PointInPolygon(p, loop));
+    }
+
+    static bool PointInPolygon(Avalonia.Point p, List<Avalonia.Point> poly)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y;
+            double xj = poly[j].X, yj = poly[j].Y;
+            if (((yi > p.Y) != (yj > p.Y))
+                && (p.X < (xj - xi) * (p.Y - yi) / (yj - yi + 1e-30) + xi))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    void SelectMillPaintInScreenRegion(
+        ViewportViewModel vm, bool erase, Func<Avalonia.Point, bool> inside)
+    {
+        EnsureMillPaintHook(vm);
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return;
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is null) continue;
+            var selectable = Picker.FindSelectableRoot(node);
+            if (selectable is null) continue;
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            if (vm.MillAreaTargetRoot is null)
+                EnsureMillAreaTarget(vm, node);
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            MillPaint.StampScreenRegion(
+                node,
+                world =>
+                {
+                    var scr = _renderer.ProjectToScreen(world, viewProj, vpW, vpH);
+                    if (float.IsNaN(scr.X)) return false;
+                    return inside(new Avalonia.Point(scr.X, scr.Y));
+                },
+                strength: 0.95f,
+                erase: erase);
+        }
+
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] region → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Upload vertex paint weights to GPU (selection wash is in the mesh shader).</summary>
+    void UpdateMillAreaOverlay(ViewportViewModel vm)
+    {
+        EnsureMillPaintHook(vm);
+
+        if (_pendingMillPaintClear)
+        {
+            _pendingMillPaintClear = false;
+            _millSurfacePaint?.Clear();
+            vm.UpdateMillPaintStats(0, 0);
+        }
+
+        if (_millSurfacePaint is not null)
+        {
+            _millSurfacePaint.UploadDirty();
+            _millSurfacePaint.RebindAll();
+        }
+    }
+
+    void ConsoleLogMill(string msg)
+    {
+        System.Console.WriteLine(msg);
+        if (DataContext is ViewportViewModel vm)
+            vm.LogMill?.Invoke(msg);
+    }
+
     /// <summary>Applied modifications (reselectable from the MODIFICATIONS panel).</summary>
     private readonly List<PaintModificationRecord> _paintModifications = [];
 
@@ -7945,7 +8597,9 @@ public partial class ViewportView : UserControl
                 || (vm.AdditiveSettings?.PaintMarks.Count ?? 0) > 0);
         if (!show)
         {
-            _renderer.SetPaintOverlay([], null);
+            // Leave the buffer alone when mill SELECT AREA owns the brush-cursor overlay.
+            if (!vm.IsMillAreaSelectActive && vm.MillPaintedTexels == 0)
+                _renderer.SetPaintOverlay([], null);
             return;
         }
         var add = vm.AdditiveSettings!;
@@ -11093,10 +11747,17 @@ public partial class ViewportView : UserControl
         _seamDragCumLen    = cum;
         _seamDragOffsetMm  = 0f;
         _seamDragVertex    = 0;
-        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], 0);
+        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], [SeamVertexTick(_seamDragLoopWorld[0])], 0);
         GlCanvas.RequestNextFrameRendering();
         return true;
     }
+
+    /// <summary>
+    /// Short vertical tick at one contour vertex. The toolpath seam-drag tool marks a spot on a
+    /// single loop, not a whole wall, so it gets a marker rather than a full-height guide.
+    /// </summary>
+    private static IReadOnlyList<TkVector3> SeamVertexTick(TkVector3 at)
+        => [new TkVector3(at.X, at.Y, at.Z - 15f), new TkVector3(at.X, at.Y, at.Z + 15f)];
 
     /// <summary>Slides the seam preview along the grabbed contour by the horizontal mouse delta.</summary>
     private void UpdateSeamPointDrag(float deltaX)
@@ -11119,7 +11780,8 @@ public partial class ViewportView : UserControl
         if (vertex != _seamDragVertex)
         {
             _seamDragVertex = vertex;
-            _renderer.SetSeamGuides([_seamDragLoopWorld[vertex]], 0);
+            _renderer.SetSeamGuides(
+                [_seamDragLoopWorld[vertex]], [SeamVertexTick(_seamDragLoopWorld[vertex])], 0);
         }
         GlCanvas.RequestNextFrameRendering();
     }
@@ -11245,7 +11907,6 @@ public partial class ViewportView : UserControl
         float my  = (float)mousePos.Y;
         float vpW = (float)GlCanvas.Bounds.Width;
         float vpH = (float)GlCanvas.Bounds.Height;
-        float dx  = (float)(mousePos.X - _kbTransformStartPos.X);
 
         switch (_kbTransformOp)
         {
@@ -11263,7 +11924,7 @@ public partial class ViewportView : UserControl
                 break;
 
             case GizmoMode.Scale:
-                KbScale(node, dx, vpW);
+                KbScale(node, mousePos, vpW, vpH);
                 break;
         }
         ApplyTransformLink(node);
@@ -11312,28 +11973,26 @@ public partial class ViewportView : UserControl
             GizmoAxis.X => Vector3.UnitX,
             GizmoAxis.Y => Vector3.UnitY,
             GizmoAxis.Z => Vector3.UnitZ,
+            // Unconstrained: view axis (top view ≈ world Z) so the model spins on the plate.
             _           => Vector3.Normalize(_renderer.Camera.Eye - _renderer.Camera.Target),
         };
 
-        // Compute rotation as the 2-D angle swept around the object's screen center.
-        // This makes the object "track" the mouse regardless of which axis is constrained.
-        var vStart = new Vector2((float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y)
-                   - _kbObjScreenCenter;
-        var vCurr  = new Vector2((float)mousePos.X, (float)mousePos.Y)
-                   - _kbObjScreenCenter;
+        // Polar angle around the mouse position where R was pressed (_kbObjScreenCenter).
+        // At press, start == center so we lock a reference direction on the first real move.
+        var vCurr = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
 
         float angle;
-        if (vStart.LengthSquared < 4f || vCurr.LengthSquared < 4f)
+        if (vCurr.LengthSquared < 16f) // ~4 px
         {
-            // Too close to center -- fall back to pure horizontal drag.
-            angle = (float)(mousePos.X - _kbTransformStartPos.X) * 0.01f;
+            angle = 0f;
         }
         else
         {
-            // Negate Y to convert screen-space (Y-down) to math-space (Y-up) before atan2,
-            // so the resulting angle follows the right-hand rule used by CreateFromAxisAngle.
-            angle = MathF.Atan2(-vCurr.Y, vCurr.X) - MathF.Atan2(-vStart.Y, vStart.X);
-            // Wrap to [-π, π] to avoid a sudden jump when crossing the ±180deg boundary.
+            // Negate Y: screen Y-down → math Y-up for right-hand CreateFromAxisAngle.
+            float curr = MathF.Atan2(-vCurr.Y, vCurr.X);
+            if (float.IsNaN(_kbRotateRefAngle))
+                _kbRotateRefAngle = curr;
+            angle = curr - _kbRotateRefAngle;
             if (angle >  MathF.PI) angle -= MathF.Tau;
             if (angle < -MathF.PI) angle += MathF.Tau;
         }
@@ -11357,39 +12016,73 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var rotNode = Matrix4.CreateFromAxisAngle(axisDir, angle);
-        var lt  = _kbTransformInitialLocal;
-        var p   = new Vector3(lt.M41, lt.M42, lt.M43);
-        lt      = lt * rotNode;
-        lt.M41  = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
-        node.LocalTransform = lt;
+        // Rotate about the world pivot under the mouse (not the local origin), so in top view
+        // the selection orbits the cursor / plate point under the cursor.
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var rotWorld   = Matrix4.CreateFromAxisAngle(axisDir, angle);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * R * T(pivot)
+        var worldRot = toOrigin * rotWorld * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        // L' = L0 * P * W * P⁻¹  (same conjugation as ApplyWorldTransformToNode)
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldRot * invParent;
     }
 
-    private void KbScale(SceneNode node, float dx, float vpW)
+    private void KbScale(SceneNode node, Point mousePos, float vpW, float vpH)
     {
-        float t     = dx / (vpW * 0.5f);
-        float ratio = MathF.Exp(t * MathF.Log(3f));
-        if (ratio <= 0f) return;
+        // Scale factor from mouse motion relative to the press point (same pivot as R).
+        // Radial distance from the press cursor: outward = grow, toward press = shrink.
+        // When press == pivot center, use a virtual base radius so the first move is well-defined.
+        var v = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
+        float basePx = MathF.Max(64f, MathF.Min(vpW, vpH) * 0.12f);
+        float currPx = MathF.Max(1f, v.Length);
+        // Signed radial scale: start at ratio 1 when still near the press point; dragging
+        // away increases size, dragging back toward the press point decreases it.
+        float ratio;
+        if (v.LengthSquared < 16f)
+        {
+            ratio = 1f;
+        }
+        else
+        {
+            // Mix radial Blender-style factor with a gentle horizontal bias so tiny motions work
+            // even before a clear radial direction is established.
+            float radial = currPx / basePx;
+            float horiz  = MathF.Exp(((float)mousePos.X - (float)_kbTransformStartPos.X) / (vpW * 0.35f) * MathF.Log(3f));
+            // Prefer radial once the cursor has moved enough off the press point.
+            ratio = currPx >= basePx * 0.35f ? radial : horiz;
+            ratio = Math.Clamp(ratio, 0.05f, 20f);
+        }
 
-        var lt = _kbTransformInitialLocal;
+        if (_toolIsDragging)
+        {
+            // Tool TCP scale is not meaningful — keep orientation-only IK path inert.
+            return;
+        }
+
+        // World-space scale about the mouse pivot (works in top + side views).
+        float sx = 1f, sy = 1f, sz = 1f;
         switch (_kbTransformAxis)
         {
-            case GizmoAxis.X:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                break;
-            case GizmoAxis.Y:
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                break;
-            case GizmoAxis.Z:
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
-            default:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
+            case GizmoAxis.X: sx = ratio; break;
+            case GizmoAxis.Y: sy = ratio; break;
+            case GizmoAxis.Z: sz = ratio; break;
+            default:          sx = sy = sz = ratio; break;
         }
-        node.LocalTransform = lt;
+
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var scaleMat   = Matrix4.CreateScale(sx, sy, sz);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * S * T(pivot)
+        var worldScale = toOrigin * scaleMat * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldScale * invParent;
     }
 
     private static string TransformUndoLabel(GizmoMode mode) => mode switch
@@ -15618,6 +16311,7 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
@@ -15659,8 +16353,7 @@ public partial class ViewportView : UserControl
         // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
         // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
         string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
-        return path;
+        return await WriteKrlAsync(vm, toolpath, node, cell, settings, path) ? path : null;
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -15694,6 +16387,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
@@ -15714,7 +16408,7 @@ public partial class ViewportView : UserControl
         {
             fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
-            await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
+            if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath)) return;
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
@@ -16030,7 +16724,197 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private async Task WriteKrlAsync(
+    /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
+    /// or a settings edit re-runs exactly the toolpaths that changed, and nothing else.
+    private readonly Dictionary<SceneNode, (Toolpath Tp, float Base, float FirstRpm, float FirstSpeed)>
+        _rpmApplied = new();
+
+    /// <summary>Set when settings or toolpaths change; cleared once the highlight catches up.</summary>
+    private volatile bool _rpmDirty = true;
+
+    /// <summary>
+    /// Keeps every toolpath's RPM colouring in step with the current settings. Runs on the GL
+    /// thread each frame but only touches VBOs when the inputs actually changed — the analysis
+    /// itself is one multiply per move.
+    /// </summary>
+    private void RefreshToolpathRpm(ViewportViewModel vm)
+    {
+        _renderer.SetToolpathRpmOverLimitVisible(vm.ShowRpmOverLimit);
+
+        // Polling the settings every frame would re-parse the extrusion offset string 60×/s
+        // for nothing. Settings edits and toolpath uploads raise the flag instead.
+        if (!_rpmDirty) return;
+        _rpmDirty = false;
+
+        if (vm.AdditiveSettings is not { } settings) return;
+        var inputs = RpmInputs(settings);
+        float basePct  = ToolpathRpm.BasePercent(inputs);
+        float firstRpm = inputs.FirstLayerRpmPercent;
+        float firstSpd = inputs.FirstLayerSpeedMps;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            var key = (tp, basePct, firstRpm, firstSpd);
+            if (_rpmApplied.TryGetValue(node, out var prev) && prev == key)
+                continue;
+            var analysis = ToolpathRpm.Analyze(tp, inputs);
+            _renderer.UpdateToolpathRpm(node, analysis.PerMovePercent, ToolpathRpm.MaxRpmPercent);
+            _rpmApplied[node] = key;
+        }
+
+        // Drop entries for toolpaths that no longer exist so the map can't grow forever.
+        if (_rpmApplied.Count > _toolpathByNode.Count)
+            foreach (var stale in _rpmApplied.Keys.Where(k => !_toolpathByNode.ContainsKey(k)).ToList())
+                _rpmApplied.Remove(stale);
+    }
+
+    /// <summary>
+    /// The one place UI settings become RPM inputs. Export and the viewport highlight both
+    /// go through here, so the RPM drawn on screen is the RPM written to the .src — there is
+    /// no second calculation that could drift.
+    /// </summary>
+    private static KrlExportSettings RpmInputs(AdditiveSettingsViewModel s)
+        => new()
+        {
+            ProgramName          = "rpm",
+            BeadWidthMm          = (float)s.BeadWidth,
+            LayerHeightMm        = (float)s.LayerHeight,
+            PrintSpeedMps        = (float)(s.PrintSpeed / 1000.0),
+            // Per-head flow: an HF toolhead has its own rate. Only a fallback for RPM
+            // (ExtrusionRpmPercent is always set below) but rpm-report prints it, and a
+            // report naming the wrong head's flow is the sort of small lie this avoids.
+            FlowRate             = (float)(s.SelectedPreset?.FlowRateFor(s.ActiveExtruderIsHf) ?? 0.463),
+            ExtrusionRpmPercent  = s.GetEffectiveExtrusionSpeedPercent(),
+            FirstLayerSpeedMps   = s.FirstLayerAdjustmentsEnabled && s.FirstLayerSpeed > 0.0
+                                       ? (float)(s.FirstLayerSpeedEffective / 1000.0) : 0f,
+            FirstLayerRpmPercent = s.FirstLayerAdjustmentsEnabled && s.FirstLayerRpm > 0.0
+                                       ? (float)s.FirstLayerRpmEffective : 0f,
+        };
+
+    /// <summary>Copies the shared RPM inputs onto a full export settings record.</summary>
+    private static KrlExportSettings WithRpmInputs(KrlExportSettings s, AdditiveSettingsViewModel a)
+    {
+        var r = RpmInputs(a);
+        return s with
+        {
+            BeadWidthMm          = r.BeadWidthMm,
+            LayerHeightMm        = r.LayerHeightMm,
+            PrintSpeedMps        = r.PrintSpeedMps,
+            FlowRate             = r.FlowRate,
+            ExtrusionRpmPercent  = r.ExtrusionRpmPercent,
+            FirstLayerSpeedMps   = r.FirstLayerSpeedMps,
+            FirstLayerRpmPercent = r.FirstLayerRpmPercent,
+        };
+    }
+
+    /// <summary>Per-move exported RPM for a toolpath under the current settings.</summary>
+    private static ToolpathRpm.Analysis AnalyzeRpm(Toolpath toolpath, AdditiveSettingsViewModel settings)
+        => ToolpathRpm.Analyze(toolpath, RpmInputs(settings));
+
+    /// <summary>Console rpm-report: what the extruder is actually being asked to do.</summary>
+    private string BuildRpmReport(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || settings is null)
+            return "[rpm-report] select a sliced toolpath first.";
+
+        var inputs = RpmInputs(settings);
+        var a      = AnalyzeRpm(toolpath, settings);
+        var sb     = new System.Text.StringBuilder();
+
+        sb.AppendLine($"[rpm-report] nominal {ToolpathRpm.BasePercent(inputs):0.##} % " +
+                      $"(bead {inputs.BeadWidthMm:0.##} mm, layer {inputs.LayerHeightMm:0.##} mm, " +
+                      $"speed {inputs.PrintSpeedMps * 1000f:0.#} mm/s, flow {inputs.FlowRate:0.###})");
+        if (inputs.FirstLayerRpmPercent > 0f)
+            sb.AppendLine($"[rpm-report] first layer override {inputs.FirstLayerRpmPercent:0.##} %");
+        sb.AppendLine($"[rpm-report] limit {ToolpathRpm.MaxRpmPercent:0} %   peak {a.PeakPercent:0.##} %");
+
+        if (!a.HasOverLimit)
+        {
+            sb.AppendLine("[rpm-report] no moves over the limit — exportable.");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"[rpm-report] OVER LIMIT: {a.OverCount:N0} move(s) in {a.Spans.Count:N0} stretch(es) " +
+                      "— export is blocked.");
+        sb.AppendLine($"[rpm-report] worst stretches first (earliest is layer {a.Spans[0].LayerIndex}, " +
+                      $"Z {a.Spans[0].LayerZ:0.#} mm):");
+        int shown = 0;
+        foreach (var s in ToolpathRpm.WorstFirst(a))
+        {
+            if (shown++ == 10) { sb.AppendLine($"[rpm-report] … and {a.Spans.Count - 10:N0} more."); break; }
+            sb.AppendLine($"[rpm-report]   layer {s.LayerIndex,5}  Z {s.LayerZ,8:0.#} mm  " +
+                          $"moves {s.FirstMoveIndex}-{s.LastMoveIndex} ({s.MoveCount:N0})  peak {s.PeakPercent:0.##} %");
+        }
+        sb.AppendLine(" ");   // trailing spacer: the console clips its last line
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Hard pre-export gate: a program asking for more than the extruder can turn is not
+    /// exportable. Deliberately offers no "export anyway" — over-limit moves would come out
+    /// as silent under-extrusion on the part. Returns true when export may proceed.
+    /// </summary>
+    private async Task<bool> BlockExportOnRpmLimitAsync(
+        ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel settings)
+    {
+        var rpm = AnalyzeRpm(toolpath, settings);
+        if (!rpm.HasOverLimit) return true;
+
+        string summary = ToolpathRpm.Describe(rpm);
+        LogToConsole($"[rpm] EXPORT BLOCKED — {summary}");
+        SetSliceStatus(vm, $"⚠ Export blocked: {summary}", isError: true);
+
+        // Make the problem findable even if the operator dismisses the dialog.
+        if (!vm.ShowRpmOverLimit) vm.ShowRpmOverLimit = true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return false;
+
+        var first = rpm.Spans[0];
+        var dlg = new Window
+        {
+            Title = "Extruder RPM Over Limit",
+            Width = 480, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"⚠ {summary}\n\n" +
+                   $"The extruder motor tops out at {ToolpathRpm.MaxRpmPercent:0} %. Those moves would " +
+                   "run at the cap and under-extrude, so this program cannot be exported.\n\n" +
+                   "Lower the print speed, layer height or bead width — or pick a material with a " +
+                   "lower flow rate — until the peak drops to the limit.\n\n" +
+                   "Over-limit moves are now highlighted magenta in the viewport.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Thickness(20, 18, 20, 12),
+        };
+        var gotoBtn  = new Button { Content = "Go to first over-RPM move", Padding = new Thickness(14, 6, 14, 6) };
+        var closeBtn = new Button { Content = "Close",                     Padding = new Thickness(14, 6, 14, 6) };
+        gotoBtn.Click  += (_, _) => { dlg.Close(); vm.ToolpathScrubIndex = first.FirstMoveIndex; };
+        closeBtn.Click += (_, _) => dlg.Close();
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Thickness(20, 0, 20, 16),
+                    Children = { closeBtn, gotoBtn },
+                },
+            },
+        };
+        await dlg.ShowDialog(owner);
+        return false;
+    }
+
+    private async Task<bool> WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
         SceneNode node,
@@ -16118,7 +17002,7 @@ public partial class ViewportView : UserControl
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
             await File.WriteAllTextAsync(path, millKrl);
-            return;
+            return true;
         }
 
         var selectedPreset = settings.SelectedPreset;
@@ -16173,28 +17057,35 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.Y,
                 cell.Bed.BaseData.Z),
             SliceBedWorldZ     = _renderer.BedZ,
-            TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
             // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
             // The exporter renders placeholders and, in URM mode, keeps the edited header
             // only if it is still URM-shaped (else falls back to the Caracol URM default).
             HeaderTemplate = postProcess.HeaderText,
             FooterTemplate = postProcess.FooterText,
-            ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
-            // First-layer overrides: only pass a value when the operator set an override
-            // (or it differs from the normal), so a plain print is unchanged. The exporter
-            // treats 0 as "use the normal speed/RPM".
-            FirstLayerSpeedMps      = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerSpeed > 0.0
-                                          ? (float)(settings.FirstLayerSpeedEffective / 1000.0) : 0f,
-            FirstLayerRpmPercent    = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerRpm > 0.0
-                                          ? (float)settings.FirstLayerRpmEffective : 0f,
+            // Bead / layer / speed / flow / RPM and the first-layer overrides are all filled
+            // in by WithRpmInputs below — one definition shared with the viewport highlight.
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
+        exportSettings = WithRpmInputs(exportSettings, settings);
 
-        var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        string krl;
+        try
+        {
+            krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        }
+        catch (RpmLimitExceededException ex)
+        {
+            // Backstop for any path that skipped BlockExportOnRpmLimitAsync. Nothing is
+            // written — a half-honest program is worse than no program.
+            LogToConsole($"[export] REFUSED: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ Export refused: {ToolpathRpm.Describe(ex.Analysis)}", isError: true);
+            return false;
+        }
         await File.WriteAllTextAsync(path, krl);
+        return true;
     }
 }

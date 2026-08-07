@@ -10,7 +10,53 @@ namespace MassiveSlicer.App.Views;
 
 public partial class RightPanelView : UserControl
 {
-    public RightPanelView() => InitializeComponent();
+    public RightPanelView()
+    {
+        InitializeComponent();
+        DataContextChanged += OnDataContextChanged;
+        // If DataContext was already assigned (inherited) before we subscribed.
+        if (DataContext is RightPanelViewModel)
+            OnDataContextChanged(this, EventArgs.Empty);
+
+        // Lets the console ("krlpost open") raise the same dialog as the KRL EXPORT gear.
+        // Bind on attach, not DataContextChanged: OnKrlPostProcessClicked needs a real
+        // TopLevel, and a detached instance registering last would silently no-op.
+        AttachedToVisualTree += (_, _) =>
+        {
+            if (DataContext is RightPanelViewModel vm)
+                vm.Additive.OnOpenKrlPostProcessRequested = () => OnKrlPostProcessClicked(this, new RoutedEventArgs());
+        };
+    }
+
+    void OnDataContextChanged(object? sender, EventArgs e)
+    {
+        if (DataContext is not RightPanelViewModel vm) return;
+        vm.Subtractive.OpenBitLibraryRequested -= OnOpenBitLibraryRequested;
+        vm.Subtractive.OpenBitLibraryRequested += OnOpenBitLibraryRequested;
+    }
+
+    async void OnOpenBitLibraryRequested(object? sender, EventArgs e)
+    {
+        try
+        {
+            if (DataContext is not RightPanelViewModel vm) return;
+            if (TopLevel.GetTopLevel(this) is not Window parent) return;
+
+            var libVm = new MillBitLibraryViewModel(vm.Subtractive.BitLibrary);
+            var dialog = new MillBitLibraryDialog { DataContext = libVm };
+            // Avoid fragile nullable-tuple ShowDialog typing — use object and cast.
+            var result = await dialog.ShowDialog<object?>(parent);
+            if (result is not ValueTuple<System.Collections.Generic.List<Core.Models.MillBitTool>, string?> tuple)
+                return;
+
+            vm.Subtractive.ReplaceBitLibrary(tuple.Item1, tuple.Item2);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[bits] open library failed: {ex}");
+            System.Console.Error.WriteLine($"[bits] open library failed: {ex}");
+        }
+    }
 
     private void JointAngle_KeyDown(object? sender, KeyEventArgs e)
     {
@@ -144,13 +190,21 @@ public partial class RightPanelView : UserControl
         if (DataContext is not RightPanelViewModel vm) return;
         if (TopLevel.GetTopLevel(this) is not Window parent) return;
 
-        var dialog = new MaterialPresetDialog { DataContext = new MaterialPresetEditorViewModel() };
+        // Default the calibration head to whichever extruder the active cell uses.
+        var newEditor = new MaterialPresetEditorViewModel { CalibIsHf = vm.Additive.ActiveExtruderIsHf };
+        var dialog = new MaterialPresetDialog { DataContext = newEditor };
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
         if (result is null) return;
 
-        vm.Additive.MaterialPresets.Add(result);
-        vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
+        AddMaterialPreset(vm, result);
+    }
+
+    /// <summary>Saves the material library and surfaces a failure instead of swallowing it.</summary>
+    private static void SaveMaterialsReportingErrors(RightPanelViewModel vm)
+    {
         MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+        if (MaterialPresetsLoader.LastSaveError is { } err)
+            vm.Presets.StatusMessage = $"⚠ Material library NOT saved: {err}";
     }
 
     private async void OnKrlPostProcessClicked(object? sender, RoutedEventArgs e)
@@ -175,13 +229,30 @@ public partial class RightPanelView : UserControl
 
         var editor = new MaterialPresetEditorViewModel();
         editor.LoadFrom(vm.Additive.MaterialPresets[idx]);
+        // Never calibrated on this preset? Default to the active cell's head.
+        if (string.IsNullOrEmpty(vm.Additive.MaterialPresets[idx].CalibratedOn))
+            editor.CalibIsHf = vm.Additive.ActiveExtruderIsHf;
 
         var dialog = new MaterialPresetDialog { DataContext = editor };
         var result = await dialog.ShowDialog<Core.Models.MaterialPreset?>(parent);
         if (result is null) return;
 
+        // JSON import marks SaveAsNew so the open preset is left alone and a new entry is added.
+        if (dialog.SaveAsNew)
+        {
+            AddMaterialPreset(vm, result);
+            return;
+        }
+
         vm.Additive.MaterialPresets[idx] = result;
         vm.Additive.SelectedPresetIndex  = idx;
-        MaterialPresetsLoader.Save(vm.Additive.MaterialPresets);
+        SaveMaterialsReportingErrors(vm);
+    }
+
+    private static void AddMaterialPreset(RightPanelViewModel vm, Core.Models.MaterialPreset preset)
+    {
+        vm.Additive.MaterialPresets.Add(preset);
+        vm.Additive.SelectedPresetIndex = vm.Additive.MaterialPresets.Count - 1;
+        SaveMaterialsReportingErrors(vm);
     }
 }

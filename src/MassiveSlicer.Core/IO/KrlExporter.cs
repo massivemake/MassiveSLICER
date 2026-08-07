@@ -49,10 +49,12 @@ public sealed record KrlExportSettings
     /// <summary>Optional KRL literal for idle <c>$ANOUT[4]</c>. Null/empty = <see cref="KrlAnout.RpmIdleAnoutText"/>.</summary>
     public string? Anout4IdleText { get; init; }
 
-    /// <summary>Optional KRL literal for extrusion TRIGGER <c>$ANOUT[4]</c>. Null/empty = compute from <see cref="ExtrusionRpmPercent"/> or bead geometry.</summary>
-    public string? Anout4ExtrudeText { get; init; }
-
-    /// <summary>Optional extrusion motor speed (%). When set, overrides geometry-based RPM before writing <c>$ANOUT[4]</c>.</summary>
+    /// <summary>
+    /// Extrusion motor speed (%). Null = compute from bead geometry and material flow.
+    /// This is the only input to the exported RPM: there is deliberately no literal
+    /// <c>$ANOUT[4]</c> override, so the value the viewport shows is the value written.
+    /// See <see cref="ToolpathRpm"/>.
+    /// </summary>
     public float? ExtrusionRpmPercent { get; init; }
 
     /// <summary>
@@ -187,9 +189,6 @@ public sealed record KrlExportSettings
     /// toolpath Z so BASE coordinates match the controller — e.g. LFAM 1 visual bed vs BASE_DATA.
     /// </summary>
     public float SliceBedWorldZ { get; init; } = float.NaN;
-
-    /// <summary>Emit <c>$ANOUT[4] = 0</c> before travel moves instead of a TRIGGER idle pulse.</summary>
-    public bool TravelSetAnout4Zero { get; init; } = true;
 
     // -- Milling (subtractive) --------------------------------------------------
 
@@ -477,7 +476,49 @@ public static class KrlExporter
     /// mis-parse LF-only files (StringBuilder.AppendLine would otherwise emit LF on macOS/Linux).
     /// </summary>
     public static string Export(Toolpath toolpath, KrlExportSettings s)
-        => ExportCore(toolpath, s).ReplaceLineEndings("\r\n");
+    {
+        GuardRpmLimit(toolpath, s);
+        GuardTemplateRpm(s.HeaderTemplate, "header");
+        GuardTemplateRpm(s.FooterTemplate, "footer");
+        return ExportCore(toolpath, s).ReplaceLineEndings("\r\n");
+    }
+
+    /// <summary>
+    /// Refuses to produce a program that asks the extruder for more than it can deliver.
+    /// The UI checks this first and explains it properly; this is the backstop that makes
+    /// it impossible for any other path -- console command, batch export, a future caller --
+    /// to write an over-limit file.
+    /// </summary>
+    private static void GuardRpmLimit(Toolpath toolpath, KrlExportSettings s)
+    {
+        if (s.IsMilling) return;   // spindle RPM, not the extruder motor percentage
+        var rpm = ToolpathRpm.Analyze(toolpath, s);
+        if (!rpm.HasOverLimit) return;
+        throw new RpmLimitExceededException(rpm);
+    }
+
+    /// <summary>
+    /// The header and footer are free-text templates. They legitimately set the idle
+    /// <c>$ANOUT[4]</c> (usually via the <c>{{RPM_IDLE_V}}</c> placeholder, which is not a
+    /// literal and is skipped here), but must not carry a hand-typed extrusion value above
+    /// the limit -- that is exactly the kind of post override the RPM check exists to stop.
+    /// Only the templates are scanned; the body is already covered by <see cref="GuardRpmLimit"/>.
+    /// </summary>
+    private static void GuardTemplateRpm(string? template, string which)
+    {
+        if (string.IsNullOrWhiteSpace(template)) return;
+        float limit = ToolpathRpm.MaxRpmPercent / 100f;
+        foreach (Match m in Regex.Matches(template, @"\$ANOUT\[4\]\s*=\s*([0-9]*\.?[0-9]+)"))
+        {
+            if (!float.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.Float, Inv, out float v))
+                continue;
+            if (v > limit + 1e-6f)
+                throw new InvalidOperationException(
+                    $"Export blocked: the KRL {which} template sets $ANOUT[4] = {m.Groups[1].Value} " +
+                    $"({v * 100f:0.#} % RPM), above the {ToolpathRpm.MaxRpmPercent:0} % limit. " +
+                    "Edit it under KRL Post-Process.");
+        }
+    }
 
     private static string ExportCore(Toolpath toolpath, KrlExportSettings s)
     {
@@ -546,18 +587,12 @@ public static class KrlExporter
             var (la, lb, lc) = KukaAbc(layer.PlaneNormal, s);
             var smoothedLayer = smoothedByLayer?[li];
 
-            // First-layer speed/RPM override: use a per-layer settings copy for the
-            // extrude speed/RPM emission on layer 0 only. Overriding PrintSpeedMps and
+            // First-layer speed/RPM override: a per-layer settings copy for the extrude
+            // speed/RPM emission on layer 0 only. Overriding PrintSpeedMps and
             // ExtrusionRpmPercent here reaches every downstream speed/RPM call without
             // threading params; 0-valued overrides leave layerS == s (no behavior change).
-            var layerS = s;
-            if (li == 0 && (s.FirstLayerSpeedMps > 1e-6f || s.FirstLayerRpmPercent > 1e-6f))
-                layerS = s with
-                {
-                    PrintSpeedMps = s.FirstLayerSpeedMps > 1e-6f ? s.FirstLayerSpeedMps : s.PrintSpeedMps,
-                    ExtrusionRpmPercent = s.FirstLayerRpmPercent > 1e-6f
-                        ? s.FirstLayerRpmPercent : s.ExtrusionRpmPercent,
-                };
+            // Shared with the RPM check so both see the same first layer.
+            var layerS = ToolpathRpm.ForLayer(s, li);
 
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
@@ -1240,12 +1275,13 @@ public static class KrlExporter
         return string.IsNullOrEmpty(s) ? "0.00" : s;
     }
 
+    /// <summary>
+    /// RPM (%) for an extrusion move. Uncapped on purpose: an over-limit demand is caught
+    /// by <see cref="GuardRpmLimit"/> and blocks the export, rather than being quietly
+    /// trimmed to 100 % and shipped as a stretch of under-extrusion.
+    /// </summary>
     private static float ResolveRpmPercent(KrlExportSettings s, float rpmScale)
-    {
-        float rpmPercent = s.ExtrusionRpmPercent
-            ?? KrlAnout.ComputeRpmPercent(s.BeadWidthMm, s.LayerHeightMm, s.PrintSpeedMps, s.FlowRate);
-        return Math.Min(rpmPercent * Math.Max(rpmScale, 0f), 100f);
-    }
+        => ToolpathRpm.BasePercent(s) * Math.Max(rpmScale, 0f);
 
     private static string FormatWaitSec(float seconds)
     {
@@ -1288,34 +1324,10 @@ public static class KrlExporter
         return s.PrintSpeedMps * scale;
     }
 
-    private static float EffectiveRpmScale(ToolpathMove move)
-    {
-        if (move.IsWipe)
-            return move.WipeRpmScale;
-        float scale = Math.Max(move.PrintSpeedScale, 1e-6f);
-        if (move.IsResumeRamp)
-            scale *= Math.Max(move.ResumeRpmScale, 1e-6f);
-        // Multi-Planar wedge layers: flow follows the local thickness.
-        scale *= Math.Max(move.HeightScale, 1e-6f);
-        return scale;
-    }
+    private static float EffectiveRpmScale(ToolpathMove move) => ToolpathRpm.MoveScale(move);
 
     private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
-    {
-        if (!string.IsNullOrWhiteSpace(s.Anout4ExtrudeText) && Math.Abs(rpmScale - 1f) < 1e-4f)
-        {
-            if (float.TryParse(s.Anout4ExtrudeText.Trim(),
-                    System.Globalization.NumberStyles.Float,
-                    System.Globalization.CultureInfo.InvariantCulture, out float raw))
-                return KrlAnout.FormatAnout4(raw);
-            return s.Anout4ExtrudeText.Trim();
-        }
-
-        float rpmPercent = s.ExtrusionRpmPercent
-            ?? KrlAnout.ComputeRpmPercent(s.BeadWidthMm, s.LayerHeightMm, s.PrintSpeedMps, s.FlowRate);
-        rpmPercent = Math.Min(rpmPercent * Math.Max(rpmScale, 0f), 100f);
-        return KrlAnout.RpmPercentToAnoutText(rpmPercent);
-    }
+        => KrlAnout.RpmPercentToAnoutText(ResolveRpmPercent(s, rpmScale));
 
     /// <summary>
     /// KRL module/routine name: letters, digits, underscore only; must start with a letter

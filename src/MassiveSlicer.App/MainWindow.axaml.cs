@@ -113,12 +113,10 @@ public partial class MainWindow : Window
         vm.LeftPanel.SetCells(cells);
 
         // When opening a .mass at startup, let OpenWorkspace load the saved cell first.
-        // Otherwise default to LFAM 2.
-        var lfam2Idx = cells.FindIndex(c =>
-            c.name.Contains("LFAM 2", StringComparison.OrdinalIgnoreCase) ||
-            c.name.Contains("LFAM2",  StringComparison.OrdinalIgnoreCase));
+        // Otherwise prefer AppPreferences.DefaultCellName (machine-local prefs.json),
+        // then LFAM 2, then the first discovered cell.
         if (App.StartupWorkspacePath is null && cells.Count > 0)
-            vm.LeftPanel.SelectedCellIndex = lfam2Idx >= 0 ? lfam2Idx : 0;
+            vm.LeftPanel.SelectedCellIndex = ResolveDefaultCellIndex(cells, vm.AppPreferences.DefaultCellName);
 
         // -- Model loading -----------------------------------------------------
         vm.Toolbar.ModelLoadRequested += async (_, _) => await ShowModelImportPickerAsync(vm);
@@ -251,6 +249,44 @@ public partial class MainWindow : Window
 
         if (App.StartupWorkspacePath is { } startupWorkspace)
             vm.OpenWorkspace(startupWorkspace);
+    }
+
+    /// <summary>
+    /// Picks the cold-start cell index from machine-local <paramref name="preferredName"/>,
+    /// then LFAM 2, then index 0. Matching is case-insensitive contains on the display name.
+    /// </summary>
+    internal static int ResolveDefaultCellIndex(
+        IReadOnlyList<(string name, string full)> cells,
+        string? preferredName)
+    {
+        if (cells.Count == 0) return -1;
+
+        static int Find(IReadOnlyList<(string name, string full)> list, params string[] needles)
+        {
+            for (int i = 0; i < list.Count; i++)
+            {
+                var n = list[i].name;
+                foreach (var needle in needles)
+                {
+                    if (n.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                        return i;
+                }
+            }
+            return -1;
+        }
+
+        if (!string.IsNullOrWhiteSpace(preferredName))
+        {
+            // Prefer exact-ish match on the preferred string, then a space-stripped form (LFAM3).
+            var compact = preferredName.Replace(" ", "", StringComparison.Ordinal);
+            int pref = Find(cells, preferredName.Trim());
+            if (pref < 0 && compact.Length > 0 && !compact.Equals(preferredName.Trim(), StringComparison.OrdinalIgnoreCase))
+                pref = Find(cells, compact);
+            if (pref >= 0) return pref;
+        }
+
+        int lfam2 = Find(cells, "LFAM 2", "LFAM2");
+        return lfam2 >= 0 ? lfam2 : 0;
     }
 
     // -- Cell switching --------------------------------------------------------

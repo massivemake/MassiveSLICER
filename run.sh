@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
-# Close any running MassiveSlicer instance, then build + run the app.
-# Usage:  ./run.sh            (from the repo root, or by full path)
 set -u
-
-# Prefer a user-installed or system .NET SDK on PATH.
-# Linux ARM64 / x64: common install from https://dot.net → $HOME/.dotnet
-# macOS Homebrew: /usr/local/share/dotnet
-export PATH="$HOME/.dotnet:/usr/local/share/dotnet:$PATH"
-export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
-
-# Close other slicer instances (app, apphost, or a prior `dotnet run`).
-pkill -f "MassiveSlicer.App" 2>/dev/null || true
-
-# Resolve the project relative to this script so the path isn't machine-specific.
+export PATH="/usr/local/share/dotnet:/opt/homebrew/bin:$HOME/.dotnet:$PATH"
+if [ -x /usr/local/share/dotnet/dotnet ]; then
+  export DOTNET_ROOT="/usr/local/share/dotnet"
+elif [ -d "$HOME/.dotnet" ]; then
+  export DOTNET_ROOT="$HOME/.dotnet"
+fi
+export DOTNET_ROLL_FORWARD="${DOTNET_ROLL_FORWARD:-Major}"
+export DOTNET_CLI_TELEMETRY_OPTOUT=1
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APPHOST="$DIR/src/MassiveSlicer.App/bin/Debug/net8.0/MassiveSlicer.App"
+if [ -x "$APPHOST" ]; then
+  killall -q "$(basename "$APPHOST")" 2>/dev/null || true
+fi
 exec dotnet run --project "$DIR/src/MassiveSlicer.App" "$@"

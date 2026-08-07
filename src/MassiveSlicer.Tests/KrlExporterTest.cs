@@ -33,7 +33,6 @@ public sealed class KrlExporterTest
             LayerHeightMm  = 3f,
             FlowRate       = 0.463f,
             PrintSpeedMps  = 0.1f,
-            TravelSetAnout4Zero = false,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -150,7 +149,6 @@ public sealed class KrlExporterTest
             ProgramName           = "test_wait",
             ExtrusionRpmPercent   = 50f,
             ExtrusionStartWaitSec = 1f,
-            TravelSetAnout4Zero   = false,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -183,7 +181,6 @@ public sealed class KrlExporterTest
             ExtrusionRpmPercent    = 50f,
             ExtrusionStartWaitSec  = 0f,
             ExtrusionResumeWaitSec = 0.5f,
-            TravelSetAnout4Zero    = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -214,7 +211,6 @@ public sealed class KrlExporterTest
             ExtrusionRpmPercent    = 50f,
             ExtrusionStartWaitSec  = 0f,
             ExtrusionResumeWaitSec = 0.5f,
-            TravelSetAnout4Zero    = true,
         });
         Assert.Contains("WAIT SEC 0.25", krl);
         Assert.DoesNotContain("WAIT SEC 0.5", krl);
@@ -245,7 +241,6 @@ public sealed class KrlExporterTest
             SsPreTravelWaitSec      = 0.5f,
             SsApproachSpeedScale    = 0.5f,
             DigitalStartStopEnabled = true,
-            TravelSetAnout4Zero     = true,
             HeaderTemplate          = KrlExporter.DefaultHeaderTemplate,
             FooterTemplate          = KrlExporter.DefaultFooterTemplate,
         });
@@ -315,7 +310,6 @@ public sealed class KrlExporterTest
             ProgramName           = "test_wait_once",
             ExtrusionRpmPercent   = 50f,
             ExtrusionStartWaitSec = 1f,
-            TravelSetAnout4Zero   = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -341,7 +335,6 @@ public sealed class KrlExporterTest
         {
             ProgramName         = "test_offset",
             ExtrusionRpmPercent = 60f,
-            TravelSetAnout4Zero = false,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -376,7 +369,6 @@ public sealed class KrlExporterTest
             ProgramName         = "test_ramp",
             ExtrusionRpmPercent = 50f,
             PrintSpeedMps       = 0.1f,
-            TravelSetAnout4Zero = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -413,7 +405,6 @@ public sealed class KrlExporterTest
             BaseDataOffset     = new Vector3(1496.36f, -577.89f, 278f),
             SliceBedWorldZ     = 272.93f,
             ApproachZMm        = 50f,
-            TravelSetAnout4Zero = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -441,7 +432,6 @@ public sealed class KrlExporterTest
         {
             ProgramName    = "rail_home",
             HomeE1Mm       = -1100.52f,
-            TravelSetAnout4Zero = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -470,7 +460,6 @@ public sealed class KrlExporterTest
         {
             ProgramName         = "wipe_travel_off",
             ExtrusionRpmPercent = 50f,
-            TravelSetAnout4Zero = false, // even when flag is off, travel/wipe must be 0
         });
 
         int wipeIdx = krl.IndexOf(";wipe", StringComparison.Ordinal);

@@ -785,6 +785,55 @@
         <Setter Property="BorderThickness"  Value="0,0,0,2"/>
     </Style>
 
+    <!-- LFAM 3 compact phase strip (right sidebar, above MODEL / phase content) -->
+    <Style Selector="Border.Lfam3SidebarTimeline">
+        <Setter Property="Background"       Value="#E6333333"/>
+        <Setter Property="BorderBrush"      Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness"  Value="1"/>
+        <Setter Property="CornerRadius"     Value="8"/>
+        <Setter Property="Padding"          Value="8,8,8,6"/>
+    </Style>
+    <Style Selector="Button.Lfam3SidebarPhase">
+        <Setter Property="HorizontalAlignment" Value="Stretch"/>
+        <Setter Property="Background"          Value="#33262626"/>
+        <Setter Property="Foreground"          Value="{DynamicResource TextSecondary}"/>
+        <Setter Property="BorderBrush"         Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness"     Value="1"/>
+        <Setter Property="CornerRadius"        Value="6"/>
+        <Setter Property="Padding"             Value="4,7"/>
+        <Setter Property="Cursor"              Value="Hand"/>
+    </Style>
+    <Style Selector="Button.Lfam3SidebarPhase:pointerover">
+        <Setter Property="Background"  Value="#40333333"/>
+        <Setter Property="Foreground"  Value="{DynamicResource TextPrimary}"/>
+        <Setter Property="BorderBrush" Value="#40b840"/>
+    </Style>
+    <Style Selector="Button.Lfam3SidebarPhase.pending">
+        <Setter Property="Opacity" Value="0.55"/>
+    </Style>
+    <Style Selector="Button.Lfam3SidebarPhase.completed">
+        <Setter Property="BorderBrush" Value="#4060a060"/>
+        <Setter Property="Foreground"  Value="#90c890"/>
+    </Style>
+    <Style Selector="Button.Lfam3SidebarPhase.active">
+        <Setter Property="Background"      Value="#2640b840"/>
+        <Setter Property="BorderBrush"     Value="#40b840"/>
+        <Setter Property="Foreground"      Value="#40b840"/>
+        <Setter Property="Opacity"         Value="1"/>
+        <Setter Property="BorderThickness" Value="1.5"/>
+    </Style>
+    <Style Selector="Border.Lfam3SidebarConnector">
+        <Setter Property="Width"              Value="10"/>
+        <Setter Property="Height"             Value="2"/>
+        <Setter Property="VerticalAlignment"  Value="Center"/>
+        <Setter Property="Margin"             Value="2,0"/>
+        <Setter Property="Background"         Value="#555555"/>
+        <Setter Property="CornerRadius"       Value="1"/>
+    </Style>
+    <Style Selector="Border.Lfam3SidebarConnector.done">
+        <Setter Property="Background" Value="#40b840"/>
+    </Style>
+
     <!-- Secondary action button — lighter than PrimaryButton for de-emphasized actions -->
     <Style Selector="Button.SecondaryButton">
         <Setter Property="Background"   Value="{DynamicResource Bg3}"/>
@@ -1203,6 +1252,35 @@
         <Setter Property="Background" Value="#1a2e1a"/>
     </Style>
 
+
+    <!-- StepCard on Button (e.g. EXIT EDIT MODE): same chrome as Expander.StepCard. -->
+    <Style Selector="Button.StepCard">
+        <Setter Property="HorizontalAlignment"        Value="Stretch"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Background"                 Value="#E6333333"/>
+        <Setter Property="BorderBrush"                Value="{DynamicResource Border1}"/>
+        <Setter Property="BorderThickness"            Value="1"/>
+        <Setter Property="CornerRadius"               Value="8"/>
+        <Setter Property="Padding"                    Value="10,10"/>
+        <Setter Property="Margin"                     Value="0,0,0,9"/>
+        <Setter Property="Cursor"                     Value="Hand"/>
+    </Style>
+    <Style Selector="Button.StepCard:pointerover">
+        <Setter Property="Background"  Value="#EE3a3a3a"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Border2}"/>
+    </Style>
+    <!-- BACK TO STEPS (Scan/Mill): same StepCard shape, slightly darker so it reads as chrome
+         / navigation rather than another workflow step card. -->
+    <Style Selector="Button.StepCard.BackToSteps">
+        <Setter Property="Background"  Value="#F0161616"/>
+        <Setter Property="BorderBrush" Value="#2a2a2a"/>
+        <Setter Property="Opacity"     Value="0.95"/>
+    </Style>
+    <Style Selector="Button.StepCard.BackToSteps:pointerover">
+        <Setter Property="Background"  Value="#F0202020"/>
+        <Setter Property="BorderBrush" Value="#3a3a3a"/>
+        <Setter Property="Opacity"     Value="1"/>
+    </Style>
 
     <!-- StepCard: standalone rounded workflow-step card (MassiveCODE style) -->
     <Style Selector="Expander.StepCard">

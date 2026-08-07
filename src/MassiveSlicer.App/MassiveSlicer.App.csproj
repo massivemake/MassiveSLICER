@@ -6,9 +6,7 @@
          cross-platform net8.0 TFM so the app builds and runs natively (incl. arm64). -->
     <TargetFramework Condition="$([MSBuild]::IsOSPlatform('Windows'))">net8.0-windows</TargetFramework>
     <TargetFramework Condition="!$([MSBuild]::IsOSPlatform('Windows'))">net8.0</TargetFramework>
-    <!-- x64 is only required for the Windows-only Occt.NET native libs; off Windows
-         build for the host arch (arm64 on Apple Silicon) so STEP import degrades
-         gracefully rather than forcing a missing x64 runtime. -->
+    <!-- Prefer x64 on Windows for GPU / native interop consistency. -->
     <PlatformTarget Condition="$([MSBuild]::IsOSPlatform('Windows'))">x64</PlatformTarget>
     <Prefer32Bit>false</Prefer32Bit>
     <Nullable>enable</Nullable>
@@ -76,18 +74,6 @@
     <None Include="..\..\assets\Images\*.png" Link="assets\Images\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <Target Name="CopyIjwhostToAppOutput" AfterTargets="Build">
-    <Copy SourceFiles="$(OutDir)occt\x64\Ijwhost.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="Exists('$(OutDir)occt\x64\Ijwhost.dll')" />
-  </Target>
-
-  <Target Name="CopyOcctToPublishDir" AfterTargets="Publish">
-    <ItemGroup>
-      <_OcctNative Include="$(OutputPath)occt\x64\**\*.*" Condition="Exists('$(OutputPath)occt\x64')" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_OcctNative)" DestinationFiles="@(_OcctNative -> '$(PublishDir)occt\x64\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" Condition="'@( _OcctNative)' != ''" />
-    <Copy SourceFiles="$(OutputPath)Ijwhost.dll" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="Exists('$(OutputPath)Ijwhost.dll')" />
-  </Target>
-
   <!-- macOS: assemble a .app bundle after publish so the app carries icon.icns in the Dock/Finder.
        (macOS uses .icns, not the .ico; the .icns is generated from the same icon artwork.)
        Runs only for osx-* publishes. Produces MassiveSlicer.app next to the publish output. -->
@@ -114,8 +100,6 @@
     <PackageReference Include="Avalonia.Controls.ColorPicker" Version="12.0.4" />
     <PackageReference Include="Avalonia.Desktop" Version="12.0.4" />
     <PackageReference Include="Avalonia.Themes.Simple" Version="12.0.4" />
-    <!-- Occt.NET (Open CASCADE) is Windows-only; STEP import lives in the Viewport project. -->
-    <PackageReference Include="Occt.NET" Version="7.9.0" Condition="$([MSBuild]::IsOSPlatform('Windows'))" />
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="Optris.Icons.Avalonia" Version="12.0.6" />
     <PackageReference Include="Optris.Icons.Avalonia.MaterialDesign" Version="12.0.6" />

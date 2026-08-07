@@ -58,7 +58,6 @@ public class LayerSpeedPostProcessorTest
             ProgramName         = "layer_speed_travel",
             PrintSpeedMps       = 0.06f,
             ExtrusionRpmPercent = 60f,
-            TravelSetAnout4Zero = true,
         };
 
         var krl = KrlExporter.Export(tp, settings);
@@ -96,7 +95,6 @@ public class LayerSpeedPostProcessorTest
             ProgramName           = "layer_speed",
             PrintSpeedMps         = 0.06f,
             ExtrusionRpmPercent   = 60f,
-            TravelSetAnout4Zero   = false,
             ExtrusionStartWaitSec = 0f,
         };
 

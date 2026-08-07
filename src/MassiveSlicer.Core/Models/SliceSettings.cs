@@ -527,7 +527,7 @@ public sealed class SliceSettings
     public float LayerLeanStrength { get; init; } = 0f;
 
     /// <summary>Hard cap on layer-lean tilt from vertical, in degrees.</summary>
-    public float LayerLeanMaxTiltDeg { get; init; } = 20f;
+    public float LayerLeanMaxTiltDeg { get; init; } = 0f;
 }
 
 /// <summary>Live effector behaviour inside the influence radius.</summary>
