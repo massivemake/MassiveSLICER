@@ -25,7 +25,7 @@ namespace MassiveSlicer.ViewModels;
 /// and overlay visibility flags. The actual OpenGL rendering lives in
 /// <c>MassiveSlicer.Viewport</c>; this ViewModel only holds bindable state.
 /// </summary>
-public sealed class ViewportViewModel : ViewModelBase
+public sealed partial class ViewportViewModel : ViewModelBase
 {
     private SelectionMode _selectionMode = SelectionMode.Object;
 
@@ -1669,8 +1669,17 @@ public sealed class ViewportViewModel : ViewModelBase
     public double SelectionB { get => _selB; set { if (SetField(ref _selB, value)) FireSelRotated(); } }
     public double SelectionC { get => _selC; set { if (SetField(ref _selC, value)) FireSelRotated(); } }
 
+    private double _selSx = 1, _selSy = 1, _selSz = 1;
+
+    /// <summary>Per-axis scale of the selection. Displayed as real millimetre dimensions or as a
+    /// percentage of the imported size depending on the scale tool's own mm/% toggle.</summary>
+    public double SelectionScaleX { get => _selSx; set { if (SetField(ref _selSx, value)) FireSelScaled(); } }
+    public double SelectionScaleY { get => _selSy; set { if (SetField(ref _selSy, value)) FireSelScaled(); } }
+    public double SelectionScaleZ { get => _selSz; set { if (SetField(ref _selSz, value)) FireSelScaled(); } }
+
     internal Action<double, double, double>? OnSelectionTranslated { get; set; }
     internal Action<double, double, double>? OnSelectionRotated    { get; set; }
+    internal Action<double, double, double>? OnSelectionScaled     { get; set; }
 
     /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
     internal UndoRedoService? UndoRedo { get; set; }
@@ -1680,6 +1689,15 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
+    private void FireSelScaled()     { if (!_suppressTransformCb) OnSelectionScaled?.Invoke(_selSx, _selSy, _selSz); }
+
+    /// <summary>Syncs the displayed per-axis scale without triggering the apply callback.</summary>
+    internal void SyncSelectionScaleDisplay(double x, double y, double z)
+    {
+        _suppressTransformCb = true;
+        SelectionScaleX = x; SelectionScaleY = y; SelectionScaleZ = z;
+        _suppressTransformCb = false;
+    }
 
     /// <summary>Syncs the displayed transform values without triggering apply callbacks.</summary>
     internal void SyncSelectionDisplay(double x, double y, double z, double a, double b, double c)
@@ -3392,12 +3410,21 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// True only while <see cref="ResetScrubIndex"/> is swapping in a new path. Blocks write-backs
+    /// from bound controls during the window where the layer table, the max and the index describe
+    /// different paths — see the long comment in that method.
+    /// </summary>
+    private bool _scrubResetting;
+
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
     {
         get => _toolpathScrubIndex;
         set
         {
+            // A control echoing a half-swapped state back at us is not a user edit.
+            if (_scrubResetting) return;
             int clamped = Math.Clamp(value, 0, Math.Max(0, _toolpathScrubMax));
             if (SetField(ref _toolpathScrubIndex, clamped))
             {
@@ -3761,12 +3788,26 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsPlaying));
             OnPlaybackToggled?.Invoke(false);
         }
+        // Everything from here to the end of the method is one atomic swap as far as the bound
+        // controls are concerned. Without the guard, RebuildScrubLayerEnds below raises property
+        // changes while _scrubLayerEnds already describes the NEW path but _toolpathScrubMax still
+        // holds the OLD path's total — and the layer-high slider's two-way binding writes back into
+        // ToolpathScrubIndex in exactly that window. Traced live on a 50% scale: a full path at
+        // 95,206/95,206 came back as 34,659 clamped against 95,206, i.e. a third of the way in.
+        //
+        // The damage lands in two visible places, which is why it looked like two unrelated bugs:
+        // Body view draws the scrub window, so the part renders unfinished; and the robot is posed
+        // at this index after a re-slice, so it drives to a pose nobody asked for.
+        _scrubResetting = true;
+        try
+        {
         ActiveScrubToolpath = toolpath;
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
-        int previous = _toolpathScrubIndex;
+        int previous    = _toolpathScrubIndex;
+        int previousMax = _toolpathScrubMax;
         _toolpathScrubMax = Math.Max(0, max);
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
@@ -3776,7 +3817,22 @@ public sealed class ViewportViewModel : ViewModelBase
             index = 0;
         else if (preservePosition)
         {
-            index = Math.Clamp(previous, 0, _toolpathScrubMax);
+            // Hold the same FRACTION of the path, not the same absolute move number. A resize
+            // changes the move count wholesale — 95,206 → 34,659 on a 50% scale — so an absolute
+            // index means something completely different afterwards. Shrinking, it clamped to the
+            // end; GROWING, it stayed put: coming back from 25% to full size left the scrub on
+            // move 10,433 of 95,206 and drew 11% of the part. Jeff: "a reset scale gave me the
+            // wrong sized toolpath."
+            //
+            // This is the same rule that was reverted earlier today, and it is only correct now
+            // because `previous` can be trusted: the _scrubResetting guard above stops a bound
+            // control writing a new-path index over it mid-swap. Fed that corrupted value, this
+            // arithmetic turned a full path into a third of one, which is what made it look like
+            // the fraction idea itself was wrong. It was the input.
+            double fraction = previousMax > 0 ? (double)previous / previousMax : 1d;
+            index = (int)Math.Round(Math.Clamp(fraction, 0d, 1d) * _toolpathScrubMax,
+                                    MidpointRounding.AwayFromZero);
+            index = Math.Clamp(index, 0, _toolpathScrubMax);
             // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
             // blank window when the path has content (common after re-arming edit scrub
             // with a stale default index of 0).
@@ -3793,7 +3849,11 @@ public sealed class ViewportViewModel : ViewModelBase
             _toolpathScrubLowIndex = 0;
         else if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
             _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+        }
+        finally { _scrubResetting = false; }
 
+        // Notifications go out only now, with index, max and layer table all describing the same
+        // path. A control writing back at this point writes back the right value.
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
@@ -4287,6 +4347,9 @@ public sealed class ViewportViewModel : ViewModelBase
             ApplyViewMode();
             ApplyViewDisplayProfile();
             if (value != "Toolpath") StopSimTimeline();
+            // Each view owns where the arm sits, so changing view re-poses it. Ignored while the
+            // robot is synced — the live machine outranks any of this.
+            OnViewGovernedPoseChanged?.Invoke();
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
@@ -4475,6 +4538,46 @@ public sealed class ViewportViewModel : ViewModelBase
         OnSimVideoExportRequested?.Invoke();
     });
     private RelayCommand? _simExportVideoCommand;
+
+    /// <summary>
+    /// Where the robot belongs for the view currently on screen — the same rule the renderer uses
+    /// to decide how much of the path to draw, so the arm and the picture always agree.
+    /// </summary>
+    /// <remarks>
+    /// A re-slice re-poses the arm on purpose (RunUpdateSliceAsync, and the pending-replace drain),
+    /// and it used to pass <see cref="ToolpathScrubIndex"/> raw. That is the toolpath EDIT
+    /// scrubber's position, so scaling, rotating, optimizing or rebuilding drove the arm back to a
+    /// mid-print pose from a mode the user had left — in every view, every time. Jeff, 2026-08-04:
+    /// "Scaling, rotating, optimizing, rebuilding path. Arm still stays in toolpath edit position."
+    /// <para>
+    /// Body carries no timeline, so it reports the end of the path: the same "no timeline means
+    /// 100%" rule that governs what Body draws.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Raised when the view changes, so the viewport can move the arm to that view's position.
+    /// </summary>
+    internal Action? OnViewGovernedPoseChanged { get; set; }
+
+    /// <summary>
+    /// True when the live robot owns the arm's pose and nothing here may drive it. Sync outranks
+    /// every view rule — driving IK calls <c>Desync()</c>, which would silently drop the machine
+    /// connection just because someone clicked a view tab.
+    /// </summary>
+    internal bool RobotOwnsPose => Robot?.IsConnected == true;
+
+    internal int ViewGovernedScrubIndex
+    {
+        get
+        {
+            float sim = SimRenderProgress;
+            if (sim >= 0f)
+                return Math.Clamp((int)Math.Round(sim * _toolpathScrubMax), 0, _toolpathScrubMax);
+            if (_viewMode == "Body")
+                return _toolpathScrubMax;
+            return _toolpathScrubIndex;
+        }
+    }
 
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
@@ -5380,24 +5483,13 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddSeamGuidePoint(SeamGuidePoint point)
     {
-        // Clicking while the cursor is off the part holds the last on-wall position, so repeated
-        // clicks used to stack identical guides on one spot (three "3044, -309, 163" entries in
-        // the list, all doing nothing). Select the existing one instead of piling up duplicates.
-        for (int i = 0; i < SeamGuideDraft.Count; i++)
-        {
-            var g = SeamGuideDraft[i];
-            if (MathF.Abs(g.X - point.X) < 2f
-             && MathF.Abs(g.Y - point.Y) < 2f
-             && MathF.Abs(g.Z - point.Z) < 2f)
-            {
-                SelectedSeamGuideIndex = i;
-                OnSeamGuidesChanged?.Invoke();
-                return;
-            }
-        }
-
+        // One guide, and placing a new one replaces it. The slicer resolves a single guide per
+        // closed contour, so on a one-island part every extra point beyond the nearest is dead
+        // weight — they stacked up in the list, could not be told apart, and blocked each other
+        // from being removed. Placing again is now how you move the seam.
+        SeamGuideDraft.Clear();
         SeamGuideDraft.Add(point);
-        SelectedSeamGuideIndex = SeamGuideDraft.Count - 1;
+        SelectedSeamGuideIndex = 0;
         IsSeamGuideLayerOpen = true;
         OnPropertyChanged(nameof(HasSeamGuideDraft));
         OnPropertyChanged(nameof(SeamGuideLayerLabel));
@@ -5768,6 +5860,15 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
     /// <summary>
+    /// The centroid a toolpath's GPU geometry was built relative to, so a diagnostic can reproduce
+    /// what is actually on screen: <c>rendered = (move - origin) * node.LocalTransform</c>. Without
+    /// it, reading raw move coordinates and calling them "world" silently ignores the node's own
+    /// transform — the mistake that made <c>align-debug</c> report a toolpath 179mm adrift as
+    /// perfectly aligned.
+    /// </summary>
+    internal Func<SceneNode, System.Numerics.Vector3?>? GetToolpathRenderOrigin { get; set; }
+
+    /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
@@ -6028,11 +6129,6 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Nodes whose subtree was reloaded on the UI thread and need GPU refresh.</summary>
     public ConcurrentQueue<SceneNode> PendingModelRefresh { get; } = new();
-
-    /// <summary>Pivot recenter jobs — geometry + transform applied atomically on the GL thread.</summary>
-    internal ConcurrentQueue<PendingRecenterJob> PendingRecenterJobs { get; } = new();
-
-    internal readonly record struct PendingRecenterJob(SceneNode Node);
 
     /// <summary>
     /// Layer boundary data queued after each slice so the GL thread can upload the

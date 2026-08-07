@@ -60,6 +60,86 @@ public class WorkspaceSaveTest
         }
     }
 
+    /// <summary>
+    /// The pivot and the import scale are the two things the composed matrix cannot carry, so they
+    /// are the two that get silently lost if the schema or the writer regresses — and losing them is
+    /// exactly the bug that sent reopened parts back to the exporter's origin with a detached gizmo.
+    /// A null here is not a crash, it is a part that quietly comes back in the wrong place, so pin
+    /// the round trip.
+    /// </summary>
+    [Fact]
+    public void Placement_pivot_and_import_scale_round_trip()
+    {
+        var doc = new WorkspaceDocument
+        {
+            Models =
+            [
+                new WorkspaceModelEntry
+                {
+                    Name         = "Bendy Wall",
+                    PivotOrigin  = [12.5f, -30.25f, 7f],
+                    // Not 1: a metres-as-millimetres import is corrected x1000 before the placement
+                    // is taken, which is the case that redefines 100% if it fails to persist.
+                    ImportScale  = [1000f, 1000f, 1000f],
+                },
+            ],
+        };
+
+        var path = Path.Combine(Path.GetTempPath(), $"massive-placement-{Guid.NewGuid():N}.mass");
+        try
+        {
+            WorkspaceLoader.Save(doc, path);
+            var loaded = WorkspaceLoader.Load(path);
+
+            var entry = Assert.Single(loaded!.Models);
+            Assert.NotNull(entry.PivotOrigin);
+            Assert.Equal(3, entry.PivotOrigin!.Length);
+            Assert.Equal(12.5f,   entry.PivotOrigin[0], 4);
+            Assert.Equal(-30.25f, entry.PivotOrigin[1], 4);
+            Assert.Equal(7f,      entry.PivotOrigin[2], 4);
+
+            Assert.NotNull(entry.ImportScale);
+            Assert.Equal(3, entry.ImportScale!.Length);
+            Assert.Equal(1000f, entry.ImportScale[0], 4);
+            Assert.Equal(1000f, entry.ImportScale[1], 4);
+            Assert.Equal(1000f, entry.ImportScale[2], 4);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    /// <summary>
+    /// A file written before pivots existed carries neither field. It must load as null rather than
+    /// as a zero vector: null means "no placement saved, adopt a box-centre one", while [0,0,0]
+    /// would read as a real pivot at the mesh origin — the detached-gizmo behaviour again, this time
+    /// asserted as intentional.
+    /// </summary>
+    [Fact]
+    public void Pre_pivot_files_load_with_no_placement_rather_than_a_zero_one()
+    {
+        var doc = new WorkspaceDocument
+        {
+            Models = [new WorkspaceModelEntry { Name = "Legacy" }],
+        };
+
+        var path = Path.Combine(Path.GetTempPath(), $"massive-legacy-{Guid.NewGuid():N}.mass");
+        try
+        {
+            WorkspaceLoader.Save(doc, path);
+            var loaded = WorkspaceLoader.Load(path);
+
+            var entry = Assert.Single(loaded!.Models);
+            Assert.Null(entry.PivotOrigin);
+            Assert.Null(entry.ImportScale);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
     [Fact]
     public void Save_large_toolpath_raw_only_round_trips()
     {

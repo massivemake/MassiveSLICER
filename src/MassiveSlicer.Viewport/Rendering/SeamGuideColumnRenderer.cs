@@ -49,21 +49,21 @@ public sealed class SeamGuideColumnRenderer : IDisposable
     private int _prevVao, _prevVbo, _prevCount;
 
     /// <summary>
-    /// Rebuilds the columns. Each spans <paramref name="zMin"/>..<paramref name="zMax"/> at its
-    /// guide's XY. <paramref name="preview"/> is the un-placed hover ghost, or null.
+    /// Rebuilds the guides. Each is a polyline swept bottom to top, so a guide hugs the wall it
+    /// seams instead of standing as a straight vertical line beside a flaring part.
+    /// <paramref name="previewPath"/> is the un-placed hover ghost, or null.
     /// </summary>
-    public void Update(IReadOnlyList<Vector3> points, int selectedIndex,
-        float zMin, float zMax, Vector3? preview,
+    public void Update(IReadOnlyList<IReadOnlyList<Vector3>> paths, int selectedIndex,
+        IReadOnlyList<Vector3>? previewPath,
         float radius, float selectedRadius)
     {
         Release();
-        if (zMax <= zMin) zMax = zMin + 1f;
 
         var verts    = new List<float>();
         var selVerts = new List<float>();
-        for (int i = 0; i < points.Count; i++)
-            AppendColumn(i == selectedIndex ? selVerts : verts, points[i],
-                i == selectedIndex ? selectedRadius : radius, zMin, zMax);
+        for (int i = 0; i < paths.Count; i++)
+            AppendTube(i == selectedIndex ? selVerts : verts, paths[i],
+                i == selectedIndex ? selectedRadius : radius);
 
         if (verts.Count > 0)
         {
@@ -77,12 +77,15 @@ public sealed class SeamGuideColumnRenderer : IDisposable
             (_selVao, _selVbo) = BuildVao([.. selVerts]);
         }
 
-        if (preview is { } pv)
+        if (previewPath is { Count: > 0 })
         {
             var prevVerts = new List<float>();
-            AppendColumn(prevVerts, pv, radius, zMin, zMax);
-            _prevCount = prevVerts.Count / 6;
-            (_prevVao, _prevVbo) = BuildVao([.. prevVerts]);
+            AppendTube(prevVerts, previewPath, radius);
+            if (prevVerts.Count > 0)
+            {
+                _prevCount = prevVerts.Count / 6;
+                (_prevVao, _prevVbo) = BuildVao([.. prevVerts]);
+            }
         }
     }
 
@@ -119,21 +122,44 @@ public sealed class SeamGuideColumnRenderer : IDisposable
         _prevVao = _prevVbo = _prevCount = 0;
     }
 
-    /// <summary>Vertical hexagonal prism at <paramref name="at"/>'s XY, capped at both ends.</summary>
-    private static void AppendColumn(List<float> verts, Vector3 at, float r, float zMin, float zMax)
+    /// <summary>
+    /// Hexagonal tube swept through <paramref name="path"/>, capped at both ends. The cross
+    /// section stays horizontal: guides run essentially bottom to top, and a horizontal ring
+    /// keeps the on-screen thickness even without needing a swept frame.
+    /// </summary>
+    private static void AppendTube(List<float> verts, IReadOnlyList<Vector3> path, float r)
     {
+        if (path.Count < 2) return;
+
         const int Sides = 6;
-        var lo = new Vector3(at.X, at.Y, zMin);
-        var hi = new Vector3(at.X, at.Y, zMax);
+        var offs = new Vector3[Sides];
         for (int j = 0; j < Sides; j++)
         {
-            float u0 = 2f * MathF.PI * j / Sides;
-            float u1 = 2f * MathF.PI * (j + 1) / Sides;
-            var o0 = new Vector3(MathF.Cos(u0), MathF.Sin(u0), 0f) * r;
-            var o1 = new Vector3(MathF.Cos(u1), MathF.Sin(u1), 0f) * r;
+            float u = 2f * MathF.PI * j / Sides;
+            offs[j] = new Vector3(MathF.Cos(u), MathF.Sin(u), 0f) * r;
+        }
 
-            AddTri(verts, lo + o0, lo + o1, hi + o1);
-            AddTri(verts, lo + o0, hi + o1, hi + o0);
+        for (int k = 0; k + 1 < path.Count; k++)
+        {
+            var a = path[k];
+            var b = path[k + 1];
+            if ((b - a).LengthSquared < 1e-8f) continue;   // duplicate sample: no wall to build
+
+            for (int j = 0; j < Sides; j++)
+            {
+                var o0 = offs[j];
+                var o1 = offs[(j + 1) % Sides];
+                AddTri(verts, a + o0, a + o1, b + o1);
+                AddTri(verts, a + o0, b + o1, b + o0);
+            }
+        }
+
+        var lo = path[0];
+        var hi = path[^1];
+        for (int j = 0; j < Sides; j++)
+        {
+            var o0 = offs[j];
+            var o1 = offs[(j + 1) % Sides];
             AddTri(verts, lo, lo + o1, lo + o0);   // bottom cap
             AddTri(verts, hi, hi + o0, hi + o1);   // top cap
         }
@@ -141,7 +167,10 @@ public sealed class SeamGuideColumnRenderer : IDisposable
 
     private static void AddTri(List<float> verts, Vector3 a, Vector3 b, Vector3 c)
     {
-        var n = Vector3.Normalize(Vector3.Cross(b - a, c - a));
+        var cross = Vector3.Cross(b - a, c - a);
+        // A sliver triangle (samples nearly coincident) normalises to NaN and paints the guide
+        // black; fall back to up rather than emitting garbage.
+        var n = cross.LengthSquared > 1e-12f ? Vector3.Normalize(cross) : Vector3.UnitZ;
         WriteVert(verts, a, n);
         WriteVert(verts, b, n);
         WriteVert(verts, c, n);

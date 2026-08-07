@@ -50,10 +50,106 @@ public partial class ViewportOverlayView : UserControl
             UpdateBottomDockMargin();
         };
 
+        // Transform toolbar: swallow every press so none of it can reach the viewport underneath.
+        // ViewportView subscribes PointerPressed on itself and calls Focus(), so a press falling
+        // through this row takes focus back off the number field and then runs the viewport's own
+        // click logic — which deselects when the ray misses the model. That is what made clicking a
+        // number box feel like it "went through the window", and it depended on whether the hit
+        // landed on the text or on the few pixels of padding around it.
+        // Both press AND release: click-to-select runs on RELEASE, so swallowing only the press
+        // still let the viewport pick — against the stale press position — and deselect the part,
+        // which closed this very toolbar. That was the "clicking a number box deselects the mesh
+        // about half the time" report, and it happened dead-centre of a field, not just at the edges.
+        foreach (Control row in new Control[] { MoveValuesRow, RotateValuesRow, ScaleValuesRow })
+        {
+            row.AddHandler(PointerPressedEvent,  OnTransformRowPointerPressed, handledEventsToo: true);
+            row.AddHandler(PointerReleasedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+        }
+
+        // The scale row's own controls. Same press-swallowing treatment as Move Origin: a plain
+        // Command would lose the click to the viewport's pointer handler underneath.
+        ScaleUnitToggle.AddHandler(PointerPressedEvent, OnScaleUnitPointerPressed, handledEventsToo: true);
+        ScaleChainToggle.AddHandler(PointerPressedEvent, OnScaleChainPointerPressed, handledEventsToo: true);
+        FitToCellButton.AddHandler(PointerPressedEvent, OnFitToCellPointerPressed, handledEventsToo: true);
+        ResetScaleButton.AddHandler(PointerPressedEvent, OnResetScalePointerPressed, handledEventsToo: true);
+
+        // Toggling Move Origin has to survive the viewport stealing the click, so it goes through
+        // the same swallow-the-press treatment as the value rows rather than a plain Command.
+        MoveOriginButton.AddHandler(PointerPressedEvent, OnMoveOriginPointerPressed, handledEventsToo: true);
+        MoveOriginButton.AddHandler(PointerReleasedEvent, OnTransformRowPointerPressed, handledEventsToo: true);
+
+        // Clicking an axis letter steps a clean additive 90°; Alt reverses.
+        foreach (Control label in new Control[] { StepAxisX, StepAxisY, StepAxisZ })
+            label.AddHandler(PointerPressedEvent, OnStepAxisPointerPressed, handledEventsToo: true);
+
         // Long-press region-select icon → toggle Square ↔ Lasso.
         RegionSelectButton.AddHandler(PointerPressedEvent, OnRegionSelectPointerPressed, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerReleasedEvent, OnRegionSelectPointerReleased, handledEventsToo: true);
         RegionSelectButton.AddHandler(PointerCaptureLostEvent, OnRegionSelectCaptureLost, handledEventsToo: true);
+    }
+
+    /// <summary>
+    /// Marks any press inside a transform value row handled, so it never reaches the viewport's own
+    /// pointer handler. Deliberately blanket rather than per-control: the row's padding, the axis
+    /// letters and the gaps between fields are all dead space that would otherwise fall through.
+    /// </summary>
+    private static void OnTransformRowPointerPressed(object? sender, Avalonia.Interactivity.RoutedEventArgs e)
+        => e.Handled = true;
+
+    private void OnMoveOriginPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        e.Handled = true;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+        (DataContext as ViewportViewModel)?.ToggleMoveOrigin();
+    }
+
+    /// <summary>
+    /// Clicking an axis letter snaps to the next 90° stop about a world axis; holding Alt goes the
+    /// other way.
+    /// </summary>
+    private void OnStepAxisPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        e.Handled = true;
+        if (!e.GetCurrentPoint(null).Properties.IsLeftButtonPressed) return;
+        if (sender is not Control { Tag: string tag } || !int.TryParse(tag, out int axis)) return;
+        if (DataContext is not ViewportViewModel vm) return;
+
+        // The result string is for the console command; here the refreshed number boxes are the
+        // feedback, so it is deliberately dropped.
+        _ = vm.StepRotation(axis, e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+    }
+
+    private static bool LeftPressed(PointerPressedEventArgs e)
+    {
+        e.Handled = true;
+        return e.GetCurrentPoint(null).Properties.IsLeftButtonPressed;
+    }
+
+    private void OnScaleUnitPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!LeftPressed(e) || DataContext is not ViewportViewModel vm) return;
+        vm.ToggleScaleUnit();
+    }
+
+    private void OnScaleChainPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!LeftPressed(e) || DataContext is not ViewportViewModel vm) return;
+        vm.ToggleScaleChain();
+    }
+
+    /// <summary>
+    /// Result strings from these are for the console; here the refreshed fields are the feedback.
+    /// </summary>
+    private void OnFitToCellPointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!LeftPressed(e) || DataContext is not ViewportViewModel vm) return;
+        _ = vm.FitToCell();
+    }
+
+    private void OnResetScalePointerPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (!LeftPressed(e) || DataContext is not ViewportViewModel vm) return;
+        _ = vm.ResetScale();
     }
 
     /// <summary>Snap-to-error: Alt-click or double-click within ±6 px of a validation
