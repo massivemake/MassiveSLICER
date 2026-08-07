@@ -1697,6 +1697,93 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "layer-flow-report",
+            Description = "Adaptive layer height vs extrusion flow: lists every layer whose real "
+                        + "thickness differs from the nominal layer height, the flow scale it now "
+                        + "gets, and how badly it WOULD have over-extruded without that correction",
+            Usage = "layer-flow-report [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                var want = args.Trim();
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[layer-flow] no toolpath matching '{want}'."
+                        : "[layer-flow] no toolpaths in the scene.");
+                    return;
+                }
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[layer-flow] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    float nominal = snap.LayerHeight;
+                    if (tp.Layers.Count == 0 || nominal <= 1e-4f)
+                    {
+                        ctx.LogError($"[layer-flow] \"{tpItem.Name}\": no layers, or nominal height is 0.");
+                        continue;
+                    }
+
+                    // A layer is "off nominal" when it is thin enough to matter (>0.5 %).
+                    var off = tp.Layers
+                        .Where(l => l.Height > 0f && MathF.Abs(l.Height - nominal) > nominal * 0.005f)
+                        .OrderBy(l => l.Height)
+                        .ToList();
+
+                    ctx.Log($"[layer-flow] \"{tpItem.Name}\": {tp.Layers.Count} layers, nominal {nominal:0.###} mm");
+                    if (off.Count == 0)
+                    {
+                        ctx.Log("[layer-flow]   every layer is at nominal — adaptive layer height changed nothing.");
+                        continue;
+                    }
+
+                    float z0 = tp.Layers[0].Z;
+                    ctx.Log($"[layer-flow]   {off.Count} layer(s) off nominal "
+                          + $"({100f * off.Count / tp.Layers.Count:0}%), thinnest {off[0].Height:0.###} mm");
+                    ctx.Log("[layer-flow]   worst first — Z is relative to the first layer:");
+                    foreach (var l in off.Take(10))
+                    {
+                        float scale = l.Moves.Count > 0 ? l.Moves[0].HeightScale : 1f;
+                        ctx.Log($"[layer-flow]     Z {l.Z - z0,8:0.0} mm   h {l.Height:0.000} mm   "
+                              + $"flow x{scale:0.000}   (uncorrected would be x{nominal / l.Height:0.00})");
+                    }
+                    if (off.Count > 10)
+                        ctx.Log($"[layer-flow]     … and {off.Count - 10} more.");
+
+                    int unscaled = off.Count(l => l.Moves.Count > 0
+                                                  && MathF.Abs(l.Moves[0].HeightScale - 1f) < 1e-6f);
+                    if (unscaled > 0)
+                        ctx.LogError($"[layer-flow]   WARNING: {unscaled} off-nominal layer(s) still at flow x1 — "
+                                   + "these are over-extruding. Re-slice to apply the height/flow correction.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "align-debug",
             Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
             Usage = "align-debug <name>",
