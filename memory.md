@@ -487,9 +487,10 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ### 2026-08-06 — Seam guides follow the wall (and why guide ≠ seam on a flare)
 
 **Change:** a guide drew as a straight vertical column at one XY. It now draws as a polyline —
-for each printed layer, the extrusion point nearest the guide's XY, swept as a tube bottom to
-top (`BuildSeamGuidePath` in `ViewportView.axaml.cs`, `AppendTube` in
-`SeamGuideColumnRenderer`). `SetSeamGuides`/`SetSeamGuidePreview` take paths;
+for each printed layer, the point on that layer's **outer boundary lying in the guide's compass
+direction from the layer centre**, swept as a tube bottom to top (`BuildSeamGuidePath` in
+`ViewportView.axaml.cs`, `AppendTube` in `SeamGuideColumnRenderer`).
+`SetSeamGuides`/`SetSeamGuidePreview` take paths;
 `PickSeamGuide` hit-tests every projected segment. Falls back to the straight column when
 nothing is sliced; the separate toolpath seam-drag tool gets a short vertex tick
 (`SeamVertexTick`) because it marks one loop, not a wall.
@@ -498,6 +499,13 @@ nothing is sliced; the separate toolpath seam-drag tool gets a short vertex tick
 surface, so guide and seam could not be visually compared at all — every report of "the seam
 isn't where the guide is" was unmeasurable. The curve traces the same column of wall the
 slicer picks, so the two are finally comparable.
+
+**Trap — "nearest extrusion point" does not find the wall.** The first attempt took the
+extrusion point nearest the guide XY on each layer. `ToolpathMove` has **no wall-vs-infill
+flag** (`MoveKind` is only Extrude/Travel/Mill), and a solid cap or dense infill covers the
+whole cross-section, so the nearest point was fill right beside the axis — the guide still
+drew straight up the middle of the part. Direction-from-centre fixes it because the extreme
+point along a direction is on the convex hull by construction, so fill can never win.
 
 **Still expect divergence up high, by design:** the guide is consulted only on a *birth* layer
 (`PlanarSlicer.cs` ~1211); every layer above projects the parent's seam onto its own contour
