@@ -1649,10 +1649,11 @@ public sealed class SceneRenderer : IDisposable
         {
             if (_seamGuidesDirty)
             {
-                // Column radius scales with part height so guides stay visible when the whole
-                // model is framed — a fixed few-mm marker vanished on metre-scale panels.
+                // Radius scales with part height so guides stay visible when the whole model is
+                // framed — a fixed few-mm marker vanished on metre-scale panels. Kept thin: the
+                // guide should read as a line drawn on the surface, not a pipe beside it.
                 float span   = MathF.Max(_seamGuideZMax - _seamGuideZMin, 1f);
-                float radius = MathF.Max(4f, span * 0.0022f);
+                float radius = MathF.Max(2f, span * 0.0010f);
                 _seamGuides.Update(_seamGuidePaths, _seamGuideSelectedIndex,
                     _seamGuidePreviewPath, radius, radius * 1.5f);
                 _seamGuidesDirty = false;

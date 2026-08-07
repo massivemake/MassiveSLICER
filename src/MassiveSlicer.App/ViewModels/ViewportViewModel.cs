@@ -5367,7 +5367,10 @@ public sealed class ViewportViewModel : ViewModelBase
         foreach (var g in current)
             SeamGuideDraft.Add(g);
         SeamEditorTool = SeamEditorToolKind.AddPoint;
-        SelectedSeamGuideIndex = -1;
+        // Guides saved earlier reload into the editor. With nothing selected the delete button
+        // silently removed the LAST point, so a previously saved guide read as unremovable —
+        // highlight one so the button visibly targets what it will delete.
+        SelectedSeamGuideIndex = SeamGuideDraft.Count > 0 ? SeamGuideDraft.Count - 1 : -1;
         IsSeamGuideLayerOpen = SeamGuideDraft.Count > 0;
         IsSeamEditorActive = true;
         OnPropertyChanged(nameof(IsSeamAddPointActive));
