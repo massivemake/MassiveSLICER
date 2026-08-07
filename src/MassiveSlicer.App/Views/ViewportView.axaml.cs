@@ -870,7 +870,10 @@ public partial class ViewportView : UserControl
 
         foreach (var (node, tp) in _toolpathByNode)
         {
-            if (!node.Visible || tp.Layers.Count == 0) continue;
+            // Deliberately NOT gated on node.Visible: the wall the seam runs down exists whether
+            // or not the toolpath layer is shown. Working in Body view with the toolpath hidden
+            // used to drop the guide back to a straight column.
+            if (tp.Layers.Count == 0) continue;
             var world = node.WorldTransform;
 
             foreach (var layer in tp.Layers)
@@ -4478,6 +4481,16 @@ public partial class ViewportView : UserControl
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
         _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+
+        // A guide's curve is traced from the printed wall, so it goes stale the moment the
+        // toolpath is replaced. Nothing rebuilt it after a slice, so the guide kept whatever
+        // shape it had when it was placed — a straight column if the part was not yet sliced —
+        // while the seam beside it followed the new geometry.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is ViewportViewModel vmGuides)
+                UpdateSeamGuideMarkers(vmGuides);
+        });
 
         // The timeline must always follow the DISPLAYED toolpath. Some replace
         // paths (workspace-restore ordering, background re-uploads) staged a new
