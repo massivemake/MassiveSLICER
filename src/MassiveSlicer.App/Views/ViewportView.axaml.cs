@@ -1189,6 +1189,18 @@ public partial class ViewportView : UserControl
         float zMin = float.MaxValue, zMax = float.MinValue;
         var pts = new List<(float R, float Z)>(4096);
 
+        // Allocated ONCE, outside both loops. A stackalloc inside a loop is not released per
+        // iteration — it accumulates until the method returns — so these two (48 bytes a pass)
+        // used to consume 48 B x up to 60,000 iterations per mesh, summed across every mesh:
+        // ~2.9 MB against a 1 MB stack. That overflowed the stack and killed the process outright
+        // on any part past roughly 22,000 triangles, with no managed exception and no crash log.
+        // Reproduced on the 302,516-triangle Dragon column: the slice succeeded and the app died
+        // immediately afterwards in StageToolpathMaps -> UpdateSeamGuideMarkers -> here.
+        // Both buffers are fully overwritten every iteration (all three lanes assigned below), so
+        // there is nothing to carry between passes and reuse is safe.
+        Span<TkVector3> v = stackalloc TkVector3[3];
+        Span<float>     s = stackalloc float[3];
+
         foreach (var (mesh, world) in meshes)
         {
             int triCount = mesh.Indices is { } ix ? ix.Length / 3 : mesh.Positions.Length / 3;
@@ -1197,8 +1209,6 @@ public partial class ViewportView : UserControl
 
             for (int t = 0; t < triCount; t += stride)
             {
-                Span<TkVector3> v = stackalloc TkVector3[3];
-                Span<float>     s = stackalloc float[3];
                 for (int k = 0; k < 3; k++)
                 {
                     int pi = mesh.Indices is { } idx ? (int)idx[t * 3 + k] : t * 3 + k;
