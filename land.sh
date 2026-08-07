@@ -201,7 +201,20 @@ restore() {
 }
 
 # ------------------------------------------------------ counts for the msg ---
-MERGE_BASE="$("${MAIN_GIT[@]}" merge-base "$MAIN" "$BRANCH")"
+# Reference point for "how many commits are landing". Squashing breaks ancestry,
+# so after a branch has landed once, merge-base still points at the old fork and
+# would re-count commits that already shipped. The landed/<branch> tag is the
+# real record of where this branch last landed — prefer it when it exists.
+LANDED_TAG="landed/$BRANCH"
+RELANDING=0
+if git rev-parse -q --verify "refs/tags/$LANDED_TAG" >/dev/null &&
+   git merge-base --is-ancestor "$LANDED_TAG" "$BRANCH" 2>/dev/null; then
+  MERGE_BASE="$(git rev-parse "$LANDED_TAG")"
+  RELANDING=1
+  echo "==> '$BRANCH' landed before; counting from tag $LANDED_TAG."
+else
+  MERGE_BASE="$("${MAIN_GIT[@]}" merge-base "$MAIN" "$BRANCH")"
+fi
 DELTA_COUNT="$("${MAIN_GIT[@]}" rev-list --count --first-parent "$MERGE_BASE".."$BRANCH")"
 
 if [ "$DELTA_COUNT" -eq 0 ]; then
@@ -225,8 +238,13 @@ if [ "$DRY_RUN" -eq 1 ]; then
   echo "   [dry-run] git commit -m \"$FINAL_MSG\""
   echo "   [dry-run] verify: git diff $BRANCH $MAIN --stat  must be empty"
   echo "   [dry-run] git push origin $MAIN"
-  echo "   [dry-run] git tag -a landed/$BRANCH -m \"Landed as main $NEW_MAIN_COUNT ($FINAL_MSG)\" $(git rev-parse "$BRANCH")"
-  echo "   [dry-run] git push origin refs/tags/landed/$BRANCH"
+  if [ "$RELANDING" -eq 1 ]; then
+    echo "   [dry-run] git tag -f -a $LANDED_TAG ... $(git rev-parse "$BRANCH")   (moving existing tag)"
+    echo "   [dry-run] git push --force origin refs/tags/$LANDED_TAG"
+  else
+    echo "   [dry-run] git tag -a $LANDED_TAG -m \"Landed as main $NEW_MAIN_COUNT ($FINAL_MSG)\" $(git rev-parse "$BRANCH")"
+    echo "   [dry-run] git push origin refs/tags/$LANDED_TAG"
+  fi
   restore
   echo ""
   echo "==> Dry run complete. Nothing was changed."
@@ -262,8 +280,16 @@ echo "==> Pushing main..."
 
 echo "==> Tagging '$BRANCH' at its own tip as landed..."
 BRANCH_TIP="$(git rev-parse "$BRANCH")"
-git tag -a "landed/$BRANCH" -m "Landed as main $NEW_MAIN_COUNT ($FINAL_MSG)" "$BRANCH_TIP"
-git push origin "refs/tags/landed/$BRANCH"
+if [ "$RELANDING" -eq 1 ]; then
+  # Second (or later) landing of the same branch. The Delta counter wants the
+  # tag to say where this branch landed MOST recently, so move it forward.
+  echo "   (moving existing $LANDED_TAG forward to $BRANCH_TIP)"
+  git tag -f -a "$LANDED_TAG" -m "Landed as main $NEW_MAIN_COUNT ($FINAL_MSG)" "$BRANCH_TIP" >/dev/null
+  git push --force origin "refs/tags/$LANDED_TAG"
+else
+  git tag -a "$LANDED_TAG" -m "Landed as main $NEW_MAIN_COUNT ($FINAL_MSG)" "$BRANCH_TIP"
+  git push origin "refs/tags/$LANDED_TAG"
+fi
 
 restore
 
