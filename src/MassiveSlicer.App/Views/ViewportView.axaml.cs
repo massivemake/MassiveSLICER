@@ -852,15 +852,21 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// The wall curve a guide marks: for each printed layer, the extrusion point nearest the
-    /// guide's XY, bottom to top. The slicer uses only a guide's XY, so this traces the same
-    /// column of wall the seam will run down — on a flaring part a straight vertical line stood
-    /// well off the surface and could not be compared against the actual seam.
+    /// The wall curve a guide marks: for each printed layer, the point on the layer's outer
+    /// boundary lying in the guide's compass direction from the layer centre, bottom to top.
+    /// The slicer uses only a guide's XY, so this traces the same column of wall the seam runs
+    /// down, and it flares outward with the part exactly as the seam does.
+    /// <para>
+    /// Direction from the centre rather than "nearest extrusion point": a solid cap or dense
+    /// infill fills the whole cross-section, so nearest-point snapped to fill right beside the
+    /// axis and the guide drew straight up the middle of the part.
+    /// </para>
     /// <para>Falls back to a straight column when nothing is sliced yet.</para>
     /// </summary>
     private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
     {
-        var path = new List<TkVector3>();
+        var path    = new List<TkVector3>();
+        var samples = new List<TkVector3>(512);
 
         foreach (var (node, tp) in _toolpathByNode)
         {
@@ -876,20 +882,46 @@ public partial class ViewportView : UserControl
                 // hundreds of thousands of moves. A few mm along the wall is invisible.
                 int stride = Math.Max(1, moves.Count / 400);
 
-                float best = float.MaxValue;
-                TkVector3 bestPt = default;
-                bool found = false;
-
+                samples.Clear();
+                float cx = 0f, cy = 0f;
                 for (int m = 0; m < moves.Count; m += stride)
                 {
                     var move = moves[m];
                     if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;
-
                     var p = TkVector3.TransformPosition(
                         new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
-                    float dx = p.X - guide.X, dy = p.Y - guide.Y;
-                    float d2 = dx * dx + dy * dy;          // XY only — the slicer ignores guide Z
-                    if (d2 < best) { best = d2; bestPt = p; found = true; }
+                    samples.Add(p);
+                    cx += p.X; cy += p.Y;
+                }
+                if (samples.Count == 0) continue;
+
+                cx /= samples.Count;
+                cy /= samples.Count;
+
+                float gx = guide.X - cx, gy = guide.Y - cy;
+                float gLen = MathF.Sqrt(gx * gx + gy * gy);
+                if (gLen < 1e-3f) continue;                 // guide sits on the axis: no direction
+                gx /= gLen; gy /= gLen;
+
+                // Best angular match to the guide's direction; among equally aligned points take
+                // the outermost, which is the wall rather than any fill behind it.
+                float bestCos = -2f, bestRad = -1f;
+                TkVector3 bestPt = default;
+                bool found = false;
+                foreach (var p in samples)
+                {
+                    float vx = p.X - cx, vy = p.Y - cy;
+                    float r = MathF.Sqrt(vx * vx + vy * vy);
+                    if (r < 1e-3f) continue;
+                    float cos = (vx * gx + vy * gy) / r;
+
+                    if (cos > bestCos + 0.02f || (cos > bestCos - 0.02f && r > bestRad))
+                    {
+                        if (cos > bestCos) bestCos = cos;
+                        bestRad = r;
+                        bestPt  = p;
+                        found   = true;
+                    }
                 }
 
                 if (found) path.Add(bestPt);
