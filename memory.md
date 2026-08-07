@@ -484,6 +484,31 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
 ## Session changelog (reverse chronological)
 
+### 2026-08-06 — Seam guide traces the model mesh, not the printed path
+
+Follow-on to the entry below, after two failed attempts at the same goal.
+
+**Attempt 1 — nearest printed point.** Snapped to solid-cap/infill fill beside the axis; guide
+still drew straight up the middle. `ToolpathMove` has no wall-vs-infill flag.
+**Attempt 2 — outermost printed point in the guide's compass direction.** Right idea (the
+extreme point along a direction is on the convex hull, so fill cannot win) but still fragile on
+a shape whose printed layers are mostly solid.
+**Attempt 3 (shipped) — trace the model mesh.** `BuildSeamGuidePathFromMesh`: sample visible
+user-model vertices to world space (strided, ≤20k per mesh), band the height into 160 slices,
+and per band take the point best aligned with the guide's direction from that band's centre,
+outermost breaking ties. Smooth through caps and fill because the mesh has no fill. The printed
+path stays the fallback when the model is hidden; the straight column is the last resort.
+
+Guide radius halved to `max(2mm, span * 0.0010)` — it should read as a line drawn on the
+surface, not a pipe beside it.
+
+**Seam editor "added a guide by itself" and "couldn't delete it":** neither was a bug in the
+usual sense. `BeginSeamEditor` reloads previously **saved** guides into the draft, and with
+`SelectedSeamGuideIndex = -1` the delete button fell back to removing the **last** point — so
+clicking delete removed the guide just added and left the old one. Now a loaded guide is
+selected on open, so the button visibly targets what it removes. The list is TwoWay-bound to
+`SelectedSeamGuideIndex`, so clicking a row picks which one dies.
+
 ### 2026-08-06 — Seam guides follow the wall (and why guide ≠ seam on a flare)
 
 **Change:** a guide drew as a straight vertical column at one XY. It now draws as a polyline —
