@@ -5380,24 +5380,13 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddSeamGuidePoint(SeamGuidePoint point)
     {
-        // Clicking while the cursor is off the part holds the last on-wall position, so repeated
-        // clicks used to stack identical guides on one spot (three "3044, -309, 163" entries in
-        // the list, all doing nothing). Select the existing one instead of piling up duplicates.
-        for (int i = 0; i < SeamGuideDraft.Count; i++)
-        {
-            var g = SeamGuideDraft[i];
-            if (MathF.Abs(g.X - point.X) < 2f
-             && MathF.Abs(g.Y - point.Y) < 2f
-             && MathF.Abs(g.Z - point.Z) < 2f)
-            {
-                SelectedSeamGuideIndex = i;
-                OnSeamGuidesChanged?.Invoke();
-                return;
-            }
-        }
-
+        // One guide, and placing a new one replaces it. The slicer resolves a single guide per
+        // closed contour, so on a one-island part every extra point beyond the nearest is dead
+        // weight — they stacked up in the list, could not be told apart, and blocked each other
+        // from being removed. Placing again is now how you move the seam.
+        SeamGuideDraft.Clear();
         SeamGuideDraft.Add(point);
-        SelectedSeamGuideIndex = SeamGuideDraft.Count - 1;
+        SelectedSeamGuideIndex = 0;
         IsSeamGuideLayerOpen = true;
         OnPropertyChanged(nameof(HasSeamGuideDraft));
         OnPropertyChanged(nameof(SeamGuideLayerLabel));
