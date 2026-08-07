@@ -263,6 +263,11 @@ public static class PlanarSlicer
         StructuralSupportPlanner.Apply(toolpath, settings);
         BrimPlanner.Apply(toolpath, settings);
 
+        // Last, so brim and support moves are covered too: flow must follow the REAL layer
+        // thickness. Adaptive layer height changes Z spacing and nothing was adjusting RPM
+        // for it, so thin layers were given a full nominal layer's worth of material.
+        Effects.LayerHeightFlowPostProcessor.Apply(toolpath, settings);
+
         AttachZigZagWarning(toolpath);
         return toolpath;
     }
