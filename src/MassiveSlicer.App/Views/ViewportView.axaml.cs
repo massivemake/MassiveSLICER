@@ -852,79 +852,68 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// The wall curve a guide marks: for each printed layer, the point on the layer's outer
-    /// boundary lying in the guide's compass direction from the layer centre, bottom to top.
-    /// The slicer uses only a guide's XY, so this traces the same column of wall the seam runs
-    /// down, and it flares outward with the part exactly as the seam does.
+    /// The wall curve a guide marks: for each printed layer, the point on that layer's <b>first
+    /// contour</b> nearest the guide's XY, bottom to top.
     /// <para>
-    /// Direction from the centre rather than "nearest extrusion point": a solid cap or dense
-    /// infill fills the whole cross-section, so nearest-point snapped to fill right beside the
-    /// axis and the guide drew straight up the middle of the part.
+    /// This is the slicer's own rule (<c>ContourSeamPlanner.AlignSeamToGuide</c> — nearest point
+    /// on the contour to the guide), applied to the printed wall. The first run of extrude moves
+    /// in a layer IS the outer perimeter, and it is exactly where <c>ToolpathRenderer</c> puts
+    /// the yellow seam marker, so guide and seam are built from the same geometry.
+    /// </para>
+    /// <para>
+    /// Earlier attempts searched every extrude move in the layer and then invented heuristics
+    /// (nearest point, then outermost-in-a-compass-direction) to dodge solid caps and infill.
+    /// Both produced artefacts — a line up the axis, then a jagged staircase — because the search
+    /// set was wrong. Restricting to the first contour removes fill from the problem entirely.
     /// </para>
     /// <para>Falls back to a straight column when nothing is sliced yet.</para>
     /// </summary>
     private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
     {
-        var path    = new List<TkVector3>();
-        var samples = new List<TkVector3>(512);
+        var path = new List<TkVector3>();
+
+        // Prefer shown toolpaths, but fall back to hidden ones so working in Body view with the
+        // toolpath layer switched off still traces the wall. Mixing a stale hidden toolpath in
+        // with a live one is what produced the floating staircase.
+        bool anyVisible = _toolpathByNode.Any(kv => kv.Key.Visible && kv.Value.Layers.Count > 0);
 
         foreach (var (node, tp) in _toolpathByNode)
         {
-            // Deliberately NOT gated on node.Visible: the wall the seam runs down exists whether
-            // or not the toolpath layer is shown. Working in Body view with the toolpath hidden
-            // used to drop the guide back to a straight column.
             if (tp.Layers.Count == 0) continue;
+            if (anyVisible && !node.Visible) continue;
             var world = node.WorldTransform;
 
             foreach (var layer in tp.Layers)
             {
                 var moves = layer.Moves;
-                if (moves.Count == 0) continue;
 
-                // Subsample: this runs per guide on every hover and a metre-scale part holds
-                // hundreds of thousands of moves. A few mm along the wall is invisible.
-                int stride = Math.Max(1, moves.Count / 400);
-
-                samples.Clear();
-                float cx = 0f, cy = 0f;
-                for (int m = 0; m < moves.Count; m += stride)
+                // First contiguous run of extrude moves = the outer perimeter loop.
+                int start = -1, end = -1;
+                for (int m = 0; m < moves.Count; m++)
                 {
-                    var move = moves[m];
-                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;
-                    var p = TkVector3.TransformPosition(
-                        new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
-                    samples.Add(p);
-                    cx += p.X; cy += p.Y;
+                    if (moves[m].Kind == MoveKind.Extrude)
+                    {
+                        if (start < 0) start = m;
+                        end = m;
+                    }
+                    else if (start >= 0) break;
                 }
-                if (samples.Count == 0) continue;
+                if (start < 0) continue;
 
-                cx /= samples.Count;
-                cy /= samples.Count;
+                // A perimeter on a metre-scale part can run to thousands of moves and this
+                // rebuilds on every hover; a few mm along the wall is invisible.
+                int stride = Math.Max(1, (end - start + 1) / 300);
 
-                float gx = guide.X - cx, gy = guide.Y - cy;
-                float gLen = MathF.Sqrt(gx * gx + gy * gy);
-                if (gLen < 1e-3f) continue;                 // guide sits on the axis: no direction
-                gx /= gLen; gy /= gLen;
-
-                // Best angular match to the guide's direction; among equally aligned points take
-                // the outermost, which is the wall rather than any fill behind it.
-                float bestCos = -2f, bestRad = -1f;
+                float best = float.MaxValue;
                 TkVector3 bestPt = default;
                 bool found = false;
-                foreach (var p in samples)
+                for (int m = start; m <= end; m += stride)
                 {
-                    float vx = p.X - cx, vy = p.Y - cy;
-                    float r = MathF.Sqrt(vx * vx + vy * vy);
-                    if (r < 1e-3f) continue;
-                    float cos = (vx * gx + vy * gy) / r;
-
-                    if (cos > bestCos + 0.02f || (cos > bestCos - 0.02f && r > bestRad))
-                    {
-                        if (cos > bestCos) bestCos = cos;
-                        bestRad = r;
-                        bestPt  = p;
-                        found   = true;
-                    }
+                    var f = moves[m].From;
+                    var p = TkVector3.TransformPosition(new TkVector3(f.X, f.Y, f.Z), world);
+                    float dx = p.X - guide.X, dy = p.Y - guide.Y;
+                    float d2 = dx * dx + dy * dy;      // XY only — the slicer ignores guide Z
+                    if (d2 < best) { best = d2; bestPt = p; found = true; }
                 }
 
                 if (found) path.Add(bestPt);
