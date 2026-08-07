@@ -852,81 +852,18 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>
-    /// The wall curve a guide marks: for each printed layer, the point on that layer's <b>first
-    /// contour</b> nearest the guide's XY, bottom to top.
+    /// Shape a guide draws: a straight vertical column at the guide's XY over the part's height.
     /// <para>
-    /// This is the slicer's own rule (<c>ContourSeamPlanner.AlignSeamToGuide</c> — nearest point
-    /// on the contour to the guide), applied to the printed wall. The first run of extrude moves
-    /// in a layer IS the outer perimeter, and it is exactly where <c>ToolpathRenderer</c> puts
-    /// the yellow seam marker, so guide and seam are built from the same geometry.
+    /// Three attempts to make this trace the wall all shipped artefacts — a line up the axis, a
+    /// jagged staircase, and a curve floating clear of the part. Reverted to the straight column,
+    /// which is at least honest about what a guide is: an XY, since the slicer discards guide Z.
+    /// Doing it properly means previewing the seam from a real slice rather than reconstructing
+    /// it from rendered moves.
     /// </para>
-    /// <para>
-    /// Earlier attempts searched every extrude move in the layer and then invented heuristics
-    /// (nearest point, then outermost-in-a-compass-direction) to dodge solid caps and infill.
-    /// Both produced artefacts — a line up the axis, then a jagged staircase — because the search
-    /// set was wrong. Restricting to the first contour removes fill from the problem entirely.
-    /// </para>
-    /// <para>Falls back to a straight column when nothing is sliced yet.</para>
     /// </summary>
     private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
-    {
-        var path = new List<TkVector3>();
-
-        // Prefer shown toolpaths, but fall back to hidden ones so working in Body view with the
-        // toolpath layer switched off still traces the wall. Mixing a stale hidden toolpath in
-        // with a live one is what produced the floating staircase.
-        bool anyVisible = _toolpathByNode.Any(kv => kv.Key.Visible && kv.Value.Layers.Count > 0);
-
-        foreach (var (node, tp) in _toolpathByNode)
-        {
-            if (tp.Layers.Count == 0) continue;
-            if (anyVisible && !node.Visible) continue;
-            var world = node.WorldTransform;
-
-            foreach (var layer in tp.Layers)
-            {
-                var moves = layer.Moves;
-
-                // First contiguous run of extrude moves = the outer perimeter loop.
-                int start = -1, end = -1;
-                for (int m = 0; m < moves.Count; m++)
-                {
-                    if (moves[m].Kind == MoveKind.Extrude)
-                    {
-                        if (start < 0) start = m;
-                        end = m;
-                    }
-                    else if (start >= 0) break;
-                }
-                if (start < 0) continue;
-
-                // A perimeter on a metre-scale part can run to thousands of moves and this
-                // rebuilds on every hover; a few mm along the wall is invisible.
-                int stride = Math.Max(1, (end - start + 1) / 300);
-
-                float best = float.MaxValue;
-                TkVector3 bestPt = default;
-                bool found = false;
-                for (int m = start; m <= end; m += stride)
-                {
-                    var f = moves[m].From;
-                    var p = TkVector3.TransformPosition(new TkVector3(f.X, f.Y, f.Z), world);
-                    float dx = p.X - guide.X, dy = p.Y - guide.Y;
-                    float d2 = dx * dx + dy * dy;      // XY only — the slicer ignores guide Z
-                    if (d2 < best) { best = d2; bestPt = p; found = true; }
-                }
-
-                if (found) path.Add(bestPt);
-            }
-        }
-
-        if (path.Count < 2)
-            return [new TkVector3(guide.X, guide.Y, zLo),
-                    new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
-
-        path.Sort((a, b) => a.Z.CompareTo(b.Z));
-        return path;
-    }
+        => [new TkVector3(guide.X, guide.Y, zLo),
+            new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
 
     /// <summary>
     /// Z extent the seam guide columns span: the visible user models' world height, falling
