@@ -411,6 +411,9 @@ public sealed class WorkspaceToolpathMoveData
     public float ResumeRpmScale { get; set; } = 1f;
     public bool IsZHop { get; set; }
     public float PrintSpeedScale { get; set; } = 1f;
+    /// <summary>Local layer thickness relative to nominal. Drives extrusion RPM, so losing it
+    /// makes a reopened workspace export thin adaptive layers at a full layer's flow.</summary>
+    public float HeightScale { get; set; } = 1f;
     /// <summary>Optional per-travel resume wait (seconds). Null/0 omitted when serializing default.</summary>
     public float? ResumeWaitSec { get; set; }
 }

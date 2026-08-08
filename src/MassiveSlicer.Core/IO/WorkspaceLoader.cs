@@ -38,7 +38,14 @@ public static class WorkspaceLoader
         WriteIndented               = false,
         PropertyNameCaseInsensitive = true,
         DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingDefault,
-        Converters                  = { new JsonStringEnumConverter() },
+        // WhenWritingDefault keeps the per-move toolpath records small, but it would drop any
+        // setting the operator turned off or set to zero — see AlwaysWriteValuesConverter.
+        Converters                  =
+        {
+            new JsonStringEnumConverter(),
+            new AlwaysWriteValuesConverter<AppPreferences>(),
+            new AlwaysWriteValuesConverter<WorkspaceUiSession>(),
+        },
     };
 
     public static bool Exists()

@@ -35,6 +35,7 @@ public static class ToolpathSerializer
                     ResumeRpmScale   = move.ResumeRpmScale,
                     IsZHop           = move.IsZHop,
                     PrintSpeedScale  = move.PrintSpeedScale,
+                    HeightScale      = move.HeightScale,
                     ResumeWaitSec    = move.ResumeWaitSec,
                 });
             }
@@ -79,6 +80,8 @@ public static class ToolpathSerializer
                     ResumeRpmScale   = moveDto.ResumeRpmScale,
                     IsZHop           = moveDto.IsZHop,
                     PrintSpeedScale  = moveDto.PrintSpeedScale,
+                    // Workspaces written before HeightScale existed have no value; nominal is 1.
+                    HeightScale      = moveDto.HeightScale <= 0f ? 1f : moveDto.HeightScale,
                     ResumeWaitSec    = moveDto.ResumeWaitSec,
                 });
             }
