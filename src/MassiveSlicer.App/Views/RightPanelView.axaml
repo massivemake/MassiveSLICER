@@ -1340,45 +1340,6 @@
                                     Command="{Binding Additive.ReverseTiltDirectionCommand}"
                                     ToolTip.Tip="Flip the angled-slice direction (negates the X and Y tilt). The perimeter arrow shows the current slice direction."/>
 
-                            <!-- Adaptive layer height (moved out of EFFECTS) -->
-                            <Expander Classes="SectionExpander" Header="ADVANCED" IsExpanded="False"
-                                      Margin="0,4,0,2"
-                                      ToolTip.Tip="Adaptive layer height — vary layer thickness with surface slope.">
-                                <StackPanel Margin="0,2,0,6">
-                                    <!-- Adaptive layer height -->
-                                    <CheckBox Margin="8,2,8,4"
-                                              Content="Adaptive layer height"
-                                              FontSize="11"
-                                              IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
-                                              IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
-                                              ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
-
-                                    <Grid Margin="8,2,8,4" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="80"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted"/>
-                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
-                                    </Grid>
-
-                                    <Grid Margin="8,2,8,8" IsVisible="{Binding Additive.ShowAdaptiveControls}">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
-                                                   VerticalAlignment="Center" Margin="8,0,4,0"/>
-                                        <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
-                                                   Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
-                                                   VerticalAlignment="Center"
-                                                   ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
-                                        <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
-                                                   VerticalAlignment="Center" Margin="4,0,8,0"/>
-                                    </Grid>
-                                </StackPanel>
-                            </Expander>
                         </StackPanel>
                     </Expander>                    <Expander Classes="SectionExpander" Header="SEAM" IsExpanded="False">
                         <StackPanel Margin="0,2,0,6">
@@ -1530,6 +1491,47 @@
                                                        Value="{Binding Additive.LayerSpeedMaxMmS, Mode=TwoWay}"
                                                        Minimum="0.1" Maximum="2000" Increment="1"
                                                        FormatString="F0" FontSize="11"/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Adaptive layer height. Lives beside Adaptive Speed and Flow because the
+                                     three interact: thickness sets how much material a layer needs, and speed
+                                     and RPM follow it. -->
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                                <CheckBox Content="Adaptive layer height"
+                                          FontSize="11"
+                                          Margin="0,0,0,2"
+                                          IsChecked="{Binding Additive.AdaptiveLayerHeight, Mode=TwoWay}"
+                                          IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
+                                          ToolTip.Tip="Vary layer thickness based on surface slope — thin layers on gentle slopes, thick on steep faces. Enables layer preview shading."/>
+                                <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
+                                           Text="Thinner layers on shallow surfaces. Extrusion follows the real thickness, so a thin layer is commanded less material."/>
+
+                                <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
+                                    </Grid>
+
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Fine" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <Slider    Grid.Column="1" Minimum="0" Maximum="1" TickFrequency="0.01"
+                                                   Value="{Binding Additive.AdaptiveQuality, Mode=TwoWay}"
+                                                   VerticalAlignment="Center"
+                                                   ToolTip.Tip="0 = finest detail (thinnest layers on slopes), 1 = fastest (thickest layers allowed)"/>
+                                        <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
+                                                   VerticalAlignment="Center" Margin="4,0,0,0"/>
                                     </Grid>
                                 </StackPanel>
 
