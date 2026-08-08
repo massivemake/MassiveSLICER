@@ -85,6 +85,23 @@ public static class KrlAnout
         float beadWidthMm, float layerHeightMm, float printSpeedMps, float flowRate)
         => beadWidthMm * layerHeightMm * printSpeedMps * flowRate * 60f;
 
+    /// <summary>
+    /// <see cref="ComputeRpmPercent"/> solved for speed: the robot speed (mm/s) at which a bead of
+    /// this width and thickness demands <paramref name="rpmPercent"/> from the extruder.
+    ///
+    /// Lets the operator state the flow they want instead of a speed, which is the useful way round:
+    /// a thin layer needs proportionally more speed to reach the same flow, and the arithmetic for
+    /// that depends on bead width, thickness and the material's flow rate all at once.
+    /// Returns 0 when the inputs cannot produce flow.
+    /// </summary>
+    public static float SpeedMmSForRpmPercent(
+        float rpmPercent, float beadWidthMm, float layerHeightMm, float flowRate)
+    {
+        float denom = beadWidthMm * layerHeightMm * flowRate * 60f;
+        if (denom <= 1e-9f || rpmPercent <= 0f) return 0f;
+        return rpmPercent / denom * 1000f;   // m/s -> mm/s
+    }
+
     /// <summary>Normalized <c>$ANOUT[4]</c> for an extrusion move.</summary>
     public static float RpmToAnout(
         float beadWidthMm, float layerHeightMm, float printSpeedMps, float flowRate)

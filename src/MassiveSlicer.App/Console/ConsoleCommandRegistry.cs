@@ -1,4 +1,5 @@
 using MassiveSlicer.Commands;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.ViewModels;
 
@@ -1692,6 +1693,65 @@ public sealed class ConsoleCommandRegistry
                 if (fn is null) { ctx.LogError("[rpm-report] viewport is not ready yet."); return; }
                 foreach (var line in fn().Split((char)10))
                     ctx.Log(line.TrimEnd((char)13));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "layer-speed-report",
+            Description = "Adaptive speed: what speed and extruder RPM each layer thickness ends up "
+                        + "commanding, where the robot ceiling bites, and the speed at which the "
+                        + "99 % export gate would be reached",
+            Usage = "layer-speed-report",
+            Execute = (ctx, _) =>
+            {
+                var add  = ctx.Main.RightPanel.Additive;
+                float bead = (float)add.BeadWidth;
+                float flow = (float)add.ActiveFlowRate;
+                float baseMmS = (float)add.PrintSpeed;
+                float nominal = (float)add.LayerHeight;
+
+                if (bead <= 0f || flow <= 0f || nominal <= 0f)
+                {
+                    ctx.LogError("[layer-speed] bead width, layer height and flow rate must all be > 0.");
+                    return;
+                }
+
+                ctx.Log($"[layer-speed] bead {bead:0.##} mm, nominal layer {nominal:0.###} mm, "
+                      + $"flow {flow:0.####} rev/cm3, print speed {baseMmS:0.#} mm/s");
+                ctx.Log($"[layer-speed] adaptive speed {(add.LayerSpeedAdaptEnabled ? "ON" : "off")}"
+                      + (add.LayerSpeedAdaptEnabled
+                            ? add.LayerSpeedUseRpmPercent
+                                ? $", range {add.LayerSpeedMinRpmPercent:0}-{add.LayerSpeedMaxRpmPercent:0} % RPM"
+                                  + $", robot max {(add.LayerSpeedRobotMaxMmS > 0.1 ? $"{add.LayerSpeedRobotMaxMmS:0} mm/s" : $"{add.LayerSpeedMaxMmS:0} mm/s (from High speed)")}"
+                                : $", range {add.LayerSpeedMinMmS:0}-{add.LayerSpeedMaxMmS:0} mm/s"
+                            : ""));
+
+                float nomRpm = KrlAnout.ComputeRpmPercent(bead, nominal, baseMmS / 1000f, flow);
+                ctx.Log($"[layer-speed] a nominal layer at {baseMmS:0.#} mm/s commands {nomRpm:0.##} % RPM; "
+                      + $"the {ToolpathRpm.MaxRpmPercent:0} % gate is reached at "
+                      + $"{KrlAnout.SpeedMmSForRpmPercent(ToolpathRpm.MaxRpmPercent, bead, nominal, flow):0} mm/s");
+
+                float ceiling = add.LayerSpeedRobotMaxMmS > 0.1
+                    ? (float)add.LayerSpeedRobotMaxMmS
+                    : (float)add.LayerSpeedMaxMmS;
+
+                ctx.Log("[layer-speed]  thickness   gate at   at high RPM target        RPM there");
+                float minH = (float)Math.Max(add.MinLayerHeight, 0.05);
+                foreach (float h in new[] { minH, minH * 1.5f, nominal * 0.5f, nominal * 0.75f, nominal })
+                {
+                    if (h <= 0f) continue;
+                    float gateAt = KrlAnout.SpeedMmSForRpmPercent(ToolpathRpm.MaxRpmPercent, bead, h, flow);
+                    float want   = KrlAnout.SpeedMmSForRpmPercent(
+                        (float)add.LayerSpeedMaxRpmPercent, bead, h, flow);
+                    float got    = MathF.Min(want, ceiling);
+                    float rpmGot = KrlAnout.ComputeRpmPercent(bead, h, got / 1000f, flow);
+                    string note  = want > ceiling ? "  <- robot ceiling binds" : "";
+                    ctx.Log($"[layer-speed]  {h,7:0.###} mm {gateAt,8:0} {got,12:0} mm/s "
+                          + $"{rpmGot,14:0.#} %{note}");
+                }
+                ctx.Log("[layer-speed] thin layers reach the same flow only by running faster — "
+                      + "if the ceiling binds, flow falls short of the target on those layers.");
             },
         });
 

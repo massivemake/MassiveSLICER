@@ -87,6 +87,26 @@ public sealed class SliceSettings
     /// <summary>Print speed (mm/s) applied to the longest/busiest layer.</summary>
     public float LayerSpeedMaxMmS { get; init; } = 100f;
 
+    /// <summary>
+    /// State the adaptive-speed range as extruder RPM percent instead of robot mm/s. Each layer's
+    /// speed is then derived from its own real thickness, so the commanded flow lands on the target
+    /// whether the layer is thin or full height — and the target cannot be set past the export gate.
+    /// </summary>
+    public bool LayerSpeedUseRpmPercent { get; init; }
+
+    /// <summary>Extruder RPM (%) aimed for on the shortest/lightest layer. RPM-percent mode only.</summary>
+    public float LayerSpeedMinRpmPercent { get; init; } = 40f;
+
+    /// <summary>Extruder RPM (%) aimed for on the longest/busiest layer. RPM-percent mode only.</summary>
+    public float LayerSpeedMaxRpmPercent { get; init; } = 85f;
+
+    /// <summary>
+    /// Ceiling on the robot speed the RPM target may ask for (mm/s). 0 = fall back to
+    /// <see cref="LayerSpeedMaxMmS"/>. A 1 mm layer can honour a high RPM target only at speeds the
+    /// arm may not hold through curves, so the extruder is not the only limit that matters.
+    /// </summary>
+    public float LayerSpeedRobotMaxMmS { get; init; }
+
     /// <summary>Z height above the part to approach before each pass, in mm.</summary>
     public float ApproachZ { get; init; } = 50f;
 

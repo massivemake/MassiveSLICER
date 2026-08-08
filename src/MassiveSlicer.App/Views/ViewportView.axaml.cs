@@ -4683,6 +4683,10 @@ public partial class ViewportView : UserControl
             LayerSpeedBasis            = s.LayerSpeedBasis,
             LayerSpeedMinMmS           = (float)s.LayerSpeedMinMmS,
             LayerSpeedMaxMmS           = (float)s.LayerSpeedMaxMmS,
+            LayerSpeedUseRpmPercent    = s.LayerSpeedUseRpmPercent,
+            LayerSpeedMinRpmPercent    = (float)s.LayerSpeedMinRpmPercent,
+            LayerSpeedMaxRpmPercent    = (float)s.LayerSpeedMaxRpmPercent,
+            LayerSpeedRobotMaxMmS      = (float)s.LayerSpeedRobotMaxMmS,
             MultiPlanarPlanes          = s.MultiPlanarPlanes
                 .Select(r => new MassiveSlicer.Core.Models.MultiPlanarPlane((float)r.HeightPct, (float)r.AngleDeg))
                 .ToList(),

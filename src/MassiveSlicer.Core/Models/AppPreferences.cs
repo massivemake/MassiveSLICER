@@ -442,6 +442,18 @@ public sealed class AppPreferences
     public double LayerSpeedMinMmS { get; set; } = 10.0;
     public double LayerSpeedMaxMmS { get; set; } = 100.0;
 
+    /// <summary>State the adaptive-speed range as extruder RPM percent rather than robot mm/s.</summary>
+    public bool LayerSpeedUseRpmPercent { get; set; }
+
+    /// <summary>Extruder RPM (%) aimed for on the shortest/lightest layer.</summary>
+    public double LayerSpeedMinRpmPercent { get; set; } = 40.0;
+
+    /// <summary>Extruder RPM (%) aimed for on the longest/busiest layer.</summary>
+    public double LayerSpeedMaxRpmPercent { get; set; } = 85.0;
+
+    /// <summary>Ceiling on the speed an RPM target may ask for (mm/s). 0 = use LayerSpeedMaxMmS.</summary>
+    public double LayerSpeedRobotMaxMmS { get; set; }
+
     /// <summary>Seam guide points as [x, y, z] world coordinates.</summary>
     public List<float[]> SeamGuidePoints { get; set; } = [];
 

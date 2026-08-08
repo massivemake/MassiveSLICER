@@ -1469,7 +1469,15 @@
                                         <TextBlock Grid.Column="2" Text="Long layers (high)" Classes="LabelMuted" FontSize="10" HorizontalAlignment="Right"/>
                                     </Grid>
 
-                                    <Grid>
+                                    <CheckBox Content="Set the range as extruder RPM %"
+                                              FontSize="11"
+                                              IsChecked="{Binding Additive.LayerSpeedUseRpmPercent, Mode=TwoWay}"
+                                              ToolTip.Tip="State the flow you want instead of a speed. Each layer's speed is then worked out from that layer's real thickness, so a thin layer gets the extra speed it needs to reach the same flow. Capped at 99 % because that is the most the motor can be commanded."/>
+                                    <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                               IsVisible="{Binding Additive.LayerSpeedShowRpm}"
+                                               Text="Speeds are derived per layer. A thin layer needs proportionally more speed for the same flow, so set a robot ceiling it must not exceed."/>
+
+                                    <Grid IsVisible="{Binding Additive.LayerSpeedShowMmS}">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="72"/>
@@ -1492,6 +1500,45 @@
                                                        Minimum="0.1" Maximum="2000" Increment="1"
                                                        FormatString="F0" FontSize="11"/>
                                     </Grid>
+
+                                    <StackPanel IsVisible="{Binding Additive.LayerSpeedShowRpm}" Spacing="6">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="72"/>
+                                                <ColumnDefinition Width="20"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="72"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Low RPM (%)" Classes="LabelMuted" FontSize="10"
+                                                       VerticalAlignment="Center"/>
+                                            <NumericUpDown Grid.Column="1"
+                                                           Value="{Binding Additive.LayerSpeedMinRpmPercent, Mode=TwoWay}"
+                                                           Minimum="1" Maximum="99" Increment="1"
+                                                           FormatString="F0" FontSize="11"/>
+                                            <TextBlock Grid.Column="2" Text="→" Classes="LabelMuted"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                            <TextBlock Grid.Column="3" Text="High RPM (%)" Classes="LabelMuted" FontSize="10"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                                            <NumericUpDown Grid.Column="4"
+                                                           Value="{Binding Additive.LayerSpeedMaxRpmPercent, Mode=TwoWay}"
+                                                           Minimum="1" Maximum="99" Increment="1"
+                                                           FormatString="F0" FontSize="11"/>
+                                        </Grid>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="72"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Robot max speed (mm/s)" Classes="LabelMuted" FontSize="10"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip.Tip="Hard ceiling on the speed an RPM target may ask for. The extruder having headroom does not mean the arm can hold the speed through curves. 0 = use the High speed box."/>
+                                            <NumericUpDown Grid.Column="1"
+                                                           Value="{Binding Additive.LayerSpeedRobotMaxMmS, Mode=TwoWay}"
+                                                           Minimum="0" Maximum="2000" Increment="1"
+                                                           FormatString="F0" FontSize="11"/>
+                                        </Grid>
+                                    </StackPanel>
                                 </StackPanel>
 
                                 <!-- Adaptive layer height. Lives beside Adaptive Speed and Flow because the
