@@ -19,6 +19,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
 
     public AdditiveSettingsViewModel()
     {
+        KrlPostProcess.Owner = this;
         SetDefaultHomePositionCommand = new RelayCommand(() => OnSetDefaultHomePositionRequested?.Invoke());
         ReverseTiltDirectionCommand      = new RelayCommand(ReverseTiltDirection);
         SetPatternCommand = new RelayCommand<string>(p => PatternType = p ?? "Smooth");
@@ -610,6 +611,17 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public RelayCommand OpenSeamEditorCommand { get; }
 
     internal Action? OnOpenSeamEditorRequested { get; set; }
+
+    /// <summary>Raised to open the KRL Post-Processing dialog (the KRL EXPORT gear, or "krlpost open").</summary>
+    internal Action? OnOpenKrlPostProcessRequested { get; set; }
+
+    /// <summary>Opens the KRL Post-Processing dialog. Returns false when no view is attached.</summary>
+    internal bool RequestOpenKrlPostProcess()
+    {
+        if (OnOpenKrlPostProcessRequested is null) return false;
+        OnOpenKrlPostProcessRequested();
+        return true;
+    }
 
     /// <summary>Runs the analytical thermomechanical screen and fills Adaptive Speed low/high.</summary>
     public RelayCommand SimulateThermalCommand { get; }
@@ -1636,7 +1648,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _layerLeanPercent, Math.Clamp(value, 0.0, 100.0));
     }
 
-    private double _layerLeanMaxTiltDeg = 20.0;
+    private double _layerLeanMaxTiltDeg = 0.0;
 
     /// <summary>Hard cap on layer-lean tilt from vertical (degrees).</summary>
     public double LayerLeanMaxTiltDeg
@@ -1914,8 +1926,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     /// <summary>Extrusion motor speed (%) written to KRL after applying <see cref="ExtrusionSpeedOffset"/>.</summary>
     public float GetEffectiveExtrusionSpeedPercent()
     {
+        // Calibration override wins outright — geometry is deliberately meaningless there.
+        if (ExtrusionRpmOverridePercent > 0.0)
+            return (float)ExtrusionRpmOverridePercent;
         float pct = (float)ComputeExtrusionSpeedPercent() + (float)ParseSignedOffset(_extrusionSpeedOffset);
         return Math.Max(0f, pct);
+    }
+
+    private double _extrusionRpmOverridePercent;
+
+    /// <summary>Calibration-only forced screw speed (%); 0 = off. See AppPreferences.</summary>
+    public double ExtrusionRpmOverridePercent
+    {
+        get => _extrusionRpmOverridePercent;
+        set => SetField(ref _extrusionRpmOverridePercent, value);
     }
 
     // -- First layer speed / RPM (override the first layer only) ---------------
@@ -2073,6 +2097,8 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             // Keep Export-to-Robot post-process header/footer in sync so the editor and
             // export never keep an LFAM $ANOUT MAT block while URM is checked.
             ApplyUrmPostProcessTemplates(value);
+            // The checkbox lives on the KRL dialog's Rules tab and proxies back to here.
+            KrlPostProcess.NotifyDigitalStartStopChanged();
         }
     }
 

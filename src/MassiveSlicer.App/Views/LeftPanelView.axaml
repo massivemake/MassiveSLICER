@@ -46,7 +46,25 @@
                             Command="{Binding DataContext.Toolbar.SyncRobotCommand,
                                       RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                             ToolTip.Tip="Connect to the KRC4 controller (live joint streaming). Click again to desync."/>
-                
+
+                    <!-- KRL tool / base frame # (moved from ROBOT section) -->
+                    <TextBlock Text="TOOL #" Classes="LabelMuted" Margin="0,8,0,2"/>
+                    <ComboBox Margin="0,0,0,6" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlToolOptions,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlToolSelectedIndex,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                              Mode=TwoWay}"
+                              ToolTip.Tip="KRL tool number ($TOOL_DATA index) for live sync / export"/>
+                    <TextBlock Text="BASE #" Classes="LabelMuted" Margin="0,0,0,2"/>
+                    <ComboBox Margin="0,0,0,0" HorizontalAlignment="Stretch"
+                              ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
+                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                              SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseSelectedIndex,
+                                              RelativeSource={RelativeSource AncestorType={x:Type Window}},
+                                              Mode=TwoWay}"
+                              ToolTip.Tip="KRL base number ($BASE_DATA index) for live sync / export"/>
+
         </StackPanel>
     </Expander>
     <Expander Classes="StepCard" IsExpanded="True"
@@ -522,41 +540,34 @@
                             </Grid>
                         </StackPanel>
 
-                        <!-- Rotary bed (E1) axis calibration -->
+                        <!-- Home via MassiveDRIVE (poses taught on Drive Movements for cal) -->
+                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
+                        <TextBlock Text="HOME" Classes="SectionHeader"/>
+                        <Button Content="GO HOME (MassiveDRIVE)"
+                                Command="{Binding DataContext.GoHomeCommand,
+                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                HorizontalAlignment="Stretch" Margin="8,0,8,6"
+                                ToolTip.Tip="SPTP XHOME / taught home via MassiveDRIVE. Pendant: LFAM3_RSI_BulkPTP. Console: home go"/>
+
+                        <!-- Rotary bed: Drive Movements master (same pattern as scan-cal) -->
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="ROTARY BED CALIBRATION" Classes="SectionHeader"/>
-                        <TextBlock Text="Tape the calibration board off-centre on the bed. Rotate E1 and capture across the widest range you can (keep the arm still)."
+                        <TextBlock Text="Runs MassiveDRIVE movement “Bed Calibration” (taught TCP + E1, notes=bed). Board off-centre on bed. Fit + apply after captures."
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                                    FontSize="11" Margin="8,2,8,6"/>
 
-                        <Button Content="AUTO-CALIBRATE (E1 SWEEP)"
+                        <Button Content="AUTO-CALIBRATE BED"
                                 Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.AutoCalibrateCommand,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                 Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,0,8,4"
-                                ToolTip.Tip="Starts BED_SCAN_CAL on the controller via the C3 Bridge (no pendant Start). The robot sweeps E1 -180..180 in 10 stops; the app captures a scan at each, then fits the result."/>
-                        <TextBlock Text="Auto: robot synced + in AUTO mode with drives on. The app starts the program and scans automatically. Or collect samples manually below."
+                                ToolTip.Tip="MassiveDRIVE Movements master: sequence Bed Calibration (E1 per waypoint, notes=bed) → board samples + surface → fit centre. Pendant: LFAM3_RSI_BulkPTP, AUT, path idle."/>
+                        <TextBlock Text="Teach E1 stops on MassiveDRIVE (notes=bed). Pendant: BulkPTP + AUT + drives ON. Path idle. Console: bed-cal"
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextSecondary}"
                                    FontSize="11" Margin="8,0,8,6"/>
-
-                        <Grid Margin="8,0,8,4" ColumnDefinitions="*,*">
-                            <Button Grid.Column="0" Content="ADD SAMPLE"
-                                    Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.AddSampleCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="0,0,4,0"/>
-                            <Button Grid.Column="1" Content="CLEAR"
-                                    Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ClearCommand,
-                                              RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                    HorizontalAlignment="Stretch" Margin="4,0,0,0"/>
-                        </Grid>
 
                         <TextBlock Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.SampleCountLabel,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                    Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="8,0,8,4"/>
-
-                        <Button Content="COMPUTE BED CENTRE"
-                                Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ComputeCommand,
-                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,0,8,6"/>
 
                         <Grid Margin="8,0,8,2"
                               IsVisible="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.HasResult,
@@ -596,14 +607,6 @@
                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                    Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.RotationLabel,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
-
-                        <Button Content="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ApplyButtonLabel,
-                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                Command="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.ApplyCommand,
-                                          RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                Classes="PrimaryButton" HorizontalAlignment="Stretch" Margin="8,4,8,4"
-                                IsVisible="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.HasResult,
-                                            RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
 
                         <TextBlock Text="{Binding DataContext.RightPanel.Settings.Robot.BedCalibration.Status,
                                           RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
@@ -713,25 +716,6 @@
                             <TextBlock Grid.Column="1" Classes="LabelMuted"
                                        Text="{Binding DataContext.RightPanel.Settings.Robot.BaseZ, RelativeSource={RelativeSource AncestorType={x:Type Window}}, StringFormat={}{0:F2} mm}"/>
                         </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
-                        <!-- KRL frame dropdowns -->
-                        <TextBlock Text="ROBOT FRAMES" Classes="SectionHeader"/>
-                        <TextBlock Text="TOOL" Classes="LabelMuted" Margin="8,4,8,2"/>
-                        <ComboBox Margin="8,0,8,6" HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlToolOptions,
-                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlToolSelectedIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}"/>
-                        <TextBlock Text="BASE" Classes="LabelMuted" Margin="8,4,8,2"/>
-                        <ComboBox Margin="8,0,8,8" HorizontalAlignment="Stretch"
-                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseOptions,
-                                               RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.KrlBaseSelectedIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}"/>
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="TCP OFFSET" Classes="SectionHeader"/>

@@ -17,6 +17,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="44"/>
             </Grid.RowDefinitions>
 
@@ -231,15 +232,18 @@
                     <TextBlock Classes="LabelMuted" TextWrapping="Wrap" Margin="0,0,0,8" Opacity="0.8"
                                Text="Heat the extruder to the temperatures above. Run it into the air at a fixed screw RPM for a fixed time. Weigh the cooled purge and enter the numbers — the flow rate is computed from them (uses Density above)."/>
 
+                    <!-- Which head was purged: the two screws have different flow rates. -->
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="140"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="Motor speed (RPM)" Classes="LabelMuted" VerticalAlignment="Center"
-                                   ToolTip.Tip="Screw speed during the purge test, in true RPM (read off the extruder drive)"/>
-                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                   Text="{Binding CalibMotorRpm, Mode=TwoWay, StringFormat={}{0:F1}}"/>
+                        <TextBlock Grid.Column="0" Text="Calibrating head" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Which extruder was purged. Apply writes that head's flow rate; the other is left alone. Defaults to the active cell's head."/>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="14">
+                            <RadioButton GroupName="CalibHead" Content="HV" IsChecked="{Binding CalibIsHv, Mode=TwoWay}"/>
+                            <RadioButton GroupName="CalibHead" Content="HF" IsChecked="{Binding CalibIsHf, Mode=TwoWay}"/>
+                        </StackPanel>
                     </Grid>
 
                     <Grid Margin="0,0,0,6">
@@ -247,10 +251,10 @@
                             <ColumnDefinition Width="140"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="RPM at 100% output" Classes="LabelMuted" VerticalAlignment="Center"
-                                   ToolTip.Tip="Drive scale: the screw RPM when $ANOUT[4] = 1.0 (machine property — set once). Converts your RPM to the % signal the KUKA speaks."/>
+                        <TextBlock Grid.Column="0" Text="Motor speed (%)" Classes="LabelMuted" VerticalAlignment="Center"
+                                   ToolTip.Tip="Screw speed during the purge test, as a percentage of drive maximum — the same number the slicer exports."/>
                         <TextBox   Grid.Column="1" Classes="PanelTextBox"
-                                   Text="{Binding CalibMaxRpm, Mode=TwoWay, StringFormat={}{0:F0}}"/>
+                                   Text="{Binding CalibMotorPercent, Mode=TwoWay, StringFormat={}{0:F1}}"/>
                     </Grid>
 
                     <Grid Margin="0,0,0,6">
@@ -306,25 +310,50 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- Footer -->
+            <!-- Import/export status -->
             <Border Grid.Row="2"
+                    Background="{DynamicResource Bg1}"
+                    Padding="16,4"
+                    IsVisible="{Binding ImportExportStatus, Converter={x:Static StringConverters.IsNotNullOrEmpty}}">
+                <TextBlock Text="{Binding ImportExportStatus}"
+                           Classes="LabelMuted" FontSize="11" TextWrapping="Wrap"/>
+            </Border>
+
+            <!-- Footer -->
+            <Border Grid.Row="3"
                     Background="{DynamicResource Bg1}"
                     BorderBrush="{DynamicResource Border1}"
                     BorderThickness="0,1,0,0">
-                <StackPanel Orientation="Horizontal"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Spacing="8"
-                            Margin="0,0,16,0">
-                    <Button Content="Cancel"
-                            Classes="ToolbarButton"
-                            Padding="14,6"
-                            Click="OnCancel"/>
-                    <Button Content="Save"
-                            Classes="PrimaryButton"
-                            Padding="14,6"
-                            Click="OnSave"/>
-                </StackPanel>
+                <Grid Margin="16,0">
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Center"
+                                Spacing="6">
+                        <Button Content="Import JSON"
+                                Classes="ToolbarButton"
+                                Padding="12,6"
+                                Click="OnImportJson"
+                                ToolTip.Tip="Import a .json file as a new material (does not replace the one you were editing). Same shape as assets/materials.json entries."/>
+                        <Button Content="Export JSON"
+                                Classes="ToolbarButton"
+                                Padding="12,6"
+                                Click="OnExportJson"
+                                ToolTip.Tip="Save the current form fields to a .json file you can share or re-import."/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Spacing="8">
+                        <Button Content="Cancel"
+                                Classes="ToolbarButton"
+                                Padding="14,6"
+                                Click="OnCancel"/>
+                        <Button Content="Save"
+                                Classes="PrimaryButton"
+                                Padding="14,6"
+                                Click="OnSave"/>
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
     </Border>

@@ -75,4 +75,40 @@ public sealed class MaterialPreset
 
     /// <summary>Conditions the flow rate was measured under, e.g. "50% × 60s → 850g @ 230/230/230°C".</summary>
     public string CalibrationNote { get; set; } = "";
+
+    // -- Calibration inputs (so Edit reopens with what was actually entered) ---
+    // Previously only the note above survived, so every Edit reset these to
+    // defaults and the operator had to retype the test conditions.
+
+    /// <summary>Screw speed used for the purge test, as a percentage of drive maximum.</summary>
+    public double CalibMotorPercent { get; set; } = 50.0;
+
+    /// <summary>Purge duration (s) used for the test.</summary>
+    public double CalibTimeSec { get; set; } = 60.0;
+
+    /// <summary>Weight (g) of the cooled purge.</summary>
+    public double CalibWeightG { get; set; }
+
+    /// <summary>Which head the dialog should open on: true = HF, false = HV.</summary>
+    public bool CalibIsHf { get; set; }
+
+    // -- HF head's own calibration -------------------------------------------
+    // The two heads have different screws, so each keeps its own test conditions and
+    // provenance. The unsuffixed fields above are the HV head's. An uncalibrated head
+    // reads 0 g rather than inheriting the other head's numbers.
+
+    /// <summary>HF: screw speed used for the purge test (% of drive maximum).</summary>
+    public double CalibMotorPercentHf { get; set; } = 50.0;
+
+    /// <summary>HF: purge duration (s).</summary>
+    public double CalibTimeSecHf { get; set; } = 60.0;
+
+    /// <summary>HF: weight (g) of the cooled purge.</summary>
+    public double CalibWeightGHf { get; set; }
+
+    /// <summary>HF: date of the last purge-and-weigh calibration (yyyy-MM-dd).</summary>
+    public string CalibratedOnHf { get; set; } = "";
+
+    /// <summary>HF: conditions the HF flow rate was measured under.</summary>
+    public string CalibrationNoteHf { get; set; } = "";
 }

@@ -26,6 +26,9 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
     /// <summary>Extruder-style Inputs | Outputs only (no position column).</summary>
     public bool UsesDualIoLayout => UsesSplitIoLayout && !ShowRobotPose;
 
+    /// <summary>Spindle section: Inputs | Outputs plus ATV RPM setpoint control.</summary>
+    public bool ShowSpindleRpm { get; }
+
     private bool _isRobotPoseLive;
     public bool IsRobotPoseLive
     {
@@ -36,6 +39,43 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
             NotifyRobotPoseLines();
         }
     }
+
+    private string _spindleRpmText = "0";
+    /// <summary>Editable ATV setpoint text (0–24000).</summary>
+    public string SpindleRpmText
+    {
+        get => _spindleRpmText;
+        set => SetField(ref _spindleRpmText, value);
+    }
+
+    private string _spindleRpmActualLine = "—";
+    public string SpindleRpmActualLine
+    {
+        get => _spindleRpmActualLine;
+        set => SetField(ref _spindleRpmActualLine, value);
+    }
+
+    private string _spindleRpmStatus = "";
+    public string SpindleRpmStatus
+    {
+        get => _spindleRpmStatus;
+        set => SetField(ref _spindleRpmStatus, value);
+    }
+
+    private bool _spindleRpmBusy;
+    public bool SpindleRpmBusy
+    {
+        get => _spindleRpmBusy;
+        set
+        {
+            if (!SetField(ref _spindleRpmBusy, value)) return;
+            OnPropertyChanged(nameof(CanSetSpindleRpm));
+        }
+    }
+
+    public bool CanSetSpindleRpm => ShowSpindleRpm && !SpindleRpmBusy;
+
+    public ICommand? SetSpindleRpmCommand { get; internal set; }
 
     private double _a1, _a2, _a3, _a4, _a5, _a6, _e1;
     private double _tcpX, _tcpY, _tcpZ, _tcpA, _tcpB, _tcpC;
@@ -94,8 +134,9 @@ public sealed class LiveIoSectionViewModel : ViewModelBase
     internal LiveIoSectionViewModel(string title)
     {
         Title = title;
-        UsesSplitIoLayout = title is "Robot (KUKA)" or "Pellet Extruder";
+        UsesSplitIoLayout = title is "Robot (KUKA)" or "Pellet Extruder" or "Spindle" or "Milling Spindle";
         ShowRobotPose = title == "Robot (KUKA)";
+        ShowSpindleRpm = title is "Spindle" or "Milling Spindle";
     }
 
     internal void ClearRobotPose()
@@ -363,6 +404,7 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
         _hasMilling = hasMilling;
         _millIp = hasMilling && !string.IsNullOrWhiteSpace(ip) ? ip.Trim() : null;
         _millBridgePort = port > 0 ? port : MillingModbusClient.DefaultPort;
+        RefreshVisibleSections();
         _millingBridgeLive = false;
         UpdateSectionStatus();
         ApplyPolling();
@@ -409,6 +451,19 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
             }
             if (vm.UsesSplitIoLayout)
                 vm.PartitionInputOutputSignals();
+            if (vm.ShowSpindleRpm)
+            {
+                var setCmd = new RelayCommand(
+                    () => _ = SetSpindleRpmFromUiAsync(vm),
+                    () => vm.CanSetSpindleRpm);
+                vm.SetSpindleRpmCommand = setCmd;
+                vm.PropertyChanged += (_, e) =>
+                {
+                    if (e.PropertyName is nameof(LiveIoSectionViewModel.SpindleRpmBusy)
+                        or nameof(LiveIoSectionViewModel.SpindleRpmText))
+                        setCmd.RaiseCanExecuteChanged();
+                };
+            }
             Sections.Add(vm);
         }
         UpdateSectionStatus();
@@ -440,7 +495,8 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
                 "Robot (KUKA)"    => true,
                 "Pellet Extruder" => _showExtruderSection,
                 "Scanner"         => _showScannerSection,
-                "Milling Spindle" => _showMillingSection,
+                // Spindle column sits right of KUKA / Extruder whenever milling cabinet is configured
+                "Spindle" or "Milling Spindle" => _hasMilling,
                 _                 => false,
             };
             if (show)
@@ -547,6 +603,7 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
     {
         bool kukaPoll = IsExpanded && _robot?.IsConnected == true;
         bool extPoll  = IsExpanded && !string.IsNullOrEmpty(_extIp);
+        // Poll milling cabinet whenever Live I/O is open and millIp is set (Spindle column always visible)
         bool millPoll = IsExpanded && _hasMilling && !string.IsNullOrEmpty(_millIp);
 
         _robot?.SetLiveIoPolling(kukaPoll);
@@ -665,9 +722,24 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
             {
                 var snap = await _millingBridge!.ReadAsync(_millIp!, _millBridgePort, ct);
                 ok = snap.Ok;
-                if (snap.Ok)
+                SpindleBridgeStatus? spindle = null;
+                try
                 {
-                    await Dispatcher.UIThread.InvokeAsync(() => ApplyMillingSnapshot(snap));
+                    spindle = await _millingBridge.ReadSpindleAsync(_millIp!, _millBridgePort, ct);
+                    if (spindle.Ok) ok = true;
+                }
+                catch
+                {
+                    /* IO may still be live without spindle status */
+                }
+
+                if (snap.Ok || (spindle?.Ok ?? false))
+                {
+                    await Dispatcher.UIThread.InvokeAsync(() =>
+                    {
+                        if (snap.Ok) ApplyMillingSnapshot(snap);
+                        if (spindle is not null) ApplySpindleStatus(spindle);
+                    });
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -697,6 +769,88 @@ public sealed class LiveIoMonitorViewModel : ViewModelBase
             {
                 break;
             }
+        }
+    }
+
+    void ApplySpindleStatus(SpindleBridgeStatus st)
+    {
+        var section = Sections.FirstOrDefault(s => s.ShowSpindleRpm);
+        if (section is null) return;
+
+        if (st.Ok)
+        {
+            int setp = (int)Math.Clamp(Math.Round(st.SetpointRpm), 0, MillingModbusClient.SpindleRpmHardMax);
+            int actual = (int)Math.Round(st.SpeedRpm);
+            // Only auto-fill when the field is not being edited (no focus tracking; skip if user typed)
+            // Always refresh actual line; update text box when not busy and matches last applied or empty/zero default
+            section.SpindleRpmActualLine = st.Fault
+                ? $"Actual {actual} rpm · FAULT · {st.State}"
+                : $"Actual {actual} rpm · {st.State}";
+            if (!section.SpindleRpmBusy)
+            {
+                // Populate on first poll / keep in sync when user hasn't changed away from last sync
+                if (string.IsNullOrWhiteSpace(section.SpindleRpmText)
+                    || section.SpindleRpmText == "0"
+                    || section.SpindleRpmText == _lastSpindleSetpointSynced.ToString())
+                {
+                    section.SpindleRpmText = setp.ToString();
+                    _lastSpindleSetpointSynced = setp;
+                }
+            }
+            if (string.IsNullOrEmpty(section.SpindleRpmStatus) || section.SpindleRpmStatus.StartsWith("Set", StringComparison.Ordinal))
+                section.SpindleRpmStatus = st.Fault ? "Drive fault" : "";
+        }
+        else
+        {
+            section.SpindleRpmActualLine = st.Error is { Length: > 0 } ? st.Error : "Spindle status unavailable";
+        }
+    }
+
+    int _lastSpindleSetpointSynced;
+
+    async Task SetSpindleRpmFromUiAsync(LiveIoSectionViewModel section)
+    {
+        if (string.IsNullOrEmpty(_millIp) || _millingBridge is null && !(_hasMilling))
+        {
+            section.SpindleRpmStatus = "Milling bridge not configured";
+            return;
+        }
+
+        if (!int.TryParse(section.SpindleRpmText?.Trim(), out int rpm))
+        {
+            section.SpindleRpmStatus = "Enter a number";
+            return;
+        }
+        rpm = Math.Clamp(rpm, 0, MillingModbusClient.SpindleRpmHardMax);
+        section.SpindleRpmText = rpm.ToString();
+        section.SpindleRpmBusy = true;
+        section.SpindleRpmStatus = "Setting…";
+        try
+        {
+            _millingBridge ??= new MillingModbusClient();
+            var result = await _millingBridge.SetSpindleRpmAsync(_millIp!, rpm, _millBridgePort);
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                if (result.Ok)
+                {
+                    _lastSpindleSetpointSynced = rpm;
+                    section.SpindleRpmStatus = $"Set {rpm} rpm";
+                    ApplySpindleStatus(result with { SetpointRpm = rpm });
+                }
+                else
+                {
+                    section.SpindleRpmStatus = result.Error ?? "Set failed";
+                }
+                section.SpindleRpmBusy = false;
+            });
+        }
+        catch (Exception ex)
+        {
+            await Dispatcher.UIThread.InvokeAsync(() =>
+            {
+                section.SpindleRpmStatus = ex.Message;
+                section.SpindleRpmBusy = false;
+            });
         }
     }
 

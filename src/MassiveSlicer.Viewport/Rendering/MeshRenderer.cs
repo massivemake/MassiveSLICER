@@ -19,7 +19,7 @@ public sealed class MeshRenderer : IDisposable
 
     // PBR material texture handles (0 = none); units 4-8 at draw time.
     private int  _baseColorTex, _mrTex, _normalTex, _aoTex, _emissiveTex;
-    private bool _hasUv, _hasTangent;
+    private bool _hasUv, _hasTangent, _hasPaintUv;
 
     /// <summary>RGBA material colour applied at draw time. Initialised from <see cref="MeshData.BaseColor"/>.</summary>
     public Vector4 Color { get; set; }
@@ -129,44 +129,70 @@ public sealed class MeshRenderer : IDisposable
     /// <summary>CPU-side mesh retained for ray-picking after GPU upload.</summary>
     public MeshData PickingData { get; }
 
+    /// <summary>
+    /// Optional R8 UV mask on unit 9 (legacy). Prefer <see cref="SelectionVertexPaint"/>.
+    /// Owned by <see cref="MillSurfacePaint"/>; never released on dispose.
+    /// </summary>
+    public int SelectionMaskTex { get; set; }
+
+    /// <summary>
+    /// When true, mill selection weight is in the paint-UV x channel (vertex soft brush).
+    /// Independent of material maps — never rebinds units 4–8.
+    /// </summary>
+    public bool SelectionVertexPaint { get; set; }
+
+    /// <summary>Tint colour for painted selection (sRGB). Lime green for mill area paint.</summary>
+    public Vector3 SelectionTint { get; set; } = new(0.25f, 1.0f, 0.20f);
+
+    /// <summary>Overlay strength (0..1). High enough that lime paint is obvious on the surface.</summary>
+    public float SelectionTintStrength { get; set; } = 0.88f;
+
     private readonly bool _renderAsPoints;
+
+    // Interleaved: pos3 + nrm3 + uv2 + tan4 + paintUv2 = 14 floats.
+    // paintUv is a dedicated channel so mill paint never rewrites material TEXCOORD_0.
+    private const int FloatsPerVertex = 14;
 
     // -- GLSL source ----------------------------------------------------------
 
+    // Pure ASCII only — some GL drivers reject / mishandle non-ASCII in shader source.
     internal static readonly string VertSrc = """
-        #version 330 core
-        layout(location = 0) in vec3 aPos;
-        layout(location = 1) in vec3 aNormal;
-        layout(location = 2) in vec2 aUv;
-        layout(location = 3) in vec4 aTangent;   // xyz + w handedness
+#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUv;
+layout(location = 3) in vec4 aTangent;
+layout(location = 4) in vec2 aPaintUv;
 
-        uniform mat4 uMVP;
-        uniform mat4 uModel;
-        uniform mat3 uNormalMat;
+uniform mat4 uMVP;
+uniform mat4 uModel;
+uniform mat3 uNormalMat;
 
-        out vec3 vWorldPos;
-        out vec3 vNormal;
-        out vec2 vUv;
-        out vec3 vTangent;
-        out vec3 vBitangent;
+out vec3 vWorldPos;
+out vec3 vNormal;
+out vec2 vUv;
+out vec2 vPaintUv;
+out vec3 vTangent;
+out vec3 vBitangent;
 
-        void main() {
-            // Row-vector convention: v * M, consistent with OpenTK upload (transpose=true).
-            gl_Position = vec4(aPos, 1.0) * uMVP;
-            vWorldPos   = (vec4(aPos, 1.0) * uModel).xyz;
-            vNormal     = normalize(aNormal * uNormalMat);
-            vUv         = aUv;
-            vec3 T      = aTangent.xyz * uNormalMat;
-            vTangent    = T;
-            vBitangent  = cross(vNormal, T) * aTangent.w;
-        }
-        """;
+void main() {
+    gl_Position = vec4(aPos, 1.0) * uMVP;
+    vWorldPos   = (vec4(aPos, 1.0) * uModel).xyz;
+    vNormal     = normalize(aNormal * uNormalMat);
+    vUv         = aUv;
+    vPaintUv    = aPaintUv;
+    vec3 T      = aTangent.xyz * uNormalMat;
+    vTangent    = T;
+    vBitangent  = cross(vNormal, T) * aTangent.w;
+}
+""";
 
     internal static readonly string FragSrc = """
         #version 330 core
         in vec3 vWorldPos;
         in vec3 vNormal;
         in vec2 vUv;
+        in vec2 vPaintUv;
         in vec3 vTangent;
         in vec3 vBitangent;
 
@@ -210,12 +236,41 @@ public sealed class MeshRenderer : IDisposable
         uniform sampler2D uNormalTex;      uniform int uHasNormalTex;    // unit 6
         uniform sampler2D uAOTex;          uniform int uHasAOTex;        // unit 7
         uniform sampler2D uEmissiveTex;    uniform int uHasEmissiveTex;  // unit 8
+        // Mill selection: vertex soft-brush weights in vPaintUv.x (preferred), or legacy R8 mask.
+        // Never shares material texture units 4-8.
+        uniform sampler2D uSelMaskTex;     uniform int uHasSelMask;
+        uniform int       uHasPaintUv;
+        uniform int       uSelVertexPaint; // 1 = use vPaintUv.x as soft selection weight
+        uniform vec3      uSelTint;
+        uniform float     uSelTintStrength;
 
         out vec4 fragColor;
 
         const float PI = 3.14159265;
 
         vec3 srgbToLin(vec3 c) { return pow(max(c, vec3(0.0)), vec3(2.2)); }
+
+        // Lime mill-area wash. Vertex weights in vPaintUv.x (soft-brushed).
+        // Strong mix so paint is obvious on light and dark materials.
+        vec3 applySelectionOverlay(vec3 color) {
+            float m = 0.0;
+            if (uSelVertexPaint == 1 && uHasPaintUv == 1) {
+                m = clamp(vPaintUv.x, 0.0, 1.0);
+            } else if (uHasSelMask == 1) {
+                vec2 suv = (uHasPaintUv == 1) ? vPaintUv : vUv;
+                if (uHasPaintUv == 1 || uHasUv == 1)
+                    m = texture(uSelMaskTex, suv).r;
+            }
+            if (m < 0.01) return color;
+            // Soft edge without killing mid-strength strokes.
+            m = smoothstep(0.01, 0.55, m);
+            float w = clamp(m * max(uSelTintStrength, 0.75), 0.0, 0.92);
+            vec3 lime = srgbToLin(uSelTint);
+            // Keep some surface lighting so it still reads as paint on the mesh.
+            float lit = 0.45 + 0.55 * max(dot(normalize(vNormal), normalize(uLightDir)), 0.0);
+            vec3 painted = lime * lit;
+            return mix(color, painted, w);
+        }
 
         // Narkowicz ACES filmic tonemap approximation.
         vec3 aces(vec3 x) {
@@ -307,12 +362,15 @@ public sealed class MeshRenderer : IDisposable
                 if (!gl_FrontFacing) fn = -fn;
                 float ndl = max(dot(fn, normalize(uLightDir)), 0.0);
                 vec3 c = vec3(0.60) * (0.32 + 0.68 * ndl) * uLightIntensity;
+                c = applySelectionOverlay(c);
                 fragColor = vec4(pow(max(c, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
                 return;
             }
 
             if (uShadingMode == 1) {
-                fragColor = vec4(N * 0.5 + 0.5, 1.0);
+                vec3 c = N * 0.5 + 0.5;
+                c = applySelectionOverlay(c);
+                fragColor = vec4(c, 1.0);
                 return;
             }
 
@@ -321,6 +379,7 @@ public sealed class MeshRenderer : IDisposable
                 float NdotL = max(dot(N, L), 0.0);
                 vec3 baseLinear = pow(max(uBaseColor.rgb, vec3(0.0)), vec3(2.2));
                 vec3 lit = baseLinear * (0.32 + 0.68 * NdotL) * uLightIntensity;
+                lit = applySelectionOverlay(lit);
                 fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), uBaseColor.a);
                 return;
             }
@@ -341,13 +400,16 @@ public sealed class MeshRenderer : IDisposable
                 float h = max(vWorldPos.z - uFloorZ, 0.0);
                 float vertGround = exp(-h / 28.0);
                 lit *= mix(1.0, 0.78, vertGround * 0.55);
+                lit = applySelectionOverlay(lit);
                 fragColor = vec4(pow(max(lit, vec3(0.0)), vec3(1.0 / 2.2)), 1.0);
                 return;
             }
 
             if (uShadingMode == 2) {
                 // Untextured meshes: heatmap-only preview (no PBR maps to show through).
-                fragColor = vec4(evalLayerPreview(vWorldPos, N), 1.0);
+                vec3 c = evalLayerPreview(vWorldPos, N);
+                c = applySelectionOverlay(c);
+                fragColor = vec4(c, 1.0);
                 return;
             }
 
@@ -455,6 +517,10 @@ public sealed class MeshRenderer : IDisposable
             }
             if (uLayerOverlay == 1)
                 color = mix(color, evalLayerPreview(vWorldPos, Nm), uLayerOverlayStrength);
+
+            // Mill SELECT AREA paint - overlay after full PBR (all maps already applied).
+            color = applySelectionOverlay(color);
+
             color *= uExposure;                      // user exposure (1 = neutral)
             color = aces(color);                     // ACES filmic tonemap
             fragColor = vec4(pow(max(color, vec3(0.0)), vec3(1.0 / 2.2)), alpha);
@@ -481,6 +547,9 @@ public sealed class MeshRenderer : IDisposable
         RoughnessFactor = data.Roughness;
         _hasUv          = data.Uvs is not null;
         _hasTangent     = data.Tangents is not null;
+        // Paint UV channel mirrors material UV0 when present; otherwise filled later
+        // via ApplyPaintUvs without ever writing material TEXCOORD_0.
+        _hasPaintUv     = data.Uvs is not null;
 
         // Acquire pooled GPU textures for the PBR material (GL thread — same as Upload).
         if (data.Material is { } mat)
@@ -560,12 +629,26 @@ public sealed class MeshRenderer : IDisposable
         _shader.SetInt("uHasUv",              _hasUv ? 1 : 0);
         _shader.SetInt("uHasTangent",         _hasTangent ? 1 : 0);
 
-        // Bind material maps to units 4-8 (1=env, 2=heatmap, 3=boundary already used).
+        // Material maps exclusively on units 4-8 (1=env, 2=heatmap, 3=boundary).
+        // Selection paint never rebinds or disables these.
         BindMaterialTex(4, "uBaseColorTex", "uHasBaseColorTex", _baseColorTex, UseBaseColorMap);
         BindMaterialTex(5, "uMRTex",        "uHasMRTex",        _mrTex,        UseMetallicRoughnessMap);
         BindMaterialTex(6, "uNormalTex",    "uHasNormalTex",    _normalTex,    UseNormalMap);
         BindMaterialTex(7, "uAOTex",        "uHasAOTex",        _aoTex,        UseAoMap);
         BindMaterialTex(8, "uEmissiveTex",  "uHasEmissiveTex",  _emissiveTex,  UseEmissiveMap);
+
+        // Selection paint: vertex weights (preferred) and/or legacy unit-9 mask.
+        // Independent of SuppressTextures / material maps on units 4-8.
+        bool selTex = SelectionMaskTex != 0 && (_hasPaintUv || _hasUv);
+        GL.ActiveTexture(TextureUnit.Texture0 + 9);
+        GL.BindTexture(TextureTarget.Texture2D, selTex ? SelectionMaskTex : 0);
+        _shader.SetInt("uSelMaskTex", 9);
+        _shader.SetInt("uHasSelMask", selTex ? 1 : 0);
+        _shader.SetInt("uHasPaintUv", _hasPaintUv ? 1 : 0);
+        _shader.SetInt("uSelVertexPaint", SelectionVertexPaint && _hasPaintUv ? 1 : 0);
+        _shader.SetVector3("uSelTint", SelectionTint);
+        _shader.SetFloat("uSelTintStrength", SelectionTintStrength);
+
         GL.ActiveTexture(TextureUnit.Texture0);
         _shader.SetFloat("uLayerHeight",      LayerHeight);
         _shader.SetFloat("uLayerZOffset",     LayerZOffset);
@@ -602,6 +685,11 @@ public sealed class MeshRenderer : IDisposable
             _shader.SetInt("uWireframe", 0);
         }
 
+        // Unbind selection unit so later draws cannot accidentally sample the mask.
+        GL.ActiveTexture(TextureUnit.Texture0 + 9);
+        GL.BindTexture(TextureTarget.Texture2D, 0);
+        GL.ActiveTexture(TextureUnit.Texture0);
+
         GL.BindVertexArray(0);
     }
 
@@ -629,6 +717,77 @@ public sealed class MeshRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
+    /// <summary>
+    /// Uploads mill-selection paint UVs into the dedicated paint-UV vertex channel
+    /// (location 4). <b>Never</b> writes material TEXCOORD_0, so base-color / normal /
+    /// MR / AO / emissive sampling is unaffected. GL thread only.
+    /// </summary>
+    public void ApplyPaintUvs(Vector2[] paintUvs)
+    {
+        if (_disposed) return;
+        if (paintUvs.Length != PickingData.Positions.Length)
+            throw new ArgumentException("Paint UV count must match vertex count.", nameof(paintUvs));
+
+        _hasPaintUv = true;
+        // Full VBO rebuild keeps material UV0 / tangents exactly as uploaded.
+        // Rebind VAO so attribute 4 (paint weights) is guaranteed live after BufferData.
+        RebuildVbo(PickingData.Uvs, paintUvs);
+        GL.BindVertexArray(_vao);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        int stride = FloatsPerVertex * sizeof(float);
+        GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 12 * sizeof(float));
+        GL.EnableVertexAttribArray(4);
+        GL.BindVertexArray(0);
+    }
+
+    /// <summary>Legacy name — routes to <see cref="ApplyPaintUvs"/> (does not touch material UVs).</summary>
+    public void ApplyUvs(Vector2[] uvs) => ApplyPaintUvs(uvs);
+
+    void RebuildVbo(Vector2[]? materialUvs, Vector2[]? paintUvs)
+    {
+        var data = PickingData;
+        int n = data.Positions.Length;
+        var verts = new float[n * FloatsPerVertex];
+        var tan = data.Tangents;
+        for (int i = 0; i < n; i++)
+        {
+            int o = i * FloatsPerVertex;
+            verts[o + 0] = data.Positions[i].X;
+            verts[o + 1] = data.Positions[i].Y;
+            verts[o + 2] = data.Positions[i].Z;
+            verts[o + 3] = data.Normals[i].X;
+            verts[o + 4] = data.Normals[i].Y;
+            verts[o + 5] = data.Normals[i].Z;
+            if (materialUvs is not null)
+            {
+                verts[o + 6] = materialUvs[i].X;
+                verts[o + 7] = materialUvs[i].Y;
+            }
+            if (tan is not null)
+            {
+                verts[o + 8]  = tan[i].X;
+                verts[o + 9]  = tan[i].Y;
+                verts[o + 10] = tan[i].Z;
+                verts[o + 11] = tan[i].W;
+            }
+            // Paint UV: explicit paint set, else copy material UV0, else zero.
+            if (paintUvs is not null)
+            {
+                verts[o + 12] = paintUvs[i].X;
+                verts[o + 13] = paintUvs[i].Y;
+            }
+            else if (materialUvs is not null)
+            {
+                verts[o + 12] = materialUvs[i].X;
+                verts[o + 13] = materialUvs[i].Y;
+            }
+        }
+
+        GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
+        GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
+        GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+    }
+
     /// <inheritdoc/>
     public void Dispose()
     {
@@ -640,6 +799,7 @@ public sealed class MeshRenderer : IDisposable
         GpuTextureCache.Release(_normalTex);
         GpuTextureCache.Release(_aoTex);
         GpuTextureCache.Release(_emissiveTex);
+        // SelectionMaskTex is owned by MillSurfacePaint — do not delete.
 
         GL.DeleteVertexArray(_vao);
         GL.DeleteBuffer(_vbo);
@@ -650,16 +810,15 @@ public sealed class MeshRenderer : IDisposable
 
     private void Upload(MeshData data)
     {
-        // Interleaved layout: [pos(3), normal(3), uv(2), tangent(4)] = 12 floats.
-        // UV/tangent are zero-filled when absent; sampling is gated by uHasUv/uHasTangent.
-        const int floatsPerVertex = 12;
+        // Interleaved: [pos3, nrm3, materialUv2, tan4, paintUv2] = 14 floats.
+        // Material UV0 and paint UV are independent channels.
         int vertexCount = data.Positions.Length;
-        var verts = new float[vertexCount * floatsPerVertex];
+        var verts = new float[vertexCount * FloatsPerVertex];
         var uvs = data.Uvs;
         var tangents = data.Tangents;
         for (int i = 0; i < vertexCount; i++)
         {
-            int o = i * floatsPerVertex;
+            int o = i * FloatsPerVertex;
             verts[o + 0] = data.Positions[i].X;
             verts[o + 1] = data.Positions[i].Y;
             verts[o + 2] = data.Positions[i].Z;
@@ -670,6 +829,9 @@ public sealed class MeshRenderer : IDisposable
             {
                 verts[o + 6] = uvs[i].X;
                 verts[o + 7] = uvs[i].Y;
+                // Default paint UV = material UV0 (standard; paint atlas shares unwrap).
+                verts[o + 12] = uvs[i].X;
+                verts[o + 13] = uvs[i].Y;
             }
             if (tangents is not null)
             {
@@ -687,7 +849,7 @@ public sealed class MeshRenderer : IDisposable
         GL.BindBuffer(BufferTarget.ArrayBuffer, _vbo);
         GL.BufferData(BufferTarget.ArrayBuffer, verts.Length * sizeof(float), verts, BufferUsageHint.StaticDraw);
 
-        int stride = floatsPerVertex * sizeof(float);
+        int stride = FloatsPerVertex * sizeof(float);
         GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, stride, 0);
         GL.EnableVertexAttribArray(0);
         GL.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, stride, 3 * sizeof(float));
@@ -696,6 +858,8 @@ public sealed class MeshRenderer : IDisposable
         GL.EnableVertexAttribArray(2);
         GL.VertexAttribPointer(3, 4, VertexAttribPointerType.Float, false, stride, 8 * sizeof(float));
         GL.EnableVertexAttribArray(3);
+        GL.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, 12 * sizeof(float));
+        GL.EnableVertexAttribArray(4);
 
         if (data.Indices != null)
         {

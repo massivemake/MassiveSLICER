@@ -1,20 +1,22 @@
 # MassiveSLICER V3 — Project Memory
 
-## ⚠️ Cut Modifier feature branch — NOT print-verified, do not merge assuming it's safe
+## ⚠️ Active work: `feature/spsm` (Scan–Print–Scan–Mill) — NOT fully merged to main
 
-This branch (`feature/cut-modifier`) adds a non-destructive Cut Modifier: split a mesh into
-independent pieces, reposition/reorient each one freely, and slice each for real. It has been
-verified in simulation only — reachability, mesh/toolpath alignment, and collision checks all
-pass on-screen, but **no piece has been printed on real hardware yet**. Jeff is running the
-first in-shop print test after this lands.
+**Branch:** `feature/spsm` (tracking `origin/feature/spsm`). First push: `8568268` (default cell prefs + Scan/Mill StepCard chrome). **Large pile of uncommitted SPSM work** still local (mill bits library, STEP via cascadio, mill area soft-paint, phase-switch fix, MCP mill commands) — commit when Jeff wants.
 
-**If you're reading this before that's happened:** treat Cut Modifier output as unverified for
-production printing. Don't assume "it slices and shows reachable" means "safe to run on the
-robot as usual." Confirm with Jeff whether shop testing has actually validated a printed part
-before trusting this path, and don't merge this branch into `main`/`master` without his
-explicit sign-off.
+**This PC (MassiveMAKE shop workstation):** machine-local defaults only (do not commit personal prefs):
+- Default cell: **LFAM 3** (`AppPreferences` / `DefaultCellName`)
+- Windows GPU High Performance for `MassiveSlicer.App.exe` when set via registry earlier
+- Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
+- STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: 2026-07-29 (Drop to Plate / Lay Flat frame fix on LFAM 3; extruder keep-alive on a branch, not yet print-verified)
+Last updated: **2026-08-07** (Seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+
+---
+
+## Older note: Cut Modifier (historical)
+
+Cut Modifier lived on `feature/cut-modifier` (non-destructive split). Treat production trust as shop-validated only. See archive if needed.
 
 > **Single source of truth** for humans and all AI assistants working in this repo. Session progress, architecture, conventions, and commands live here — **not** in tool-specific files. (`CLAUDE.md`/`AGENTS.md` exist only as thin auto-loaded pointers that route assistants here and to `ROADMAP.md`, and carry the doc-maintenance rules.)
 
@@ -130,39 +132,87 @@ dotnet format
 
 | What | Path |
 |------|------|
-| Repo (this machine) | `/Users/thomboessel/MassiveSLICER V3` |
+| Repo (this machine / MassiveMAKE PC) | `C:\Users\MassiveMAKE\MassiveSLICER` |
 | Repo (NAS historical) | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
 | GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
-| GitHub (mirror) | https://github.com/MattWhite3194/MassiveSlicer |
-| Milestone tag (2026-06-25) | `milestone/krl-import-viewport-polish-2026-06-25` @ `409e2e8` on `master`/`main` |
-| Publish (only) | `%LOCALAPPDATA%\MassiveSlicer\build` |
-| Cell JSON (canonical) | Repo `assets\cells\` — dev saves mirror here via `CellPaths` |
+| Active branch | **`feature/spsm`** |
+| Publish (optional) | `%LOCALAPPDATA%\MassiveSlicer\build` |
+| Dev run (this PC often) | `src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe` |
+| Cell JSON (canonical) | Repo `assets\cells\` |
+| Mill bit library (user) | `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` |
+| STEP env (cascadio) | `%APPDATA%\MassiveSlicer\step-env` |
+| Bridge port file | `%LOCALAPPDATA%\MassiveSlicer\bridge.port` |
 | Test GLB | `assets\test\crystal_stone_rock.glb` |
-
-**Do not use `build2`, `build3`, or `build4`** — obsolete copies from earlier sessions.
 
 ### Build + run (canonical — always paste this in full)
 
 ```powershell
 Stop-Process -Name "MassiveSlicer.App" -Force -ErrorAction SilentlyContinue
-Set-Location '\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2'
-dotnet publish 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release -o "$env:LOCALAPPDATA\MassiveSlicer\build"
+Set-Location 'C:\Users\MassiveMAKE\MassiveSLICER'
+dotnet build 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release
 if ($LASTEXITCODE -eq 0) {
-    Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App.exe" -WorkingDirectory "$env:LOCALAPPDATA\MassiveSlicer\build"
+    Start-Process -FilePath '.\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+      -WorkingDirectory '.\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 }
 ```
 
-Equivalent script (same steps): `scripts\publish-and-run.ps1`
+Publish variant (optional): `scripts\publish-and-run.ps1` → `%LOCALAPPDATA%\MassiveSlicer\build`.
 
 ### Start only (no rebuild)
 
 ```powershell
-Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App.exe" -WorkingDirectory "$env:LOCALAPPDATA\MassiveSlicer\build"
+Start-Process -FilePath 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+  -WorkingDirectory 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 ```
 
 ---
 
 ## Completed features
+
+### SPSM / Mill sidebar (`feature/spsm`, 2026-07-31)
+
+**Goal:** Scan–Print–Scan–Mill workflow on LFAM 3 — Mill panel structure, bit library, area paint, reliable STEP import.
+
+#### Mill right-panel structure (LFAM 3)
+- **1 BITS** — spindle tool library dropdown + dialog; default **Flat 3in AP90** (`MillBitTool.CreateLfam3DefaultFlat3In`); library JSON v3 under AppData.
+- **2 OPERATION** — strategy tiles (`MillOperationKind`: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf) + **SELECT AREA**.
+- **3 TOOLPATHING** — passes / travel / movement; SpindleRpm linked between BITS and TOOLPATHING.
+- **MORE** — catch-all.
+- Scan/Mill StepCards match Printing styling; BACK TO STEPS removed.
+- Key UI: `RightPanelView.axaml`, `SubtractiveSettingsViewModel.cs`, `MillBitLibraryDialog.axaml`, `MillBitLibraryViewModel.cs`, `MillBitTool.cs`, `MillBitLibraryLoader.cs`, `MillOperationKind.cs`.
+
+#### SELECT AREA (soft brush on workpiece only)
+- Tools: Whole / Face / Box / Lasso / Brush / Clear.
+- **Workpiece-only:** `ViewportViewModel.IsMillableWorkpiece` — user imports/scans; never robot, bed, cell env, toolpaths, effectors, modifiers.
+- **Not UV-atlas dependent:** `MillSurfacePaint` stores **world-space vertex weights** (soft falloff). Weights upload into dedicated paint vertex channel (`aPaintUv.x`); material TEXCOORD_0 and PBR maps (units 4–8) untouched.
+- Shader: `MeshRenderer.applySelectionOverlay` — **lime green** wash (`SelectionTint` ~`0.25,1.0,0.20`, strength ~0.88). Applied in Standard / fastcell / arctic / layer / wire / normals paths.
+- Brush UI: bottom-center toolbar when Brush armed (`ShowMillBrushToolbar`, ~250px from bottom) — Size mm + Falloff. **No right-click menu, no sphere cursor.**
+- Alt = erase. Hit triangle always flooded so a pick always leaves a mark.
+- Key: `MillSurfacePaint.cs`, `ViewportView` mill handlers, `ViewportOverlayView.axaml` toolbar, `Picker.FaceHit` / `PickFaceDetailed`.
+
+#### STEP import (Windows)
+- **Occt.NET removed from the load path** — TianTeng package popped a garbled license MessageBox and crashed the host.
+- **Cascadio** (Python OCCT wheel) via private venv: `CascadioStepConverter.cs` + thin `StepLoader.cs` (all platforms). Needs Python 3 on PATH first run.
+- Non-Windows already used cascadio; now shared.
+- Legacy files kept but not compiled: `OcctBootstrap.cs`, `OcctUiSuppressor.cs` (MessageBox auto-OK experiment — superseded).
+- Package refs stripped from App/Viewport/Tests csproj.
+
+#### GLSL / launch crash gotcha (reconfirmed 2026-07-31)
+- NVIDIA rejects **any non-ASCII** in shader source strings (even comments) → `error C0000: unexpected $end` → app dies on first mesh upload.
+- Keep `MeshRenderer.VertSrc` / `FragSrc` pure ASCII.
+
+#### LFAM 3 phase switch: do not select TCP
+- `SelectLfam3WorkflowPhase` updates `_lfam3WorkflowPhaseIndex` + sidebar only.
+- **Does not** call `SelectLfam3Tool` (that set `Robot.SelectedToolIndex` → mount → `_renderer.Select(tool)`).
+- Tool mount still via explicit pick/deposit or robot tool dropdown.
+
+#### Console + MCP milling
+- Console: `mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <Kind>`
+- MCP: `massiveslicer_mill` tool + `massiveslicer_command` docs in `scripts/mcp/massiveslicer_mcp.py`.
+- Bridge: `POST /command` on port from `bridge.port`.
+
+#### Machine-local (do not commit)
+- Default cell LFAM 3; GPU High Performance preference; mill_tools.json; step-env venv.
 
 ### PBR rendering (metallic-roughness + material inspector)
 - Imported GLBs render real **metallic-roughness PBR** from their textures (base colour, MR, normal, AO, emissive) via Cook-Torrance + env IBL + ACES tonemap. Data model: `TextureData`/`MaterialData` + `MeshData.Uvs/Tangents/Material`; loader decodes/dedups images (StbImageSharp); GPU textures pooled in `GpuTextureCache` (units 4-8). Single uber-shader in `MeshRenderer.FragSrc` (mode 0 = PBR; modes 1/2/3 = normals/layer/fastcell unchanged; presets via factor path).
@@ -358,6 +408,28 @@ Start-Process -FilePath "$env:LOCALAPPDATA\MassiveSlicer\build\MassiveSlicer.App
 Current baseline: **`docs/KNOWN-TEST-FAILURES.md`** (15 known failures, with reasons).
 The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 
+## Key files (SPSM / mill / STEP — 2026-07-31)
+
+| Path | Role |
+|------|------|
+| `src/MassiveSlicer.Core/Models/MillBitTool.cs` | Bit library model + Flat 3in AP90 default |
+| `src/MassiveSlicer.Core/IO/MillBitLibraryLoader.cs` | AppData `mill_tools.json` load/save |
+| `src/MassiveSlicer.Core/Models/MillOperationKind.cs` | Operation catalog + `MillAreaSelectTool` enum |
+| `src/MassiveSlicer.App/ViewModels/SubtractiveSettingsViewModel.cs` | BITS / OPERATION / TOOLPATHING / SELECT AREA |
+| `src/MassiveSlicer.App/ViewModels/MillBitLibraryViewModel.cs` | Bit library dialog VM |
+| `src/MassiveSlicer.App/Views/MillBitLibraryDialog.axaml` | Bit library UI |
+| `src/MassiveSlicer.App/Views/RightPanelView.axaml` | Mill StepCards + SELECT AREA tiles |
+| `src/MassiveSlicer.App/ViewModels/ViewportViewModel.cs` | Mill area state, brush toolbar, phase select (no TCP) |
+| `src/MassiveSlicer.App/Views/ViewportView.axaml.cs` | Mill pointer paint + GL upload of weights |
+| `src/MassiveSlicer.App/Views/ViewportOverlayView.axaml` | Bottom mill brush toolbar |
+| `src/MassiveSlicer.Viewport/Rendering/MillSurfacePaint.cs` | Soft vertex-weight paint |
+| `src/MassiveSlicer.Viewport/Rendering/MeshRenderer.cs` | Paint channel + lime selection overlay shader |
+| `src/MassiveSlicer.Viewport/Scene/Picker.cs` | `PickFaceDetailed` / triangle helpers |
+| `src/MassiveSlicer.Viewport/Loading/CascadioStepConverter.cs` | STEP → GLB via Python cascadio |
+| `src/MassiveSlicer.Viewport/Loading/StepLoader.cs` | Windows STEP entry → cascadio |
+| `src/MassiveSlicer.App/Console/ConsoleCommandRegistry.cs` | `mill` command family |
+| `scripts/mcp/massiveslicer_mcp.py` | MCP mill tool + command docs |
+
 ## Key files (quick reference)
 
 | Area | Paths |
@@ -388,6 +460,16 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 > **The forward-looking backlog now lives in `ROADMAP.md` (repo root).**
 > Items below predate it and are carried there; keep new plans in ROADMAP.md.
 
+### SPSM / `feature/spsm` open items (2026-07-31)
+
+1. **Commit + push** remaining uncommitted SPSM work (mill library, cascadio STEP, soft paint, phase no-TCP, MCP mill) — only `8568268` is on origin so far.
+2. **Mill area paint → real toolpath region** — weights exist in-viewport; need to feed SELECT AREA into subtractive path generators / stock bounds.
+3. **SELECT AREA deeper mesh marquee** if Face/Box/Lasso still feel incomplete vs Brush.
+4. **Auto-unwrap quality** for soft paint is world-vertex-based now (good for CAD); optional xatlas if UV-based tools return.
+5. **Shop verify:** paint on large STEP; mill bit library dialog UX on both 100% / 125% DPI.
+
+### General backlog (older)
+
 1. **PBR polish (core done — see Completed features):** real metallic-roughness PBR with textures now renders. Remaining nice-to-haves: full prefiltered-env + BRDF LUT IBL (v1 uses roughness→LOD + analytic Karis fit); alpha **blend** ordering (v1 = Opaque + Mask only); populate `UvSettingsViewModel` from the selected mesh; later: apply the material system to toolpath meshes + feed the slicer.
    - **"Make it pop" — DONE via user sliders + default backdrop (2026-06-21):** a *hardcoded* in-shader exposure/IBL boost **grayed** the crystal (it's mostly metal → colour comes from albedo-tinted env reflection → brightening hits ACES's desaturation shoulder). So instead: added user-facing **Exposure** + **Reflections (IBL gain)** sliders in the LIGHTING panel (`ViewportViewModel.Exposure`/`IblIntensity` → `SceneRenderer` → per-mesh `MeshRenderer.Exposure`/`IblGain` → `uExposure`/`uIblGain`, defaults 1.0 = neutral) so the user dials it live. Also set a **non-None default backdrop** (`ViewportViewModel` ctor picks AmbienceExposure4k/CasualDay4K/… from `assets/Images/*.hdr`, fallback first image) so imported models get IBL out of the box. Verified: bumping the sliders brightens + glosses the crystal with colour intact.
    - **Import display:** the committed Final Render is colourful and correct (verified after a clean rebuild). If an imported model looks grey/flat, suspect a **stale NAS build** first (clean-rebuild Viewport), then check that `ApplyShaderModeToSubtree` ran (toggling a shader mode forces it).
@@ -401,6 +483,237 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-07 — Seam guide traces the model surface (merged; five failed attempts first)
+
+**Shipped:** `BuildSeamGuideSurfaceProfile` in `ViewportView.axaml.cs`. Cuts the model with a
+vertical plane through the part axis and the guide, keeps the intersection points on the
+guide's side, and takes the outer edge per height band. Exact plane/triangle intersection —
+one pass over triangles, strided to 60k on big meshes. Confirmed working end to end: Edit →
+guide follows the surface → click → Save → re-slices with the seam at the guide.
+
+**Viewport only. The slicer was NOT changed** (verified: `git diff origin/main...branch` was a
+single file). An experiment that made the guide anchor every layer instead of only the birth
+layer was reverted — see below.
+
+**Two bugs found after the profile worked:**
+- *Worked once, never again.* The profile only collected **visible** models. Slicing hides the
+  model and shows the toolpath, so re-opening the editor on a sliced part found no mesh and
+  fell back to a straight column. Now prefers shown models, falls back to hidden.
+- *One guide only.* `AddSeamGuidePoint` clears before adding. The slicer resolves one guide per
+  closed contour, so extra points on a single-island part were dead weight that stacked in the
+  list and blocked each other from deletion. Placing again moves the seam.
+
+**Four approaches that FAILED — do not retry these:**
+1. Nearest printed extrude point per layer → snapped to solid-cap/infill beside the axis; drew
+   a line straight up the middle. `ToolpathMove` has **no wall-vs-infill flag**.
+2. Outermost printed point in the guide's compass direction → jagged, because the ±0.02 cosine
+   tolerance spans a wide arc on a big part and flips between corners.
+3. Mesh **vertices** banded by height → sparse scatter per band, selection flipped between
+   distant vertices, produced a zigzag scribble.
+4. First-contour-only nearest point → sound idea, but tangled with a stale hidden toolpath and
+   produced a curve floating clear of the part.
+
+**The lesson:** 1–4 all *sampled* points and scored them with an invented heuristic. Sampling
+plus a heuristic is what produced every artefact. The fix was exact geometry (plane section),
+where there is no scoring rule to get wrong.
+
+**Reverted — the every-layer seam experiment.** Making a guide re-solve on every layer rather
+than only the birth layer *seemed* to explain guide/seam drift on a flared column. Tests
+written for it (`SeamGuideEveryLayerTest`, now deleted) **passed against the unmodified slicer
+too** — neither a flaring tube nor a 90° twisting tube separates the two rules, because
+nearest-point inheritance holds a near-constant XY on both. Shipped anyway, did not fix the
+symptom, reverted. **If guide/seam drift is reported again, get the `.mass` file and measure
+the per-layer seam positions — do not reason from screenshots.** Five attempts in this session
+were screenshot-driven and every one was wrong.
+
+**Also fixed earlier in the same run:** guide markers rebuild in `StageToolpathMaps` after a
+slice (the curve is traced from geometry that a re-slice replaces).
+
+### 2026-08-06 — Seam guides follow the wall (and why guide ≠ seam on a flare)
+
+**Change:** a guide drew as a straight vertical column at one XY. It now draws as a polyline —
+for each printed layer, the point on that layer's **outer boundary lying in the guide's compass
+direction from the layer centre**, swept as a tube bottom to top (`BuildSeamGuidePath` in
+`ViewportView.axaml.cs`, `AppendTube` in `SeamGuideColumnRenderer`).
+`SetSeamGuides`/`SetSeamGuidePreview` take paths;
+`PickSeamGuide` hit-tests every projected segment. Falls back to the straight column when
+nothing is sliced; the separate toolpath seam-drag tool gets a short vertex tick
+(`SeamVertexTick`) because it marks one loop, not a wall.
+
+**Why it mattered beyond looks:** on a flaring part the straight line stands well off the
+surface, so guide and seam could not be visually compared at all — every report of "the seam
+isn't where the guide is" was unmeasurable. The curve traces the same column of wall the
+slicer picks, so the two are finally comparable.
+
+**Trap — "nearest extrusion point" does not find the wall.** The first attempt took the
+extrusion point nearest the guide XY on each layer. `ToolpathMove` has **no wall-vs-infill
+flag** (`MoveKind` is only Extrude/Travel/Mill), and a solid cap or dense infill covers the
+whole cross-section, so the nearest point was fill right beside the axis — the guide still
+drew straight up the middle of the part. Direction-from-centre fixes it because the extreme
+point along a direction is on the convex hull by construction, so fill can never win.
+
+**Still expect divergence up high, by design:** the guide is consulted only on a *birth* layer
+(`PlanarSlicer.cs` ~1211); every layer above projects the parent's seam onto its own contour
+for continuity. On a strongly changing cross-section the seam can drift as it rises. Not
+changed — it affects print output and is the developer's call whether every layer should
+re-align to the guide.
+
+### 2026-08-06 — Seam guide and actual seam on different sides of the part
+
+Three reports, two real causes, both in the placement/commit path rather than the slicer.
+
+**1. Guides landed off the part, and repeated clicks stacked identical points.**
+The toolpath snap shipped earlier the same day used a *world-space* accept radius (25mm, or
+15% of part height). On a 3m cell that is roughly two pixels, so the snap silently never
+fired; every click fell through to the held on-wall position and committed the same stale
+point. The Guide Points list showed three identical `3044, -309, 163` entries. The slicer
+then aligned the seam to that off-part guide — which is why the seam appeared "somewhere
+else." **No frame bug:** the slicer receives world-space meshes
+(`ViewportView.axaml.cs` ~4217, `TransformPoint(positions[i], world)`) and toolpath
+SceneNodes carry no transform of their own, so guide and part share one space.
+*Fix:* snap in screen pixels (40px grab, front-most on a pixel tie, since the toolpath draws
+as lines and the far wall shows through), plus a 2mm duplicate guard in
+`AddSeamGuidePoint`.
+
+**2. Saving a guide did not re-slice.** `SetSeamGuides` raises only `SeamGuideSummary`, which
+was absent from `RealtimeSliceProps` in `ViewportView.axaml.cs` (`SeamMode` was there, the
+guides were not). Save committed the point and left the toolpath alone, so the green guide
+sat next to the yellow seam from the previous slice. *Fix:* added the property to the list.
+`ScheduleRealtimeSlice` already refuses to run over a protected baked toolpath and honours
+the pause, so project load is unaffected.
+
+**How the slicer uses guides** (`PlanarSlicer.cs:654`, `ContourSeamPlanner.cs`): `ToXY()` —
+**Z is discarded**. `NearestGuideToContour` picks *one guide per closed loop*, so multiple
+points are meaningful only for multiple islands, never for varying the seam by height. The
+guide is consulted **only on a birth layer** (no overlapping parent above the threshold);
+every layer above projects the parent's seam onto its own contour for continuity. On a
+flaring part the seam therefore follows the surface outward while the guide column stays a
+vertical line — they diverge visually by design.
+
+**Key files:** `src/MassiveSlicer.App/Views/ViewportView.axaml.cs`
+(`TrySeamGuideOnToolpath`, `RealtimeSliceProps`),
+`src/MassiveSlicer.App/ViewModels/ViewportViewModel.cs` (`AddSeamGuidePoint`,
+`SaveSeamEditor`).
+
+**Worth remembering:** a screen-picked tool needs a screen-space tolerance. A millimetre
+radius that feels right on a benchtop part is invisible on a 3m robot cell.
+
+### 2026-08-06 — Seam edit tool showed no line on a sliced part
+
+**Symptom:** click **Edit** next to Seam position guides and no line appears — the tool
+looked dead. Reported the same day auto-slice on import was restored.
+
+**Cause:** not a regression in the seam code — `git diff 1febe52..HEAD` over
+`ViewportView.axaml.cs` and `RightPanelView.axaml` showed **zero** seam-related changes since
+the version that was confirmed working. The scene state changed, not the code.
+`TrySeamGuideOnModel` only accepts a ray/face hit on a non-toolpath node, and
+`Picker.PickFaceDetailed` skips any node that is invisible or has no uploaded
+`Mesh.PickingData`. Toolpath nodes carry no mesh at all. So once a part is sliced and the
+model is hidden, **nothing in the scene is pickable** → no preview column is built → the
+render pass at `SceneRenderer.cs:1620` is gated on
+`_seamGuidePoints.Count > 0 || _seamGuidePreview.HasValue`, so it draws nothing. With no
+guides placed yet, the viewport is simply empty. Restoring auto-slice on import made this
+the normal landing state, which is why it surfaced now.
+
+**Fix:** `TrySeamGuideOnToolpath` in `ViewportView.axaml.cs` — when the face pick finds
+nothing, snap to the nearest visible **extrusion** point (`ToolpathMoveKinds.IsCutSegment`,
+travels excluded). Moves are subsampled to ~20k points because this runs on every mouse
+move and a metre-scale part holds hundreds of thousands. The accept radius is
+`max(25mm, 15% of part height)` so it behaves the same on a 200mm bracket and a 3m panel;
+off-part hover still falls through to the held on-wall position rather than snapping across
+the scene. Both the hover preview and the committing click go through this helper.
+
+**Key files:** `src/MassiveSlicer.App/Views/ViewportView.axaml.cs` (`TrySeamGuideOnModel`,
+`TrySeamGuideOnToolpath`), `src/MassiveSlicer.Viewport/Scene/Picker.cs:220-224` (the
+visible + `PickingData` gate).
+
+**Worth remembering:** when a UI feature "stops working," diff it against the commit where
+it was confirmed working *before* reading the subsystem. Zero diff redirects the search from
+the feature to its inputs, and it costs one command.
+
+### 2026-08-06 — Auto-slice on import restored (and why it went missing)
+
+**Symptom:** drop in a model with the top-bar toggle on "Realtime" and nothing slices.
+
+**Cause:** `955e898` (2026-08-01, SPSM batch) added an early return to
+`ViewportView.RunRealtimeSliceAsync` — *"Only re-slice when a toolpath already exists.
+Auto-slicing a fresh import (esp. dense STEP meshes) can freeze or crash."* Correct for
+**re-slicing**, but a fresh import has no toolpath by definition, so the same return also
+removed the **first** slice and nothing was left to create one. It arrived in the 08-06 pull,
+so it looked like a merge regression — it is not.
+
+**Fix:** no toolpath → run a full `RunSliceAsync`. Crash protection kept as a size check
+rather than a blanket refusal: above `AutoSliceMaxTriangles` (1,000,000) the import is skipped
+and the status bar reports the actual triangle count instead of failing silently. Production
+parts here are 145k–160k tris, so normal work clears it ~6×. Confirmed with the SPSM author
+that auto-slicing is wanted; anyone who prefers it off can pause the Realtime toggle, which is
+the existing control for exactly that. **If a dense STEP import still hangs, lower the
+threshold — do not restore the blanket guard.**
+
+### 2026-08-06 — Material presets: per-head calibration, flow-offset leak, user storage
+
+- **Calibration inputs never saved.** `MaterialPreset` stored only `CalibratedOn`/
+  `CalibrationNote`, so Edit always reset motor speed / run time / purge weight to defaults.
+  Now persisted and round-tripped.
+- **"RPM at 100% output" removed** — the operator reads a percentage off the drive and the
+  slicer exports a percentage; the extra field only allowed the two to disagree.
+- **Calibration no longer hijacks `ExtrusionSpeedOffset`.** `MaterialCalibrationWorkspace`
+  forced the motor value through that field to bypass geometry-based flow. It is a field used
+  on real jobs, it persists into `prefs.json`, and it then silently added itself to the flow of
+  everything sliced afterwards — the likely source of a 65% screw value on a 6×3 bead that
+  computes to 27%. Now uses `ExtrusionRpmOverridePercent` and clears the offset; test asserts
+  both halves.
+- **HV and HF calibrate separately.** `ApplyCalibration` always wrote the HV flow rate, and
+  `FlowRateFor()` falls back to HV when HF is 0 — so an uncalibrated HF printed with the wrong
+  screw's number, silently. Each head now keeps its own inputs and provenance; the selector
+  defaults to the active cell's extruder. Tests: `MaterialCalibrationPerHeadTest` ×4.
+- **Library moved** to `%AppData%/MassiveSlicer/materials.json` beside `prefs.json`. The old
+  `assets/materials.json` was resolved by searching upward from the working directory, so one
+  machine had two libraries (repo and `bin/`) and which you saw depended on how the app was
+  launched; edits could be wiped by a rebuild and could reach the team through git. The repo
+  file is now read-only seed data. `Save()` no longer swallows errors.
+
+**Related trap seen the same day:** the app rewrote the git-tracked `assets/krl_postprocess.json`
+after the KRL post-process dialog was opened, replacing the stored header with the URM one. A
+stored header overrides the default (unconditionally on the analog branch), so a snapshot taken
+by one person can reach everyone through git. Reverted, not pushed. Shared repo assets should
+not be used as live user state.
+
+
+
+### 2026-07-31 — `feature/spsm`: Mill BITS/OPERATION/paint, STEP cascadio, no TCP on phase switch
+
+**Branch:** `feature/spsm` @ MassiveMAKE PC (`C:\Users\MassiveMAKE\MassiveSLICER`). Pushed earlier: `8568268`. Rest uncommitted at session end.
+
+**Mill UI (SPSM)**
+- Mill sidebar: **1 BITS** (library + Flat 3in AP90 default), **2 OPERATION** (strategy + SELECT AREA), **3 TOOLPATHING** (SpindleRpm linked), MORE catch-all.
+- Scan/Mill StepCards match Printing; BACK TO STEPS removed.
+- This PC only: default cell **LFAM 3** (prefs local).
+
+**STEP import**
+- Dropped Occt.NET runtime path (garbled license MessageBox + crashes).
+- Windows STEP = **cascadio** Python (`CascadioStepConverter` + `step-env` venv under AppData).
+- Smoke: `CES - C_EXE_2.stp` → ~8k verts OK.
+
+**SELECT AREA paint**
+- Soft **world-space vertex weights** (`MillSurfacePaint`), lime green wash in `MeshRenderer`.
+- Workpiece-only filter; bottom-center Size/Falloff bar when Brush armed (~250px up).
+- No sphere cursor / no right-click brush menu.
+- Paint channel isolated from PBR maps (attrib 4 + unit-9 legacy unused for vertex mode).
+
+**Phase switch**
+- Print/Scan/Mill sidebar **does not** call `SelectLfam3Tool` → no TCP toolhead selection on phase change.
+
+**Console / MCP**
+- `mill status|area|brush size|brush falloff|op …`
+- MCP `massiveslicer_mill` + command description update.
+
+**Gotchas logged**
+- GLSL must stay ASCII or NVIDIA kills launch on mesh load.
+- Prefer Release build from repo bin path on this PC; kill `MassiveSlicer.App` before rebuild if exe locked.
+
+**Key new files:** see “Key files (SPSM…)” table above.
 
 ### 2026-07-29 — Drop to Plate slid sideways on LFAM 3 (world-vs-parent frame)
 

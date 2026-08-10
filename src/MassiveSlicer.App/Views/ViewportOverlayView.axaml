@@ -13,6 +13,7 @@
 
     <UserControl.Resources>
         <conv:EnumMatchConverter x:Key="EnumMatchCvt"/>
+        <conv:BoolConverter x:Key="NotCvt" Invert="True"/>
     </UserControl.Resources>
 
     <!-- Side margins keep overlay chrome clear of the floating panel cards. -->
@@ -623,9 +624,8 @@
         <local:SequenceWaypointEditorView DataContext="{Binding SequenceWaypointEditor}"
                                           ZIndex="30"/>
 
-        <!-- Live I/O monitor for LFAM 1/2 (LFAM 3 has it inside the workflow bar).
-             Same LiveIo view model — the extruder/milling bridge config is set on
-             every cell swap, so the monitor works on any cell. -->
+        <!-- Live I/O monitor dock (all cells, including LFAM 3 — bottom workflow bar
+             is hidden; phase switching is in the sidebar). Same LiveIo view model. -->
         <Border x:Name="LiveIoDock"
                 IsVisible="{Binding ShowStandaloneLiveIo}"
                 HorizontalAlignment="Right"
@@ -661,8 +661,11 @@
             </StackPanel>
         </Border>
 
+        <!-- Large bottom LFAM 3 workflow timeline: phase switching moved to the right
+             sidebar compact strip (RightPanelView Lfam3SidebarTimeline). Keep the control
+             in the tree for Live I/O / tool-change panels if re-enabled later. -->
         <local:Lfam3WorkflowTimelineView x:Name="Lfam3WorkflowBar"
-                                         IsVisible="{Binding ShowLfam3ToolPicker}"
+                                         IsVisible="False"
                                          HorizontalAlignment="Stretch"
                                          VerticalAlignment="Bottom"
                                          Margin="{Binding Lfam3WorkflowMargin}"
@@ -699,17 +702,46 @@
                         <ia:Icon Value="mdi-arrow-expand-all" FontSize="14"/>
                     </Button>
                     <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
+                    <Button x:Name="MoveOriginButton" Classes="ToolbarButton" Padding="12,4"
+                            Classes.active="{Binding IsMoveOriginActive}"
+                            IsEnabled="{Binding HasMeshSelected}"
+                            ToolTip.Tip="Move Origin — show the part's bounding box and click a corner, edge midpoint or face centre to put the handle there. The part does not move. Esc to cancel.">
+                        <ia:Icon Value="mdi-vector-point" FontSize="14"/>
+                    </Button>
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding RecenterCommand}"
                             IsEnabled="{Binding HasMeshSelected}"
-                            ToolTip.Tip="Recenter — move origin to bottom center of mesh (keeps world placement)">
+                            ToolTip.Tip="Recenter — put the handle at the centre of the part's footprint, at the height of its lowest point (the face that meets the bed). The part does not move.">
                         <ia:Icon Value="mdi-target-variant" FontSize="14"/>
+                    </Button>
+
+                    <!-- Placing the part on the plate. Moved here from the top-left focus overlay:
+                         these belong with the transform tools, not with the camera controls. -->
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"
+                            IsVisible="{Binding !IsToolpathSelected}"/>
+                    <Button Classes="ToolbarButton" Padding="12,4"
+                            Classes.active="{Binding IsLayFlatMode}"
+                            Command="{Binding LayFlatCommand}"
+                            IsVisible="{Binding !IsToolpathSelected}"
+                            ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
+                        <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
+                    </Button>
+                    <Button Classes="ToolbarButton" Padding="12,4"
+                            Command="{Binding DropToPlateCommand}"
+                            IsVisible="{Binding !IsToolpathSelected}"
+                            ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
+                        <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
                     </Button>
                 </StackPanel>
             </Border>
 
-            <!-- Axis values -->
-                <Border Background="#F2262626"
+            <!-- Axis values.
+                 x:Name on each row so the code-behind can stop a pointer press reaching the
+                 viewport underneath: ViewportView subscribes PointerPressed on itself and calls
+                 Focus(), so any press that falls through here steals focus from the field and runs
+                 the viewport's own click logic, which deselects on a miss. -->
+                <Border x:Name="MoveValuesRow"
+                        Background="#F2262626"
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -718,23 +750,24 @@
                         IsVisible="{Binding IsMoveActive}">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionX}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Position along world X. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionY}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Position along world Y. Accepts maths: 45+90, 90/2, 30x3"/>
                         <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <ctrl:TransformNumberBox Value="{Binding SelectionZ}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"
+                                       ToolTip.Tip="Position along world Z. Accepts maths: 45+90, 90/2, 30x3"/>
                     </StackPanel>
                 </Border>
-                <Border Background="#F2262626"
+                <Border x:Name="RotateValuesRow"
+                        Background="#F2262626"
                         BorderBrush="#3D3D3D"
                         BorderThickness="1"
                         CornerRadius="6"
@@ -742,21 +775,101 @@
                         Margin="0,-3,0,0"
                         IsVisible="{Binding IsRotateActive}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                        <!-- The axis letters are buttons: click steps a clean additive 90 degrees. -->
+                        <Border x:Name="StepAxisX" Tag="0" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Snap to the next 90° stop about world X — straightens an off-angle part so a flat face sits on the bed. Hold Alt to go the other way.">
+                            <TextBlock Text="A" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionA}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Rotation about the part's own X axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                        <Border x:Name="StepAxisY" Tag="1" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Snap to the next 90° stop about world Y — straightens an off-angle part so a flat face sits on the bed. Hold Alt to go the other way.">
+                            <TextBlock Text="B" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionB}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"/>
-                        <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
-                        <NumericUpDown Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
-                                       Increment="1" AllowSpin="False" ShowButtonSpinner="False"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Rotation about the part's own Y axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                        <Border x:Name="StepAxisZ" Tag="2" Background="Transparent" Cursor="Hand"
+                                Padding="3,1" Margin="0,0,1,0" CornerRadius="3"
+                                ToolTip.Tip="Snap to the next 90° stop about world Z — straightens an off-angle part so a flat face sits on the bed. Hold Alt to go the other way.">
+                            <TextBlock Text="C" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold"/>
+                        </Border>
+                        <ctrl:TransformNumberBox Value="{Binding SelectionC}" FormatString="F2" Width="72" FontSize="11"
                                        Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
-                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"/>
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0"
+                                       ToolTip.Tip="Rotation about the part's own Z axis, in degrees. Accepts maths: 45+90, 90/2, 30x3"/>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="ScaleValuesRow"
+                        Background="#F2262626"
+                        BorderBrush="#3D3D3D"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        Padding="8,6"
+                        Margin="0,-3,0,0"
+                        IsVisible="{Binding IsScaleActive}">
+                    <StackPanel Orientation="Horizontal">
+                        <!-- Unit toggle: reads as the unit currently in force, click swaps it. -->
+                        <Border x:Name="ScaleUnitToggle" Background="#F2161616" Cursor="Hand"
+                                BorderBrush="#3D3D3D" BorderThickness="1" CornerRadius="5"
+                                Padding="6,4" Margin="0,0,7,0" MinWidth="34"
+                                ToolTip.Tip="Switch between millimetres and percent of the size this part was imported at. In percent, typing 100 puts it back to its original size.">
+                            <TextBlock Text="{Binding ScaleUnitLabel}" VerticalAlignment="Center"
+                                       HorizontalAlignment="Center" FontSize="11" FontWeight="Bold"
+                                       Foreground="#DDDDDD"/>
+                        </Border>
+
+                        <TextBlock Text="X" VerticalAlignment="Center" FontSize="11" Foreground="#E05555" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldX}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own X. Accepts maths: 1200/2, 300x3"/>
+                        <TextBlock Text="Y" VerticalAlignment="Center" FontSize="11" Foreground="#44CC55" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldY}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own Y. Accepts maths: 1200/2, 300x3"/>
+                        <TextBlock Text="Z" VerticalAlignment="Center" FontSize="11" Foreground="#4477EE" FontWeight="Bold" Margin="0,0,4,0"/>
+                        <ctrl:TransformNumberBox Value="{Binding ScaleFieldZ}" FormatString="F2" Width="72" FontSize="11"
+                                       Background="#F2161616" BorderBrush="#3D3D3D" CornerRadius="5"
+                                       Padding="5,4" VerticalContentAlignment="Center" Margin="0,0,7,0"
+                                       ToolTip.Tip="Size along the part's own Z. Accepts maths: 1200/2, 300x3"/>
+
+                        <!-- Chain: on, editing any axis rescales the other two by the same ratio. -->
+                        <Border x:Name="ScaleChainToggle" Cursor="Hand"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="6,4" Margin="0,0,7,0"
+                                ToolTip.Tip="Keep the part in proportion. On, changing one axis rescales the other two by the same ratio — halving 100 to 50 also takes 1300 down to 650. Off, each axis moves on its own.">
+                            <Panel>
+                                <ia:Icon Value="mdi-link-variant" FontSize="14" Foreground="#4EA8DE"
+                                         IsVisible="{Binding IsScaleChained}"/>
+                                <ia:Icon Value="mdi-link-variant-off" FontSize="14" Foreground="#777777"
+                                         IsVisible="{Binding IsScaleChained, Converter={StaticResource NotCvt}}"/>
+                            </Panel>
+                        </Border>
+
+                        <Border Width="1" Background="#3D3D3D" Margin="0,2,7,2"/>
+
+                        <!-- Fit to Cell is hidden rather than deleted: it works and is still on the
+                             `scale fit` console command, but it was earning no keep on the toolbar.
+                             Set IsVisible to True to bring it back. -->
+                        <Border x:Name="FitToCellButton" Cursor="Hand" IsVisible="False"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="8,4" Margin="0,0,7,0"
+                                ToolTip.Tip="Scale the part up or down uniformly until it just fits the bed, with room to spare. Stops at whichever axis runs out first.">
+                            <TextBlock Text="Fit to Cell" VerticalAlignment="Center" FontSize="11" Foreground="#DDDDDD"/>
+                        </Border>
+                        <Border x:Name="ResetScaleButton" Cursor="Hand"
+                                Background="#F2161616" BorderBrush="#3D3D3D" BorderThickness="1"
+                                CornerRadius="5" Padding="8,4" Margin="0"
+                                ToolTip.Tip="Put the part back to the size it was imported at.">
+                            <TextBlock Text="Reset Scale" VerticalAlignment="Center" FontSize="11" Foreground="#DDDDDD"/>
+                        </Border>
                     </StackPanel>
                 </Border>
         </StackPanel>
@@ -772,27 +885,8 @@
                 CornerRadius="5"
                 Padding="4">
             <StackPanel Orientation="Horizontal">
-                <!-- Transformation tools: place the object on the plate -->
-                <Button Classes="ToolbarButton"
-                        Classes.active="{Binding IsLayFlatMode}"
-                        Padding="6,4"
-                        Command="{Binding LayFlatCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
-                    <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
-                </Button>
-                <Button Classes="ToolbarButton"
-                        Padding="6,4"
-                        Margin="2,0,0,0"
-                        Command="{Binding DropToPlateCommand}"
-                        IsVisible="{Binding !IsToolpathSelected}"
-                        ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
-                    <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
-                </Button>
-
-                <Border Width="1" Background="{DynamicResource Border1}" Margin="4,2"
-                        IsVisible="{Binding !IsToolpathSelected}"/>
-
+                <!-- Lay on Face and Drop to Plate used to live here; they moved into the transform
+                     toolbar next to Recenter, which is where the rest of the placing tools are. -->
                 <!-- Other tools: camera + mesh structure -->
                 <Button Classes="ToolbarButton" Padding="6"
                         Command="{Binding FrameAllCommand}"
@@ -873,6 +967,9 @@
                                 <CheckBox Content="Bead surface" FontSize="11"
                                           IsChecked="{Binding ShowBead, Mode=TwoWay}"
                                           ToolTip.Tip="Solid extruded-bead preview (printed-part look)"/>
+                                <CheckBox Content="RPM over limit" FontSize="11"
+                                          IsChecked="{Binding ShowRpmOverLimit, Mode=TwoWay}"
+                                          ToolTip.Tip="Magenta on every move demanding more than 99 % extruder RPM — the extruder cannot deliver it, and these block export. On by default in the RPM view."/>
                                 <CheckBox Content="Bead overhang heatmap" FontSize="11"
                                           IsChecked="{Binding ShowBeadOverhang, Mode=TwoWay}"
                                           ToolTip.Tip="Bead colored by overhang percentage (see legend)"/>
@@ -1526,6 +1623,41 @@
                       Fill="#2280B7FF"
                       StrokeJoin="Round" StrokeLineCap="Round"/>
         </Canvas>
+
+        <!-- Mill soft-brush controls: center, ~250px from bottom so it clears timeline/panels -->
+        <Border IsVisible="{Binding ShowMillBrushToolbar}"
+                HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,250" ZIndex="50"
+                Background="#F01A1A1A" CornerRadius="10"
+                BorderBrush="{DynamicResource Border1}" BorderThickness="1"
+                Padding="16,12" MinWidth="320" MaxWidth="420"
+                BoxShadow="0 8 28 0 #90000000">
+            <StackPanel Spacing="8">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Border Width="10" Height="10" CornerRadius="2" Background="#40F247" VerticalAlignment="Center"/>
+                    <TextBlock Text="Mill brush" FontSize="12" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimary}" VerticalAlignment="Center"/>
+                    <TextBlock Text="· Alt erases · workpiece only"
+                               FontSize="10" Opacity="0.55" VerticalAlignment="Center"/>
+                </StackPanel>
+                <Grid ColumnDefinitions="70,*,52">
+                    <TextBlock Text="Size mm" FontSize="10" Opacity="0.75" VerticalAlignment="Center"/>
+                    <Slider Grid.Column="1" Minimum="2" Maximum="200" Margin="8,0"
+                            Value="{Binding MillBrushRadiusMm, Mode=TwoWay}"/>
+                    <TextBlock Grid.Column="2" Text="{Binding MillBrushRadiusMm, StringFormat={}{0:0.#}}"
+                               FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right"
+                               FontFamily="Consolas,Courier New,monospace"/>
+                </Grid>
+                <Grid ColumnDefinitions="70,*,52">
+                    <TextBlock Text="Falloff" FontSize="10" Opacity="0.75" VerticalAlignment="Center"/>
+                    <Slider Grid.Column="1" Minimum="0" Maximum="1" Margin="8,0"
+                            Value="{Binding MillBrushFalloff, Mode=TwoWay}"/>
+                    <TextBlock Grid.Column="2" Text="{Binding MillBrushFalloff, StringFormat={}{0:0.##}}"
+                               FontSize="11" VerticalAlignment="Center" HorizontalAlignment="Right"
+                               FontFamily="Consolas,Courier New,monospace"/>
+                </Grid>
+            </StackPanel>
+        </Border>
 
         <!-- Horizontal timeline — Preview view only, while a scrub session is live
              (stays up when the TCP is selected for keyframe adjustments) -->

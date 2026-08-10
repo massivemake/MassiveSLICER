@@ -36,4 +36,21 @@ public sealed class PendingToolpathEntry
 
     /// <summary>Geometry centroid stored at last upload; gizmo edits do not update this.</summary>
     public System.Numerics.Vector3? PreservedOrigin { get; init; }
+
+    /// <summary>
+    /// Set for a genuine RE-SLICE, where the incoming toolpath was regenerated from the mesh's
+    /// current world vertices and is therefore already in the right place — so the node belongs at
+    /// the fresh geometry's own centroid, not at whatever translation it happened to carry before.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="PreserveRelativePose"/> alone restores the pre-replace translation absolutely.
+    /// That is right for a restore (workspace load, undo of a delete) where the geometry is
+    /// unchanged, and right for a MOVE — the drag-link already shifted the node by the same amount
+    /// the new centroid shifted, so the two agree. It is wrong for anything that changes the
+    /// geometry's shape, because the centroid moves and the node does not follow: a scale leaves
+    /// the drawn path parked on the old centroid while the path itself was rebuilt around a new
+    /// one. Measured on the running app — 50% scale put the toolpath 112mm off its mesh, 25% put
+    /// it 179mm off, and it grew every time the part was resized again.
+    /// </remarks>
+    public bool RebaseToFreshCentroid { get; init; }
 }

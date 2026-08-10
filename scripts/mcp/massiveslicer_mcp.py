@@ -102,13 +102,48 @@ TOOLS = [
     },
     {
         "name": "massiveslicer_command",
-        "description": "Run a MassiveSlicer console command (sync, scan-cal, bed-cal, scan, diag-scans, etc.).",
+        "description": (
+            "Run a MassiveSlicer console command. Examples: sync, scan-cal, bed-cal, scan, "
+            "import <path>, mill status, mill area brush, mill brush size 30, mill brush falloff 0.7, "
+            "mill op PlanarFacing, mill area clear, paint list, objects, outliner-tree."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "Console command line"},
             },
             "required": ["command"],
+        },
+    },
+    {
+        "name": "massiveslicer_mill",
+        "description": (
+            "Milling SELECT AREA / soft-brush / operation helpers. "
+            "action=status|area|brush_size|brush_falloff|op|clear. "
+            "area tools: whole, face, box, lasso, brush. "
+            "op: MultiAxisFinishing, Drilling, PlanarFacing, PlanarClearing, Cutout, Contouring, Swarf."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "status | area | brush_size | brush_falloff | op | clear",
+                    "default": "status",
+                },
+                "tool": {
+                    "type": "string",
+                    "description": "For action=area: whole|face|box|lasso|brush",
+                },
+                "value": {
+                    "type": "number",
+                    "description": "For brush_size (mm) or brush_falloff (0..1)",
+                },
+                "operation": {
+                    "type": "string",
+                    "description": "For action=op: operation kind name",
+                },
+            },
         },
     },
     {
@@ -250,6 +285,34 @@ def handle_tools_call(req_id: Any, name: str, arguments: dict[str, Any]) -> None
             patch = {k: v for k, v in arguments.items() if v is not None}
             data = bridge_post_json("/materials", patch)
             tool_result(req_id, json.dumps(data, indent=2))
+
+        elif name == "massiveslicer_mill":
+            action = str(arguments.get("action", "status")).strip().lower()
+            if action in ("", "status"):
+                cmd = "mill status"
+            elif action == "clear":
+                cmd = "mill area clear"
+            elif action == "area":
+                tool = str(arguments.get("tool", "brush")).strip()
+                cmd = f"mill area {tool}"
+            elif action in ("brush_size", "size", "radius"):
+                val = arguments.get("value", 25)
+                cmd = f"mill brush size {val}"
+            elif action in ("brush_falloff", "falloff"):
+                val = arguments.get("value", 0.65)
+                cmd = f"mill brush falloff {val}"
+            elif action in ("op", "operation"):
+                op = str(arguments.get("operation", "")).strip()
+                if not op:
+                    tool_error(req_id, "operation is required for action=op")
+                    return
+                cmd = f"mill op {op}"
+            else:
+                tool_error(req_id, f"unknown mill action: {action}")
+                return
+            data = bridge_post_command(cmd)
+            out = data.get("output", [])
+            tool_result(req_id, json.dumps(data, indent=2) + ("\n\n" + "\n".join(out) if out else ""))
 
         else:
             tool_error(req_id, f"unknown tool: {name}")

@@ -27,6 +27,8 @@ public static class PlanarSlicer
         SliceSettings settings,
         Action<float>? progress = null)
     {
+        s_droppedContours.Clear();
+
         // -- Compute Z + XY extents across all meshes -------------------------
         float zMin = float.MaxValue, zMax = float.MinValue;
         float xMin = float.MaxValue, xMax = float.MinValue;
@@ -263,7 +265,13 @@ public static class PlanarSlicer
         StructuralSupportPlanner.Apply(toolpath, settings);
         BrimPlanner.Apply(toolpath, settings);
 
+        // Last, so brim and support moves are covered too: flow must follow the REAL layer
+        // thickness. Adaptive layer height changes Z spacing and nothing was adjusting RPM
+        // for it, so thin layers were given a full nominal layer's worth of material.
+        Effects.LayerHeightFlowPostProcessor.Apply(toolpath, settings);
+
         AttachZigZagWarning(toolpath);
+        ReportDroppedContours();
         return toolpath;
     }
 
@@ -400,6 +408,9 @@ public static class PlanarSlicer
         var rawContours = new List<List<Vector2>>();
         foreach (var segs in perMeshSegs)
             rawContours.AddRange(ChainByProximity(segs));
+
+        // Discard anything too small to extrude before it reaches nesting/offset.
+        DropUnprintableContours(rawContours, z, settings.BeadWidth);
 
         // ── Stage 3: nesting depth + contour offset ──────────────────────────
         if (rawContours.Count == 0) return empty;
@@ -1103,6 +1114,66 @@ public static class PlanarSlicer
     // Extends from BOTH the head and tail so a chain grows in both directions regardless of
     // which direction the seed segment happened to be oriented. This prevents open-boundary
     // meshes (e.g. a split cube) from producing split chains that look like doubled walls.
+    /// <summary>
+    /// Drops chained contours that are too short to extrude.
+    ///
+    /// <see cref="CollectSegments"/> nudges a vertex sitting exactly on the slice plane to
+    /// the +Z side. When the geometry around that vertex is BELOW the plane, the triangle
+    /// then reads as a real crossing and yields a sub-micron segment — the plane grazing a
+    /// tip. Flipping the nudge direction does not help; it just moves the failure to
+    /// downward-pointing tips. Several such segments at one vertex chain into a 3+ point
+    /// "contour" of zero length, which survives every later stage: the ≥3 point test in
+    /// <see cref="ChainByProximity"/>, and the centroid-inside-a-bigger-contour test in
+    /// SurfaceSlicing.FilterContours (it sits ON the main contour's boundary, so the
+    /// point-in-polygon test says no). It then costs a full travel out and back.
+    ///
+    /// Observed on the Dragon column: one plane landed on the tessellation vertices where
+    /// the internal cross-brace meets the wall, and the layer paid a 1.6 m round trip to
+    /// print two zero-length loops.
+    ///
+    /// One bead width is a deliberately loose floor — a genuinely printable closed loop is
+    /// at least a bead across, so its perimeter is ~2 bead widths or more.
+    /// </summary>
+    private static void DropUnprintableContours(List<List<Vector2>> contours, float z, float beadWidth)
+    {
+        float minLen = MathF.Max(beadWidth, 1f);
+
+        for (int i = contours.Count - 1; i >= 0; i--)
+        {
+            var c = contours[i];
+
+            // Chains are polylines; a closed ring repeats its first point at the end,
+            // so this is the full perimeter without adding a closing edge.
+            float len = 0f;
+            for (int k = 1; k < c.Count; k++) len += Vector2.Distance(c[k - 1], c[k]);
+            if (len >= minLen) continue;
+
+            contours.RemoveAt(i);
+            s_droppedContours.Add((z, c.Count > 0 ? c[0] : default, len));
+        }
+    }
+
+    /// <summary>Unprintable contours discarded this slice: (layer Z, where, path length).</summary>
+    private static readonly List<(float Z, Vector2 At, float Len)> s_droppedContours = [];
+
+    /// <summary>Console summary of what <see cref="DropUnprintableContours"/> removed.</summary>
+    private static void ReportDroppedContours()
+    {
+        if (s_droppedContours.Count == 0) return;
+
+        int distinctLayers = s_droppedContours.Select(d => d.Z).Distinct().Count();
+        System.Console.WriteLine(
+            $"[slice] dropped {s_droppedContours.Count} unprintable contour(s) on " +
+            $"{distinctLayers} layer(s) — too short to extrude, each would have cost a travel:");
+
+        foreach (var d in s_droppedContours.Take(8))
+            System.Console.WriteLine(
+                $"[slice]   Z={d.Z:F3}  at ({d.At.X:F2}, {d.At.Y:F2})  length {d.Len:F4}mm");
+
+        if (s_droppedContours.Count > 8)
+            System.Console.WriteLine($"[slice]   …and {s_droppedContours.Count - 8} more");
+    }
+
     private static List<List<Vector2>> ChainByProximity(List<(Vector2 A, Vector2 B)> segs)
     {
         int n = segs.Count;

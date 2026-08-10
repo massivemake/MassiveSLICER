@@ -110,8 +110,77 @@ public sealed class SceneNode
 
     // -- Transform -------------------------------------------------------------
 
+    private Matrix4        _localTransform = Matrix4.Identity;
+    private NodeTransform? _placement;
+
     /// <summary>Transform relative to the parent (or world if no parent).</summary>
-    public Matrix4 LocalTransform { get; set; } = Matrix4.Identity;
+    /// <remarks>
+    /// Still the single thing every reader consumes. When <see cref="Placement"/> is set, writing a
+    /// raw matrix here re-derives the separated values from it rather than leaving them stale — so
+    /// the two can never disagree, and code paths that legitimately hand over a finished matrix
+    /// (undo/redo restore, workspace load, the robot and cell rigs) keep working untouched.
+    /// </remarks>
+    public Matrix4 LocalTransform
+    {
+        get => _localTransform;
+        set
+        {
+            _localTransform = value;
+            // Keep the pivot; re-read position/rotation/scale from whatever was just written.
+            if (_placement is { } p)
+                _placement = NodeTransform.FromMatrix(value, p.Origin);
+        }
+    }
+
+    /// <summary>
+    /// The node's placement as separated position / rotation / scale / pivot values, or
+    /// <c>null</c> for nodes that are driven straight from a matrix (the robot rig, cell fixtures,
+    /// the tool) and have no user-facing transform tools.
+    /// </summary>
+    /// <remarks>
+    /// Set this via <see cref="SetPlacement"/> so the composed matrix is rebuilt with it. Reading
+    /// is free; the getter does no work.
+    /// </remarks>
+    public NodeTransform? Placement => _placement;
+
+    /// <summary>Replaces <see cref="Placement"/> and rebuilds <see cref="LocalTransform"/> from it.</summary>
+    public void SetPlacement(NodeTransform placement)
+    {
+        _placement      = placement;
+        _localTransform = placement.ToMatrix();
+    }
+
+    /// <summary>
+    /// Gives this node a <see cref="Placement"/> if it has none, decomposed from its current
+    /// matrix and pivoting about <paramref name="origin"/> in mesh space. The composed transform is
+    /// unchanged either way, so adopting a placement never moves anything.
+    /// </summary>
+    public NodeTransform EnsurePlacement(Vector3 origin)
+    {
+        if (_placement is null)
+        {
+            _placement  = NodeTransform.FromMatrix(_localTransform, origin);
+            ImportScale = _placement.Value.Scale;
+        }
+        return _placement.Value;
+    }
+
+    /// <summary>
+    /// The scale this node had when it first adopted a placement — its "as imported" size, and the
+    /// 100% the scale tool's percent mode is a percentage of.
+    /// </summary>
+    /// <remarks>
+    /// Not simply 1: an STL exported in metres is corrected ×1000 before the placement is taken, and
+    /// a part imported into a rotary cell is scaled down to fit the platter. Both are baked into the
+    /// matrix that <see cref="EnsurePlacement"/> decomposes, so the raw <see cref="NodeTransform.Scale"/>
+    /// is a poor answer to "how big is this compared to the file I opened". Captured at the same
+    /// moment as the pivot, once, and never recomputed.
+    /// <para>
+    /// <c>null</c> on a node restored from a workspace saved before this existed; callers should
+    /// read that as <see cref="Vector3.One"/>, which is what the raw scale already meant.
+    /// </para>
+    /// </remarks>
+    public Vector3? ImportScale { get; set; }
 
     /// <summary>Accumulated world-space transform, computed from the parent chain.</summary>
     public Matrix4 WorldTransform
@@ -168,7 +237,21 @@ public sealed class SceneNode
             // inside faces stay visible, several levels below any top-level child — that
             // setting was dead code).
             if (CullFaces) GL.Enable(EnableCap.CullFace); else GL.Disable(EnableCap.CullFace);
+            // AlwaysOnTop used to be honoured only by the translucent pass and the selection-mask
+            // pass, so an OPAQUE node carrying the flag was silently depth-tested anyway. The Move
+            // Origin snap markers are exactly that, which is why the ones on the far side of a part
+            // never showed through it and the gold centre marker — inside the mesh by definition —
+            // could not be seen at all. Same explicit set/restore shape as CullFaces above.
+            //
+            // ⚠ The restore re-enables unconditionally, which is right for every caller today: the
+            // opaque pass always enters with depth testing on. The one caller that does not is the
+            // translucent pass, which disables it around this call for an AlwaysOnTop node and
+            // re-enables afterwards — harmless because it only wraps the node's OWN mesh here, and
+            // the sole such node (a cut modifier's corner markers) is a leaf. Give a translucent
+            // always-on-top node children and their depth state would need rethinking.
+            if (AlwaysOnTop) GL.Disable(EnableCap.DepthTest);
             mesh.Draw(world, fullMvp, viewPos, lightDir, lightIntensity);
+            if (AlwaysOnTop) GL.Enable(EnableCap.DepthTest);
         }
 
         foreach (var child in Children)

@@ -71,6 +71,11 @@ internal static class WorkspaceService
                 Visible        = node.Visible,
                 LayerPreview   = node.LayerPreview,
                 LocalTransform = ToArray(node.WorldTransform),
+                // The matrix alone cannot express these: a pivot move leaves the composed matrix
+                // untouched by design, and the imported scale is a historical fact about the file
+                // rather than anything the current transform records.
+                PivotOrigin    = node.Placement is { } pl ? [pl.Origin.X, pl.Origin.Y, pl.Origin.Z] : null,
+                ImportScale    = node.ImportScale is { } isc ? [isc.X, isc.Y, isc.Z] : null,
             };
 
             // EnumerateUserModelItems() flattens Applied-Pieces groups (see its own comment) so
@@ -157,6 +162,65 @@ internal static class WorkspaceService
                         SizeY             = cut.SizeY,
                     };
                     entry.Modifiers.Add(modEntry);
+                }
+            }
+
+            doc.Models.Add(entry);
+        }
+
+        // Zivid / bed scans live under the rotary group and are intentionally excluded from
+        // EnumerateUserModelItems() (they are not print CAD). Persist them too or Save Workspace
+        // drops every scan while keeping only imports (e.g. rock.gltf).
+        string scanSidecarDir = Path.Combine(Path.GetDirectoryName(savePath)!, "workspace_scans");
+        foreach (var item in viewport.GetBedLevelScanItems())
+        {
+            var node = item.Node;
+            var entry = new WorkspaceModelEntry
+            {
+                Name           = node.Name,
+                Visible        = node.Visible,
+                LayerPreview   = node.LayerPreview,
+                LocalTransform = ToArray(node.WorldTransform),
+                IsScan         = true,
+            };
+
+            if (OutlinerModelOps.ResolveSourceFilePath(node) is { } src && File.Exists(src))
+                entry.SourcePath = src;
+
+            // Prefer embedding the meshable scan so the .mass reloads without the Zivid SDK.
+            if (TryGetMesh(node) is { } mesh)
+            {
+                string fileName = $"scan_{Guid.NewGuid():N}.stl";
+                string meshPath = Path.Combine(meshDir, fileName);
+                StlExporter.Write(meshPath, mesh);
+                entry.EmbeddedMeshPath = WorkspaceLoader.ToRelativeMeshPath(fileName);
+            }
+            else if (entry.SourcePath is null)
+            {
+                continue;
+            }
+
+            // Copy .zdf (+ .json sidecar) beside the workspace for recovery / re-mesh.
+            if (entry.SourcePath is { } zdfSrc
+                && zdfSrc.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(zdfSrc))
+            {
+                try
+                {
+                    Directory.CreateDirectory(scanSidecarDir);
+                    string destName = Path.GetFileName(zdfSrc);
+                    string dest = Path.Combine(scanSidecarDir, destName);
+                    if (!string.Equals(Path.GetFullPath(zdfSrc), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+                        File.Copy(zdfSrc, dest, overwrite: true);
+                    string jsonSrc = Path.ChangeExtension(zdfSrc, ".json");
+                    if (File.Exists(jsonSrc))
+                        File.Copy(jsonSrc, Path.ChangeExtension(dest, ".json"), overwrite: true);
+                    entry.ScanZdfPath = Path.Combine("workspace_scans", destName).Replace('\\', '/');
+                    entry.SourcePath  = Path.GetFullPath(dest);
+                }
+                catch
+                {
+                    entry.ScanZdfPath = entry.SourcePath;
                 }
             }
 
@@ -253,32 +317,95 @@ internal static class WorkspaceService
                     loadPath = embedded;
             }
 
+            bool isScan = entry.IsScan
+                          || OutlinerModelOps.IsScan(new SceneNode { Name = entry.Name });
+
+            // Prefer mesh paths ImportHelper understands; remember ZDF for re-mesh fallback.
+            string? zdfPath = null;
+            if (loadPath is not null && loadPath.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase))
+            {
+                zdfPath = loadPath;
+                loadPath = null;
+            }
+            if (zdfPath is null && entry.ScanZdfPath is { } zdfRel)
+            {
+                string zdfAbs = Path.IsPathRooted(zdfRel)
+                    ? zdfRel
+                    : Path.GetFullPath(Path.Combine(Path.GetDirectoryName(workspacePath)!, zdfRel));
+                if (File.Exists(zdfAbs))
+                    zdfPath = zdfAbs;
+            }
+            if (zdfPath is null && entry.SourcePath is { } srcZ
+                && srcZ.EndsWith(".zdf", StringComparison.OrdinalIgnoreCase)
+                && File.Exists(srcZ))
+                zdfPath = srcZ;
+
             SceneNode? node = null;
             ViewModels.OutlinerItemViewModel? parentItem = null;
+            var transform = FromArray(entry.LocalTransform);
+
             if (loadPath is not null)
             {
-                var transform = FromArray(entry.LocalTransform);
                 node = ImportHelper.LoadAtTransform(loadPath, transform);
-                if (node is not null)
-                {
-                    node.Name         = entry.Name;
-                    node.Visible      = entry.Visible;
-                    node.LayerPreview = entry.LayerPreview;
 
-                    if (entry.PiecesGroupName is { } groupName)
+                // Pivot + import scale, restored only on the mesh-loaded path — which is where this
+                // has always run. RestorePlacement measures the node's bounding box, so it needs real
+                // geometry; the ZDF re-mesh and mesh-missing placeholder paths below never carried a
+                // saved placement. Name/Visible/LayerPreview are set once, further down, for every
+                // path at the same time.
+                if (node is not null)
+                    RestorePlacement(node, entry);
+            }
+
+            // Re-mesh from ZDF when the embedded STL is missing (or was never written).
+            if (node is null && zdfPath is not null && File.Exists(zdfPath))
+            {
+                try
+                {
+                    var cap = Core.Scanning.ZividScanService.LoadFromZdf(zdfPath);
+                    var name = string.IsNullOrEmpty(entry.Name)
+                        ? Path.GetFileNameWithoutExtension(zdfPath)
+                        : entry.Name;
+                    node = PointCloudMesher.Build(
+                        cap.PointsXYZ, cap.Width, cap.Height, name);
+                    if (node is not null)
+                        node.LocalTransform = transform;
+                }
+                catch (Exception ex)
+                {
+                    viewport.OnDevLog?.Invoke(
+                        $"[workspace] ZDF re-mesh failed for '{entry.Name}': {ex.Message}");
+                }
+            }
+
+            if (node is not null)
+            {
+                node.Name         = entry.Name;
+                node.Visible      = entry.Visible;
+                node.LayerPreview = entry.LayerPreview;
+                if (zdfPath is not null)
+                    node.SourceFilePath = zdfPath;
+                else if (entry.SourcePath is { } sp && File.Exists(sp))
+                    node.SourceFilePath = sp;
+
+                if (isScan)
+                {
+                    node.CullFaces = false;
+                    viewport.AddScanNode(node);
+                }
+                else if (entry.PiecesGroupName is { } groupName)
+                {
+                    if (!piecesGroups.TryGetValue(groupName, out var groupItem))
                     {
-                        if (!piecesGroups.TryGetValue(groupName, out var groupItem))
-                        {
-                            groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
-                            groupItem.Visible = entry.Visible;
-                            piecesGroups[groupName] = groupItem;
-                        }
-                        parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                        groupItem = viewport.CreateAppliedPiecesGroupNamed(groupName);
+                        groupItem.Visible = entry.Visible;
+                        piecesGroups[groupName] = groupItem;
                     }
-                    else
-                    {
-                        viewport.AddImportNode(node);
-                    }
+                    parentItem = viewport.AddRestoredPieceToGroup(node, groupItem);
+                }
+                else
+                {
+                    viewport.AddImportNode(node);
                 }
             }
 
@@ -429,6 +556,36 @@ internal static class WorkspaceService
         foreach (var smb in clone.RobotSmb)
             smb.Password = null;
         return clone;
+    }
+
+    /// <summary>
+    /// Gives a restored node back the placement it was saved with — pivot and imported scale — so
+    /// reopening a file behaves the same as the session it was saved from.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only the pivot is read back from the file. Position, rotation and scale are recovered by
+    /// decomposing the matrix around it, which is exact for anything this app writes (placements
+    /// never shear), so there is no second copy of the same numbers to fall out of step.
+    /// </para>
+    /// <para>
+    /// A file saved before pivots existed carries none, and still gets a placement here — pivoted at
+    /// its bounding-box centre, exactly like a fresh import. Leaving it without one would keep those
+    /// parts on the old behaviour: gizmo parked at whatever origin the exporter chose, rotation
+    /// about a distant point. The pivot is a guess for those files, but a far better one than none.
+    /// </para>
+    /// </remarks>
+    private static void RestorePlacement(SceneNode node, WorkspaceModelEntry entry)
+    {
+        if (entry.PivotOrigin is { Length: >= 3 } o)
+            node.EnsurePlacement(new Vector3(o[0], o[1], o[2]));
+        else
+            ImportHelper.CenterOrigin(node);
+
+        // After EnsurePlacement, which otherwise captures the saved scale as if it were the
+        // original — quietly redefining 100% as whatever size the part was last left at.
+        if (entry.ImportScale is { Length: >= 3 } s)
+            node.ImportScale = new Vector3(s[0], s[1], s[2]);
     }
 
     private static float[] ToArray(Matrix4 m) =>

@@ -35,8 +35,8 @@ public static class LiveIoPhasePlan
         AcceptanceCriteria:
         [
             "Open LFAM 3 → Show Live I/O → Sync Robot: Robot column shows Live · C3Bridge",
-            "$IN[6–17] digital inputs update ~2×/s with lime/amber/red indicators",
-            "$OUT[5–16] digital outputs show HIGH/LOW; ⇅ force writes with Confirm",
+            "$IN[1–17] digital inputs use MassiveDRIVE names (Spindle Docked, Extruder Docked, …)",
+            "$OUT[1–17] + $OUT[51] Spindle match MassiveDRIVE; ⇅ force writes with Confirm",
             "$ANOUT[1–4] show °C / RPM % using LFAM scaling",
             "Closing panel or desyncing stops C3Bridge I/O polling (axes still stream)",
         ],
@@ -60,15 +60,16 @@ public static class LiveIoPhasePlan
 
     public static LiveIoPhaseDefinition Phase3 { get; } = new(
         Number: 3,
-        Title: "Milling Spindle",
+        Title: "Spindle",
         Status: LiveIoPhaseStatus.Implemented,
         PrimarySource: LiveIoSource.MillingModbus,
-        ConnectionSummary: "lfam-monitor JSON bridge TCP:8765 on millIp (LFAM3: 192.168.0.249)",
+        ConnectionSummary: "lfam-monitor JSON bridge TCP:8765 on millIp (LFAM3: 192.168.0.249) + ATV340 RPM",
         AcceptanceCriteria:
         [
-            "Milling DI live: gate, SS1, emergency, KUKA-running signal",
+            "Spindle DI live: gate, SS1, emergency, KUKA-running signal",
             "Status lamps (red/yellow/green) reflect milling cabinet state",
-            "Milling section status shows P3 live · bridge when millIp reachable",
+            "RPM setpoint field polls ATV setpoint; Set writes via bridge set_rpm",
+            "Spindle section status shows live · bridge when millIp reachable",
         ],
         ImplementationTasks: []);
 
@@ -79,7 +80,8 @@ public static class LiveIoPhasePlan
         "Robot (KUKA)"     => Phase1,
         "Scanner"          => Phase2,
         "Pellet Extruder"  => Phase2,
-        "Milling Spindle"  => Phase3,
+        "Spindle"          => Phase3,
+        "Milling Spindle"  => Phase3, // legacy title
         _                  => null,
     };
 

@@ -1,8 +1,10 @@
 namespace MassiveSlicer.Core.Scanning;
 
 /// <summary>
-/// Wrist nutation poses for 3D hand-eye calibration (ported from SCAN_TOOL_CAL.src).
-/// App drives these via CELL MS_AXIS — no separate KRL program.
+/// Legacy wrist-nutation deltas for hand-eye (from SCAN_TOOL_CAL.src).
+/// Preferred path: MassiveDRIVE Movement <c>Scanner Calibration</c> with waypoint
+/// <c>notes=scan</c> — SLICER follows Drive as motion master and does not need local poses.
+/// These deltas remain for offline tests / fallback tooling only.
 /// </summary>
 public static class ScanToolCalSweep
 {

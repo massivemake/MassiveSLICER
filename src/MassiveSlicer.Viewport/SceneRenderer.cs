@@ -39,10 +39,13 @@ public sealed class SceneRenderer : IDisposable
     private SeamGuideRenderer?    _boundaryHighMarkers;
     private SequencePathRenderer? _sequencePath;
     private IReadOnlyList<Vector3> _seamGuidePoints = [];
+    /// <summary>Per-guide polyline that hugs the wall, bottom to top. Parallel to _seamGuidePoints.</summary>
+    private IReadOnlyList<IReadOnlyList<Vector3>> _seamGuidePaths = [];
     private int _seamGuideSelectedIndex = -1;
     private bool _seamGuidesDirty;
     private float _seamGuideZMin, _seamGuideZMax;
     private Vector3? _seamGuidePreview;
+    private IReadOnlyList<Vector3>? _seamGuidePreviewPath;
     private IReadOnlyList<Vector3> _boundaryLowPoints = [];
     private IReadOnlyList<Vector3> _boundaryHighPoints = [];
     private bool _boundaryLoopsDirty;
@@ -515,15 +518,37 @@ public sealed class SceneRenderer : IDisposable
     public bool GizmoEnabled { get; set; } = true;
 
     /// <summary>
+    /// True while the Move Origin chooser is up. Only suppresses the scale gizmo's centre cube,
+    /// which would otherwise sit on top of the chooser's gold centre marker; the handles stay
+    /// drawn so the tool still reads as present, and they cannot be grabbed anyway because
+    /// Move Origin swallows the click before gizmo hit-testing.
+    /// </summary>
+    public bool MoveOriginActive { get; set; }
+
+    /// <summary>
     /// Optional world-space gizmo pivot (e.g. robot TCP). When set, overrides the
     /// selected node's origin for gizmo display and hit-testing.
     /// </summary>
     public Vector3? GizmoPivotWorld { get; set; }
 
     /// <summary>Optional rotation-only basis (no translation) the gizmo is drawn/hit-tested in,
-    /// instead of always being world-axis-aligned — set when the selection is a Vertical Cut
-    /// modifier so its gizmo's X/Y follow the plane's own RotationDegrees.</summary>
+    /// instead of always being world-axis-aligned — set from the selection's own rotation so the
+    /// arrows stay stuck to the object, or from a Vertical Cut modifier's own RotationDegrees.</summary>
     public Matrix4? GizmoAxisBasis { get; set; }
+
+    /// <summary>
+    /// Where a node's gizmo belongs: its own pivot, in world space.
+    /// </summary>
+    /// <remarks>
+    /// Nodes driven straight from a matrix (the robot rig, cell fixtures) have no pivot of their
+    /// own and fall back to the matrix's translation column — which is also what every node used to
+    /// do, and why the gizmo appeared unrelated to the mesh: that column holds the file's own
+    /// origin, and most exports leave it nowhere near the geometry.
+    /// </remarks>
+    private static Vector3 PivotWorldOf(SceneNode node)
+        => node.Placement is { } p
+            ? Vector3.TransformPosition(p.Origin, node.WorldTransform)
+            : node.WorldTransform.Row3.Xyz;
 
     /// <summary>When false the ground-plane grid is not rendered.</summary>
     public bool ShowGrid { get; set; } = true;
@@ -749,6 +774,14 @@ public sealed class SceneRenderer : IDisposable
     /// negative = off (normal selection-based scrubbing).</summary>
     public float ToolpathSimProgress { get; set; } = -1f;
 
+    /// <summary>
+    /// Whether the scrub window governs how much of a toolpath is drawn. False in Body view, which
+    /// carries no timeline and therefore shows the whole path — otherwise it silently renders
+    /// through a scrubber belonging to a mode the user has left, and the part looks half printed
+    /// with nothing on screen to explain it.
+    /// </summary>
+    public bool ScrubWindowApplies { get; set; } = true;
+
     /// <summary>Line views (Toolpath/Speed/RPM/Preview) render every toolpath with the
     /// full selected appearance — colours, travels, seams — regardless of selection.
     /// Body view keeps the dimmed unselected treatment.</summary>
@@ -767,6 +800,7 @@ public sealed class SceneRenderer : IDisposable
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
+        renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -785,6 +819,29 @@ public sealed class SceneRenderer : IDisposable
         if (found)
             entry.Renderer.UpdateReachability(reachable);
     }
+
+    /// <summary>
+    /// Supplies a registered toolpath with the RPM (%) each move exports with, and the limit
+    /// above which it is highlighted. Must be called on the GL thread.
+    /// </summary>
+    public void UpdateToolpathRpm(SceneNode node, float[]? rpmPercent, float limit)
+    {
+        if (_toolpaths.TryGetValue(node, out var entry))
+            entry.Renderer.UpdateRpm(rpmPercent, limit);
+    }
+
+    /// <summary>
+    /// Turns the over-limit RPM highlight on or off for every registered toolpath.
+    /// Must be called on the GL thread.
+    /// </summary>
+    public void SetToolpathRpmOverLimitVisible(bool visible)
+    {
+        if (_toolpathRpmOverLimitVisible == visible) return;
+        _toolpathRpmOverLimitVisible = visible;
+        foreach (var entry in _toolpaths.Values)
+            entry.Renderer.SetRpmOverLimitVisible(visible);
+    }
+    private bool _toolpathRpmOverLimitVisible;
 
     /// <summary>
     /// Builds or rebuilds the singularity-point VBO for a registered toolpath.
@@ -826,6 +883,7 @@ public sealed class SceneRenderer : IDisposable
         var renderer = new ToolpathRenderer(toolpath, centroid, beadWidth, layerHeight, materialColor, beadToolpath);
         renderer.SetBeadColor(_toolpathBeadColor);
         renderer.SetColorMode(_toolpathColorMode);   // new renderers must inherit the active Speed/RPM mode
+        renderer.SetRpmOverLimitVisible(_toolpathRpmOverLimitVisible);
         renderer.UpdateColors(_toolpathExtrudeColor, _toolpathTravelColor, _toolpathSeamColor, _toolpathUnselectedColor,
             _toolpathWipeColor, _toolpathRetractionColor);
         node.LocalTransform = Matrix4.CreateTranslation(centroid.X, centroid.Y, centroid.Z);
@@ -1321,9 +1379,10 @@ public sealed class SceneRenderer : IDisposable
             bool isSelected = IsToolpathHighlighted(tpNode);
             // Sticky scrub / edit mode: apply the layer window to the scrubbed
             // toolpath even when the mesh (or another node) is the selection.
-            bool applyScrub = isSelected
-                || (ToolpathActiveScrubNode is not null
-                    && ReferenceEquals(tpNode, ToolpathActiveScrubNode));
+            bool applyScrub = ScrubWindowApplies
+                && (isSelected
+                    || (ToolpathActiveScrubNode is not null
+                        && ReferenceEquals(tpNode, ToolpathActiveScrubNode)));
             var eyeLocal = (new Vector4(Camera.Eye, 1f) * tpNode.LocalTransform.Inverted()).Xyz;
 
             // 2D Slice Plane Viewer: ALWAYS multi-pass only — ignore sim-progress and the
@@ -1491,7 +1550,7 @@ public sealed class SceneRenderer : IDisposable
                         if (n.Mesh is null) continue;
                         var nodeMvp = n.WorldTransform * mvp;
                         _maskShader.SetMatrix4("uMVP", ref nodeMvp);
-                        // Same always-on-top exemption as the main draw above -- otherwise the
+                        // Same always-on-top exemption as SceneNode.Draw -- otherwise the
                         // mask (and thus the selection outline) would still only cover whichever
                         // part of the marker isn't occluded by real geometry behind it, even
                         // though the marker itself now renders fully visible on top of it.
@@ -1617,7 +1676,7 @@ public sealed class SceneRenderer : IDisposable
         }
 
         // -- Seam guide pass (always on top) -----------------------------------
-        if ((_seamGuidePoints.Count > 0 || _seamGuidePreview.HasValue) && _seamGuides is not null)
+        if ((_seamGuidePaths.Count > 0 || _seamGuidePreviewPath is { Count: > 0 }) && _seamGuides is not null)
         {
             if (_seamGuidesDirty)
             {
@@ -1625,9 +1684,8 @@ public sealed class SceneRenderer : IDisposable
                 // model is framed — a fixed few-mm marker vanished on metre-scale panels.
                 float span   = MathF.Max(_seamGuideZMax - _seamGuideZMin, 1f);
                 float radius = MathF.Max(4f, span * 0.0022f);
-                _seamGuides.Update(_seamGuidePoints, _seamGuideSelectedIndex,
-                    _seamGuideZMin, _seamGuideZMax, _seamGuidePreview,
-                    radius, radius * 1.5f);
+                _seamGuides.Update(_seamGuidePaths, _seamGuideSelectedIndex,
+                    _seamGuidePreviewPath, radius, radius * 1.5f);
                 _seamGuidesDirty = false;
             }
 
@@ -1718,7 +1776,9 @@ public sealed class SceneRenderer : IDisposable
         // hit-tested; the Cut tool only worked around it by force-selecting the mesh.
         if (_gizmo is not null && (SelectedNode is not null || GizmoPivotWorld is not null))
         {
-            var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
+            // Pivot from main's transform overhaul (respects a node's own pivot);
+            // scale from GizmoScaleAt so the gizmo is sized correctly under ortho too.
+            var nodePos = GizmoPivotWorld ?? PivotWorldOf(SelectedNode!);
             float scale = GizmoScaleAt(nodePos);
 
             GL.Clear(ClearBufferMask.DepthBufferBit);
@@ -1729,7 +1789,8 @@ public sealed class SceneRenderer : IDisposable
 
             if (GizmoEnabled && GizmoMode != GizmoMode.None)
             {
-                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis);
+                _gizmo.Draw(nodePos, scale, mvp, GizmoMode, GizmoAxisBasis,
+                            drawScaleCenter: !MoveOriginActive);
                 if (GizmoMode == GizmoMode.Rotate && ActiveDragAxis != GizmoAxis.None)
                     _gizmo.DrawRingHighlight(nodePos, ActiveDragAxis, scale, mvp, GizmoAxisBasis);
             }
@@ -1857,14 +1918,26 @@ public sealed class SceneRenderer : IDisposable
     /// range each column spans (the model's Z extent) — guides seam every layer, so they render
     /// full height rather than as a marker at one Z.
     /// </summary>
-    public void SetSeamGuides(IReadOnlyList<Vector3> points, int selectedIndex = -1,
+    public void SetSeamGuides(IReadOnlyList<Vector3> points,
+        IReadOnlyList<IReadOnlyList<Vector3>> paths, int selectedIndex = -1,
         float zMin = 0f, float zMax = 0f)
     {
         _seamGuidePoints        = points;
+        _seamGuidePaths         = paths;
         _seamGuideSelectedIndex = selectedIndex;
         _seamGuideZMin          = zMin;
         _seamGuideZMax          = zMax;
         _seamGuidesDirty        = true;
+    }
+
+    /// <summary>
+    /// Fallback guide shape when there is no sliced wall to follow (model not sliced yet):
+    /// the original straight column over the stored height range.
+    /// </summary>
+    private IReadOnlyList<Vector3> StraightGuidePath(Vector3 g)
+    {
+        float zHi = _seamGuideZMax > _seamGuideZMin ? _seamGuideZMax : _seamGuideZMin + 1f;
+        return [new Vector3(g.X, g.Y, _seamGuideZMin), new Vector3(g.X, g.Y, zHi)];
     }
 
     /// <summary>Squared distance from <paramref name="p"/> to segment ab (screen space).</summary>
@@ -1878,13 +1951,14 @@ public sealed class SceneRenderer : IDisposable
     }
 
     /// <summary>Ghost column under the cursor while placing a guide; null clears it.</summary>
-    public void SetSeamGuidePreview(Vector3? point)
+    public void SetSeamGuidePreview(Vector3? point, IReadOnlyList<Vector3>? path = null)
     {
         bool had = _seamGuidePreview.HasValue;
         if (!had && point is null) return;
         if (had && point is { } p && Vector3.Distance(_seamGuidePreview!.Value, p) < 0.5f) return;
-        _seamGuidePreview = point;
-        _seamGuidesDirty  = true;
+        _seamGuidePreview     = point;
+        _seamGuidePreviewPath = point is null ? null : path;
+        _seamGuidesDirty      = true;
     }
 
     /// <summary>Sets the angled-slice direction helper arrow (world space). <paramref name="visible"/>
@@ -2082,25 +2156,30 @@ public sealed class SceneRenderer : IDisposable
 
         for (int i = 0; i < _seamGuidePoints.Count; i++)
         {
-            // Guides draw as full-height columns, so hit-test the whole projected column,
-            // not just the stored point — otherwise only one spot on the line is grabbable.
-            var g   = _seamGuidePoints[i];
-            var top = WorldToScreen(new Vector3(g.X, g.Y, _seamGuideZMax), viewProj, vpW, vpH);
-            var bot = WorldToScreen(new Vector3(g.X, g.Y, _seamGuideZMin), viewProj, vpW, vpH);
+            // Guides draw as a curve hugging the wall, so hit-test every projected segment, not
+            // just the stored point — otherwise only one spot on the line is grabbable.
+            var path = i < _seamGuidePaths.Count && _seamGuidePaths[i].Count >= 2
+                ? _seamGuidePaths[i]
+                : StraightGuidePath(_seamGuidePoints[i]);
 
-            float d2;
-            if (float.IsNaN(top.X) && float.IsNaN(bot.X)) continue;
-            if (float.IsNaN(top.X) || float.IsNaN(bot.X))
+            var prev = WorldToScreen(path[0], viewProj, vpW, vpH);
+            for (int k = 1; k < path.Count; k++)
             {
-                var only = float.IsNaN(top.X) ? bot : top;
-                d2 = (only - click).LengthSquared;
-            }
-            else d2 = DistanceToSegmentSquared(click, bot, top);
+                var cur = WorldToScreen(path[k], viewProj, vpW, vpH);
 
-            if (d2 < bestDist)
-            {
-                bestDist = d2;
-                best     = i;
+                float d2;
+                if (float.IsNaN(prev.X) && float.IsNaN(cur.X)) { prev = cur; continue; }
+                if (float.IsNaN(prev.X) || float.IsNaN(cur.X))
+                    d2 = ((float.IsNaN(prev.X) ? cur : prev) - click).LengthSquared;
+                else
+                    d2 = DistanceToSegmentSquared(click, prev, cur);
+
+                if (d2 < bestDist)
+                {
+                    bestDist = d2;
+                    best     = i;
+                }
+                prev = cur;
             }
         }
 
@@ -2211,7 +2290,7 @@ public sealed class SceneRenderer : IDisposable
         if (SelectedNode is null && GizmoPivotWorld is null)
             return GizmoAxis.None;
 
-        var nodePos = GizmoPivotWorld ?? SelectedNode!.WorldTransform.Row3.Xyz;
+        var nodePos = GizmoPivotWorld ?? PivotWorldOf(SelectedNode!);
         // MUST match the draw pass exactly, or the handles you see are not the handles
         // you can grab.
         float scale = GizmoScaleAt(nodePos);

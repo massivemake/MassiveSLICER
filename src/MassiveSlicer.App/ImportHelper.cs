@@ -37,7 +37,36 @@ internal static class ImportHelper
 
         NormalizeUnitScale(node, log);
         PlaceOnBed(node, activeCell);
+        CenterOrigin(node);
         return node;
+    }
+
+    /// <summary>
+    /// Gives <paramref name="node"/> a pivot at the centre of its own bounding box, once, without
+    /// the geometry moving. Applied to every fresh import and to every piece a cut creates.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without this the pivot is wherever the exporting package left its origin — frequently far
+    /// outside the part — so the gizmo appeared detached from the mesh and every rotation swung the
+    /// part around a distant point. Toolpath nodes have always centred their own origin on their
+    /// centroid (<c>SceneRenderer.AddToolpath</c>); this brings meshes in line with that.
+    /// </para>
+    /// <para>
+    /// Deliberately a one-time move at creation rather than a value recomputed as the part changes:
+    /// a pivot that silently followed the geometry would shift under the user mid-edit. Re-centring
+    /// later is an explicit Recenter Origin press.
+    /// </para>
+    /// <para>
+    /// Called after <see cref="PlaceOnBed"/> so the pivot's recorded position already accounts for
+    /// bed placement and any unit-scale correction. Does nothing to a node that already carries a
+    /// placement, so restoring a saved workspace keeps whatever pivot that file specified.
+    /// </para>
+    /// </remarks>
+    internal static void CenterOrigin(SceneNode node)
+    {
+        if (NodeBounds.LocalCenter(node) is not { } center) return;
+        node.EnsurePlacement(center);
     }
 
     /// <summary>
@@ -229,149 +258,21 @@ internal static class ImportHelper
         return nativeRoot;
     }
 
-    /// <summary>
-    /// Moves the node origin to the bottom-center of its mesh bounds while keeping world geometry fixed.
-    /// Bakes per-mesh vertex offsets and compensates via the root transform; callers must re-upload GPU meshes.
-    /// </summary>
-    internal static bool RecenterPivotToBottomCenter(SceneNode root)
-    {
-        if (!TryComputeBottomCenterLocal(root, out var bottomCenter))
-            return false;
-
-        if (!IsFinite(bottomCenter))
-            return false;
-
-        int expected = CountEditableMeshes(root);
-        if (expected == 0)
-            return false;
-
-        int moved = OffsetSubtreeMeshPositionsInRootLocal(root, -bottomCenter);
-        if (moved != expected)
-            return false;
-
-        root.LocalTransform = root.LocalTransform * Matrix4.CreateTranslation(bottomCenter);
-        return true;
-    }
-
-    internal static Dictionary<SceneNode, Matrix4> SnapshotSubtreeTransforms(SceneNode root)
-    {
-        var snap = new Dictionary<SceneNode, Matrix4>();
-        foreach (var n in root.SelfAndDescendants())
-            snap[n] = n.LocalTransform;
-        return snap;
-    }
-
-    internal static void RestoreSubtreeTransforms(SceneNode root, Dictionary<SceneNode, Matrix4> transforms)
-    {
-        foreach (var n in root.SelfAndDescendants())
-        {
-            if (transforms.TryGetValue(n, out var local))
-                n.LocalTransform = local;
-        }
-    }
-
-    internal static Dictionary<SceneNode, MeshData?> SnapshotSubtreeMeshes(SceneNode root)
-    {
-        var snap = new Dictionary<SceneNode, MeshData?>();
-        foreach (var n in root.SelfAndDescendants())
-            snap[n] = CloneMeshSnapshot(n);
-        return snap;
-    }
-
-    internal static void RestoreMeshSnapshot(SceneNode node, MeshData? mesh)
-    {
-        if (mesh is null)
-        {
-            node.PendingMesh = null;
-            return;
-        }
-
-        node.PendingMesh = CloneMeshData(mesh);
-    }
-
-    internal static void RestoreSubtreeSnapshot(
-        SceneNode root,
-        Dictionary<SceneNode, Matrix4> transforms,
-        Dictionary<SceneNode, MeshData?> meshes)
-    {
-        RestoreSubtreeTransforms(root, transforms);
-        foreach (var (node, mesh) in meshes)
-            RestoreMeshSnapshot(node, mesh);
-    }
-
-    private static MeshData? CloneMeshSnapshot(SceneNode node)
-    {
-        if (node.PendingMesh is { } pending) return CloneMeshData(pending);
-        if (node.Mesh?.PickingData is { } gpu) return CloneMeshData(gpu);
-        return null;
-    }
+    // Deleted 2026-08-01: RecenterPivotToBottomCenter and its whole support cast — the subtree
+    // transform/mesh snapshots, the restore path, and NodeRecenterAction.
+    //
+    // It rewrote every vertex so the model's own zero became its bottom centre, then compensated
+    // with the root transform. Recenter is a pivot move now, which is four numbers and instant. The
+    // bake bought nothing visible — slicing works off world transforms — while costing a GPU
+    // re-upload, an undo snapshot of every vertex array, and a bug that left the part correctly
+    // positioned but not drawing at all. Nothing had enqueued a recenter job since; this was
+    // unreachable code with live-looking tests around it.
 
     private static MeshData CloneMeshData(MeshData mesh) =>
         new(mesh.Positions.ToArray(), mesh.Normals.ToArray(), mesh.Indices?.ToArray() ?? [], mesh.Name,
             mesh.BaseColor, mesh.Metallic, mesh.Roughness,
             mesh.Uvs?.ToArray(), mesh.Tangents?.ToArray(), mesh.Material);
 
-    private static bool TryComputeBottomCenterLocal(SceneNode root, out Vector3 bottomCenterLocal)
-    {
-        bottomCenterLocal = default;
-        var (wMin, wMax)  = ComputeSubtreeWorldAabb(root);
-        if (wMin.X > wMax.X) return false;
-
-        var bcWorld = new Vector3(
-            (wMin.X + wMax.X) * 0.5f,
-            (wMin.Y + wMax.Y) * 0.5f,
-            wMin.Z);
-
-        bottomCenterLocal = TransformPoint(bcWorld, root.WorldTransform.Inverted());
-        return true;
-    }
-
-    private static int OffsetSubtreeMeshPositionsInRootLocal(SceneNode root, Vector3 rootLocalOffset)
-    {
-        var toRootFromMesh = root.WorldTransform.Inverted();
-        int moved = 0;
-        foreach (var n in root.SelfAndDescendants())
-        {
-            var mesh = GetOrCloneEditableMesh(n);
-            if (mesh is null) continue;
-
-            var meshToRoot = n.WorldTransform * toRootFromMesh;
-            var shift      = TransformPoint(rootLocalOffset, meshToRoot.Inverted());
-            if (!IsFinite(shift)) continue;
-
-            for (int i = 0; i < mesh.Positions.Length; i++)
-                mesh.Positions[i] += shift;
-
-            n.PendingMesh = CloneMeshData(mesh);
-            moved++;
-        }
-        return moved;
-    }
-
-    private static MeshData? GetOrCloneEditableMesh(SceneNode node)
-    {
-        if (node.PendingMesh is { } pending) return pending;
-        if (node.Mesh?.PickingData is not { } gpu)
-            return null;
-
-        var clone = CloneMeshData(gpu);
-        node.PendingMesh = clone;
-        return clone;
-    }
-
-    private static bool IsFinite(Vector3 v)
-        => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
-
-    private static int CountEditableMeshes(SceneNode root)
-    {
-        int count = 0;
-        foreach (var n in root.SelfAndDescendants())
-        {
-            if (n.PendingMesh is not null || n.Mesh?.PickingData is not null)
-                count++;
-        }
-        return count;
-    }
 
     private static Vector3 TransformPoint(Vector3 p, Matrix4 m)
         => new(
@@ -379,6 +280,17 @@ internal static class ImportHelper
             p.X * m.M12 + p.Y * m.M22 + p.Z * m.M32 + m.M42,
             p.X * m.M13 + p.Y * m.M23 + p.Z * m.M33 + m.M43);
 
+    /// <summary>
+    /// World-space bounds of the subtree's real geometry.
+    /// </summary>
+    /// <remarks>
+    /// Authoring overlays are excluded, as <see cref="SceneNode.IsAuthoringOverlay"/> promises. A cut
+    /// modifier's plane and the Move Origin box are real child nodes with real geometry extending
+    /// well past the part, so counting them made Recenter measure the overlay's bottom instead of the
+    /// model's and bake a wildly wrong offset. Note this is a <em>measurement</em> fix only — the
+    /// bake itself must still shift every mesh in the subtree, overlays included, or they would be
+    /// left behind in the part's old coordinates.
+    /// </remarks>
     internal static (Vector3 Min, Vector3 Max) ComputeSubtreeWorldAabb(SceneNode root)
     {
         var min = new Vector3(float.MaxValue);
@@ -387,6 +299,7 @@ internal static class ImportHelper
 
         foreach (var n in root.SelfAndDescendants())
         {
+            if (n.IsAuthoringOverlay) continue;
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null || mesh.Positions.Length == 0) continue;
 
@@ -420,6 +333,9 @@ internal static class ImportHelper
 
         foreach (var n in root.SelfAndDescendants())
         {
+            // Overlays out, same reason as ComputeSubtreeWorldAabb — this one drives bed placement
+            // and the metres-as-millimetres check, so a cut plane in the subtree would skew both.
+            if (n.IsAuthoringOverlay) continue;
             if (n.PendingMesh is not { } mesh) continue;
 
             var world        = n.WorldTransform;

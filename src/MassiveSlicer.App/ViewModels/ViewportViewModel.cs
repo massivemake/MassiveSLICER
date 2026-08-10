@@ -25,7 +25,7 @@ namespace MassiveSlicer.ViewModels;
 /// and overlay visibility flags. The actual OpenGL rendering lives in
 /// <c>MassiveSlicer.Viewport</c>; this ViewModel only holds bindable state.
 /// </summary>
-public sealed class ViewportViewModel : ViewModelBase
+public sealed partial class ViewportViewModel : ViewModelBase
 {
     private SelectionMode _selectionMode = SelectionMode.Object;
 
@@ -34,6 +34,191 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         get => _selectionMode;
         set => SetField(ref _selectionMode, value);
+    }
+
+    // ── Mill OPERATION → SELECT AREA (mesh-face region on the workpiece) ──────
+
+    private MillAreaSelectTool _millAreaSelectTool = MillAreaSelectTool.WholeModel;
+
+    /// <summary>
+    /// Active mill area tool from the Mill sidebar. When not
+    /// <see cref="MillAreaSelectTool.WholeModel"/>, viewport input paints faces
+    /// exclusively on user workpieces (imports/scans) — never robot / bed / cell.
+    /// </summary>
+    public MillAreaSelectTool MillAreaSelectTool
+    {
+        get => _millAreaSelectTool;
+        set
+        {
+            if (!SetField(ref _millAreaSelectTool, value)) return;
+            OnPropertyChanged(nameof(IsMillAreaSelectActive));
+            OnPropertyChanged(nameof(IsMillAreaBrush));
+            OnPropertyChanged(nameof(IsMillAreaBox));
+            OnPropertyChanged(nameof(IsMillAreaLasso));
+            OnPropertyChanged(nameof(IsMillAreaFace));
+            OnPropertyChanged(nameof(ShowMillBrushToolbar));
+            NotifyRenderNeeded();
+        }
+    }
+
+    /// <summary>True while a face-region tool is armed (Face / Box / Lasso / Brush).</summary>
+    public bool IsMillAreaSelectActive =>
+        MillAreaSelectTool is MillAreaSelectTool.Face
+            or MillAreaSelectTool.Box
+            or MillAreaSelectTool.Lasso
+            or MillAreaSelectTool.Brush;
+
+    public bool IsMillAreaBrush => MillAreaSelectTool == MillAreaSelectTool.Brush;
+    public bool IsMillAreaBox   => MillAreaSelectTool == MillAreaSelectTool.Box;
+    public bool IsMillAreaLasso => MillAreaSelectTool == MillAreaSelectTool.Lasso;
+    public bool IsMillAreaFace  => MillAreaSelectTool == MillAreaSelectTool.Face;
+
+    private double _millBrushRadiusMm = 25.0;
+
+    /// <summary>Soft-brush radius in world millimetres. Edit via right-click brush menu.</summary>
+    public double MillBrushRadiusMm
+    {
+        get => _millBrushRadiusMm;
+        set => SetField(ref _millBrushRadiusMm, Math.Clamp(value, 2.0, 400.0));
+    }
+
+    private double _millBrushFalloff = 0.65;
+
+    /// <summary>Brush edge falloff 0 = hard, 1 = soft gaussian. Right-click menu.</summary>
+    public double MillBrushFalloff
+    {
+        get => _millBrushFalloff;
+        set => SetField(ref _millBrushFalloff, Math.Clamp(value, 0.0, 1.0));
+    }
+
+    /// <summary>
+    /// Bottom-center brush toolbar while SELECT AREA → Brush is armed.
+    /// Fixed above the timeline (~250px from bottom).
+    /// </summary>
+    public bool ShowMillBrushToolbar => IsMillAreaBrush;
+
+    /// <summary>
+    /// Workpiece root locked once the first stroke is painted (one model per operation).
+    /// Null until first hit or when cleared.
+    /// </summary>
+    public SceneNode? MillAreaTargetRoot { get; private set; }
+
+    private int _millPaintedVertices;
+    private float _millPaintCoverage;
+
+    /// <summary>Vertices with selection weight (soft brush coverage proxy).</summary>
+    public int MillPaintedVertices
+    {
+        get => _millPaintedVertices;
+        private set
+        {
+            if (!SetField(ref _millPaintedVertices, value)) return;
+            OnPropertyChanged(nameof(MillAreaStatusText));
+        }
+    }
+
+    /// <summary>Alias for older bindings / status.</summary>
+    public int MillPaintedTexels => MillPaintedVertices;
+
+    /// <summary>Fraction of vertices painted (0..1).</summary>
+    public float MillPaintCoverage
+    {
+        get => _millPaintCoverage;
+        private set => SetField(ref _millPaintCoverage, value);
+    }
+
+    /// <summary>Status line for the SELECT AREA card.</summary>
+    public string MillAreaStatusText
+    {
+        get
+        {
+            if (MillAreaSelectTool == MillAreaSelectTool.WholeModel)
+                return "Whole model";
+            string tool = MillAreaSelectTool switch
+            {
+                MillAreaSelectTool.Face  => "Face",
+                MillAreaSelectTool.Box   => "Box",
+                MillAreaSelectTool.Lasso => "Lasso",
+                MillAreaSelectTool.Brush => "Brush",
+                _ => "Area",
+            };
+            string target = MillAreaTargetRoot?.Name is { Length: > 0 } n
+                ? $" on \"{n}\""
+                : " — paint the milling model only";
+            if (MillPaintedVertices <= 0)
+                return $"{tool}: soft brush{target} · Alt erases · size/falloff on bottom bar";
+            return $"{tool}: {MillPaintCoverage * 100f:0.#}% ({MillPaintedVertices:N0} verts){target}";
+        }
+    }
+
+    /// <summary>Raised when mill surface paint changes.</summary>
+    internal Action? OnMillAreaSelectionChanged { get; set; }
+
+    /// <summary>Viewport owns the paint masks; calls this to clear GL resources.</summary>
+    internal Action? ClearMillSurfacePaint { get; set; }
+
+    /// <summary>Optional host log sink (app console).</summary>
+    internal Action<string>? LogMill { get; set; }
+
+    /// <summary>Describe paint layers for console/MCP diagnostics.</summary>
+    internal Func<string>? DescribeMillPaint { get; set; }
+
+    internal void SetMillAreaTargetRoot(SceneNode? root)
+    {
+        if (MillAreaTargetRoot == root) return;
+        MillAreaTargetRoot = root;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+    }
+
+    internal void UpdateMillPaintStats(int paintedVertices, float coverage01)
+    {
+        MillPaintCoverage = Math.Clamp(coverage01, 0f, 1f);
+        MillPaintedVertices = paintedVertices;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+        OnMillAreaSelectionChanged?.Invoke();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>Clears surface paint and unlocks the target model.</summary>
+    public void ClearMillAreaSelection()
+    {
+        ClearMillSurfacePaint?.Invoke();
+        MillAreaTargetRoot = null;
+        MillPaintCoverage = 0;
+        MillPaintedVertices = 0;
+        OnPropertyChanged(nameof(MillAreaStatusText));
+        OnMillAreaSelectionChanged?.Invoke();
+        NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// True when <paramref name="node"/> (or its selectable root) is a user workpiece
+    /// mesh suitable for milling area selection — imports and scans, never robot/bed/cell
+    /// infrastructure, toolpaths, effectors, or modifiers.
+    /// </summary>
+    internal bool IsMillableWorkpiece(SceneNode? node)
+    {
+        if (node is null) return false;
+        if (IsEffectorNode(node) || IsModifierNode(node) || IsModifiersGroupNode(node))
+            return false;
+
+        var item = FindUserMeshOutlinerItem(node);
+        if (item is null) return false;
+        if (item.IsToolpath || item.IsEffector || item.IsModifier || item.IsModifiersGroup)
+            return false;
+
+        // Lock to first painted model (same outliner item or under that root).
+        if (MillAreaTargetRoot is { } locked)
+        {
+            for (var c = node; c is not null; c = c.Parent)
+                if (c == locked) return true;
+            var lockedItem = FindUserMeshOutlinerItem(locked);
+            if (lockedItem is not null && ReferenceEquals(lockedItem, item))
+                return true;
+            return false;
+        }
+
+        return true;
     }
 
     private TransformTool _activeTool = TransformTool.Select;
@@ -277,6 +462,18 @@ public sealed class ViewportViewModel : ViewModelBase
             if (!SetField(ref _showOrientationPreview, value)) return;
             if (value && _showBeadOverhang) { _showBeadOverhang = false; OnPropertyChanged(nameof(ShowBeadOverhang)); }
         }
+    }
+
+    private bool _showRpmOverLimit;
+    /// <summary>
+    /// Highlight extrusion moves whose exported RPM exceeds
+    /// <see cref="MassiveSlicer.Core.IO.ToolpathRpm.MaxRpmPercent"/>. Per-view setting
+    /// (on by default in the RPM view); those moves also block export.
+    /// </summary>
+    public bool ShowRpmOverLimit
+    {
+        get => _showRpmOverLimit;
+        set { if (SetField(ref _showRpmOverLimit, value)) NotifyRenderNeeded(); }
     }
 
     private bool _showExtrusionMoves = true;
@@ -809,8 +1006,12 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public LiveIoMonitorViewModel LiveIo { get; } = new();
 
-    /// <summary>Standalone Live I/O dock for cells without the LFAM 3 workflow bar.</summary>
-    public bool ShowStandaloneLiveIo => ActiveCell is not null && !ShowLfam3ToolPicker;
+    /// <summary>
+    /// Bottom-right Live I/O toggle + panel on the viewport for every active cell.
+    /// (LFAM 3 used to host this inside the large workflow timeline; that bar is hidden
+    /// while phase switching lives in the sidebar, so the dock must show on LFAM 3 too.)
+    /// </summary>
+    public bool ShowStandaloneLiveIo => ActiveCell is not null;
 
     private Avalonia.Thickness _bottomDockMargin = new(8, 8, 8, 8);
     /// <summary>Margin for the bottom corner docks (ERP left, Live I/O right). The overlay
@@ -1159,7 +1360,10 @@ public sealed class ViewportViewModel : ViewModelBase
     {
         if (!ShowLfam3ToolPicker) return;
         _lfam3WorkflowPhaseIndex = phaseIndex;
-        SelectLfam3Tool(toolName);
+        // Phase UI / sidebar only. Do not mount or select the phase tool here —
+        // that was selecting the TCP toolhead in the viewport on every Print/Scan/Mill click.
+        // Explicit pick/deposit (or robot tool dropdown) still mounts tools when the user asks.
+        _ = toolName;
         NotifyWorkflowStateChanged();
     }
 
@@ -1168,7 +1372,7 @@ public sealed class ViewportViewModel : ViewModelBase
         if (!ShowLfam3ToolPicker) return;
         int? phase = MountedToolName switch
         {
-            "HV Extruder" => PrintPhaseIndex,
+            "Extruder" or "HV Extruder" => PrintPhaseIndex,
             "Spindle"     => MillPhaseIndex,
             _             => null,
         };
@@ -1222,17 +1426,17 @@ public sealed class ViewportViewModel : ViewModelBase
 
     static string PickSequenceId(string cellToolName) => cellToolName switch
     {
-        "HV Extruder" => "Extruder_Pick",
-        "Scanner"     => "Scanner_Pick",
-        "Spindle"     => "Spindle_Pick",
+        "Extruder" or "HV Extruder" => "Extruder_Pick",
+        "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => "Scanner_Pick",
+        "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => "Spindle_Pick",
         _             => "",
     };
 
     static string DepositSequenceId(string cellToolName) => cellToolName switch
     {
-        "HV Extruder" => "Extruder_Deposit",
-        "Scanner"     => "Scanner_Deposit",
-        "Spindle"     => "Spindle_Deposit",
+        "Extruder" or "HV Extruder" => "Extruder_Deposit",
+        "Scanner" or "Scanner (Calibrated)" or "Scanner (No Calibration)" => "Scanner_Deposit",
+        "Spindle" or "Spindle (No Bit)" or "Spindle (Probe)" => "Spindle_Deposit",
         _             => "",
     };
 
@@ -1465,8 +1669,17 @@ public sealed class ViewportViewModel : ViewModelBase
     public double SelectionB { get => _selB; set { if (SetField(ref _selB, value)) FireSelRotated(); } }
     public double SelectionC { get => _selC; set { if (SetField(ref _selC, value)) FireSelRotated(); } }
 
+    private double _selSx = 1, _selSy = 1, _selSz = 1;
+
+    /// <summary>Per-axis scale of the selection. Displayed as real millimetre dimensions or as a
+    /// percentage of the imported size depending on the scale tool's own mm/% toggle.</summary>
+    public double SelectionScaleX { get => _selSx; set { if (SetField(ref _selSx, value)) FireSelScaled(); } }
+    public double SelectionScaleY { get => _selSy; set { if (SetField(ref _selSy, value)) FireSelScaled(); } }
+    public double SelectionScaleZ { get => _selSz; set { if (SetField(ref _selSz, value)) FireSelScaled(); } }
+
     internal Action<double, double, double>? OnSelectionTranslated { get; set; }
     internal Action<double, double, double>? OnSelectionRotated    { get; set; }
+    internal Action<double, double, double>? OnSelectionScaled     { get; set; }
 
     /// <summary>Shared undo/redo stack for transform edits in the viewport.</summary>
     internal UndoRedoService? UndoRedo { get; set; }
@@ -1476,6 +1689,15 @@ public sealed class ViewportViewModel : ViewModelBase
 
     private void FireSelTranslated() { if (!_suppressTransformCb) OnSelectionTranslated?.Invoke(_selX, _selY, _selZ); }
     private void FireSelRotated()    { if (!_suppressTransformCb) OnSelectionRotated?.Invoke(_selA, _selB, _selC); }
+    private void FireSelScaled()     { if (!_suppressTransformCb) OnSelectionScaled?.Invoke(_selSx, _selSy, _selSz); }
+
+    /// <summary>Syncs the displayed per-axis scale without triggering the apply callback.</summary>
+    internal void SyncSelectionScaleDisplay(double x, double y, double z)
+    {
+        _suppressTransformCb = true;
+        SelectionScaleX = x; SelectionScaleY = y; SelectionScaleZ = z;
+        _suppressTransformCb = false;
+    }
 
     /// <summary>Syncs the displayed transform values without triggering apply callbacks.</summary>
     internal void SyncSelectionDisplay(double x, double y, double z, double a, double b, double c)
@@ -3206,12 +3428,21 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
+    /// <summary>
+    /// True only while <see cref="ResetScrubIndex"/> is swapping in a new path. Blocks write-backs
+    /// from bound controls during the window where the layer table, the max and the index describe
+    /// different paths — see the long comment in that method.
+    /// </summary>
+    private bool _scrubResetting;
+
     /// <summary>Current scrubber position (move index). Bound to the slider value.</summary>
     public int ToolpathScrubIndex
     {
         get => _toolpathScrubIndex;
         set
         {
+            // A control echoing a half-swapped state back at us is not a user edit.
+            if (_scrubResetting) return;
             int clamped = Math.Clamp(value, 0, Math.Max(0, _toolpathScrubMax));
             if (SetField(ref _toolpathScrubIndex, clamped))
             {
@@ -3575,12 +3806,26 @@ public sealed class ViewportViewModel : ViewModelBase
             OnPropertyChanged(nameof(IsPlaying));
             OnPlaybackToggled?.Invoke(false);
         }
+        // Everything from here to the end of the method is one atomic swap as far as the bound
+        // controls are concerned. Without the guard, RebuildScrubLayerEnds below raises property
+        // changes while _scrubLayerEnds already describes the NEW path but _toolpathScrubMax still
+        // holds the OLD path's total — and the layer-high slider's two-way binding writes back into
+        // ToolpathScrubIndex in exactly that window. Traced live on a 50% scale: a full path at
+        // 95,206/95,206 came back as 34,659 clamped against 95,206, i.e. a third of the way in.
+        //
+        // The damage lands in two visible places, which is why it looked like two unrelated bugs:
+        // Body view draws the scrub window, so the part renders unfinished; and the robot is posed
+        // at this index after a re-slice, so it drives to a pose nobody asked for.
+        _scrubResetting = true;
+        try
+        {
         ActiveScrubToolpath = toolpath;
         RebuildScrubLayerEnds(toolpath);
         ExportKrlCommand?.RaiseCanExecuteChanged();
         UpdateSliceCommand?.RaiseCanExecuteChanged();
 
-        int previous = _toolpathScrubIndex;
+        int previous    = _toolpathScrubIndex;
+        int previousMax = _toolpathScrubMax;
         _toolpathScrubMax = Math.Max(0, max);
         OnPropertyChanged(nameof(ToolpathScrubMax));
         OnPropertyChanged(nameof(ToolpathScrubMaxLabel));
@@ -3590,7 +3835,22 @@ public sealed class ViewportViewModel : ViewModelBase
             index = 0;
         else if (preservePosition)
         {
-            index = Math.Clamp(previous, 0, _toolpathScrubMax);
+            // Hold the same FRACTION of the path, not the same absolute move number. A resize
+            // changes the move count wholesale — 95,206 → 34,659 on a 50% scale — so an absolute
+            // index means something completely different afterwards. Shrinking, it clamped to the
+            // end; GROWING, it stayed put: coming back from 25% to full size left the scrub on
+            // move 10,433 of 95,206 and drew 11% of the part. Jeff: "a reset scale gave me the
+            // wrong sized toolpath."
+            //
+            // This is the same rule that was reverted earlier today, and it is only correct now
+            // because `previous` can be trusted: the _scrubResetting guard above stops a bound
+            // control writing a new-path index over it mid-swap. Fed that corrupted value, this
+            // arithmetic turned a full path into a third of one, which is what made it look like
+            // the fraction idea itself was wrong. It was the input.
+            double fraction = previousMax > 0 ? (double)previous / previousMax : 1d;
+            index = (int)Math.Round(Math.Clamp(fraction, 0d, 1d) * _toolpathScrubMax,
+                                    MidpointRounding.AwayFromZero);
+            index = Math.Clamp(index, 0, _toolpathScrubMax);
             // Scrub index is an exclusive end: 0 → draw zero moves. Never preserve a
             // blank window when the path has content (common after re-arming edit scrub
             // with a stale default index of 0).
@@ -3607,7 +3867,11 @@ public sealed class ViewportViewModel : ViewModelBase
             _toolpathScrubLowIndex = 0;
         else if (_toolpathScrubLowIndex >= _toolpathScrubIndex)
             _toolpathScrubLowIndex = Math.Max(0, _toolpathScrubIndex - 1);
+        }
+        finally { _scrubResetting = false; }
 
+        // Notifications go out only now, with index, max and layer table all describing the same
+        // path. A control writing back at this point writes back the right value.
         OnPropertyChanged(nameof(ToolpathScrubIndex));
         OnPropertyChanged(nameof(ToolpathScrubText));
         OnPropertyChanged(nameof(ToolpathScrubLabel));
@@ -4101,6 +4365,9 @@ public sealed class ViewportViewModel : ViewModelBase
             ApplyViewMode();
             ApplyViewDisplayProfile();
             if (value != "Toolpath") StopSimTimeline();
+            // Each view owns where the arm sits, so changing view re-poses it. Ignored while the
+            // robot is synced — the live machine outranks any of this.
+            OnViewGovernedPoseChanged?.Invoke();
             OnPropertyChanged(nameof(IsToolpathViewActive));
             OnPropertyChanged(nameof(ShowSimTimeline));
             OnPropertyChanged(nameof(ShowPlaybackTimeline));
@@ -4290,6 +4557,46 @@ public sealed class ViewportViewModel : ViewModelBase
     });
     private RelayCommand? _simExportVideoCommand;
 
+    /// <summary>
+    /// Where the robot belongs for the view currently on screen — the same rule the renderer uses
+    /// to decide how much of the path to draw, so the arm and the picture always agree.
+    /// </summary>
+    /// <remarks>
+    /// A re-slice re-poses the arm on purpose (RunUpdateSliceAsync, and the pending-replace drain),
+    /// and it used to pass <see cref="ToolpathScrubIndex"/> raw. That is the toolpath EDIT
+    /// scrubber's position, so scaling, rotating, optimizing or rebuilding drove the arm back to a
+    /// mid-print pose from a mode the user had left — in every view, every time. Jeff, 2026-08-04:
+    /// "Scaling, rotating, optimizing, rebuilding path. Arm still stays in toolpath edit position."
+    /// <para>
+    /// Body carries no timeline, so it reports the end of the path: the same "no timeline means
+    /// 100%" rule that governs what Body draws.
+    /// </para>
+    /// </remarks>
+    /// <summary>
+    /// Raised when the view changes, so the viewport can move the arm to that view's position.
+    /// </summary>
+    internal Action? OnViewGovernedPoseChanged { get; set; }
+
+    /// <summary>
+    /// True when the live robot owns the arm's pose and nothing here may drive it. Sync outranks
+    /// every view rule — driving IK calls <c>Desync()</c>, which would silently drop the machine
+    /// connection just because someone clicked a view tab.
+    /// </summary>
+    internal bool RobotOwnsPose => Robot?.IsConnected == true;
+
+    internal int ViewGovernedScrubIndex
+    {
+        get
+        {
+            float sim = SimRenderProgress;
+            if (sim >= 0f)
+                return Math.Clamp((int)Math.Round(sim * _toolpathScrubMax), 0, _toolpathScrubMax);
+            if (_viewMode == "Body")
+                return _toolpathScrubMax;
+            return _toolpathScrubIndex;
+        }
+    }
+
     /// <summary>Drained by the GL loop: 0–1 while the sim timeline governs, −1 = off
     /// (also off while a selected toolpath's full playback card owns the scrub).</summary>
     internal float SimRenderProgress
@@ -4420,6 +4727,11 @@ public sealed class ViewportViewModel : ViewModelBase
         public bool ShowTravelMoves { get; set; } = true;
         public bool ShowWipeMoves { get; set; } = true;
         public bool ShowSeam { get; set; } = true;
+
+        /// <summary>Null = never chosen for this view; falls back to the per-view default
+        /// (on in RPM). Nullable so profiles saved before this setting existed don't
+        /// deserialize to false and silently turn the highlight off.</summary>
+        public bool? ShowRpmOverLimit { get; set; }
     }
 
     /// <summary>
@@ -4511,6 +4823,7 @@ public sealed class ViewportViewModel : ViewModelBase
         nameof(BackdropOpacity), nameof(BackdropBlur), nameof(ToolpathLineOpacity),
         nameof(ShowBead), nameof(ShowExtrusionMoves), nameof(ShowTravelMoves),
         nameof(ShowWipeMoves), nameof(ShowSeam),
+        nameof(ShowRpmOverLimit),
     ];
 
     /// <summary>
@@ -4546,6 +4859,7 @@ public sealed class ViewportViewModel : ViewModelBase
             prof.ShowTravelMoves    = ShowTravelMoves;
             prof.ShowWipeMoves      = ShowWipeMoves;
             prof.ShowSeam           = ShowSeam;
+            prof.ShowRpmOverLimit   = ShowRpmOverLimit;
         };
     }
 
@@ -4578,6 +4892,10 @@ public sealed class ViewportViewModel : ViewModelBase
                 _paintShowBeads = prof.ShowBead;
                 OnPropertyChanged(nameof(PaintShowBeads));
             }
+            // The RPM view is where an over-limit stretch matters most, so it starts on
+            // there and off elsewhere — until the operator ticks it for a view themselves.
+            // In edit mode the key is EditProfileKey, so it defaults off while path-editing.
+            ShowRpmOverLimit   = prof.ShowRpmOverLimit ?? (EffectiveProfileKey == "RPM");
             if (Enum.TryParse<ShaderMode>(prof.ShaderMode, out var sm))
                 ActiveShaderMode = sm;
         }
@@ -5006,35 +5324,35 @@ public sealed class ViewportViewModel : ViewModelBase
         TogglePrePrintScanStepCommand = new RelayCommand(
             () => HasPrePrintScanStep = !HasPrePrintScanStep, () => ShowLfam3ToolPicker);
         SelectPrePrintScanPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(0, "Scanner"),
+            () => SelectLfam3WorkflowPhase(0, "Scanner (Calibrated)"),
             () => ShowLfam3ToolPicker && HasPrePrintScanStep);
         SelectPrintPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(PrintPhaseIndex, "HV Extruder"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(PrintPhaseIndex, "Extruder"), () => ShowLfam3ToolPicker);
         SelectVerifyScanPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(ScanPhaseIndex, "Scanner (Calibrated)"), () => ShowLfam3ToolPicker);
         SelectMillPhaseCommand = new RelayCommand(
-            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle"), () => ShowLfam3ToolPicker);
+            () => SelectLfam3WorkflowPhase(MillPhaseIndex, "Spindle (No Bit)"), () => ShowLfam3ToolPicker);
         ToggleLfam3WorkflowCommand = new RelayCommand(
             () => IsLfam3WorkflowExpanded = !IsLfam3WorkflowExpanded, () => ShowLfam3ToolPicker);
 
         SimulateExtruderPickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Extruder_Pick"),
-            () => CanSimulateToolPick("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Extruder", MountedToolName, ShowLfam3ToolPicker));
         SimulateExtruderDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Extruder_Deposit"),
-            () => CanSimulateToolDeposit("HV Extruder", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Extruder", MountedToolName, ShowLfam3ToolPicker));
         SimulateScannerPickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Scanner_Pick"),
-            () => CanSimulateToolPick("Scanner", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Scanner (Calibrated)", MountedToolName, ShowLfam3ToolPicker));
         SimulateScannerDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Scanner_Deposit"),
-            () => CanSimulateToolDeposit("Scanner", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Scanner (Calibrated)", MountedToolName, ShowLfam3ToolPicker));
         SimulateSpindlePickCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Spindle_Pick"),
-            () => CanSimulateToolPick("Spindle", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolPick("Spindle (No Bit)", MountedToolName, ShowLfam3ToolPicker));
         SimulateSpindleDepositCommand = new RelayCommand(
             () => RequestToolChangeSimulation("Spindle_Deposit"),
-            () => CanSimulateToolDeposit("Spindle", MountedToolName, ShowLfam3ToolPicker));
+            () => CanSimulateToolDeposit("Spindle (No Bit)", MountedToolName, ShowLfam3ToolPicker));
 
         ExtruderToolPanel = new ToolChangePanelBinding(
             this, "HV EXTRUDER", "Extruder_Pick", "Extruder_Deposit",
@@ -5267,8 +5585,13 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddSeamGuidePoint(SeamGuidePoint point)
     {
+        // One guide, and placing a new one replaces it. The slicer resolves a single guide per
+        // closed contour, so on a one-island part every extra point beyond the nearest is dead
+        // weight — they stacked up in the list, could not be told apart, and blocked each other
+        // from being removed. Placing again is now how you move the seam.
+        SeamGuideDraft.Clear();
         SeamGuideDraft.Add(point);
-        SelectedSeamGuideIndex = SeamGuideDraft.Count - 1;
+        SelectedSeamGuideIndex = 0;
         IsSeamGuideLayerOpen = true;
         OnPropertyChanged(nameof(HasSeamGuideDraft));
         OnPropertyChanged(nameof(SeamGuideLayerLabel));
@@ -5661,6 +5984,15 @@ public sealed class ViewportViewModel : ViewModelBase
     internal Func<SceneNode, ToolpathSnapshot?>? GetToolpathSnapshot { get; set; }
 
     /// <summary>
+    /// The centroid a toolpath's GPU geometry was built relative to, so a diagnostic can reproduce
+    /// what is actually on screen: <c>rendered = (move - origin) * node.LocalTransform</c>. Without
+    /// it, reading raw move coordinates and calling them "world" silently ignores the node's own
+    /// transform — the mistake that made <c>align-debug</c> report a toolpath 179mm adrift as
+    /// perfectly aligned.
+    /// </summary>
+    internal Func<SceneNode, System.Numerics.Vector3?>? GetToolpathRenderOrigin { get; set; }
+
+    /// <summary>
     /// Reference to the additive settings ViewModel. Set by <c>MainWindowViewModel</c>
     /// so the slice command can read current parameters.
     /// </summary>
@@ -5792,6 +6124,10 @@ public sealed class ViewportViewModel : ViewModelBase
 
     /// <summary>Callback registered by the viewport code-behind to run the save-file dialog and write the KRL file.</summary>
     internal Func<Task>? OnExportKrlRequested { get; set; }
+    /// <summary>Per-move extruder RPM report for the selected toolpath, including every
+    /// stretch above the export limit. Wired by the viewport for the rpm-report command.</summary>
+    internal Func<string>? OnRpmReportRequested { get; set; }
+
     internal Func<Task>? OnSendToRobotRequested { get; set; }
 
     /// <summary>Merges the currently shift-selected toolpaths into one exportable toolpath.</summary>
@@ -5918,11 +6254,6 @@ public sealed class ViewportViewModel : ViewModelBase
     /// <summary>Nodes whose subtree was reloaded on the UI thread and need GPU refresh.</summary>
     public ConcurrentQueue<SceneNode> PendingModelRefresh { get; } = new();
 
-    /// <summary>Pivot recenter jobs — geometry + transform applied atomically on the GL thread.</summary>
-    internal ConcurrentQueue<PendingRecenterJob> PendingRecenterJobs { get; } = new();
-
-    internal readonly record struct PendingRecenterJob(SceneNode Node);
-
     /// <summary>
     /// Layer boundary data queued after each slice so the GL thread can upload the
     /// layer-preview heatmap texture. zBounds has numLayers+1 entries (sorted);
@@ -6047,21 +6378,33 @@ public sealed class ViewportViewModel : ViewModelBase
         }
     }
 
-    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).</summary>
+    /// <summary>Registers stands and flat print-bed meshes in the outliner (visibility only, not deletable).
+    /// Tool stands nest under Robot Root when present; print bed stays top-level.</summary>
     internal void SetCellEnvironmentOutliner(IEnumerable<(SceneNode Node, string DisplayName)> entries)
     {
         foreach (var item in _cellEnvOutlinerItems)
+        {
             OutlinerItems.Remove(item);
+            _robotGroupItem?.RemoveChild(item);
+        }
         _cellEnvOutlinerItems.Clear();
 
         foreach (var (node, displayName) in entries)
         {
             var item = new OutlinerItemViewModel(node, NotifyRenderNeeded, _ => { }, null, displayName, canDelete: false)
             { IsLocked = true };
-            OutlinerItems.Add(item);
+            // Stands live under Robot Root in the outliner (siblings of Pedestal / Arm).
+            if (_robotGroupItem is not null && IsCellStandDisplayName(displayName))
+                _robotGroupItem.AddChild(item);
+            else
+                OutlinerItems.Add(item);
             _cellEnvOutlinerItems.Add(item);
         }
     }
+
+    static bool IsCellStandDisplayName(string displayName) =>
+        displayName is "Extruder Stand" or "Scanner Stand" or "Spindle Stand"
+        || displayName.EndsWith(" Stand", StringComparison.Ordinal);
 
     /// <summary>Locks/unlocks the cell-environment rows whose scene node is dev-editable
     /// (print bed, stands) — dev mode unlocks them so they can be selected and transformed.</summary>
@@ -6084,7 +6427,14 @@ public sealed class ViewportViewModel : ViewModelBase
     /// </summary>
     internal void SetRobotGroup(SceneNode? root, SceneNode? pedestal, SceneNode? arm)
     {
-        if (_robotGroupItem is not null) { OutlinerItems.Remove(_robotGroupItem); _robotGroupItem = null; }
+        // Detach stand rows before dropping the group so SetCellEnvironmentOutliner can re-home them.
+        if (_robotGroupItem is not null)
+        {
+            foreach (var env in _cellEnvOutlinerItems)
+                _robotGroupItem.RemoveChild(env);
+            OutlinerItems.Remove(_robotGroupItem);
+            _robotGroupItem = null;
+        }
         _robotPedestalItem = null;
         _robotArmItem      = null;
         if (root is null) return;
@@ -6104,6 +6454,14 @@ public sealed class ViewportViewModel : ViewModelBase
             // Chain: Root -> Pedestal -> Arm (arm nests under the pedestal when present).
             _robotArmItem = new OutlinerItemViewModel(arm, NotifyRenderNeeded, _ => { }, null, "Robot Arm", canDelete: false) { IsLocked = true };
             (_robotPedestalItem ?? _robotGroupItem).AddChild(_robotArmItem);
+        }
+
+        // Re-parent any already-registered stands under the new Robot Root.
+        foreach (var env in _cellEnvOutlinerItems)
+        {
+            if (!IsCellStandDisplayName(env.Name)) continue;
+            OutlinerItems.Remove(env);
+            _robotGroupItem.AddChild(env);
         }
     }
 
@@ -6317,6 +6675,8 @@ public sealed class ViewportViewModel : ViewModelBase
 
     public void AddScanNode(SceneNode node)
     {
+        // Ensure lime translucent look even for restored STLs / re-meshed ZDFs.
+        ApplyScanAppearance(node);
         FlattenScansToBedGroup();
         var parentObject = _rotaryGroupItem;
         EnqueueRotarySceneNode(node);
@@ -6335,6 +6695,34 @@ public sealed class ViewportViewModel : ViewModelBase
 
         SliceCommand.RaiseCanExecuteChanged();
         NotifyRenderNeeded();
+    }
+
+    /// <summary>
+    /// Lime green (opaque) scan look. Applied for live captures, ZDF recover, and workspace restore.
+    /// </summary>
+    internal static void ApplyScanAppearance(SceneNode node)
+    {
+        // #8CFF26 ≈ (0.55, 1.00, 0.15)
+        var lime = new OpenTK.Mathematics.Vector4(0.55f, 1.00f, 0.15f, 1f);
+        foreach (var n in node.SelfAndDescendants())
+        {
+            n.CullFaces       = false;
+            n.TranslucentPass = false;
+            n.KeepOwnMaterial = true;
+            if (n.Mesh is { } gpu)
+            {
+                gpu.Color        = lime;
+                gpu.AlphaModeInt = (int)MassiveSlicer.Viewport.Scene.AlphaMode.Opaque;
+            }
+            // Restored STLs often have non-lime PendingMesh — re-stamp before GPU upload.
+            if (n.PendingMesh is { } pm
+                && (pm.BaseColor.X < 0.5f || pm.BaseColor.Y < 0.9f || pm.BaseColor.W < 0.99f))
+            {
+                n.PendingMesh = new MassiveSlicer.Viewport.Scene.MeshData(
+                    pm.Positions, pm.Normals, pm.Indices, pm.Name,
+                    lime, 0f, 0.85f);
+            }
+        }
     }
 
     private void EnqueueRotarySceneNode(SceneNode node)

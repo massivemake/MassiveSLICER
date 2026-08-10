@@ -9,6 +9,7 @@ using Avalonia.Input;
 using Avalonia.Platform.Storage;
 using Avalonia.Media;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using MassiveSlicer.App;
 using MassiveSlicer.App.Enums;
 using MassiveSlicer.App.Undo;
@@ -78,7 +79,43 @@ public partial class ViewportView : UserControl
     private Vector3  _gizmoDragPlaneNormal;
     private Vector3  _gizmoDragPlanePoint;
     private Vector3  _gizmoDragStartHit;
+
+    // Bed clamp: the bed is solid, so a translate drag cannot push a part through it.
+    //
+    // Measured once at drag start rather than per mouse-move. A translate drag is rigid, so the
+    // part's lowest point moves exactly with the drag's world Z — re-walking every vertex each
+    // frame would buy nothing and put a whole-mesh scan on the mouse-poll path.
+    // float.MaxValue means "no clamp": no real geometry, or a node the bed does not apply to.
+    private float    _bedClampStartMinZ = float.MaxValue;
+
+    // Where the handle would be if the bed were not holding the part back, or null when nothing is
+    // being held back. The mesh stops on the bed while the handle keeps following the pointer; on
+    // release this clears and the handle snaps back onto the part.
+    private Vector3? _bedClampGizmoWorld;
+
+    // Whether the part was already sitting on the bed when the drag began — the question the
+    // Keep on bed preferences answer, and one that can only be asked before anything moves.
+    private bool _bedWasRestingAtDragStart;
+
+    // Same question, asked at the start of a keyboard G/R/S gesture. The mouse path had this and
+    // the keyboard path did not, so a G or R could park a part through the plate and nothing put
+    // it back — Jeff, 2026-08-03: "G and R do not respect the collision features."
+    private bool _kbWasRestingAtStart;
+    /// <summary>Set when the viewport itself saw the left press. Click-to-select runs on release
+    /// against the press position, so without this a press swallowed by overlay chrome would still
+    /// produce a pick — at a stale position — on release.</summary>
+    private bool     _leftPressSeen;
     private Matrix4  _gizmoDragInitialLocal;
+    private NodeTransform? _gizmoDragInitialPlacement;
+    /// <summary>The basis the active handle was drawn and hit-tested in — the object's own axes for
+    /// a part, so a drag moves along the arrow the user actually grabbed.</summary>
+    private Matrix4  _gizmoDragBasis = Matrix4.Identity;
+    /// <summary>In-plane reference directions for a rotate-ring drag, taken from the ring's own
+    /// basis. Measuring the sweep against these instead of against world X/Y/Z is what makes a ring
+    /// turn the part about the axis it is drawn around.</summary>
+    private Vector3  _gizmoRingU, _gizmoRingV;
+    /// <summary>Shift held during the current drag — rotation lands on whole 5° steps.</summary>
+    private bool     _gizmoDragSnap;
     private float    _gizmoDragStartAngle;
     private float    _gizmoDragStartScreenX;
     private float    _gizmoDragCurrScreenX;
@@ -90,10 +127,15 @@ public partial class ViewportView : UserControl
     private Point     _kbTransformStartPos;
     private Matrix4   _kbTransformInitialLocal;
     private Vector2   _kbObjScreenCenter;
+    /// <summary>World-space pivot for keyboard rotate (R) — under the mouse when R is pressed.</summary>
+    private Vector3   _kbRotatePivotWorld;
+    /// <summary>Screen-space polar reference once the cursor has left the press point (NaN until set).</summary>
+    private float     _kbRotateRefAngle = float.NaN;
 
-    // Transform undo (panel numeric edits debounced; gizmo commits immediately)
-    private SceneNode? _lastCommittedTransformNode;
-    private Matrix4    _lastCommittedTransform = Matrix4.Identity;
+    // Transform undo (panel numeric edits debounced; gizmo commits immediately).
+    // The primary node's own baseline is NOT kept here: every caller already knows the pose it is
+    // editing from and passes it in, which is what stops a refresh landing mid-edit from quietly
+    // erasing the undo entry. Only the followers still need a remembered baseline, below.
     // Baseline for linked nodes (a model's toolpath, or vice versa) carried along by
     // MirrorTypedTransformDelta/the drag-link — lets RecordTransformUndo bundle their
     // before/after into the same undo entry so Undo can never desync them from the primary.
@@ -347,8 +389,11 @@ public partial class ViewportView : UserControl
             vm.CanUpdateSlice         = () => FindResliceSource(vm) is not null
                 && (_activeScrubNode is null || !_mergedByNode.ContainsKey(_activeScrubNode));
             vm.GetToolpathSnapshot    = GetToolpathSnapshot;
+            vm.GetToolpathRenderOrigin = n =>
+                _toolpathOriginByNode.TryGetValue(n, out var o) ? o : null;
             vm.OnExportKrlRequested   = () => ExportKrlAsync(vm);
             vm.OnSendToRobotRequested = () => SendToRobotAsync(vm);
+            vm.OnRpmReportRequested  = () => BuildRpmReport(vm);
             vm.ExportKrlToDirectory = (dir, rev) => ExportKrlToDirectoryAsync(vm, dir, rev);
             vm.OnApplyToolpathSeamRequested = () => ApplyToolpathSeam(vm);
             vm.OnMergeToolpathsRequested = () => MergeToolpaths(vm);
@@ -399,7 +444,95 @@ public partial class ViewportView : UserControl
             };
             vm.OnFocusRequested       = FocusSelected;
             vm.OnFrameMoveRequested   = FrameCameraToScrubIndex;
+            vm.OnBoundsDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[bounds] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+                // Empty comes back as a float.MaxValue/MinValue sentinel, which printed as a wall of
+                // digits. A selection made entirely of authoring overlays (a cut modifier) now hits
+                // this every time, since those are excluded from the measurement.
+                if (bMin.X > bMax.X)
+                    return $"[bounds] \"{n.Name}\" has no real geometry — "
+                         + $"{n.SelfAndDescendants().Count(d => d.IsAuthoringOverlay)} authoring overlay node(s) only.";
+                var size = bMax - bMin;
+                var pivot = n.Placement is { } pl
+                    ? Vector3.TransformPosition(pl.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
+                return string.Format(inv,
+                    "[bounds] \"{0}\" min=({1:F1},{2:F1},{3:F1}) max=({4:F1},{5:F1},{6:F1}) "
+                    + "size=({7:F1},{8:F1},{9:F1}) pivotWorld=({10:F1},{11:F1},{12:F1}) "
+                    + "nodes={13} meshes={14} meshOnRoot={15} overlays={16}",
+                    n.Name, bMin.X, bMin.Y, bMin.Z, bMax.X, bMax.Y, bMax.Z,
+                    size.X, size.Y, size.Z, pivot.X, pivot.Y, pivot.Z,
+                    n.SelfAndDescendants().Count(),
+                    n.SelfAndDescendants().Count(d => d.Mesh?.PickingData is not null || d.PendingMesh is not null),
+                    n.Mesh?.PickingData is not null || n.PendingMesh is not null,
+                    n.SelfAndDescendants().Count(d => d.IsAuthoringOverlay));
+            };
+            vm.OnRecenterDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[recenter] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                var (bMin, bMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+
+                // Recenter is a pivot move now — four numbers, applied immediately on this thread —
+                // so before and after can both be reported from one call. It used to queue a job for
+                // the render thread to bake vertices on, which is why this only ever printed the
+                // pre-state and told you to run it again.
+                var pivotBefore = n.Placement is { } pb
+                    ? OpenTK.Mathematics.Vector3.TransformPosition(pb.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
+
+                RecenterSelected();
+
+                var pivotAfter = n.Placement is { } pa
+                    ? OpenTK.Mathematics.Vector3.TransformPosition(pa.Origin, n.WorldTransform)
+                    : n.WorldTransform.Row3.Xyz;
+                var (aMin, aMax) = ImportHelper.ComputeSubtreeWorldAabb(n);
+
+                return string.Format(inv,
+                    "[recenter] pivot ({0:F1},{1:F1},{2:F1}) -> ({3:F1},{4:F1},{5:F1}); "
+                    + "geometry worldMin ({6:F1},{7:F1},{8:F1}) -> ({9:F1},{10:F1},{11:F1}) (want no change)",
+                    pivotBefore.X, pivotBefore.Y, pivotBefore.Z,
+                    pivotAfter.X,  pivotAfter.Y,  pivotAfter.Z,
+                    bMin.X, bMin.Y, bMin.Z, aMin.X, aMin.Y, aMin.Z);
+            };
+            vm.OnMoveOriginModeChanged = SetMoveOriginOverlay;
             vm.OnDropToPlateRequested = DropToPlate;
+            vm.OnDropToPlateDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[drop] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                float before = LayFlatMinZ(n);
+                var posBefore = n.WorldTransform.Row3.Xyz;
+                DropToPlate();
+                float after = LayFlatMinZ(n);
+                var posAfter = n.WorldTransform.Row3.Xyz;
+                return string.Format(inv,
+                    "[drop] bedZ={0:F2} lowestBefore={1:F2} lowestAfter={2:F2} (want bedZ) "
+                    + "originBefore=({3:F1},{4:F1},{5:F1}) originAfter=({6:F1},{7:F1},{8:F1})",
+                    _renderer.BedZ, before, after,
+                    posBefore.X, posBefore.Y, posBefore.Z,
+                    posAfter.X, posAfter.Y, posAfter.Z);
+            };
+            vm.OnBedClearanceDiagnostic = () =>
+            {
+                if (_renderer.SelectedNode is not { } n) return "[bed] nothing selected.";
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                // Linked-aware, so selecting a toolpath reports the pair's clearance rather than
+                // "no geometry" — the same measurement the clamp itself uses.
+                float lowest = LowestWorldZWithLinked(n);
+                if (lowest >= float.MaxValue) return "[bed] selection has no real geometry to measure.";
+
+                float gap = lowest - _renderer.BedZ;
+                string state = MathF.Abs(gap) <= BedContactTolerance ? "resting"
+                             : gap > 0f ? "floating"
+                             : "THROUGH";
+                return string.Format(inv,
+                    "[bed] bedZ={0:F2} lowest={1:F2} gap={2:F3} state={3} clampApplies={4}",
+                    _renderer.BedZ, lowest, gap, state, BedClampApplies(n));
+            };
             vm.OnRecenterRequested    = RecenterSelected;
             vm.OnUngroupRequested     = UngroupSelected;
             vm.OnExplodeRequested     = ExplodeSelected;
@@ -408,6 +541,16 @@ public partial class ViewportView : UserControl
             vm.OnCancelCutToolRequested = CancelCutToolInteractive;
             vm.OnPerformCutToolRequested = () => PerformCutToolInteractive();
             vm.OnScrubIkRequested  = ScrubIk;
+            vm.OnViewGovernedPoseChanged = () =>
+            {
+                // Body 100%, Toolpath tab its own timeline, toolpath edit its scrubber — each view
+                // owns the arm. Skipped entirely while synced: ScrubIkForNode desyncs to take
+                // control, and losing the machine connection over a view tab would be far worse
+                // than a stale pose.
+                if (vm.RobotOwnsPose) return;
+                if (_activeScrubNode is not { } poseNode) return;
+                ScrubIkForNode(poseNode, vm.ViewGovernedScrubIndex);
+            };
             vm.OnSimScrubRequested = SimScrubIk;
             vm.OnSimVideoExportRequested = () => _ = ExportSimVideoAsync(vm);
             vm.OnAddTcpKeyframeRequested    = () => AddTcpKeyframeAtCurrentIndex(vm);
@@ -451,6 +594,26 @@ public partial class ViewportView : UserControl
                 _rawToolpathByNode.TryGetValue(node, out var rawUp);
                 var snapUp = GetToolpathSnapshot(node);
                 if (snapUp is null) return;
+                // Optimize Toolpath and tpfix land here. They re-ORDER (or add to) moves that are
+                // already in world space — the orientation of the data does not change, so the
+                // node's own transform is still the right one and must be put back verbatim,
+                // rotation included.
+                //
+                // Without this the entry matched none of the drain's branches, so the node kept
+                // whatever ReplaceToolpath had just set: a pure centroid translation. That WIPES
+                // the rotation the model↔toolpath link had applied, and the path snapped back to
+                // its unrotated orientation while the mesh stayed turned. Jeff, 2026-08-03: "it was
+                // optimize toolpath that broke it and caused it to rotate off."
+                //
+                // Note this is the opposite of what a re-slice needs (RebaseToFreshCentroid): a
+                // re-slice rebuilds the moves from the mesh's CURRENT vertices, so the rotation is
+                // already baked into the data and re-applying the node's would double it. The two
+                // cases genuinely differ — what changed, the data or only its order.
+                if (!_toolpathOriginByNode.TryGetValue(node, out var reupOrigin))
+                {
+                    var lt0 = node.LocalTransform;
+                    reupOrigin = new NVec3(lt0.M41, lt0.M42, lt0.M43);
+                }
                 vm.PendingToolpathReplace.Enqueue(new PendingToolpathEntry
                 {
                     Toolpath      = tpUp,
@@ -459,6 +622,9 @@ public partial class ViewportView : UserControl
                     BeadWidth     = snapUp.BeadWidth,
                     LayerHeight   = snapUp.LayerHeight,
                     MaterialColor = snapUp.MaterialColor,
+                    PreserveRelativePose    = true,
+                    PreservedLocalTransform = node.LocalTransform,
+                    PreservedOrigin         = reupOrigin,
                 });
                 GlCanvas.RequestNextFrameRendering();
             };
@@ -673,31 +839,138 @@ public partial class ViewportView : UserControl
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old = node.LocalTransform;
-            var lt = node.LocalTransform;
-            lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
-            node.LocalTransform = lt;
+            bool wasResting = IsRestingOnBed(node);
+            if (node.Placement is { } p)
+            {
+                // The typed numbers are where the pivot goes, which is also where the gizmo is —
+                // so what the boxes say and what the handle sits on are the same point.
+                var target = new Vector3((float)x, (float)y, (float)z);
+                var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+                Matrix4.Invert(parentWorld, out var invParent);
+                p.Position = Vector3.TransformPosition(target, invParent);
+                node.SetPlacement(p);
+            }
+            else
+            {
+                var lt = node.LocalTransform;
+                lt.Row3 = new Vector4((float)x, (float)y, (float)z, 1f);
+                node.LocalTransform = lt;
+            }
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
             MirrorTypedTransformDelta(vm, node, old);
+            ApplyBedRules(node, wasResting, BedEdit.Move);
+            vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
-            SchedulePanelTransformUndo(vm, node, "Move");
+            SchedulePanelTransformUndo(vm, node, "Move", old);
         };
         vm.OnSelectionRotated = (a, b, c) =>
         {
             if (_renderer.SelectedNode is not { } node) return;
             var old  = node.LocalTransform;
-            var lt   = node.LocalTransform;
-            float sX = lt.Row0.Xyz.Length;
-            float sY = lt.Row1.Xyz.Length;
-            float sZ = lt.Row2.Xyz.Length;
-            var rt = MassiveSlicer.Core.Kinematics.KukaIkSolver.AbcToMatrix((float)a, (float)b, (float)c);
-            lt.Row0 = new Vector4(rt.M11 * sX, rt.M12 * sX, rt.M13 * sX, 0f);
-            lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
-            lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
-            node.LocalTransform = lt;
+            bool wasResting = IsRestingOnBed(node);
+            if (node.Placement is { } p)
+            {
+                // Absolute set, about the part's own X/Y/Z — the same axes as the coloured handles.
+                p.EulerDegrees = new Vector3((float)a, (float)b, (float)c);
+                node.SetPlacement(p);
+            }
+            else
+            {
+                // No placement: the tool/TCP frame, where A/B/C really are KUKA angles.
+                var lt   = node.LocalTransform;
+                float sX = lt.Row0.Xyz.Length;
+                float sY = lt.Row1.Xyz.Length;
+                float sZ = lt.Row2.Xyz.Length;
+                var rt = MassiveSlicer.Core.Kinematics.KukaIkSolver.AbcToMatrix((float)a, (float)b, (float)c);
+                lt.Row0 = new Vector4(rt.M11 * sX, rt.M12 * sX, rt.M13 * sX, 0f);
+                lt.Row1 = new Vector4(rt.M21 * sY, rt.M22 * sY, rt.M23 * sY, 0f);
+                lt.Row2 = new Vector4(rt.M31 * sZ, rt.M32 * sZ, rt.M33 * sZ, 0f);
+                node.LocalTransform = lt;
+            }
+            // After the mirror, so the bed sees the finished pair rather than a half-moved one.
             MirrorTypedTransformDelta(vm, node, old);
+            ApplyBedRules(node, wasResting, BedEdit.Rotate);
+            vm.ConstrainModifierPlanesUnder(node);
             GlCanvas.RequestNextFrameRendering();
             RevalidateSelectedToolpath();
-            SchedulePanelTransformUndo(vm, node, "Rotate");
+            SchedulePanelTransformUndo(vm, node, "Rotate", old);
+        };
+        // Console/bridge-driven transform edits get the same follow-up a typed field edit does, so a
+        // headless test exercises the real path rather than a shortcut around it.
+        vm.OnExternalNodeTransform = (node, oldLocal, label) =>
+        {
+            bool isScale = label.Equals("scale", StringComparison.OrdinalIgnoreCase);
+            // The console tags say which tool ran: "scale" and "step" are unambiguous, and
+            // everything else on this path is a move or a pivot edit.
+            var edit = isScale ? BedEdit.Scale
+                     : label.Equals("step", StringComparison.OrdinalIgnoreCase) ? BedEdit.Rotate
+                     : BedEdit.Move;
+
+            // This callback runs after the edit has landed, so "was it resting" has to be measured
+            // by putting the old matrix back for the length of one measurement. The followers have
+            // not been mirrored yet at this point, so the pair really is in its pre-edit pose.
+            var applied = node.LocalTransform;
+            node.LocalTransform = oldLocal;
+            bool wasRestingBefore = IsRestingOnBed(node);
+            node.LocalTransform = applied;
+            // A scale deliberately does not mirror onto the toolpath — see OnSelectionScaled below.
+            if (!isScale) MirrorTypedTransformDelta(vm, node, oldLocal);
+            ApplyBedRules(node, wasRestingBefore, edit);
+            vm.ConstrainModifierPlanesUnder(node);
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+            // remember: false — this refresh must not advance the undo baseline. Doing so left the
+            // debounced entry below with before == after, so it was dropped and the edit became
+            // un-undoable while looking perfectly applied.
+            SyncSelectionTransformDisplay(vm, remember: false);
+            if (isScale)
+            {
+                vm.RefreshScaleFields();
+                // Belt and braces with the no-op guard in TransformNumberBox.Commit: an edit that
+                // left the placement where it found it changed no geometry, so re-slicing would
+                // burn seconds and re-pose the robot for nothing. The field path is the one that
+                // used to do this on every click; this also covers the console and any future
+                // caller that recomputes the same scale it already had.
+                //
+                // Approximate, not exact: `scale x 1847.4` on a part measuring 1847.39990234375
+                // divides and multiplies back to 1.0000000528 rather than 1, so exact equality
+                // caught nothing at all. Verified through the bridge — that command used to add
+                // seven moves to the toolpath by re-slicing an unchanged part.
+                if (NodeTransform.ApproximatelyEqual(applied, oldLocal))
+                {
+                    // Says so out loud, because a scale edit that does not re-slice looks broken
+                    // from the outside. Only fires on the skip, so it stays quiet in normal use.
+                    if (TopLevel.GetTopLevel(this)?.DataContext is MainWindowViewModel skipVm)
+                        skipVm.Console.Log(
+                            "[scale] value unchanged — keeping the existing toolpath, no re-slice.");
+                }
+                else
+                {
+                    vm.OnModelGeometryChanged?.Invoke();
+                }
+            }
+            SchedulePanelTransformUndo(vm, node, label, oldLocal);
+        };
+        vm.OnSelectionScaled = (sx, sy, sz) =>
+        {
+            if (_renderer.SelectedNode is not { } node) return;
+            if (node.Placement is not { } p) return;
+            var old = node.LocalTransform;
+            bool wasResting = IsRestingOnBed(node);
+            p.Scale = new Vector3((float)sx, (float)sy, (float)sz);
+            p.ClampScale();
+            node.SetPlacement(p);
+            ApplyBedRules(node, wasResting, BedEdit.Scale);
+            vm.ConstrainModifierPlanesUnder(node);
+            GlCanvas.RequestNextFrameRendering();
+            RevalidateSelectedToolpath();
+            // No MirrorTypedTransformDelta: mirroring a scale onto the toolpath node would multiply
+            // its baked bead geometry, drawing a part printed with a fatter nozzle than the settings
+            // specify. A resized part needs a genuinely new path, not a stretched one, so the slice
+            // is re-run instead — debounced, so holding a field down does not queue a dozen of them.
+            vm.OnModelGeometryChanged?.Invoke();
+            SchedulePanelTransformUndo(vm, node, "Scale", old);
         };
 
         vm.GetToolWorldPose = ComputeToolWorldPose;
@@ -714,6 +987,10 @@ public partial class ViewportView : UserControl
 
             additive.PropertyChanged += (_, pe) =>
             {
+                // Any settings edit may move the RPM. Re-check on the next frame — the
+                // recompute itself is skipped unless the RPM inputs really changed.
+                _rpmDirty = true;
+
                 // Recompute layer-preview heatmap when any relevant setting changes.
                 if (pe.PropertyName is nameof(AdditiveSettingsViewModel.ShowLayerPreview)
                                     or nameof(AdditiveSettingsViewModel.LayerHeight)
@@ -835,8 +1112,146 @@ public partial class ViewportView : UserControl
         }
 
         var (zLo, zHi) = SeamGuideHeightRange(vm);
-        _renderer.SetSeamGuides(guides, vm.SelectedSeamGuideIndex, zLo, zHi);
+        var paths = new List<IReadOnlyList<TkVector3>>(guides.Count);
+        foreach (var g in guides)
+            paths.Add(BuildSeamGuidePath(g, zLo, zHi));
+        _renderer.SetSeamGuides(guides, paths, vm.SelectedSeamGuideIndex, zLo, zHi);
         GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Shape a guide draws: the model's own surface profile at the guide's compass bearing,
+    /// bottom to top, falling back to a straight column when there is no mesh to cut.
+    /// </summary>
+    private IReadOnlyList<TkVector3> BuildSeamGuidePath(TkVector3 guide, float zLo, float zHi)
+        => BuildSeamGuideSurfaceProfile(guide) is { Count: >= 2 } profile
+            ? profile
+            : [new TkVector3(guide.X, guide.Y, zLo),
+               new TkVector3(guide.X, guide.Y, zHi > zLo ? zHi : zLo + 1f)];
+
+    /// <summary>
+    /// Cuts the visible model with a vertical plane through the part axis and the guide, and
+    /// returns the outer edge of that cut on the guide's side — the silhouette the guide should
+    /// lie along.
+    /// <para>
+    /// Exact geometry, deliberately: every earlier attempt <i>sampled</i> something (printed
+    /// moves, then mesh vertices) and scored the samples with a heuristic, which produced a line
+    /// up the axis, a jagged staircase, and a curve floating clear of the part. A plane/triangle
+    /// intersection yields the true section outline instead of a vote over scattered points.
+    /// </para>
+    /// </summary>
+    private List<TkVector3>? BuildSeamGuideSurfaceProfile(TkVector3 guide)
+    {
+        const int Bands = 240;
+
+        if ((_vm ?? DataContext as ViewportViewModel) is not { } vm) return null;
+
+        // Part axis = centre of the models' footprint. The bearing is measured from here, so the
+        // profile is the outline you see looking along it.
+        float aMinX = float.MaxValue, aMinY = float.MaxValue;
+        float aMaxX = float.MinValue, aMaxY = float.MinValue;
+        var meshes = new List<(MassiveSlicer.Viewport.Scene.MeshData Mesh, Matrix4 World)>();
+
+        // Prefer shown models, but fall back to hidden ones. Slicing hides the model and shows
+        // the toolpath, so re-opening the editor on an already-sliced part found no mesh to cut
+        // and dropped the guide back to a straight column — it worked the first time and never
+        // again. The part's shape does not depend on whether its layer is switched on.
+        bool anyVisible = vm.EnumerateUserModelItems().Any(i => i.Visible);
+
+        foreach (var item in vm.EnumerateUserModelItems())
+        {
+            if (anyVisible && !item.Visible) continue;
+            var (mn, mx) = ImportHelper.ComputeSubtreeWorldAabb(item.Node);
+            if (mn.X > mx.X) continue;
+            aMinX = MathF.Min(aMinX, mn.X); aMaxX = MathF.Max(aMaxX, mx.X);
+            aMinY = MathF.Min(aMinY, mn.Y); aMaxY = MathF.Max(aMaxY, mx.Y);
+
+            foreach (var n in item.Node.SelfAndDescendants())
+                if ((n.Mesh?.PickingData ?? n.PendingMesh) is { } md && md.Positions.Length >= 3)
+                    meshes.Add((md, n.WorldTransform));
+        }
+
+        if (meshes.Count == 0 || aMinX > aMaxX) return null;
+
+        float axX = (aMinX + aMaxX) * 0.5f, axY = (aMinY + aMaxY) * 0.5f;
+        float dx = guide.X - axX, dy = guide.Y - axY;
+        float dLen = MathF.Sqrt(dx * dx + dy * dy);
+        if (dLen < 1e-3f) return null;                       // guide on the axis: no bearing
+        dx /= dLen; dy /= dLen;
+        float nx = -dy, ny = dx;                             // cutting plane normal, in XY
+
+        // Section outline: every triangle edge crossing the plane contributes a point.
+        var rOf = new float[Bands];
+        var zOf = new float[Bands];
+        var has = new bool[Bands];
+        Array.Fill(rOf, float.MinValue);
+
+        float zMin = float.MaxValue, zMax = float.MinValue;
+        var pts = new List<(float R, float Z)>(4096);
+
+        // Allocated ONCE, outside both loops. A stackalloc inside a loop is not released per
+        // iteration — it accumulates until the method returns — so these two (48 bytes a pass)
+        // used to consume 48 B x up to 60,000 iterations per mesh, summed across every mesh:
+        // ~2.9 MB against a 1 MB stack. That overflowed the stack and killed the process outright
+        // on any part past roughly 22,000 triangles, with no managed exception and no crash log.
+        // Reproduced on the 302,516-triangle Dragon column: the slice succeeded and the app died
+        // immediately afterwards in StageToolpathMaps -> UpdateSeamGuideMarkers -> here.
+        // Both buffers are fully overwritten every iteration (all three lanes assigned below), so
+        // there is nothing to carry between passes and reuse is safe.
+        Span<TkVector3> v = stackalloc TkVector3[3];
+        Span<float>     s = stackalloc float[3];
+
+        foreach (var (mesh, world) in meshes)
+        {
+            int triCount = mesh.Indices is { } ix ? ix.Length / 3 : mesh.Positions.Length / 3;
+            if (triCount == 0) continue;
+            int stride = Math.Max(1, triCount / 60_000);     // caps work on million-triangle parts
+
+            for (int t = 0; t < triCount; t += stride)
+            {
+                for (int k = 0; k < 3; k++)
+                {
+                    int pi = mesh.Indices is { } idx ? (int)idx[t * 3 + k] : t * 3 + k;
+                    var src = mesh.Positions[pi];
+                    v[k] = TkVector3.TransformPosition(new TkVector3(src.X, src.Y, src.Z), world);
+                    s[k] = (v[k].X - axX) * nx + (v[k].Y - axY) * ny;
+                }
+
+                for (int e = 0; e < 3; e++)
+                {
+                    int a = e, b = (e + 1) % 3;
+                    if ((s[a] < 0f) == (s[b] < 0f)) continue;          // edge does not cross
+                    float denom = s[a] - s[b];
+                    if (MathF.Abs(denom) < 1e-9f) continue;
+                    float f = s[a] / denom;
+                    var p = v[a] + (v[b] - v[a]) * f;
+
+                    float r = (p.X - axX) * dx + (p.Y - axY) * dy;
+                    if (r <= 0f) continue;                             // far side of the part
+                    pts.Add((r, p.Z));
+                    if (p.Z < zMin) zMin = p.Z;
+                    if (p.Z > zMax) zMax = p.Z;
+                }
+            }
+        }
+
+        if (pts.Count < 8 || zMax - zMin < 1e-3f) return null;
+
+        // Outer edge per height band. The input is a continuous section outline, not scattered
+        // vertices, so the maximum in each band lands on the surface rather than jittering.
+        float invH = (Bands - 1) / (zMax - zMin);
+        foreach (var (r, z) in pts)
+        {
+            int b = Math.Clamp((int)((z - zMin) * invH), 0, Bands - 1);
+            if (r > rOf[b]) { rOf[b] = r; zOf[b] = z; has[b] = true; }
+        }
+
+        var profile = new List<TkVector3>(Bands);
+        for (int b = 0; b < Bands; b++)
+            if (has[b])
+                profile.Add(new TkVector3(axX + dx * rOf[b], axY + dy * rOf[b], zOf[b]));
+
+        return profile.Count >= 2 ? profile : null;
     }
 
     /// <summary>
@@ -1038,6 +1453,17 @@ public partial class ViewportView : UserControl
             return true;
         }
 
+        // Once the part is sliced the model is usually hidden and only the toolpath is on
+        // screen. Toolpath nodes carry no pickable mesh, so the face pick above finds nothing
+        // and the editor drew no line at all — it looked like the tool had stopped working.
+        // The printed outline IS the wall here, so seam onto it.
+        if (TrySeamGuideOnToolpath(mx, my, out var tpHit))
+        {
+            _lastSeamGuideSurfacePoint = tpHit;
+            hit = tpHit;
+            return true;
+        }
+
         // Cursor left the silhouette: hold the last on-surface position. Snapping to the
         // nearest sampled vertex instead made the column jitter between scattered vertices
         // and occasionally land off the visible wall.
@@ -1049,6 +1475,79 @@ public partial class ViewportView : UserControl
 
         hit = default;
         return false;
+    }
+
+    /// <summary>
+    /// Visible toolpath extrusion point nearest the cursor <b>in screen pixels</b>, used when no
+    /// model mesh is hittable (hidden after slicing, or a toolpath-only project). Returns false
+    /// when the cursor is not near a printed line, so hover off the part holds the last on-wall
+    /// position instead of snapping across the scene.
+    /// <para>
+    /// The radius must be in pixels, not millimetres: a world-space tolerance that feels right on
+    /// a 200mm bracket is a couple of pixels on a 3m cell, so the snap silently never fired and
+    /// clicks committed the stale held position instead — every guide landed on the same wrong
+    /// spot off the part.
+    /// </para>
+    /// </summary>
+    private bool TrySeamGuideOnToolpath(float mx, float my, out TkVector3 hit)
+    {
+        hit = default;
+        if (_toolpathByNode.IsEmpty) return false;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW <= 0f || vpH <= 0f) return false;
+
+        // One matrix for the whole sweep — ProjectToScreen would rebuild it per point.
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        const float grabPx    = 40f;   // forgiving: printed lines are thin on screen
+        const float tieSlopPx = 6f;    // within this, prefer the line nearest the camera
+
+        float bestPx2  = float.MaxValue;
+        float bestDepth = float.MaxValue;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            if (!node.Visible || tp.Layers.Count == 0) continue;
+            var world = node.WorldTransform;
+
+            // A metre-scale part holds hundreds of thousands of moves and this runs on every
+            // mouse move. A few mm of slop is invisible on a seam column, so subsample.
+            int total = 0;
+            foreach (var layer in tp.Layers) total += layer.Moves.Count;
+            int stride = Math.Max(1, total / 20_000);
+
+            int i = 0;
+            foreach (var layer in tp.Layers)
+            {
+                var moves = layer.Moves;
+                for (int m = 0; m < moves.Count; m++, i++)
+                {
+                    if (i % stride != 0) continue;
+                    var move = moves[m];
+                    if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;   // travels aren't wall
+
+                    var p = TkVector3.TransformPosition(
+                        new TkVector3(move.From.X, move.From.Y, move.From.Z), world);
+                    var s = _renderer.ProjectToScreenDepth(p, viewProj, vpW, vpH);
+                    if (float.IsNaN(s.X)) continue;                              // behind the camera
+
+                    float dx = s.X - mx, dy = s.Y - my;
+                    float px2 = dx * dx + dy * dy;
+                    if (px2 > grabPx * grabPx) continue;
+
+                    // The toolpath draws as lines, so the far wall is visible through the near
+                    // one. Nearest pixel wins; when two are effectively under the same pixel,
+                    // take the one closest to the camera — that's the wall you can see.
+                    bool better = px2 < bestPx2 - tieSlopPx * tieSlopPx
+                               || (MathF.Abs(px2 - bestPx2) <= tieSlopPx * tieSlopPx && s.Z < bestDepth);
+                    if (better) { bestPx2 = px2; bestDepth = s.Z; hit = p; }
+                }
+            }
+        }
+
+        return bestPx2 < float.MaxValue;
     }
 
 
@@ -1284,6 +1783,13 @@ public partial class ViewportView : UserControl
             _renderer.ToolpathLineOpacity = vm.ToolpathLineOpacity;
             _renderer.ToolpathSimProgress = vm.SimRenderProgress;
             _renderer.ToolpathFullAppearance = vm.ViewMode != "Body";
+            // Body has no timeline of its own, so it shows the whole path. It used to render
+            // through the toolpath EDIT scrubber's position — set that to 20%, leave edit mode,
+            // and the part sat there looking a fifth built with no visible control explaining why.
+            // Jeff, 2026-08-03: "if body doesnt have a timeline, one would only assume its always
+            // at 100%." The Toolpath tab keeps its own sim timeline; Preview keeps the playback
+            // one. Only Body opts out.
+            _renderer.ScrubWindowApplies = vm.ViewMode != "Body";
 
             while (vm.PendingCellSwap.TryDequeue(out var swap))
             {
@@ -1297,9 +1803,6 @@ public partial class ViewportView : UserControl
 
             while (vm.PendingLayerPreview.TryDequeue(out var lp))
                 _renderer.SetLayerPreview(lp.zBounds, lp.heights);
-
-            while (vm.PendingRecenterJobs.TryDequeue(out var recenterJob))
-                ProcessRecenterJob(vm, recenterJob);
 
             while (vm.PendingModelRefresh.TryDequeue(out var refreshed))
             {
@@ -1337,6 +1840,22 @@ public partial class ViewportView : UserControl
                 if (_renderer.SelectedNode is not null &&
                     removing.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
                     _renderer.Select(null);
+            }
+
+            // Selecting a different part while the chooser is open would leave the box parented to
+            // the old one, still rendered and still counted by anything that walks that subtree.
+            if (vm.IsMoveOriginActive
+                && _originOverlayTarget is not null
+                && !ReferenceEquals(_originOverlayTarget, _renderer.SelectedNode))
+                SetMoveOriginOverlay(true);
+
+            // Overlay meshes upload here rather than through PendingNodes, which also re-parents to
+            // the scene root, marks the subtree as a user import and steals the selection.
+            if (_pendingOverlayUpload is { } overlayUpload)
+            {
+                _pendingOverlayUpload = null;
+                UploadPendingMeshes(overlayUpload);
+                _renderer.InvalidateShaderAppearance();
             }
 
             while (vm.PendingNodes.TryDequeue(out var incoming))
@@ -1535,12 +2054,15 @@ public partial class ViewportView : UserControl
                 Dispatcher.UIThread.Post(() =>
                 {
                     UpdateFocusOverlay();
-                    // After re-slice upload, keep robot on the current timeline frame.
+                    // After re-slice upload, keep the robot on the frame the CURRENT view governs —
+                    // Body has no timeline, so the arm belongs at the end of the path rather than
+                    // wherever the toolpath editor was left.
                     if (DataContext is ViewportViewModel vRep
                         && ReferenceEquals(_activeScrubNode, replacedNode)
-                        && vRep.IsScrubSessionActive)
+                        && vRep.IsScrubSessionActive
+                        && !vRep.RobotOwnsPose)   // synced robot outranks a re-slice
                     {
-                        ScrubIkForNode(replacedNode, vRep.ToolpathScrubIndex);
+                        ScrubIkForNode(replacedNode, vRep.ViewGovernedScrubIndex);
                         // Repopulate playback IK data so the timeline can play again.
                         if (_toolpathByNode.TryGetValue(replacedNode, out var freshTp))
                             ValidateToolpathAsync(replacedNode, freshTp);
@@ -1552,6 +2074,8 @@ public partial class ViewportView : UserControl
             while (_pendingReachability.TryDequeue(out var reach))
                 _renderer.UpdateToolpathReachability(reach.node, reach.reachable);
 
+            RefreshToolpathRpm(vm);
+
             while (_pendingSingularityPoints.TryDequeue(out var sing))
                 _renderer.UpdateToolpathSingularityPoints(sing.node, sing.singularity);
 
@@ -1560,6 +2084,7 @@ public partial class ViewportView : UserControl
             else
                 UpdateAnglePlanePreview(vm);
             UpdatePaintOverlay(vm);
+            UpdateMillAreaOverlay(vm);
 
             if (_fkController is not null && vm.Robot is { } fkRobot)
             {
@@ -1670,6 +2195,13 @@ public partial class ViewportView : UserControl
             _renderer.GizmoPivotWorld = new Vector3(
                 (float)cutS.CenterX, (float)cutS.CenterY, (float)cutS.CenterZ);
         }
+        else if (_bedClampGizmoWorld is { } heldBackByBed)
+        {
+            // The part has stopped on the bed but the pointer has carried on. Draw the handle where
+            // the hand actually is, so the drag reads as pushing against a surface rather than as
+            // the tool having gone dead. Cleared on release, which snaps the handle back onto the part.
+            _renderer.GizmoPivotWorld = heldBackByBed;
+        }
         else
         {
             _renderer.GizmoPivotWorld = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcpGizmo
@@ -1677,7 +2209,9 @@ public partial class ViewportView : UserControl
                 : null;
         }
 
-        _renderer.GizmoAxisBasis = supportAxisBasis ?? GetModifierAxisBasis(_renderer.SelectedNode);
+        // A selected support pocket's own rotation wins; otherwise fall through to main's
+        // node-local basis (GetModifierAxisBasis was renamed GetGizmoAxisBasis there).
+        _renderer.GizmoAxisBasis = supportAxisBasis ?? GetGizmoAxisBasis(_renderer.SelectedNode);
 
         _renderer.Render(w, h);
         UpdateSequenceWaypointTags(w, h);
@@ -2679,9 +3213,28 @@ public partial class ViewportView : UserControl
 
     // -- Pointer input ---------------------------------------------------------
 
+    /// <summary>
+    /// True when keyboard focus is inside a text-entry control, so the viewport's bare-key shortcuts
+    /// should stand down and let the characters through.
+    /// </summary>
+    private bool IsTextEntryFocused()
+    {
+        var focused = TopLevel.GetTopLevel(this)?.FocusManager?.GetFocusedElement();
+        return focused switch
+        {
+            TextBox => true,
+            // NumericUpDown / AutoCompleteBox focus their own inner TextBox, so walk up as well.
+            Visual v => v.FindAncestorOfType<TextBox>() is not null,
+            _ => false,
+        };
+    }
+
     private void OnPointerPressed(object? sender, PointerPressedEventArgs e)
     {
-        this.Focus();
+        // Taking focus here is what makes the viewport's keyboard shortcuts work, but it must not
+        // yank focus out of a field the user just clicked into.
+        if (!IsTextEntryFocused() || e.Source is not Visual src || src.FindAncestorOfType<TextBox>() is null)
+            this.Focus();
         var pt   = e.GetCurrentPoint(this);
         var pos  = pt.Position;
         var mods = e.KeyModifiers;
@@ -2712,6 +3265,59 @@ public partial class ViewportView : UserControl
             _capturedPointer = e.Pointer;
             e.Handled = true;
             return;
+        }
+
+        // Mill SELECT AREA — Face / Brush / Box / Lasso on workpiece meshes only
+        // (imports & scans). Robot, bed, and cell environment never receive hits.
+        if (DataContext is ViewportViewModel millPtrVm
+            && millPtrVm.IsMillAreaSelectActive
+            && !_spaceHeld)
+        {
+            if (kind == PointerUpdateKind.LeftButtonPressed)
+            {
+                bool erase = mods.HasFlag(KeyModifiers.Alt);
+                if (millPtrVm.IsMillAreaBox || millPtrVm.IsMillAreaLasso)
+                {
+                    _millAreaBoxDragging = true;
+                    _millAreaBoxStart = pos;
+                    _paintLassoPts.Clear();
+                    if (millPtrVm.IsMillAreaLasso)
+                    {
+                        millPtrVm.PaintMarqueeVisible = false;
+                        _paintLassoPts.Add(pos);
+                        millPtrVm.SetPaintLassoPoints(_paintLassoPts);
+                        millPtrVm.PaintLassoVisible = true;
+                    }
+                    else
+                    {
+                        millPtrVm.PaintLassoVisible = false;
+                        millPtrVm.ClearPaintLassoPoints();
+                        millPtrVm.PaintMarqueeX = pos.X;
+                        millPtrVm.PaintMarqueeY = pos.Y;
+                        millPtrVm.PaintMarqueeW = 0;
+                        millPtrVm.PaintMarqueeH = 0;
+                        millPtrVm.PaintMarqueeVisible = true;
+                    }
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                if (millPtrVm.IsMillAreaBrush)
+                {
+                    _millAreaStroking = true;
+                    _lastPaintPx = new Avalonia.Point(double.MinValue, double.MinValue);
+                    TryMillAreaBrushAt(millPtrVm, pos, erase);
+                    e.Pointer.Capture(this);
+                    _capturedPointer = e.Pointer;
+                    e.Handled = true;
+                    return;
+                }
+                // Face click
+                TryMillAreaFaceAt(millPtrVm, pos, erase);
+                e.Handled = true;
+                return;
+            }
         }
 
         // 2D slice plane: right-drag pans (orbit is locked; this is the primary pan).
@@ -2872,10 +3478,21 @@ public partial class ViewportView : UserControl
             }
         }
 
+        // Move Origin mode owns the next left click: it is a chooser, so a click either lands on a
+        // snap marker or dismisses it, and must never fall through to selection or a gizmo drag.
+        if (kind == PointerUpdateKind.LeftButtonPressed
+            && DataContext is ViewportViewModel { IsMoveOriginActive: true } moVm)
+        {
+            if (!TryPickOrigin(pos)) moVm.IsMoveOriginActive = false;
+            e.Handled = true;
+            return;
+        }
+
         if (kind == PointerUpdateKind.LeftButtonPressed)
         {
-            _leftDownPos = pos;
-            _leftDragged = false;
+            _leftDownPos  = pos;
+            _leftDragged  = false;
+            _leftPressSeen = true;
 
             float mx  = (float)pos.X;
             float my  = (float)pos.Y;
@@ -2966,6 +3583,35 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // Mill area marquee / brush drag (before toolpath paint so Mill mode owns the pointer).
+        if (_millAreaBoxDragging && DataContext is ViewportViewModel millBoxVm)
+        {
+            if (millBoxVm.IsMillAreaLasso)
+            {
+                if (_paintLassoPts.Count == 0 || Dist2D(_paintLassoPts[^1], pos) >= 4.0)
+                {
+                    _paintLassoPts.Add(pos);
+                    millBoxVm.SetPaintLassoPoints(_paintLassoPts);
+                }
+            }
+            else
+            {
+                millBoxVm.PaintMarqueeX = Math.Min(pos.X, _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeY = Math.Min(pos.Y, _millAreaBoxStart.Y);
+                millBoxVm.PaintMarqueeW = Math.Abs(pos.X - _millAreaBoxStart.X);
+                millBoxVm.PaintMarqueeH = Math.Abs(pos.Y - _millAreaBoxStart.Y);
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking && DataContext is ViewportViewModel millStrokeVm)
+        {
+            if (Math.Abs(pos.X - _lastPaintPx.X) + Math.Abs(pos.Y - _lastPaintPx.Y) >= 5)
+                TryMillAreaBrushAt(millStrokeVm, pos, erase: e.KeyModifiers.HasFlag(KeyModifiers.Alt));
+            GlCanvas.RequestNextFrameRendering();
+            e.Handled = true;
+            return;
+        }
         if (_paintBoxDragging && DataContext is ViewportViewModel pbxVm)
         {
             if (pbxVm.PaintRegionSelectIsLasso)
@@ -3013,6 +3659,7 @@ public partial class ViewportView : UserControl
         if (_gizmoDragAxis != GizmoAxis.None)
         {
             _leftDragged = true;
+            _gizmoDragSnap = e.KeyModifiers.HasFlag(KeyModifiers.Shift);
             ProcessGizmoDrag((float)pos.X, (float)pos.Y);
             if (_toolIsDragging)
                 RunIkForToolDrag();
@@ -3053,10 +3700,14 @@ public partial class ViewportView : UserControl
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
-                _renderer.SetSeamGuidePreview(
-                    TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit)
-                        ? previewHit
-                        : null);
+                if (TrySeamGuideOnModel(ray, (float)pos.X, (float)pos.Y, out var previewHit))
+                {
+                    var (pLo, pHi) = SeamGuideHeightRange(hoverVm);
+                    _renderer.SetSeamGuidePreview(
+                        previewHit, BuildSeamGuidePath(previewHit, pLo, pHi));
+                }
+                else
+                    _renderer.SetSeamGuidePreview(null);
                 GlCanvas.RequestNextFrameRendering();
             }
             else
@@ -3122,6 +3773,47 @@ public partial class ViewportView : UserControl
         var pt   = e.GetCurrentPoint(this);
         var kind = pt.Properties.PointerUpdateKind;
         var btn  = ToButton(kind);
+        // Consume the flag up front so every early return below still resets it.
+        bool sawLeftPress = _leftPressSeen;
+        if (kind == PointerUpdateKind.LeftButtonReleased) _leftPressSeen = false;
+
+        if (_millAreaBoxDragging)
+        {
+            _millAreaBoxDragging = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            if (DataContext is ViewportViewModel millBoxVm)
+            {
+                bool erase = e.KeyModifiers.HasFlag(KeyModifiers.Alt);
+                if (millBoxVm.IsMillAreaLasso)
+                {
+                    millBoxVm.PaintLassoVisible = false;
+                    if (_paintLassoPts.Count >= 3)
+                        SelectMillFacesInLasso(millBoxVm, _paintLassoPts, erase);
+                    _paintLassoPts.Clear();
+                    millBoxVm.ClearPaintLassoPoints();
+                }
+                else
+                {
+                    millBoxVm.PaintMarqueeVisible = false;
+                    var rect = new Avalonia.Rect(
+                        Math.Min(pt.Position.X, _millAreaBoxStart.X),
+                        Math.Min(pt.Position.Y, _millAreaBoxStart.Y),
+                        Math.Abs(pt.Position.X - _millAreaBoxStart.X),
+                        Math.Abs(pt.Position.Y - _millAreaBoxStart.Y));
+                    if (rect.Width > 4 && rect.Height > 4)
+                        SelectMillFacesInRect(millBoxVm, rect, erase);
+                }
+            }
+            e.Handled = true;
+            return;
+        }
+        if (_millAreaStroking)
+        {
+            _millAreaStroking = false;
+            if (_capturedPointer == e.Pointer) { e.Pointer.Capture(null); _capturedPointer = null; }
+            e.Handled = true;
+            return;
+        }
 
         if (_paintBoxDragging)
         {
@@ -3256,17 +3948,44 @@ public partial class ViewportView : UserControl
             {
                 bool cutDragging = DataContext is ViewportViewModel { IsCutToolActive: true };
                 bool tilted = false;
+                bool scaled = false;
                 if (!cutDragging
                     && _renderer.SelectedNode is { } gzNode
                     && DataContext is ViewportViewModel vmGz)
                 {
                     var op = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+
+                    // Everything except a translate drag gets the bed rule applied on release
+                    // rather than live. A translate drag is already held against the bed as it
+                    // happens; a rotate or scale is not, because correcting height mid-gesture
+                    // reads as the part squirming away from the cursor, and dipping below part-way
+                    // through a tumble is normal rather than a mistake. Once the gesture is over
+                    // there is nothing left to push against, so the part is simply set back down —
+                    // the same "if it's going through the bed, it drops to bed after" rule a typed
+                    // field gets. Ahead of the undo entry, so Ctrl+Z goes back to the pose the drag
+                    // started from and never to a sunk one.
+                    // Followers are already current — ApplyTransformLink ran on every move of the
+                    // drag — and SettleOnBed shifts the whole linked set itself, so there is
+                    // nothing left to re-mirror here. A translate drag was already held against the
+                    // bed as it happened, so it only needs the Keep on bed half.
+                    var bedEdit = op switch
+                    {
+                        GizmoMode.Rotate => BedEdit.Rotate,
+                        GizmoMode.Scale  => BedEdit.Scale,
+                        _                => BedEdit.Move,
+                    };
+                    ApplyBedRules(gzNode, _bedWasRestingAtDragStart, bedEdit);
+                    if (op != GizmoMode.Translate) vmGz.ConstrainModifierPlanesUnder(gzNode);
+
                     RecordTransformUndo(vmGz, gzNode, _gizmoDragInitialLocal, gzNode.LocalTransform, TransformUndoLabel(op));
                     tilted = DragClassifier.ChangedUpAxis(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                    scaled = op == GizmoMode.Scale && ChangedScale(_gizmoDragInitialLocal, gzNode.LocalTransform);
+                    if (scaled) vmGz.RefreshScaleFields();
                 }
                 _toolIsDragging          = false;
                 _gizmoDragAxis           = GizmoAxis.None;
                 _renderer.ActiveDragAxis = GizmoAxis.None;
+                ClearBedClamp();
                 EndTransformLink();
                 _capturedPointer?.Capture(null);
                 _capturedPointer = null;
@@ -3278,6 +3997,13 @@ public partial class ViewportView : UserControl
                         // Dragging the TCP mid-scrub = keyframe the offset at this moment
                         // (no re-slice — the adjustment lives on the toolpath timeline).
                         AddTcpKeyframeAtCurrentIndex(vmGz2);
+                    }
+                    else if (scaled)
+                    {
+                        // A resized part is a different part to slice: layer count changes, and the
+                        // bead width the settings ask for has to be laid down at the new size rather
+                        // than stretched with the geometry. Same hook a tilt uses, and debounced.
+                        vmGz2.OnModelGeometryChanged?.Invoke();
                     }
                     else if (tilted)
                     {
@@ -3300,8 +4026,13 @@ public partial class ViewportView : UserControl
                 GlCanvas.RequestNextFrameRendering();
                 RevalidateSelectedToolpath();
             }
-            else if (!_leftDragged)
+            else if (!_leftDragged && sawLeftPress)
             {
+                // _leftPressSeen guards click-to-select against a press that overlay chrome
+                // swallowed. Selection runs on RELEASE using the position recorded at PRESS, so a
+                // click on a toolbar the viewport never saw pressed would otherwise pick against a
+                // stale position — deselecting the part and, with it, closing the very toolbar being
+                // clicked. Applies to every overlay control, not just the transform rows.
                 float vpW = (float)GlCanvas.Bounds.Width;
                 float vpH = (float)GlCanvas.Bounds.Height;
                 var ray   = _renderer.Camera.GetPickRay(
@@ -3548,6 +4279,22 @@ public partial class ViewportView : UserControl
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
     {
+        // Single-key shortcuts must not fire while the user is typing. The viewport binds bare keys
+        // — D1-D5 for view presets, G/R/S for transforms — and a TextBox does not mark a digit's
+        // KeyDown handled (text arrives via TextInput), so every digit typed into an overlay field
+        // also snapped the camera to a preset view. Guarding on focus fixes it for every text field
+        // in the app rather than just the transform boxes, and leaves the shortcuts themselves
+        // untouched for when the viewport genuinely has focus.
+        if (IsTextEntryFocused()) return;
+
+        // Esc backs out of the Move Origin chooser without picking anything.
+        if (e.Key == Key.Escape && DataContext is ViewportViewModel { IsMoveOriginActive: true } moCancelVm)
+        {
+            moCancelVm.IsMoveOriginActive = false;
+            e.Handled = true;
+            return;
+        }
+
         if (_kbTransformActive)
         {
             switch (e.Key)
@@ -4226,10 +4973,21 @@ public partial class ViewportView : UserControl
 
     private void StageToolpathMaps(PendingToolpathEntry entry)
     {
+        _rpmDirty = true;   // new/re-sliced geometry needs its RPM highlight recomputed
         _toolpathByNode[entry.Node]     = entry.Toolpath;
         _rawToolpathByNode[entry.Node]  = entry.RawToolpath;
         _toolpathMetaByNode[entry.Node] = (entry.BeadWidth, entry.LayerHeight, entry.MaterialColor);
         _scrubCacheByNode[entry.Node]   = BuildScrubCache(entry.Toolpath);
+
+        // A guide's curve is traced from the printed wall, so it goes stale the moment the
+        // toolpath is replaced. Nothing rebuilt it after a slice, so the guide kept whatever
+        // shape it had when it was placed — a straight column if the part was not yet sliced —
+        // while the seam beside it followed the new geometry.
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (DataContext is ViewportViewModel vmGuides)
+                UpdateSeamGuideMarkers(vmGuides);
+        });
 
         // The timeline must always follow the DISPLAYED toolpath. Some replace
         // paths (workspace-restore ordering, background re-uploads) staged a new
@@ -4275,7 +5033,24 @@ public partial class ViewportView : UserControl
             var geometryCentroid = new NVec3(
                 centroidLocal.Row3.X, centroidLocal.Row3.Y, centroidLocal.Row3.Z);
 
-            if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
+            if (entry.RebaseToFreshCentroid)
+            {
+                // ReplaceToolpath above already parked the node on the new geometry's centroid,
+                // which is where a freshly re-sliced path belongs: its moves are baked in absolute
+                // world space from the mesh's CURRENT vertices, so the centroid is the whole answer.
+                //
+                // Why this is safe for the move case the branch below exists to protect: on a pure
+                // move the drag-link shifts this node by M and the new centroid shifts by M too, so
+                // preservedLocal and the fresh centroid are the SAME value and leaving it alone
+                // changes nothing. They only diverge when the centroid moves for a reason the node
+                // did not follow — a scale or a rotate — and that is exactly the broken case:
+                // measured 112mm adrift at 50% scale, 179mm at 25%, compounding on each resize.
+                //
+                // This is NOT the old `preservedLocal * invOldOrigin * centroidLocal` rebase that
+                // double-counted a move (see the comment below). That formula re-added the mesh's
+                // delta on top of a centroid which already contained it. This adds nothing.
+            }
+            else if (entry.PreserveRelativePose && entry.PreservedLocalTransform is Matrix4 preservedLocal)
             {
                 // Just keep the node exactly where it already was — do NOT rebase through the
                 // old/new centroids (the previous formula here was preservedLocal * invOldOrigin
@@ -5049,6 +5824,10 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.InfillAngleDeg),
         nameof(AdditiveSettingsViewModel.PatternType),
         nameof(AdditiveSettingsViewModel.SeamMode),
+        // Raised only by SetSeamGuides (seam editor Save, project load). Without it, saving a
+        // seam guide changed nothing on screen — the toolpath kept the seam from the previous
+        // slice, so the green guide and the yellow seam sat on different sides of the part.
+        nameof(AdditiveSettingsViewModel.SeamGuideSummary),
         nameof(AdditiveSettingsViewModel.ZigZagAllowSameLayerTravel),
         nameof(AdditiveSettingsViewModel.PatternMapping),
         nameof(AdditiveSettingsViewModel.PatternWavelengthMm),
@@ -5332,6 +6111,27 @@ public partial class ViewportView : UserControl
         _realtimeSliceTimer.Start();
     }
 
+    /// <summary>
+    /// Above this triangle count a fresh import is NOT auto-sliced — slicing a very dense
+    /// mesh the instant it appears could freeze or crash the app (the reason the blanket
+    /// guard was added on 2026-08-01). Typical production parts here run 145k–160k tris,
+    /// so this clears normal work by a wide margin and only catches heavy STEP imports.
+    /// </summary>
+    private const int AutoSliceMaxTriangles = 1_000_000;
+
+    /// <summary>Triangles across a node's subtree, for the auto-slice size guard.</summary>
+    private static int SubtreeTriangleCount(SceneNode root)
+    {
+        int n = 0;
+        foreach (var node in root.SelfAndDescendants())
+        {
+            var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+            if (mesh is null) continue;
+            n += mesh.Indices is { } idx ? idx.Length / 3 : mesh.Positions.Length / 3;
+        }
+        return n;
+    }
+
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
         if (HasProtectedBakedToolpath(vm))
@@ -5342,10 +6142,24 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
-        if (toolpathChild is not null)
-            await RunUpdateSliceAsync(vm, (item, toolpathChild));
-        else
+        if (toolpathChild is null)
+        {
+            // No toolpath yet — this is a fresh import, so produce the FIRST slice rather
+            // than re-slicing. The 2026-08-01 guard returned here unconditionally, which
+            // fixed dense STEP imports freezing but also removed auto-slice on import
+            // entirely. Keep that protection as a size check instead of a blanket refusal.
+            int tris = SubtreeTriangleCount(item.Node);
+            if (tris > AutoSliceMaxTriangles)
+            {
+                SetSliceStatus(vm,
+                    $"Auto-slice skipped — {tris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). Press Slice to run it.");
+                return;
+            }
             await RunSliceAsync(vm);
+            return;
+        }
+
+        await RunUpdateSliceAsync(vm, (item, toolpathChild));
     }
 
     /// <summary>Begin a new slice cancellation token (cancels any previous).</summary>
@@ -5444,6 +6258,7 @@ public partial class ViewportView : UserControl
                 PreserveRelativePose   = true,
                 PreservedLocalTransform = preservedLocal,
                 PreservedOrigin        = preservedOrigin,
+                RebaseToFreshCentroid  = true,
             });
 
             ApplyToolpathStats(vm, smoothedToolpath);
@@ -5454,12 +6269,16 @@ public partial class ViewportView : UserControl
             _activeScrubNode = toolpathNode;
             vm.IsScrubSessionActive = true;
             vm.ResetScrubIndex(newMax, smoothedToolpath, preservePosition: keepScrub);
-            // Re-pose robot at the preserved index once scrub cache is rebuilt on GL thread.
-            int restoreIdx = vm.ToolpathScrubIndex;
+            // Re-pose robot once the scrub cache is rebuilt on the GL thread — at the position the
+            // CURRENT view governs, not the toolpath editor's. Passing ToolpathScrubIndex raw sent
+            // the arm back to a mid-print pose from a mode the user had left, on every scale,
+            // rotate, optimize and rebuild.
+            int restoreIdx = vm.ViewGovernedScrubIndex;
             Dispatcher.UIThread.Post(() =>
             {
                 if (DataContext is ViewportViewModel v2
-                    && ReferenceEquals(_activeScrubNode, toolpathNode))
+                    && ReferenceEquals(_activeScrubNode, toolpathNode)
+                    && !v2.RobotOwnsPose)   // synced robot outranks a re-slice
                     ScrubIkForNode(toolpathNode, restoreIdx);
             }, DispatcherPriority.Background);
             GlCanvas.RequestNextFrameRendering();
@@ -5674,6 +6493,10 @@ public partial class ViewportView : UserControl
         if (LayFlatMinZ(node) >= float.MaxValue) return;
         var old = node.LocalTransform;
         DropNodeToBed(node, _renderer.BedZ);
+        // Drop moves the part, so its cut planes ride along and drift out of step with their own
+        // fields. Every other path that moves a part already re-levels them; this one did not,
+        // which is how a horizontal plane ended up travelling down under the mesh.
+        if (DataContext is ViewportViewModel dropVm) dropVm.ConstrainModifierPlanesUnder(node);
         // A one-shot transform edit, same category as a typed coordinate change — mesh and
         // toolpath are scene-graph siblings, not real parent/child, so nothing carries the
         // toolpath along unless explicitly told to (same mechanism OnSelectionTranslated
@@ -5683,6 +6506,40 @@ public partial class ViewportView : UserControl
         RevalidateSelectedToolpath();
     }
 
+    /// <summary>
+    /// Puts the pivot at the centre of the part's world footprint, at the height of its lowest
+    /// point — the spot that will touch the bed.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Measured in <em>world</em> space, not the part's own. The part's own bottom stops meaning
+    /// anything once it has been tumbled: rotate something upside down and its local bottom is now
+    /// its top, so the pivot landed on the face pointing at the ceiling. What is actually wanted is
+    /// the face that meets the bed, and that is only knowable from how the part is currently sitting.
+    /// </para>
+    /// <para>
+    /// The consequence is that this is <em>pose-dependent</em> — unlike a Move Origin snap, which
+    /// picks a fixed spot on the mesh and stays there, this reads the current orientation. Rotate
+    /// the part afterwards and the pivot no longer sits at the new lowest point until Recenter is
+    /// pressed again. That is inherent to asking for "wherever the bottom is now".
+    /// </para>
+    /// <para>
+    /// X and Y stay centred on the footprint rather than following the single lowest vertex. On a
+    /// tilted part that vertex is off at one corner, which would put the handle right back where
+    /// this whole overhaul found it — metres away from the middle of the thing being dragged.
+    /// </para>
+    /// <para>
+    /// Just a pivot move, exactly like a Move Origin snap. Nothing is baked, no vertices are
+    /// touched, no GPU upload happens: it changes four numbers and is instant.
+    /// </para>
+    /// <para>
+    /// It used to rewrite every vertex so the model's own zero became its bottom centre, then
+    /// compensate with a transform. That bought nothing visible — slicing works off world transforms
+    /// — while costing a full mesh re-upload, an undo snapshot of every vertex array, and a bug that
+    /// left the part correctly positioned but not drawing at all. Move Origin moves the pivot
+    /// anywhere on the box without any of that, so Recenter now does the same thing.
+    /// </para>
+    /// </remarks>
     private void RecenterSelected()
     {
         if (_renderer.SelectedNode is not { } selected) return;
@@ -5693,56 +6550,36 @@ public partial class ViewportView : UserControl
         if (node != selected)
             _renderer.Select(node);
 
-        vm.PendingRecenterJobs.Enqueue(new ViewportViewModel.PendingRecenterJob(node));
-        vm.NotifyRenderNeeded();
-    }
+        var (wMin, wMax) = ImportHelper.ComputeSubtreeWorldAabb(node);
+        if (wMin.X > wMax.X) return;   // the empty-box sentinel: nothing real to measure
 
-    private void ProcessRecenterJob(ViewportViewModel vm, ViewportViewModel.PendingRecenterJob job)
-    {
-        var node = job.Node;
-        var transformsBefore = ImportHelper.SnapshotSubtreeTransforms(node);
-        var meshesBefore     = ImportHelper.SnapshotSubtreeMeshes(node);
+        var worldBottomCentre = new Vector3(
+            (wMin.X + wMax.X) * 0.5f,
+            (wMin.Y + wMax.Y) * 0.5f,
+            wMin.Z);
 
-        if (!ImportHelper.RecenterPivotToBottomCenter(node))
-        {
-            System.Console.WriteLine("[recenter] aborted: pivot edit failed");
-            return;
-        }
+        // Origin is expressed in the node's own space — the frame NodeBounds measures in — so the
+        // world point chosen above has to come back down through the node's own world transform.
+        var nodeWorld = node.WorldTransform;
+        var invNodeWorld = Matrix4.Identity;
+        if (MathF.Abs(nodeWorld.Determinant) > 1e-12f)
+            Matrix4.Invert(nodeWorld, out invNodeWorld);
+        var bottomCentre = Vector3.TransformPosition(worldBottomCentre, invNodeWorld);
 
-        if (!TryRefreshSubtreeGpuMeshes(node))
-        {
-            System.Console.WriteLine("[recenter] aborted: GPU refresh failed — rolling back");
-            ImportHelper.RestoreSubtreeSnapshot(node, transformsBefore, meshesBefore);
-            TryRefreshSubtreeGpuMeshes(node);
-            _renderer.InvalidateShaderAppearance();
-            return;
-        }
+        var before = NodePose.Of(node);
+        var t = node.EnsurePlacement(bottomCentre);
+        t.SetOrigin(bottomCentre);
+        node.SetPlacement(t);
 
-        _renderer.InvalidateShaderAppearance();
-
-        var transformsAfter = ImportHelper.SnapshotSubtreeTransforms(node);
-        var meshesAfter     = ImportHelper.SnapshotSubtreeMeshes(node);
-
-        Dispatcher.UIThread.Post(() =>
-        {
-            vm.UndoRedo?.Push(new NodeRecenterAction(
-                node, transformsBefore, transformsAfter,
-                meshesBefore, meshesAfter,
-                () =>
-                {
-                    vm.PendingModelRefresh.Enqueue(node);
-                    vm.NotifyRenderNeeded();
-                    OnRecenterApplied(vm, node);
-                }));
-            OnRecenterApplied(vm, node);
-        });
-
-        if (_renderer.SelectedNode is not null &&
-            node.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
-            _renderer.Select(node);
-
+        SyncSelectionTransformDisplay(vm);
+        UpdateFocusOverlay();
+        vm.UndoRedo?.Push(new NodePlacementAction(
+            node, before, NodePose.Of(node), "Recenter Origin",
+            () => { SyncSelectionTransformDisplay(vm); GlCanvas.RequestNextFrameRendering(); }));
+        vm.MarkWorkspaceDirty?.Invoke();
         GlCanvas.RequestNextFrameRendering();
     }
+
 
     private static bool TryRefreshSubtreeGpuMeshes(SceneNode root)
     {
@@ -5800,10 +6637,23 @@ public partial class ViewportView : UserControl
         RememberCommittedTransform(vm, node);
     }
 
+    /// <summary>
+    /// Copies a mesh, vertex arrays included.
+    /// </summary>
+    /// <remarks>
+    /// This used to hand the same <c>Positions</c> array to the copy, so the undo snapshot, the
+    /// editable working copy and the live GPU mesh's PickingData were all one array. Recenter's bake
+    /// mutates positions in place, which therefore rewrote the "before" snapshot as it went — undo
+    /// had nothing original left to restore — and left every MeshData's LocalBounds, computed once at
+    /// construction, describing vertices it no longer held.
+    /// </remarks>
     private static MeshData CloneMeshData(MeshData mesh) =>
-        new(mesh.Positions, mesh.Normals, mesh.Indices, mesh.Name,
+        new((Vector3[])mesh.Positions.Clone(),
+            (Vector3[])mesh.Normals.Clone(),
+            mesh.Indices?.ToArray(),
+            mesh.Name,
             mesh.BaseColor, mesh.Metallic, mesh.Roughness,
-            mesh.Uvs, mesh.Tangents, mesh.Material);
+            mesh.Uvs?.ToArray(), mesh.Tangents?.ToArray(), mesh.Material);
 
     private static bool HasExplodableMeshes(SceneNode root)
     {
@@ -6294,6 +7144,10 @@ public partial class ViewportView : UserControl
                     CullFaces      = false,
                     Visible        = true,
                 };
+                // A cut piece is a brand-new object, so it gets its own centred pivot rather than
+                // inheriting the whole part's — otherwise every piece would rotate about a point
+                // that made sense only for the uncut original, often outside the piece entirely.
+                ImportHelper.CenterOrigin(node);
                 firstNode ??= node;
                 vm.PendingNodes.Enqueue(node);
 
@@ -6554,18 +7408,211 @@ public partial class ViewportView : UserControl
         node.LocalTransform = node.LocalTransform * parent * world * parent.Inverted();
     }
 
+    /// <summary>How far below the bed still counts as resting on it, in mm.</summary>
+    private const float BedContactTolerance = 1e-3f;
+
+    /// <summary>
+    /// Whether a drag actually resized the part, by comparing basis-row lengths.
+    /// </summary>
+    /// <remarks>
+    /// Row length is the scale on that axis and is unchanged by any rotation, so this stays false
+    /// for a scale-mode drag that grabbed a handle and moved nowhere — which matters, because the
+    /// answer decides whether to spend a whole re-slice.
+    /// </remarks>
+    private static bool ChangedScale(Matrix4 before, Matrix4 after)
+    {
+        const float tol = 1e-4f;
+        return MathF.Abs(before.Row0.Xyz.Length - after.Row0.Xyz.Length) > tol
+            || MathF.Abs(before.Row1.Xyz.Length - after.Row1.Xyz.Length) > tol
+            || MathF.Abs(before.Row2.Xyz.Length - after.Row2.Xyz.Length) > tol;
+    }
+
+    /// <summary>
+    /// Puts <paramref name="node"/> back on the bed if the edit that just ran pushed it through.
+    /// </summary>
+    /// <remarks>
+    /// The after-the-fact counterpart to the live clamp a translate drag gets. A drag can be held
+    /// against the bed as it happens because the pointer is still moving and the part can lag behind
+    /// the handle; a typed field or an A/B/C step arrives already finished, with no gesture left to
+    /// push against, so the part is simply set back down.
+    /// <para>
+    /// Rotation drags are deliberately left out entirely. Correcting height mid-spin moves the part
+    /// under the cursor while it is being turned, which reads as the model squirming away — and a
+    /// tumble that dips below the bed part-way through is normal, not a mistake to undo.
+    /// </para>
+    /// </remarks>
+    /// <remarks>
+    /// <para>
+    /// Must run <em>after</em> the linked toolpath has been mirrored, not before. Measuring first
+    /// reads a pair that has not finished moving: drag the toolpath down and, at that instant, the
+    /// mesh is still sitting up on the bed, so the pair measures as resting and nothing is
+    /// corrected — then the mirror carries the mesh down through the floor unchecked.
+    /// </para>
+    /// <para>
+    /// Moves the whole linked set by one shared world lift rather than moving the primary and
+    /// letting the mirror re-derive the rest. They are rigid with respect to each other, so the same
+    /// translation on each keeps them together without a second mirroring pass to get wrong.
+    /// </para>
+    /// </remarks>
+    private void EnsureAboveBed(SceneNode node) => SettleOnBed(node, alsoLower: false);
+
+    /// <summary>How close to the bed still counts as "sitting on it" when deciding whether a part
+    /// should be kept there. Looser than <see cref="BedContactTolerance"/>: this is a judgement
+    /// about the user's intent, not a float comparison.</summary>
+    private const float BedRestingTolerance = 0.5f;
+
+    /// <summary>Whether the part (with anything linked to it) is currently resting on the bed.</summary>
+    private bool IsRestingOnBed(SceneNode node)
+    {
+        if (!BedClampApplies(node)) return false;
+        float minZ = LowestWorldZWithLinked(node);
+        return minZ < float.MaxValue && MathF.Abs(minZ - _renderer.BedZ) <= BedRestingTolerance;
+    }
+
+    /// <summary>
+    /// Puts the part back in contact with the bed. Always lifts one that has gone through it;
+    /// lowers one that has been left hanging only when <paramref name="alsoLower"/>.
+    /// </summary>
+    /// <remarks>
+    /// The two halves are deliberately not the same rule. Being below the plate is never what
+    /// anyone meant, so that is corrected unconditionally. Being above it often is — a part parked
+    /// in mid-air on purpose must stay there — so pulling one down happens only when it was already
+    /// resting on the bed before the edit and the matching Keep on bed preference is on.
+    /// </remarks>
+    private void SettleOnBed(SceneNode node, bool alsoLower)
+    {
+        if (!BedClampApplies(node)) return;
+
+        var linked = DataContext is ViewportViewModel vm
+            ? ResolveLinkedNodes(vm, node)
+            : new List<SceneNode>();
+
+        float minZ = LowestWorldZWithLinked(node, linked);
+        if (minZ >= float.MaxValue) return;
+
+        float delta = _renderer.BedZ - minZ;
+        bool sunk     = delta >  BedContactTolerance;
+        bool floating = delta < -BedContactTolerance;
+        if (!sunk && !(floating && alsoLower)) return;
+
+        var shift = new TkVector3(0f, 0f, delta);
+        TranslateNodeWorld(node, shift);
+        foreach (var follower in linked)
+            TranslateNodeWorld(follower, shift);
+    }
+
+    /// <summary>Which Keep on bed preference governs a given edit.</summary>
+    private enum BedEdit { Move, Rotate, Scale }
+
+    private bool KeepOnBedEnabled(BedEdit edit)
+    {
+        if (TopLevel.GetTopLevel(this)?.DataContext is not MainWindowViewModel mvm) return false;
+        var p = mvm.AppPreferences;
+        return edit switch
+        {
+            BedEdit.Move   => p.KeepOnBedWhenMoving,
+            BedEdit.Rotate => p.KeepOnBedWhenRotating,
+            _              => p.KeepOnBedWhenScaling,
+        };
+    }
+
+    /// <summary>
+    /// The full bed rule for one committed edit: hard floor always, plus keeping a part that was
+    /// already planted planted. <paramref name="wasResting"/> must be sampled BEFORE the edit.
+    /// </summary>
+    private void ApplyBedRules(SceneNode node, bool wasResting, BedEdit edit)
+        => SettleOnBed(node, alsoLower: wasResting && KeepOnBedEnabled(edit));
+
+    /// <summary>
+    /// Lowest world Z of <paramref name="node"/>'s real geometry together with anything linked to it.
+    /// </summary>
+    /// <remarks>
+    /// A mesh and its toolpath move as one rigid pair, so the bed has to stop the pair however you
+    /// grab it. Measuring only the node under the cursor was not enough: a toolpath carries no mesh
+    /// geometry of its own — <see cref="LayFlatMinZ"/> finds nothing on it and returns the empty
+    /// sentinel — so dragging the toolpath sailed straight through the bed while dragging the mesh
+    /// stopped dead, which is the same operation as far as anyone using it is concerned.
+    /// </remarks>
+    private float LowestWorldZWithLinked(SceneNode node, IReadOnlyList<SceneNode>? linked = null)
+    {
+        float minZ = LayFlatMinZ(node);
+        linked ??= DataContext is ViewportViewModel vm
+            ? ResolveLinkedNodes(vm, node)
+            : new List<SceneNode>();
+        foreach (var follower in linked)
+            minZ = MathF.Min(minZ, LayFlatMinZ(follower));
+        return minZ;
+    }
+
+    /// <summary>
+    /// Ends any bed clamp, which is what snaps the handle back onto the part on release.
+    /// </summary>
+    private void ClearBedClamp()
+    {
+        _bedClampStartMinZ  = float.MaxValue;
+        _bedClampGizmoWorld = null;
+    }
+
+    /// <summary>
+    /// Whether the bed should stop <paramref name="node"/> from being dragged below it.
+    /// </summary>
+    /// <remarks>
+    /// Parts only. The robot's own tool has to be able to reach below the bed to print, and a cut
+    /// modifier's plane is an authoring overlay whose whole job is passing through the part, so
+    /// neither can be treated as something that rests on a surface. A node with no real geometry
+    /// (a toolpath on its own) measures as <see cref="float.MaxValue"/> further down and clamps to
+    /// nothing anyway.
+    /// </remarks>
+    private bool BedClampApplies(SceneNode node)
+    {
+        if (IsToolNodeSelected()) return false;
+        if (DataContext is ViewportViewModel vm && vm.IsModifierNode(node)) return false;
+        return true;
+    }
+
     /// <summary>Drops <paramref name="node"/> straight down (world −Z) until its lowest
     /// point rests on <paramref name="bedZ"/>. No-op when the node has no geometry.</summary>
     internal static void DropNodeToBed(SceneNode node, float bedZ)
     {
         float minZ = LayFlatMinZ(node);
         if (minZ >= float.MaxValue) return;
-        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(0f, 0f, bedZ - minZ));
+        TranslateNodeWorld(node, new TkVector3(0f, 0f, bedZ - minZ));
+    }
+
+    /// <summary>
+    /// Shifts <paramref name="node"/> by a world-space offset, without disturbing anything else
+    /// about its placement.
+    /// </summary>
+    /// <remarks>
+    /// Moves the pivot directly rather than composing the offset into the matrix. Writing a matrix
+    /// onto a placement-bearing node makes it re-derive position, rotation and scale from what was
+    /// written, and that decomposition squares the basis back up with Gram-Schmidt — so a pure
+    /// slide sideways came back very slightly rotated and repositioned. Small (~0.3mm on a 2m part)
+    /// but real, in machine coordinates rather than just on screen, and it accumulated once per
+    /// correction. Editing the pivot skips the round trip entirely and is exact.
+    /// </remarks>
+    internal static void TranslateNodeWorld(SceneNode node, TkVector3 worldDelta)
+    {
+        var parent = node.Parent?.WorldTransform ?? TkMatrix4.Identity;
+
+        if (node.Placement is { } placement)
+        {
+            var invParent = TkMatrix4.Identity;
+            if (MathF.Abs(parent.Determinant) > 1e-12f)
+                TkMatrix4.Invert(parent, out invParent);
+
+            placement.Position += TransformDir(worldDelta, invParent);
+            node.SetPlacement(placement);
+            return;
+        }
+
+        // No placement (the robot rig, cell fixtures): matrix composition is all there is.
+        ApplyWorldTransformToNode(node, TkMatrix4.CreateTranslation(worldDelta));
     }
 
     private static TkVector3 LayFlatWorldCenter(SceneNode node)
     {
-        var mesh = node.Mesh?.PickingData ?? node.PendingMesh;
+        var mesh = node.IsAuthoringOverlay ? null : node.Mesh?.PickingData ?? node.PendingMesh;
         if (mesh is null) return node.WorldTransform.Row3.Xyz;
         var lo = mesh.LocalBounds.Min;
         var hi = mesh.LocalBounds.Max;
@@ -6577,11 +7624,22 @@ public partial class ViewportView : UserControl
             lc.X * m.M13 + lc.Y * m.M23 + lc.Z * m.M33 + m.M43);
     }
 
+    /// <summary>
+    /// Lowest point of the node's real geometry in world Z.
+    /// </summary>
+    /// <remarks>
+    /// Authoring overlays are skipped. A cut modifier's plane and the Move Origin box are both real
+    /// child nodes with real geometry, and both extend past the part — so counting them made Drop to
+    /// Plate measure the overlay's lowest point instead of the model's and shove the part somewhere
+    /// wrong, sometimes upward. <see cref="SceneNode.IsAuthoringOverlay"/> already promises exclusion
+    /// from "slicing, bounding-box, export" measurements; this was missing that.
+    /// </remarks>
     private static float LayFlatMinZ(SceneNode node)
     {
         float minZ = float.MaxValue;
         foreach (var n in node.SelfAndDescendants())
         {
+            if (n.IsAuthoringOverlay) continue;
             var mesh = n.Mesh?.PickingData ?? n.PendingMesh;
             if (mesh is null) continue;
             var m = n.WorldTransform;
@@ -6820,29 +7878,75 @@ public partial class ViewportView : UserControl
 
     // -- Toolhead selection check ----------------------------------------------
 
+    /// <summary>
+    /// Where the gizmo sits, and the point every rotation and scale works about.
+    /// </summary>
+    /// <remarks>
+    /// For a node with a <see cref="SceneNode.Placement"/> this is its pivot run out to world
+    /// space — centred at import, or wherever Move Origin last snapped it. The old behaviour of
+    /// reading the matrix's translation column is kept for nodes driven straight from a matrix (the
+    /// robot rig, cell fixtures), and is also why the gizmo used to appear detached from a mesh:
+    /// that column is the file's own origin, which for most exports is nowhere near the geometry.
+    /// </remarks>
     private Vector3 GetGizmoPivotWorld(SceneNode node)
     {
         if (IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp)
             return tcp.Row3.Xyz;
+        if (node.Placement is { } p)
+            return Vector3.TransformPosition(p.Origin, node.WorldTransform);
         return node.WorldTransform.Row3.Xyz;
     }
 
-    /// <summary>Rotation-only basis (no translation) the gizmo should be drawn/hit-tested/dragged
-    /// in for <paramref name="node"/> — a Vertical Cut modifier's own RotationDegrees around Z
-    /// (X/Y follow the plane, Z stays world-up since RotationDegrees only ever rotates about Z
-    /// anyway), or null (world-axis-aligned, every other selectable object's existing behavior)
-    /// for anything else. Scoped to Cut modifiers only — see feedback from Jeff 2026-07-22.</summary>
-    private Matrix4? GetModifierAxisBasis(SceneNode? node)
+    /// <summary>
+    /// Rotation-only basis (no translation) the gizmo is drawn, hit-tested and dragged in for
+    /// <paramref name="node"/>, or <c>null</c> for world-axis-aligned.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For any node with a <see cref="SceneNode.Placement"/> this is the node's own orientation, so
+    /// the red, green and blue handles stay stuck to the object: rotate a part 90° and its red arrow
+    /// now points 90° round with it. That may look "wrong" against the room, but it is what makes
+    /// the tool predictable — the handle you grab is always the object's own axis. World position is
+    /// unaffected and remains the single source of truth for where the part actually is.
+    /// </para>
+    /// <para>
+    /// Read from the node's <em>world</em> transform, not its local one, so a part parented under a
+    /// rotated frame (a rotary cell's table) still gets handles that match what is on screen. Rows
+    /// are normalised because non-uniform scale lengthens them; the placement guarantees they stay
+    /// mutually perpendicular, so normalising is enough to recover clean axes.
+    /// </para>
+    /// <para>
+    /// A Vertical Cut modifier keeps its existing special case (X/Y follow the plane's own
+    /// RotationDegrees, Z stays world-up) — its plane is not a placement-bearing part.
+    /// </para>
+    /// </remarks>
+    private Matrix4? GetGizmoAxisBasis(SceneNode? node)
     {
         // Called from OnRender (GL thread) every frame — must use the cached _vm field, never
         // DataContext (an Avalonia dispatcher-verified property that throws
         // InvalidOperationException off the UI thread). See the GL-thread DataContext audit
         // referenced in project memory; this exact mistake crashed on the very next model import.
         if (node is null) return null;
-        if (_vm is not { } vm) return null;
-        if (vm.FindModifierForNode(node) is not { Orientation: CutOrientation.Vertical } cut) return null;
-        return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        if (_vm is { } vm && vm.FindModifierForNode(node) is { Orientation: CutOrientation.Vertical } cut)
+            return Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(cut.RotationDegrees));
+        if (node.Placement is null) return null;
+        return WorldAxisBasis(node);
     }
+
+    /// <summary>The node's own X/Y/Z directions in world space as a rotation-only matrix.</summary>
+    private static Matrix4 WorldAxisBasis(SceneNode node)
+    {
+        var w = node.WorldTransform;
+        var x = SafeNormalize(w.Row0.Xyz, Vector3.UnitX);
+        var y = SafeNormalize(w.Row1.Xyz, Vector3.UnitY);
+        var z = SafeNormalize(w.Row2.Xyz, Vector3.UnitZ);
+        return new Matrix4(
+            new Vector4(x, 0f), new Vector4(y, 0f), new Vector4(z, 0f),
+            new Vector4(0f, 0f, 0f, 1f));
+    }
+
+    private static Vector3 SafeNormalize(Vector3 v, Vector3 fallback)
+        => v.LengthSquared > 1e-12f ? Vector3.Normalize(v) : fallback;
 
     private void BeginToolIkDrag(SceneNode node)
     {
@@ -6921,12 +8025,35 @@ public partial class ViewportView : UserControl
         _kbTransformAxis         = GizmoAxis.None;
         _kbTransformStartPos     = _lastMousePos;
         _kbTransformInitialLocal = node.LocalTransform;
+        _kbRotateRefAngle        = float.NaN;
 
-        // Project the node's world position to screen so KbRotate can use atan2.
+        // Must be sampled before anything moves — it is the question the Keep on bed preferences
+        // answer, and it is unanswerable once the gesture has started.
+        _kbWasRestingAtStart     = IsRestingOnBed(node);
+
+        // Arm the model↔toolpath link, exactly as a mouse gizmo drag does. Without this,
+        // ApplyKbTransform's ApplyTransformLink call had no followers and no baseline to measure a
+        // delta from, so it returned immediately and did nothing: G or R moved the mesh and left
+        // the toolpath standing where it was, a bit further adrift on every keystroke. The mouse
+        // path had this all along; the keyboard path was simply never given it.
+        //
+        // Scale is excluded on the same grounds as the mouse path (see OnPointerPressed): the
+        // toolpath's bead width is baked into its geometry at slice time, so scaling its node
+        // fattens every bead on screen. A resized part gets a fresh slice instead.
+        if (op != GizmoMode.Scale) BeginTransformLink(node);
+        else                       EndTransformLink();
+
         float vpW0 = (float)GlCanvas.Bounds.Width;
         float vpH0 = (float)GlCanvas.Bounds.Height;
-        if (vpW0 > 0 && vpH0 > 0)
+        if (op is GizmoMode.Rotate or GizmoMode.Scale)
         {
+            // R and S: pivot under the mouse at press (top + side views).
+            _kbObjScreenCenter = new Vector2((float)_lastMousePos.X, (float)_lastMousePos.Y);
+            _kbRotatePivotWorld = PickKbTransformPivotWorld(node, (float)_lastMousePos.X, (float)_lastMousePos.Y, vpW0, vpH0);
+        }
+        else if (vpW0 > 0 && vpH0 > 0)
+        {
+            // Translate: keep screen center on the object pivot for any helpers.
             float aspect0  = vpW0 / vpH0;
             var   vp0      = _renderer.Camera.GetViewMatrix() * _renderer.Camera.GetProjectionMatrix(aspect0);
             var   nodePos0 = GetGizmoPivotWorld(node);
@@ -6936,10 +8063,12 @@ public partial class ViewportView : UserControl
                     (clip0.X / clip0.W * 0.5f + 0.5f) * vpW0,
                     (1f - (clip0.Y / clip0.W * 0.5f + 0.5f)) * vpH0)
                 : new Vector2(vpW0 * 0.5f, vpH0 * 0.5f);
+            _kbRotatePivotWorld = nodePos0;
         }
         else
         {
-            _kbObjScreenCenter = Vector2.Zero;
+            _kbObjScreenCenter  = Vector2.Zero;
+            _kbRotatePivotWorld = GetGizmoPivotWorld(node);
         }
 
         BeginToolIkDrag(node);
@@ -6947,6 +8076,46 @@ public partial class ViewportView : UserControl
         // Prime the view-plane state so unconstrained translate tracks exactly from the start.
         if (op == GizmoMode.Translate)
             SetupKbViewPlane(node);
+    }
+
+    /// <summary>
+    /// World point under the mouse for keyboard rotate/scale.
+    /// Top/bottom views use the bed (or object-height) plane; side/front views use the
+    /// camera view plane through the object so the pivot sits under the cursor, not on the bed far away.
+    /// </summary>
+    private Vector3 PickKbTransformPivotWorld(SceneNode node, float mx, float my, float vpW, float vpH)
+    {
+        var objectPivot = GetGizmoPivotWorld(node);
+        if (vpW <= 1f || vpH <= 1f)
+            return objectPivot;
+
+        var ray = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
+        var viewDir = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+        // Looking mostly along ±Z → top/bottom (number-key "1" style).
+        bool topOrBottom = MathF.Abs(viewDir.Z) > 0.85f;
+
+        if (topOrBottom)
+        {
+            if (SceneRenderer.TryPickHorizontalPlane(ray, _renderer.BedZ, out var onBed))
+                return onBed;
+            if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onObjectZ))
+                return onObjectZ;
+        }
+
+        // Side / front / 3D: intersect the view plane through the object pivot.
+        float denom = Vector3.Dot(ray.Direction, viewDir);
+        if (MathF.Abs(denom) > 1e-5f)
+        {
+            float t = Vector3.Dot(objectPivot - ray.Origin, viewDir) / denom;
+            if (t > 0f)
+                return ray.At(t);
+        }
+
+        // Last resort: horizontal plane at object height.
+        if (SceneRenderer.TryPickHorizontalPlane(ray, objectPivot.Z, out var onZ))
+            return onZ;
+
+        return objectPivot;
     }
 
     // Stores the camera view-plane (normal + anchor + start-hit) for unconstrained translate.
@@ -6994,13 +8163,32 @@ public partial class ViewportView : UserControl
     private void CommitKbTransform()
     {
         if (_renderer.SelectedNode is { } node && DataContext is ViewportViewModel vmCb)
+        {
+            // The bed is solid for a keyboard gesture too. Applied BEFORE the undo entry is
+            // recorded, so Ctrl+Z returns to the pose the gesture started from and never to a
+            // sunk one — the same ordering the mouse release uses. SettleOnBed shifts the whole
+            // linked set by one shared translation, so the toolpath comes up with the mesh and
+            // there is nothing left to re-mirror.
+            var bedEdit = _kbTransformOp switch
+            {
+                GizmoMode.Rotate => BedEdit.Rotate,
+                GizmoMode.Scale  => BedEdit.Scale,
+                _                => BedEdit.Move,
+            };
+            ApplyBedRules(node, _kbWasRestingAtStart, bedEdit);
+
             RecordTransformUndo(vmCb, node, _kbTransformInitialLocal, node.LocalTransform, TransformUndoLabel(_kbTransformOp));
+        }
 
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        // Followers are current — ApplyTransformLink ran on every mouse move of the gesture.
+        // Dropping the baseline here stops a later, unrelated edit measuring its delta from it.
+        EndTransformLink();
+        ClearBedClamp();
         if (DataContext is ViewportViewModel vmCb2) SyncSelectionTransformDisplay(vmCb2);
         GlCanvas.RequestNextFrameRendering();
         RevalidateSelectedToolpath();
@@ -7034,6 +8222,210 @@ public partial class ViewportView : UserControl
     private bool _paintBoxDragging;
     private Avalonia.Point _paintBoxStart;
     private readonly List<Avalonia.Point> _paintLassoPts = [];
+
+    // ── Mill OPERATION → SELECT AREA (soft vertex paint on workpiece only) ───
+    private bool _millAreaStroking, _millAreaBoxDragging;
+    private Avalonia.Point _millAreaBoxStart;
+    private MillSurfacePaint? _millSurfacePaint;
+    private bool _millPaintHooked;
+
+    MillSurfacePaint MillPaint
+    {
+        get
+        {
+            _millSurfacePaint ??= new MillSurfacePaint();
+            return _millSurfacePaint;
+        }
+    }
+
+    void EnsureMillPaintHook(ViewportViewModel vm)
+    {
+        if (_millPaintHooked) return;
+        _millPaintHooked = true;
+        vm.ClearMillSurfacePaint = () =>
+        {
+            _pendingMillPaintClear = true;
+            vm.NotifyRenderNeeded();
+        };
+        vm.DescribeMillPaint = () => _millSurfacePaint?.Describe() ?? "no paint";
+    }
+
+    bool _pendingMillPaintClear;
+
+    /// <summary>
+    /// Ray-pick a face exclusively on millable user workpieces (imports / scans).
+    /// Robot, bed, toolheads, and other cell environment never qualify.
+    /// </summary>
+    Picker.FaceHit? PickMillableFace(ViewportViewModel vm, Avalonia.Point pos)
+    {
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return null;
+        var ray = _renderer.Camera.GetPickRay((float)pos.X, (float)pos.Y, vpW, vpH);
+        return Picker.PickFaceDetailed(ray, _renderer.SceneRoot, vm.IsMillableWorkpiece);
+    }
+
+    void EnsureMillAreaTarget(ViewportViewModel vm, SceneNode meshLeaf)
+    {
+        if (vm.MillAreaTargetRoot is not null) return;
+        var root = meshLeaf;
+        for (var c = meshLeaf; c is not null; c = c.Parent)
+        {
+            if (vm.FindUserMeshOutlinerItem(c) is { } item
+                && !item.IsToolpath && !item.IsEffector
+                && !item.IsModifier && !item.IsModifiersGroup)
+            {
+                root = item.Node;
+                break;
+            }
+        }
+        vm.SetMillAreaTargetRoot(root);
+    }
+
+    void SyncMillPaintStats(ViewportViewModel vm)
+    {
+        var paint = _millSurfacePaint;
+        if (paint is null) { vm.UpdateMillPaintStats(0, 0); return; }
+        vm.UpdateMillPaintStats(paint.PaintedVertexCount, paint.Coverage01);
+    }
+
+    void TryMillAreaFaceAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+        {
+            ConsoleLogMill($"[mill-paint] face miss (no workpiece under cursor)");
+            return;
+        }
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+        if (hit.Value.MeshNode.Mesh?.PickingData is not { } mesh) return;
+
+        MillPaint.StampTriangle(hit.Value.MeshNode, mesh, hit.Value.TriangleIndex, erase);
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] face tri={hit.Value.TriangleIndex} on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void TryMillAreaBrushAt(ViewportViewModel vm, Avalonia.Point pos, bool erase)
+    {
+        EnsureMillPaintHook(vm);
+        _lastPaintPx = pos;
+        var hit = PickMillableFace(vm, pos);
+        if (hit is null)
+            return;
+        EnsureMillAreaTarget(vm, hit.Value.MeshNode);
+        if (!vm.IsMillableWorkpiece(hit.Value.MeshNode)
+            && !vm.IsMillableWorkpiece(hit.Value.SelectableRoot))
+            return;
+
+        // World-space soft brush — works without material UVs (STEP/STL/GLB).
+        int before = MillPaint.PaintedVertexCount;
+        MillPaint.StampWorld(
+            hit.Value.MeshNode,
+            hit.Value.WorldHit,
+            radiusMm: (float)vm.MillBrushRadiusMm,
+            falloff: (float)vm.MillBrushFalloff,
+            strength: erase ? 1f : 1f,
+            erase: erase,
+            hitTriangleIndex: hit.Value.TriangleIndex);
+        SyncMillPaintStats(vm);
+        if (vm.MillPaintedVertices != before)
+            ConsoleLogMill($"[mill-paint] brush on {hit.Value.MeshNode.Name} → {vm.MillPaintedVertices} verts");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    void SelectMillFacesInRect(ViewportViewModel vm, Avalonia.Rect rect, bool erase)
+        => SelectMillPaintInScreenRegion(vm, erase, p => rect.Contains(p));
+
+    void SelectMillFacesInLasso(ViewportViewModel vm, List<Avalonia.Point> loop, bool erase)
+    {
+        if (loop.Count < 3) return;
+        SelectMillPaintInScreenRegion(vm, erase, p => PointInPolygon(p, loop));
+    }
+
+    static bool PointInPolygon(Avalonia.Point p, List<Avalonia.Point> poly)
+    {
+        bool inside = false;
+        for (int i = 0, j = poly.Count - 1; i < poly.Count; j = i++)
+        {
+            double xi = poly[i].X, yi = poly[i].Y;
+            double xj = poly[j].X, yj = poly[j].Y;
+            if (((yi > p.Y) != (yj > p.Y))
+                && (p.X < (xj - xi) * (p.Y - yi) / (yj - yi + 1e-30) + xi))
+                inside = !inside;
+        }
+        return inside;
+    }
+
+    void SelectMillPaintInScreenRegion(
+        ViewportViewModel vm, bool erase, Func<Avalonia.Point, bool> inside)
+    {
+        EnsureMillPaintHook(vm);
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW < 2 || vpH < 2) return;
+        var viewProj = _renderer.GetViewProjectionMatrix(vpW, vpH);
+
+        foreach (var node in _renderer.SceneRoot.SelfAndDescendants())
+        {
+            if (node.Mesh?.PickingData is null) continue;
+            var selectable = Picker.FindSelectableRoot(node);
+            if (selectable is null) continue;
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            if (vm.MillAreaTargetRoot is null)
+                EnsureMillAreaTarget(vm, node);
+            if (!vm.IsMillableWorkpiece(selectable) && !vm.IsMillableWorkpiece(node))
+                continue;
+
+            MillPaint.StampScreenRegion(
+                node,
+                world =>
+                {
+                    var scr = _renderer.ProjectToScreen(world, viewProj, vpW, vpH);
+                    if (float.IsNaN(scr.X)) return false;
+                    return inside(new Avalonia.Point(scr.X, scr.Y));
+                },
+                strength: 0.95f,
+                erase: erase);
+        }
+
+        SyncMillPaintStats(vm);
+        ConsoleLogMill($"[mill-paint] region → {vm.MillPaintedVertices} verts ({vm.MillPaintCoverage * 100:0.#}%)");
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    /// <summary>Upload vertex paint weights to GPU (selection wash is in the mesh shader).</summary>
+    void UpdateMillAreaOverlay(ViewportViewModel vm)
+    {
+        EnsureMillPaintHook(vm);
+
+        if (_pendingMillPaintClear)
+        {
+            _pendingMillPaintClear = false;
+            _millSurfacePaint?.Clear();
+            vm.UpdateMillPaintStats(0, 0);
+        }
+
+        if (_millSurfacePaint is not null)
+        {
+            _millSurfacePaint.UploadDirty();
+            _millSurfacePaint.RebindAll();
+        }
+    }
+
+    void ConsoleLogMill(string msg)
+    {
+        System.Console.WriteLine(msg);
+        if (DataContext is ViewportViewModel vm)
+            vm.LogMill?.Invoke(msg);
+    }
+
     /// <summary>Applied modifications (reselectable from the MODIFICATIONS panel).</summary>
     private readonly List<PaintModificationRecord> _paintModifications = [];
 
@@ -7288,7 +8680,9 @@ public partial class ViewportView : UserControl
                 || (vm.AdditiveSettings?.PaintMarks.Count ?? 0) > 0);
         if (!show)
         {
-            _renderer.SetPaintOverlay([], null);
+            // Leave the buffer alone when mill SELECT AREA owns the brush-cursor overlay.
+            if (!vm.IsMillAreaSelectActive && vm.MillPaintedTexels == 0)
+                _renderer.SetPaintOverlay([], null);
             return;
         }
         var add = vm.AdditiveSettings!;
@@ -10454,10 +11848,17 @@ public partial class ViewportView : UserControl
         _seamDragCumLen    = cum;
         _seamDragOffsetMm  = 0f;
         _seamDragVertex    = 0;
-        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], 0);
+        _renderer.SetSeamGuides([_seamDragLoopWorld[0]], [SeamVertexTick(_seamDragLoopWorld[0])], 0);
         GlCanvas.RequestNextFrameRendering();
         return true;
     }
+
+    /// <summary>
+    /// Short vertical tick at one contour vertex. The toolpath seam-drag tool marks a spot on a
+    /// single loop, not a whole wall, so it gets a marker rather than a full-height guide.
+    /// </summary>
+    private static IReadOnlyList<TkVector3> SeamVertexTick(TkVector3 at)
+        => [new TkVector3(at.X, at.Y, at.Z - 15f), new TkVector3(at.X, at.Y, at.Z + 15f)];
 
     /// <summary>Slides the seam preview along the grabbed contour by the horizontal mouse delta.</summary>
     private void UpdateSeamPointDrag(float deltaX)
@@ -10480,7 +11881,8 @@ public partial class ViewportView : UserControl
         if (vertex != _seamDragVertex)
         {
             _seamDragVertex = vertex;
-            _renderer.SetSeamGuides([_seamDragLoopWorld[vertex]], 0);
+            _renderer.SetSeamGuides(
+                [_seamDragLoopWorld[vertex]], [SeamVertexTick(_seamDragLoopWorld[vertex])], 0);
         }
         GlCanvas.RequestNextFrameRendering();
     }
@@ -10581,12 +11983,20 @@ public partial class ViewportView : UserControl
     private void CancelKbTransform()
     {
         if (_renderer.SelectedNode is { } node)
-            node.LocalTransform  = _kbTransformInitialLocal;
+        {
+            node.LocalTransform = _kbTransformInitialLocal;
+            // Put the followers back where they started too. The link has been dragging them
+            // along all gesture, so restoring only the node would abandon the toolpath at the
+            // cancelled pose — an Esc that half-undoes is worse than no Esc.
+            ApplyTransformLink(node);
+        }
+        EndTransformLink();
         _kbTransformActive       = false;
         _kbTransformAxis         = GizmoAxis.None;
         _gizmoDragAxis           = GizmoAxis.None;
         _renderer.ActiveDragAxis = GizmoAxis.None;
         _toolIsDragging          = false;
+        ClearBedClamp();
         GlCanvas.RequestNextFrameRendering();
     }
 
@@ -10598,7 +12008,6 @@ public partial class ViewportView : UserControl
         float my  = (float)mousePos.Y;
         float vpW = (float)GlCanvas.Bounds.Width;
         float vpH = (float)GlCanvas.Bounds.Height;
-        float dx  = (float)(mousePos.X - _kbTransformStartPos.X);
 
         switch (_kbTransformOp)
         {
@@ -10616,10 +12025,17 @@ public partial class ViewportView : UserControl
                 break;
 
             case GizmoMode.Scale:
-                KbScale(node, dx, vpW);
+                KbScale(node, mousePos, vpW, vpH);
                 break;
         }
         ApplyTransformLink(node);
+
+        // Same live readout as a gizmo drag — a G/R/S move is the same interaction by another route.
+        if (DataContext is ViewportViewModel vmKbLive)
+        {
+            SyncSelectionTransformDisplayThrottled(vmKbLive);
+            vmKbLive.ConstrainModifierPlanesUnder(node);
+        }
 
         if (_toolIsDragging)
             RunIkForToolDrag();
@@ -10658,28 +12074,26 @@ public partial class ViewportView : UserControl
             GizmoAxis.X => Vector3.UnitX,
             GizmoAxis.Y => Vector3.UnitY,
             GizmoAxis.Z => Vector3.UnitZ,
+            // Unconstrained: view axis (top view ≈ world Z) so the model spins on the plate.
             _           => Vector3.Normalize(_renderer.Camera.Eye - _renderer.Camera.Target),
         };
 
-        // Compute rotation as the 2-D angle swept around the object's screen center.
-        // This makes the object "track" the mouse regardless of which axis is constrained.
-        var vStart = new Vector2((float)_kbTransformStartPos.X, (float)_kbTransformStartPos.Y)
-                   - _kbObjScreenCenter;
-        var vCurr  = new Vector2((float)mousePos.X, (float)mousePos.Y)
-                   - _kbObjScreenCenter;
+        // Polar angle around the mouse position where R was pressed (_kbObjScreenCenter).
+        // At press, start == center so we lock a reference direction on the first real move.
+        var vCurr = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
 
         float angle;
-        if (vStart.LengthSquared < 4f || vCurr.LengthSquared < 4f)
+        if (vCurr.LengthSquared < 16f) // ~4 px
         {
-            // Too close to center -- fall back to pure horizontal drag.
-            angle = (float)(mousePos.X - _kbTransformStartPos.X) * 0.01f;
+            angle = 0f;
         }
         else
         {
-            // Negate Y to convert screen-space (Y-down) to math-space (Y-up) before atan2,
-            // so the resulting angle follows the right-hand rule used by CreateFromAxisAngle.
-            angle = MathF.Atan2(-vCurr.Y, vCurr.X) - MathF.Atan2(-vStart.Y, vStart.X);
-            // Wrap to [-π, π] to avoid a sudden jump when crossing the ±180deg boundary.
+            // Negate Y: screen Y-down → math Y-up for right-hand CreateFromAxisAngle.
+            float curr = MathF.Atan2(-vCurr.Y, vCurr.X);
+            if (float.IsNaN(_kbRotateRefAngle))
+                _kbRotateRefAngle = curr;
+            angle = curr - _kbRotateRefAngle;
             if (angle >  MathF.PI) angle -= MathF.Tau;
             if (angle < -MathF.PI) angle += MathF.Tau;
         }
@@ -10703,39 +12117,73 @@ public partial class ViewportView : UserControl
             return;
         }
 
-        var rotNode = Matrix4.CreateFromAxisAngle(axisDir, angle);
-        var lt  = _kbTransformInitialLocal;
-        var p   = new Vector3(lt.M41, lt.M42, lt.M43);
-        lt      = lt * rotNode;
-        lt.M41  = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
-        node.LocalTransform = lt;
+        // Rotate about the world pivot under the mouse (not the local origin), so in top view
+        // the selection orbits the cursor / plate point under the cursor.
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var rotWorld   = Matrix4.CreateFromAxisAngle(axisDir, angle);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * R * T(pivot)
+        var worldRot = toOrigin * rotWorld * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        // L' = L0 * P * W * P⁻¹  (same conjugation as ApplyWorldTransformToNode)
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldRot * invParent;
     }
 
-    private void KbScale(SceneNode node, float dx, float vpW)
+    private void KbScale(SceneNode node, Point mousePos, float vpW, float vpH)
     {
-        float t     = dx / (vpW * 0.5f);
-        float ratio = MathF.Exp(t * MathF.Log(3f));
-        if (ratio <= 0f) return;
+        // Scale factor from mouse motion relative to the press point (same pivot as R).
+        // Radial distance from the press cursor: outward = grow, toward press = shrink.
+        // When press == pivot center, use a virtual base radius so the first move is well-defined.
+        var v = new Vector2((float)mousePos.X, (float)mousePos.Y) - _kbObjScreenCenter;
+        float basePx = MathF.Max(64f, MathF.Min(vpW, vpH) * 0.12f);
+        float currPx = MathF.Max(1f, v.Length);
+        // Signed radial scale: start at ratio 1 when still near the press point; dragging
+        // away increases size, dragging back toward the press point decreases it.
+        float ratio;
+        if (v.LengthSquared < 16f)
+        {
+            ratio = 1f;
+        }
+        else
+        {
+            // Mix radial Blender-style factor with a gentle horizontal bias so tiny motions work
+            // even before a clear radial direction is established.
+            float radial = currPx / basePx;
+            float horiz  = MathF.Exp(((float)mousePos.X - (float)_kbTransformStartPos.X) / (vpW * 0.35f) * MathF.Log(3f));
+            // Prefer radial once the cursor has moved enough off the press point.
+            ratio = currPx >= basePx * 0.35f ? radial : horiz;
+            ratio = Math.Clamp(ratio, 0.05f, 20f);
+        }
 
-        var lt = _kbTransformInitialLocal;
+        if (_toolIsDragging)
+        {
+            // Tool TCP scale is not meaningful — keep orientation-only IK path inert.
+            return;
+        }
+
+        // World-space scale about the mouse pivot (works in top + side views).
+        float sx = 1f, sy = 1f, sz = 1f;
         switch (_kbTransformAxis)
         {
-            case GizmoAxis.X:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                break;
-            case GizmoAxis.Y:
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                break;
-            case GizmoAxis.Z:
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
-            default:
-                lt.M11 *= ratio; lt.M12 *= ratio; lt.M13 *= ratio;
-                lt.M21 *= ratio; lt.M22 *= ratio; lt.M23 *= ratio;
-                lt.M31 *= ratio; lt.M32 *= ratio; lt.M33 *= ratio;
-                break;
+            case GizmoAxis.X: sx = ratio; break;
+            case GizmoAxis.Y: sy = ratio; break;
+            case GizmoAxis.Z: sz = ratio; break;
+            default:          sx = sy = sz = ratio; break;
         }
-        node.LocalTransform = lt;
+
+        var pivot = _kbRotatePivotWorld;
+        var toOrigin   = Matrix4.CreateTranslation(-pivot);
+        var scaleMat   = Matrix4.CreateScale(sx, sy, sz);
+        var fromOrigin = Matrix4.CreateTranslation(pivot);
+        // Row-vector: p' = p * T(-pivot) * S * T(pivot)
+        var worldScale = toOrigin * scaleMat * fromOrigin;
+
+        var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
+        Matrix4.Invert(parentWorld, out var invParent);
+        node.LocalTransform = _kbTransformInitialLocal * parentWorld * worldScale * invParent;
     }
 
     private static string TransformUndoLabel(GizmoMode mode) => mode switch
@@ -10748,8 +12196,6 @@ public partial class ViewportView : UserControl
 
     private void RememberCommittedTransform(ViewportViewModel vm, SceneNode node)
     {
-        _lastCommittedTransformNode = node;
-        _lastCommittedTransform     = node.LocalTransform;
         foreach (var f in ResolveLinkedNodes(vm, node))
             _lastCommittedFollowerTransform[f] = f.LocalTransform;
     }
@@ -11000,8 +12446,39 @@ public partial class ViewportView : UserControl
         GlCanvas.RequestNextFrameRendering();
     }
 
-    private void SchedulePanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
+    /// <summary>The node a debounced panel edit is pending for, and the pose it started from.</summary>
+    private SceneNode? _panelUndoNode;
+    private Matrix4    _panelUndoBefore;
+
+    /// <summary>
+    /// Queues one undo entry for a burst of panel, field or console edits, from the pose the burst
+    /// started at.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The "before" is passed in by the caller, captured before it touched the node, and held for
+    /// the whole burst. It used to be read at commit time out of the <c>_lastCommittedTransform</c>
+    /// ledger instead, which had two failure modes and hit both. If anything refreshed that ledger
+    /// inside the 400ms window — and <see cref="SyncSelectionTransformDisplay"/> does exactly that
+    /// by default, as does a re-slice landing — then before and after came out equal and the entry
+    /// was <em>silently dropped</em>: the edit stayed, but Ctrl+Z skipped straight past it to an
+    /// older one, which reads as a much bigger reset than anything you just did. And if the ledger
+    /// happened to hold some much older pose, the entry reverted far too much.
+    /// </para>
+    /// <para>
+    /// Only the first edit of a burst sets the baseline; later ones coalesce into it, so holding a
+    /// field down still collapses to a single undo rather than one per keystroke.
+    /// </para>
+    /// </remarks>
+    private void SchedulePanelTransformUndo(
+        ViewportViewModel vm, SceneNode node, string description, Matrix4 before)
     {
+        if (_panelUndoNode != node)
+        {
+            _panelUndoNode   = node;
+            _panelUndoBefore = before;
+        }
+
         _panelTransformDebounce?.Cancel();
         _panelTransformDebounce = new CancellationTokenSource();
         var token = _panelTransformDebounce.Token;
@@ -11018,23 +12495,189 @@ public partial class ViewportView : UserControl
 
     private void CommitPanelTransformUndo(ViewportViewModel vm, SceneNode node, string description)
     {
-        if (_renderer.SelectedNode != node) return;
+        // Deliberately not gated on the node still being selected. Clicking away during the 400ms
+        // window is a normal thing to do and used to throw the entry away with no sign it had
+        // happened — the edit was still there, but no longer undoable.
+        if (_panelUndoNode != node) return;
 
-        var before = _lastCommittedTransformNode == node
-            ? _lastCommittedTransform
-            : node.LocalTransform;
+        var before = _panelUndoBefore;
+        _panelUndoNode = null;
+        _panelTransformDebounce = null;
         RecordTransformUndo(vm, node, before, node.LocalTransform, description);
     }
 
-    private void SyncSelectionTransformDisplay(ViewportViewModel vm)
+    /// <summary>
+    /// Refreshes the three position and three rotation boxes from the selection.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a part, the numbers come straight from its stored placement: the position shown is the
+    /// pivot the gizmo is sitting on, and the degrees are rotations about the part's own X, Y and Z
+    /// — the same axes as the red, green and blue handles.
+    /// </para>
+    /// <para>
+    /// Two bugs are gone from this method. It used to normalise the matrix by dividing all three
+    /// axis rows by the length of the <em>first</em> one, so any part scaled unevenly handed a
+    /// non-rotation matrix to the angle extractor and got meaningless degrees back — which the user
+    /// could then type straight back in. And it reported KUKA A/B/C, whose first value turns about
+    /// Z, while the field beside it was coloured red for X. The KUKA readout is still what the tool
+    /// and TCP need, so that path is untouched below.
+    /// </para>
+    /// </remarks>
+    // -- Move Origin mode ------------------------------------------------------
+
+    private SceneNode? _originOverlay;
+    private SceneNode? _originOverlayTarget;
+    private Vector3[]  _originSnapPoints = [];
+    private SceneNode? _pendingOverlayUpload;
+
+    /// <summary>How near the cursor must be to a marker, in pixels.</summary>
+    private const float OriginPickRadiusPx = 16f;
+
+    /// <summary>
+    /// Shows or hides the bounding box and its 27 snap markers (26 on the surface plus the gold
+    /// box centre) for the current selection.
+    /// </summary>
+    private void SetMoveOriginOverlay(bool on)
+    {
+        TearDownOriginOverlay();
+
+        if (!on) { GlCanvas.RequestNextFrameRendering(); return; }
+        if (_renderer.SelectedNode is not { } node) return;
+        if (NodeBounds.LocalAabb(node) is not { } box) return;
+
+        // Parented to the part, so the box tracks it as it moves and turns with nothing having to
+        // re-place it, and a marker's local position is directly the pivot value it will set.
+        // The part's scale goes in so the snap markers stay cubes: everything in the overlay is
+        // parented to the part, so an unevenly scaled part would otherwise stretch them into slabs.
+        var overlay = OriginPickOverlay.Build(box, out var points, node.Placement?.Scale);
+        node.AddChild(overlay);
+
+        _originOverlay          = overlay;
+        _originOverlayTarget    = node;
+        _originSnapPoints       = points;
+        _pendingOverlayUpload   = overlay;
+        _renderer.MoveOriginActive = true;
+
+        GlCanvas.RequestNextFrameRendering();
+    }
+
+    private void TearDownOriginOverlay()
+    {
+        if (_originOverlay is { } old)
+            (old.Parent ?? _renderer.SceneRoot).RemoveChild(old);
+        _originOverlay          = null;
+        _originOverlayTarget    = null;
+        _originSnapPoints       = [];
+        _renderer.MoveOriginActive = false;
+    }
+
+    /// <summary>
+    /// Picks the snap marker nearest the cursor and moves the pivot there. Screen-space rather than
+    /// a ray cast: the markers are deliberately tiny, and what the user is aiming at is the dot they
+    /// can see, not a volume in space.
+    /// </summary>
+    private bool TryPickOrigin(Point pos)
+    {
+        if (_originOverlayTarget is not { } node || _originSnapPoints.Length == 0) return false;
+        if (node.Placement is not { } placement) return false;
+
+        float vpW = (float)GlCanvas.Bounds.Width;
+        float vpH = (float)GlCanvas.Bounds.Height;
+        if (vpW <= 0 || vpH <= 0) return false;
+
+        var world    = node.WorldTransform;
+        var viewProj = _renderer.Camera.GetViewMatrix()
+                     * _renderer.Camera.GetProjectionMatrix(vpW / vpH);
+
+        var    mouse = new Vector2((float)pos.X, (float)pos.Y);
+        float  best  = OriginPickRadiusPx;
+        Vector3? hit = null;
+
+        foreach (var local in _originSnapPoints)
+        {
+            var screen = GizmoRenderer.WorldToScreen(
+                Vector3.TransformPosition(local, world), viewProj, vpW, vpH);
+            float d = (screen - mouse).Length;
+            if (d < best) { best = d; hit = local; }
+        }
+
+        if (hit is not { } chosen) return false;
+
+        var before = NodePose.Of(node);
+        var t = placement;
+        t.SetOrigin(chosen);
+        node.SetPlacement(t);
+
+        if (DataContext is ViewportViewModel vm)
+        {
+            // Only the pivot moved, so there is no world delta to mirror onto the toolpath.
+            SyncSelectionTransformDisplay(vm);
+            vm.IsMoveOriginActive = false;   // one pick and the chooser is done
+            // Placement-based, not matrix-based: a pivot move leaves the composed transform
+            // identical on purpose, so a before/after matrix pair records nothing to undo.
+            vm.UndoRedo?.Push(new NodePlacementAction(
+                node, before, NodePose.Of(node), "Move Origin",
+                () => { SyncSelectionTransformDisplay(vm); GlCanvas.RequestNextFrameRendering(); }));
+        }
+
+        GlCanvas.RequestNextFrameRendering();
+        return true;
+    }
+
+    /// <summary>Last live readout refresh, used to keep drag updates to roughly frame rate.</summary>
+    private long _lastLiveReadoutTicks;
+
+    /// <summary>
+    /// Live readout during a drag, rate-limited to about 60 Hz.
+    /// </summary>
+    /// <remarks>
+    /// A full refresh pushes nine bound values, each of which re-renders a text box and measures it.
+    /// Mouse-move events arrive far faster than the screen updates, so without a gate the drag spent
+    /// its time laying out text nobody saw. The final value is never lost: the drag's release does an
+    /// ungated refresh.
+    /// </remarks>
+    private void SyncSelectionTransformDisplayThrottled(ViewportViewModel vm)
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastLiveReadoutTicks < 16) return;
+        _lastLiveReadoutTicks = now;
+        SyncSelectionTransformDisplay(vm, remember: false);
+    }
+
+    private void SyncSelectionTransformDisplay(ViewportViewModel vm, bool remember = true)
     {
         if (_renderer.SelectedNode is not { } node) return;
 
-        var w = IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp
-            ? tcp
-            : node.WorldTransform;
+        if (IsToolNodeSelected() && _renderer.TcpFrameMatrix is { } tcp)
+        {
+            SyncKukaAbcDisplay(vm, node, tcp);
+            return;
+        }
 
-        var pos = w.Row3.Xyz;
+        if (node.Placement is { } p)
+        {
+            var pivot = Vector3.TransformPosition(p.Origin, node.WorldTransform);
+            var e     = p.EulerDegrees;
+            vm.SyncSelectionDisplay(
+                Math.Round(pivot.X, 2), Math.Round(pivot.Y, 2), Math.Round(pivot.Z, 2),
+                Math.Round(e.X, 2),     Math.Round(e.Y, 2),     Math.Round(e.Z, 2));
+            vm.SyncSelectionScaleDisplay(p.Scale.X, p.Scale.Y, p.Scale.Z);
+            // The scale row shows millimetres or percent rather than the raw factor, so it needs its
+            // own pass — and it has to follow a selection change, not just a scale edit.
+            vm.RefreshScaleFields();
+            if (remember) RememberCommittedTransform(vm, node);
+            return;
+        }
+
+        SyncKukaAbcDisplay(vm, node, node.WorldTransform);
+    }
+
+    /// <summary>Readout for nodes with no placement of their own (the tool/TCP frame), in the KUKA
+    /// A/B/C convention the robot side genuinely uses.</summary>
+    private void SyncKukaAbcDisplay(ViewportViewModel vm, SceneNode node, Matrix4 w)
+    {
+        var pos  = w.Row3.Xyz;
         float sc = w.Row0.Xyz.Length;
         if (sc < 1e-6f) return;
         var nm = new System.Numerics.Matrix4x4(
@@ -13063,7 +14706,7 @@ public partial class ViewportView : UserControl
     }
 
     /// <summary>Pocket-local axis basis: X/Y follow the rectangle's own rotation, Z stays
-    /// world-up. Same shape as <see cref="GetModifierAxisBasis"/> (rotation about Z only).</summary>
+    /// world-up. Same shape as <see cref="GetGizmoAxisBasis"/> (rotation about Z only).</summary>
     private static TkMatrix4 SupportAxisBasis(Core.Models.StructuralSupportSpec spec)
         => TkMatrix4.CreateRotationZ(MathHelper.DegreesToRadians(spec.RotationDeg));
 
@@ -14020,6 +15663,7 @@ public partial class ViewportView : UserControl
     {
         _gizmoDragAxis           = axis;
         _renderer.ActiveDragAxis = axis;
+        _gizmoDragSnap           = false;   // never inherit the last drag's modifier state
         _gizmoDragStartScreenX   = mx;
         _gizmoDragCurrScreenX    = mx;
         // Every drag starts clean: a support drag that ended by anything other than a
@@ -14033,19 +15677,25 @@ public partial class ViewportView : UserControl
         }
         else
         {
-            // Every other gizmo (meshes, effectors, etc.) stays world-axis-aligned — this is
-            // scoped to Cut modifiers only. A Vertical cut's X/Y axes follow its own
-            // RotationDegrees so dragging "sideways" moves along the plane's own line instead of
-            // requiring a diagonal X+Y combination; Z stays world-up always (RotationDegrees only
-            // ever rotates about Z for a Vertical cut, so Z was never tilting anyway — this just
-            // makes that explicit rather than accidental).
-            var basis = GetModifierAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
-            _gizmoDragAxisDir = axis switch
+            // The basis a handle is dragged along must be the same one it was drawn and hit-tested
+            // in, or the arrow you grabbed and the direction the part travels disagree. For a part
+            // that is its own orientation (handles stuck to the object); for a Vertical cut, the
+            // plane's own RotationDegrees so dragging "sideways" runs along the plane's line rather
+            // than needing a diagonal X+Y; world axes for anything else.
+            var basis = GetGizmoAxisBasis(_renderer.SelectedNode) ?? Matrix4.Identity;
+            _gizmoDragBasis   = basis;
+            Vector3 BasisRow(int i) => i switch
             {
-                GizmoAxis.X => basis.Row0.Xyz,
-                GizmoAxis.Y => basis.Row1.Xyz,
-                _           => basis.Row2.Xyz,
+                0 => basis.Row0.Xyz,
+                1 => basis.Row1.Xyz,
+                _ => basis.Row2.Xyz,
             };
+            // For a band, the "axis dir" is the direction it does NOT move along — its normal. The
+            // drag plane is then the band itself, and the motion is whatever the cursor traces
+            // across it rather than a projection onto one arrow.
+            _gizmoDragAxisDir = axis.IsPlane()
+                ? BasisRow(axis.PlaneAxes().Normal)
+                : BasisRow(AxisIndex(axis));
         }
 
         // Cut tool: gizmo drives the cut plane, not the mesh transform.
@@ -14090,20 +15740,40 @@ public partial class ViewportView : UserControl
         // A modifier plane isn't a solid part — scaling it means nothing (no field for it).
         if (DataContext is ViewportViewModel vmScale && vmScale.IsModifierNode(node)
             && _renderer.GizmoMode == GizmoMode.Scale) return;
-        _gizmoDragInitialLocal = node.LocalTransform;
-        _gizmoDragPlanePoint   = GetGizmoPivotWorld(node);
-        BeginTransformLink(node);
-        BeginToolIkDrag(node);
+        _gizmoDragInitialLocal     = node.LocalTransform;
+        _gizmoDragInitialPlacement = node.Placement;
+        _gizmoDragPlanePoint       = GetGizmoPivotWorld(node);
+        _bedClampStartMinZ         = BedClampApplies(node) ? LowestWorldZWithLinked(node) : float.MaxValue;
+        _bedClampGizmoWorld        = null;
+        _bedWasRestingAtDragStart  = IsRestingOnBed(node);
 
         var dragOp = _kbTransformActive ? _kbTransformOp : _renderer.GizmoMode;
+
+        // A toolpath is carried along by a move or a rotate, but deliberately NOT by a scale. Its
+        // bead width is baked into the drawn geometry at slice time, so scaling its node fattens
+        // every bead on screen — a picture of a print nobody asked for. The path is re-sliced at the
+        // part's new size on release instead, which is the only way the widths stay honest.
+        if (dragOp != GizmoMode.Scale) BeginTransformLink(node);
+        else                           _transformLinkFollowers = null;
+        BeginToolIkDrag(node);
         switch (dragOp)
         {
             case GizmoMode.Translate:
             case GizmoMode.Scale:
             {
-                var camFwd = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
-                var n      = camFwd - Vector3.Dot(camFwd, _gizmoDragAxisDir) * _gizmoDragAxisDir;
-                _gizmoDragPlaneNormal = n.LengthSquared > 1e-6f ? Vector3.Normalize(n) : Vector3.UnitZ;
+                // A band drags in its own plane, so that plane IS the drag surface. A single axis
+                // has no plane of its own, so one is improvised facing the camera and the motion is
+                // projected back onto the arrow afterwards.
+                if (axis.IsPlane())
+                {
+                    _gizmoDragPlaneNormal = _gizmoDragAxisDir;
+                }
+                else
+                {
+                    var camFwd = Vector3.Normalize(_renderer.Camera.Target - _renderer.Camera.Eye);
+                    var n      = camFwd - Vector3.Dot(camFwd, _gizmoDragAxisDir) * _gizmoDragAxisDir;
+                    _gizmoDragPlaneNormal = n.LengthSquared > 1e-6f ? Vector3.Normalize(n) : Vector3.UnitZ;
+                }
 
                 var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
                 float denom  = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
@@ -14115,6 +15785,7 @@ public partial class ViewportView : UserControl
             case GizmoMode.Rotate:
             {
                 _gizmoDragPlaneNormal = _gizmoDragAxisDir;
+                SetRingPlane(axis, _gizmoDragBasis);
 
                 var startRay = _renderer.Camera.GetPickRay(mx, my, vpW, vpH);
                 float denom  = Vector3.Dot(startRay.Direction, _gizmoDragPlaneNormal);
@@ -14123,11 +15794,39 @@ public partial class ViewportView : UserControl
                     : _gizmoDragPlanePoint;
 
                 var rel = _gizmoDragStartHit - _gizmoDragPlanePoint;
-                _gizmoDragStartAngle = AxisAngle(axis, rel);
+                _gizmoDragStartAngle = RingAngle(rel);
                 break;
             }
         }
     }
+
+    /// <summary>
+    /// Picks the two in-plane reference directions for a rotate-ring drag, from the same basis the
+    /// ring was drawn in.
+    /// </summary>
+    /// <remarks>
+    /// Taking them as the other two axes of that basis, in cyclic order, means a positive measured
+    /// sweep is a positive right-hand-rule rotation about the dragged axis — so the part follows the
+    /// cursor round the ring, at the ring's own tilt, with no per-axis sign table to get wrong.
+    /// The old code measured every ring against fixed world planes (atan2 of world Y over X and so
+    /// on), which only lines up while the object is world-aligned.
+    /// </remarks>
+    private void SetRingPlane(GizmoAxis axis, Matrix4 basis)
+    {
+        var ax = SafeNormalize(basis.Row0.Xyz, Vector3.UnitX);
+        var ay = SafeNormalize(basis.Row1.Xyz, Vector3.UnitY);
+        var az = SafeNormalize(basis.Row2.Xyz, Vector3.UnitZ);
+        (_gizmoRingU, _gizmoRingV) = axis switch
+        {
+            GizmoAxis.X => (ay, az),
+            GizmoAxis.Y => (az, ax),
+            _           => (ax, ay),
+        };
+    }
+
+    /// <summary>Angle of <paramref name="rel"/> within the active ring's plane.</summary>
+    private float RingAngle(Vector3 rel)
+        => MathF.Atan2(Vector3.Dot(rel, _gizmoRingV), Vector3.Dot(rel, _gizmoRingU));
 
     /// <summary>Gizmo drag setup for anything driven by a bare pivot point rather than a
     /// SceneNode transform (the Cut tool's ghost plane, a Structural Support pocket).</summary>
@@ -14218,6 +15917,18 @@ public partial class ViewportView : UserControl
                 break;
         }
         ApplyTransformLink(node);
+
+        // Count the toolbar numbers along with the drag rather than snapping to the answer on
+        // release. remember: false because the undo baseline for a drag is the pose captured at
+        // drag start (_gizmoDragInitialLocal) — re-baselining it on every mouse move would collapse
+        // the whole drag into nothing to undo.
+        if (DataContext is ViewportViewModel vmLive)
+        {
+            SyncSelectionTransformDisplayThrottled(vmLive);
+            // Keep this node's cut planes obeying their own Horizontal/Vertical tag as it turns,
+            // rather than letting them ride the tilt. Live, so the plane never visibly leans.
+            if (modifierCut is null) vmLive.ConstrainModifierPlanesUnder(node);
+        }
 
         if (modifierCut is { } cut && DataContext is ViewportViewModel vmMod)
             vmMod.SyncModifierAfterGizmoEdit(cut, node);
@@ -14355,12 +16066,45 @@ public partial class ViewportView : UserControl
 
     private void ProcessTranslateDrag(SceneNode node, Vector3 hitWorld)
     {
-        float proj     = Vector3.Dot(hitWorld - _gizmoDragStartHit, _gizmoDragAxisDir);
-        var worldDelta = _gizmoDragAxisDir * proj;
+        // A band drag already happens inside its own plane, so the cursor's whole travel is the
+        // movement. A single-axis drag happens on an improvised camera-facing plane, so it has to be
+        // projected back down onto the one arrow being held.
+        var travel = hitWorld - _gizmoDragStartHit;
+        var worldDelta = _gizmoDragAxis.IsPlane()
+            ? travel
+            : _gizmoDragAxisDir * Vector3.Dot(travel, _gizmoDragAxisDir);
+
+        // The bed is solid. Pull a part down through it and the part stops resting exactly on the
+        // bed — the same place Drop to Plate would leave it — while the handle carries on tracking
+        // the pointer, so the drag still feels connected to the hand instead of going dead.
+        //
+        // Clamped in world space before the parent's frame is divided out, so a part living under a
+        // rotated parent (a rotary table) still stops against a real horizontal bed rather than
+        // against its parent's tilted idea of down.
+        var unclampedDelta = worldDelta;
+        bool heldBackByBed = false;
+        if (_bedClampStartMinZ < float.MaxValue)
+        {
+            float restingDelta = _renderer.BedZ - _bedClampStartMinZ;
+            if (worldDelta.Z < restingDelta)
+            {
+                worldDelta.Z = restingDelta;
+                heldBackByBed = true;
+            }
+        }
+        _bedClampGizmoWorld = heldBackByBed ? _gizmoDragPlanePoint + unclampedDelta : null;
 
         var parentWorld = node.Parent?.WorldTransform ?? Matrix4.Identity;
         Matrix4.Invert(parentWorld, out var invParent);
         var localDelta = TransformDir(worldDelta, invParent);
+
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            t.Position += localDelta;
+            node.SetPlacement(t);
+            return;
+        }
 
         var lt = _gizmoDragInitialLocal;
         lt.M41 += localDelta.X; lt.M42 += localDelta.Y; lt.M43 += localDelta.Z;
@@ -14388,6 +16132,25 @@ public partial class ViewportView : UserControl
             if (ratio <= 0f) return;
         }
 
+        // Scaling a part multiplies its stored scale about its own pivot, so growing a part that has
+        // had its origin snapped to a face pushes it away from that face rather than out of a point
+        // somewhere in space. Applied to the pose the drag started from, so the total is the sweep.
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            var s = t.Scale;
+            t.Scale = _gizmoDragAxis switch
+            {
+                GizmoAxis.X => new Vector3(s.X * ratio, s.Y, s.Z),
+                GizmoAxis.Y => new Vector3(s.X, s.Y * ratio, s.Z),
+                GizmoAxis.Z => new Vector3(s.X, s.Y, s.Z * ratio),
+                _           => s * ratio,
+            };
+            t.ClampScale();
+            node.SetPlacement(t);
+            return;
+        }
+
         var lt = _gizmoDragInitialLocal;
         switch (_gizmoDragAxis)
         {
@@ -14412,8 +16175,17 @@ public partial class ViewportView : UserControl
     private void ProcessRotateDrag(SceneNode node, Vector3 hitWorld)
     {
         var rel     = hitWorld - _gizmoDragPlanePoint;
-        float angle = AxisAngle(_gizmoDragAxis, rel);
-        float delta = angle - _gizmoDragStartAngle;
+        float delta = WrapPi(RingAngle(rel) - _gizmoDragStartAngle);
+
+        // Shift snaps to whole 5° steps. Applied to the sweep since the drag began, not to each
+        // frame's increment, so the part sits on an exact multiple of 5 from where it started
+        // rather than accumulating rounding as the cursor moves.
+        if (_gizmoDragSnap)
+        {
+            const float StepDeg = 5f;
+            float deg = MathHelper.RadiansToDegrees(delta);
+            delta = MathHelper.DegreesToRadians(MathF.Round(deg / StepDeg) * StepDeg);
+        }
 
         if (_toolIsDragging)
         {
@@ -14421,6 +16193,17 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // A part turns about its own axis, from the pose it had when the drag began, so the total
+        // rotation always matches the total sweep and repeated small deltas cannot accumulate drift.
+        if (_gizmoDragInitialPlacement is { } start)
+        {
+            var t = start;
+            t.RotateLocal(AxisIndex(_gizmoDragAxis), delta);
+            node.SetPlacement(t);
+            return;
+        }
+
+        // No placement (a modifier plane, an effector): unchanged world-axis behaviour.
         var rot = _gizmoDragAxis switch
         {
             GizmoAxis.X => Matrix4.CreateRotationX(delta),
@@ -14434,6 +16217,22 @@ public partial class ViewportView : UserControl
         lt.M41 = p.X; lt.M42 = p.Y; lt.M43 = p.Z;
         node.LocalTransform = lt;
     }
+
+    /// <summary>Wraps to [-π, π] so a sweep across the ring's ±180° seam is a small step, not a
+    /// near-full-turn jump.</summary>
+    private static float WrapPi(float a)
+    {
+        while (a >  MathF.PI) a -= MathF.Tau;
+        while (a < -MathF.PI) a += MathF.Tau;
+        return a;
+    }
+
+    private static int AxisIndex(GizmoAxis axis) => axis switch
+    {
+        GizmoAxis.X => 0,
+        GizmoAxis.Y => 1,
+        _           => 2,
+    };
 
     private static float AxisAngle(GizmoAxis axis, Vector3 v) => axis switch
     {
@@ -14954,6 +16753,7 @@ public partial class ViewportView : UserControl
 
         if (toolpath is null || node is null || cell is null || settings is null) return;
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         var topLevel = Avalonia.Controls.TopLevel.GetTopLevel(this);
@@ -14995,8 +16795,7 @@ public partial class ViewportView : UserControl
         // can tell revisions apart on the controller, e.g. "2026_0710 - Drone Print V90 Rev08.src".
         // Sanitized for PointLoader (keeps spaces / " - " / RevNN; drops crazy punctuation).
         string path = Path.Combine(dir, RobotKrlPaths.SuggestedSrcFileName(node.Name, rev));
-        await WriteKrlAsync(vm, toolpath, node, cell, settings, path);
-        return path;
+        return await WriteKrlAsync(vm, toolpath, node, cell, settings, path) ? path : null;
     }
 
     private async Task SendToRobotAsync(ViewportViewModel vm)
@@ -15030,6 +16829,7 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        if (!await BlockExportOnRpmLimitAsync(vm, toolpath, settings)) return;
         if (!await ConfirmExportDespiteValidationAsync(node)) return;
 
         // The NAS keeps a copy per revision (3D Print Files/Rev N/) and the robot
@@ -15050,7 +16850,7 @@ public partial class ViewportView : UserControl
         {
             fileName = RobotKrlPaths.SuggestedSrcFileName(node.Name);
             srcPath  = Path.Combine(Path.GetTempPath(), fileName);
-            await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath);
+            if (!await WriteKrlAsync(vm, toolpath, node, cell, settings, srcPath)) return;
             mvm?.Console.Log("[robot] workspace not saved on the NAS — no 3D Print Files copy kept.");
         }
         byte[] content = await File.ReadAllBytesAsync(srcPath);
@@ -15366,7 +17166,197 @@ public partial class ViewportView : UserControl
         }
     }
 
-    private async Task WriteKrlAsync(
+    /// RPM inputs each toolpath's highlight was last built from. Keyed by node so a re-slice
+    /// or a settings edit re-runs exactly the toolpaths that changed, and nothing else.
+    private readonly Dictionary<SceneNode, (Toolpath Tp, float Base, float FirstRpm, float FirstSpeed)>
+        _rpmApplied = new();
+
+    /// <summary>Set when settings or toolpaths change; cleared once the highlight catches up.</summary>
+    private volatile bool _rpmDirty = true;
+
+    /// <summary>
+    /// Keeps every toolpath's RPM colouring in step with the current settings. Runs on the GL
+    /// thread each frame but only touches VBOs when the inputs actually changed — the analysis
+    /// itself is one multiply per move.
+    /// </summary>
+    private void RefreshToolpathRpm(ViewportViewModel vm)
+    {
+        _renderer.SetToolpathRpmOverLimitVisible(vm.ShowRpmOverLimit);
+
+        // Polling the settings every frame would re-parse the extrusion offset string 60×/s
+        // for nothing. Settings edits and toolpath uploads raise the flag instead.
+        if (!_rpmDirty) return;
+        _rpmDirty = false;
+
+        if (vm.AdditiveSettings is not { } settings) return;
+        var inputs = RpmInputs(settings);
+        float basePct  = ToolpathRpm.BasePercent(inputs);
+        float firstRpm = inputs.FirstLayerRpmPercent;
+        float firstSpd = inputs.FirstLayerSpeedMps;
+
+        foreach (var (node, tp) in _toolpathByNode)
+        {
+            var key = (tp, basePct, firstRpm, firstSpd);
+            if (_rpmApplied.TryGetValue(node, out var prev) && prev == key)
+                continue;
+            var analysis = ToolpathRpm.Analyze(tp, inputs);
+            _renderer.UpdateToolpathRpm(node, analysis.PerMovePercent, ToolpathRpm.MaxRpmPercent);
+            _rpmApplied[node] = key;
+        }
+
+        // Drop entries for toolpaths that no longer exist so the map can't grow forever.
+        if (_rpmApplied.Count > _toolpathByNode.Count)
+            foreach (var stale in _rpmApplied.Keys.Where(k => !_toolpathByNode.ContainsKey(k)).ToList())
+                _rpmApplied.Remove(stale);
+    }
+
+    /// <summary>
+    /// The one place UI settings become RPM inputs. Export and the viewport highlight both
+    /// go through here, so the RPM drawn on screen is the RPM written to the .src — there is
+    /// no second calculation that could drift.
+    /// </summary>
+    private static KrlExportSettings RpmInputs(AdditiveSettingsViewModel s)
+        => new()
+        {
+            ProgramName          = "rpm",
+            BeadWidthMm          = (float)s.BeadWidth,
+            LayerHeightMm        = (float)s.LayerHeight,
+            PrintSpeedMps        = (float)(s.PrintSpeed / 1000.0),
+            // Per-head flow: an HF toolhead has its own rate. Only a fallback for RPM
+            // (ExtrusionRpmPercent is always set below) but rpm-report prints it, and a
+            // report naming the wrong head's flow is the sort of small lie this avoids.
+            FlowRate             = (float)(s.SelectedPreset?.FlowRateFor(s.ActiveExtruderIsHf) ?? 0.463),
+            ExtrusionRpmPercent  = s.GetEffectiveExtrusionSpeedPercent(),
+            FirstLayerSpeedMps   = s.FirstLayerAdjustmentsEnabled && s.FirstLayerSpeed > 0.0
+                                       ? (float)(s.FirstLayerSpeedEffective / 1000.0) : 0f,
+            FirstLayerRpmPercent = s.FirstLayerAdjustmentsEnabled && s.FirstLayerRpm > 0.0
+                                       ? (float)s.FirstLayerRpmEffective : 0f,
+        };
+
+    /// <summary>Copies the shared RPM inputs onto a full export settings record.</summary>
+    private static KrlExportSettings WithRpmInputs(KrlExportSettings s, AdditiveSettingsViewModel a)
+    {
+        var r = RpmInputs(a);
+        return s with
+        {
+            BeadWidthMm          = r.BeadWidthMm,
+            LayerHeightMm        = r.LayerHeightMm,
+            PrintSpeedMps        = r.PrintSpeedMps,
+            FlowRate             = r.FlowRate,
+            ExtrusionRpmPercent  = r.ExtrusionRpmPercent,
+            FirstLayerSpeedMps   = r.FirstLayerSpeedMps,
+            FirstLayerRpmPercent = r.FirstLayerRpmPercent,
+        };
+    }
+
+    /// <summary>Per-move exported RPM for a toolpath under the current settings.</summary>
+    private static ToolpathRpm.Analysis AnalyzeRpm(Toolpath toolpath, AdditiveSettingsViewModel settings)
+        => ToolpathRpm.Analyze(toolpath, RpmInputs(settings));
+
+    /// <summary>Console rpm-report: what the extruder is actually being asked to do.</summary>
+    private string BuildRpmReport(ViewportViewModel vm)
+    {
+        var toolpath = vm.ActiveScrubToolpath;
+        var settings = vm.AdditiveSettings;
+        if (toolpath is null || settings is null)
+            return "[rpm-report] select a sliced toolpath first.";
+
+        var inputs = RpmInputs(settings);
+        var a      = AnalyzeRpm(toolpath, settings);
+        var sb     = new System.Text.StringBuilder();
+
+        sb.AppendLine($"[rpm-report] nominal {ToolpathRpm.BasePercent(inputs):0.##} % " +
+                      $"(bead {inputs.BeadWidthMm:0.##} mm, layer {inputs.LayerHeightMm:0.##} mm, " +
+                      $"speed {inputs.PrintSpeedMps * 1000f:0.#} mm/s, flow {inputs.FlowRate:0.###})");
+        if (inputs.FirstLayerRpmPercent > 0f)
+            sb.AppendLine($"[rpm-report] first layer override {inputs.FirstLayerRpmPercent:0.##} %");
+        sb.AppendLine($"[rpm-report] limit {ToolpathRpm.MaxRpmPercent:0} %   peak {a.PeakPercent:0.##} %");
+
+        if (!a.HasOverLimit)
+        {
+            sb.AppendLine("[rpm-report] no moves over the limit — exportable.");
+            return sb.ToString();
+        }
+
+        sb.AppendLine($"[rpm-report] OVER LIMIT: {a.OverCount:N0} move(s) in {a.Spans.Count:N0} stretch(es) " +
+                      "— export is blocked.");
+        sb.AppendLine($"[rpm-report] worst stretches first (earliest is layer {a.Spans[0].LayerIndex}, " +
+                      $"Z {a.Spans[0].LayerZ:0.#} mm):");
+        int shown = 0;
+        foreach (var s in ToolpathRpm.WorstFirst(a))
+        {
+            if (shown++ == 10) { sb.AppendLine($"[rpm-report] … and {a.Spans.Count - 10:N0} more."); break; }
+            sb.AppendLine($"[rpm-report]   layer {s.LayerIndex,5}  Z {s.LayerZ,8:0.#} mm  " +
+                          $"moves {s.FirstMoveIndex}-{s.LastMoveIndex} ({s.MoveCount:N0})  peak {s.PeakPercent:0.##} %");
+        }
+        sb.AppendLine(" ");   // trailing spacer: the console clips its last line
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Hard pre-export gate: a program asking for more than the extruder can turn is not
+    /// exportable. Deliberately offers no "export anyway" — over-limit moves would come out
+    /// as silent under-extrusion on the part. Returns true when export may proceed.
+    /// </summary>
+    private async Task<bool> BlockExportOnRpmLimitAsync(
+        ViewportViewModel vm, Toolpath toolpath, AdditiveSettingsViewModel settings)
+    {
+        var rpm = AnalyzeRpm(toolpath, settings);
+        if (!rpm.HasOverLimit) return true;
+
+        string summary = ToolpathRpm.Describe(rpm);
+        LogToConsole($"[rpm] EXPORT BLOCKED — {summary}");
+        SetSliceStatus(vm, $"⚠ Export blocked: {summary}", isError: true);
+
+        // Make the problem findable even if the operator dismisses the dialog.
+        if (!vm.ShowRpmOverLimit) vm.ShowRpmOverLimit = true;
+
+        if (Avalonia.Controls.TopLevel.GetTopLevel(this) is not Window owner) return false;
+
+        var first = rpm.Spans[0];
+        var dlg = new Window
+        {
+            Title = "Extruder RPM Over Limit",
+            Width = 480, SizeToContent = SizeToContent.Height,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            CanResize = false,
+            ShowInTaskbar = false,
+        };
+        var msg = new TextBlock
+        {
+            Text = $"⚠ {summary}\n\n" +
+                   $"The extruder motor tops out at {ToolpathRpm.MaxRpmPercent:0} %. Those moves would " +
+                   "run at the cap and under-extrude, so this program cannot be exported.\n\n" +
+                   "Lower the print speed, layer height or bead width — or pick a material with a " +
+                   "lower flow rate — until the peak drops to the limit.\n\n" +
+                   "Over-limit moves are now highlighted magenta in the viewport.",
+            TextWrapping = Avalonia.Media.TextWrapping.Wrap,
+            Margin = new Thickness(20, 18, 20, 12),
+        };
+        var gotoBtn  = new Button { Content = "Go to first over-RPM move", Padding = new Thickness(14, 6, 14, 6) };
+        var closeBtn = new Button { Content = "Close",                     Padding = new Thickness(14, 6, 14, 6) };
+        gotoBtn.Click  += (_, _) => { dlg.Close(); vm.ToolpathScrubIndex = first.FirstMoveIndex; };
+        closeBtn.Click += (_, _) => dlg.Close();
+        dlg.Content = new StackPanel
+        {
+            Children =
+            {
+                msg,
+                new StackPanel
+                {
+                    Orientation = Avalonia.Layout.Orientation.Horizontal,
+                    HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Right,
+                    Spacing = 8,
+                    Margin = new Thickness(20, 0, 20, 16),
+                    Children = { closeBtn, gotoBtn },
+                },
+            },
+        };
+        await dlg.ShowDialog(owner);
+        return false;
+    }
+
+    private async Task<bool> WriteKrlAsync(
         ViewportViewModel vm,
         Toolpath toolpath,
         SceneNode node,
@@ -15454,7 +17444,7 @@ public partial class ViewportView : UserControl
             };
             var millKrl = await Task.Run(() => KrlExporter.Export(toolpath, millExport));
             await File.WriteAllTextAsync(path, millKrl);
-            return;
+            return true;
         }
 
         var selectedPreset = settings.SelectedPreset;
@@ -15509,28 +17499,35 @@ public partial class ViewportView : UserControl
                 cell.Bed.BaseData.Y,
                 cell.Bed.BaseData.Z),
             SliceBedWorldZ     = _renderer.BedZ,
-            TravelSetAnout4Zero = postProcess.TravelSetAnout4Zero,
             // URM: never pass LFAM post-process header/footer ($ANOUT MAT). Exporter also
             // The exporter renders placeholders and, in URM mode, keeps the edited header
             // only if it is still URM-shaped (else falls back to the Caracol URM default).
             HeaderTemplate = postProcess.HeaderText,
             FooterTemplate = postProcess.FooterText,
-            ExtrusionRpmPercent     = settings.GetEffectiveExtrusionSpeedPercent(),
-            // First-layer overrides: only pass a value when the operator set an override
-            // (or it differs from the normal), so a plain print is unchanged. The exporter
-            // treats 0 as "use the normal speed/RPM".
-            FirstLayerSpeedMps      = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerSpeed > 0.0
-                                          ? (float)(settings.FirstLayerSpeedEffective / 1000.0) : 0f,
-            FirstLayerRpmPercent    = settings.FirstLayerAdjustmentsEnabled && settings.FirstLayerRpm > 0.0
-                                          ? (float)settings.FirstLayerRpmEffective : 0f,
+            // Bead / layer / speed / flow / RPM and the first-layer overrides are all filled
+            // in by WithRpmInputs below — one definition shared with the viewport highlight.
             ExtrusionStartWaitSec   = (float)settings.ExtrusionStartWaitSec,
             ExtrusionResumeWaitSec  = (float)settings.ExtrusionResumeWaitSec,
             SsPreTravelWaitSec      = (float)settings.SsPreTravelWaitSec,
             SsResumePrimePercent    = (float)settings.SsResumePrimePercent,
             DigitalStartStopEnabled = settings.DigitalStartStopEnabled,
         };
+        exportSettings = WithRpmInputs(exportSettings, settings);
 
-        var krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        string krl;
+        try
+        {
+            krl = await Task.Run(() => KrlExporter.Export(toolpath, exportSettings));
+        }
+        catch (RpmLimitExceededException ex)
+        {
+            // Backstop for any path that skipped BlockExportOnRpmLimitAsync. Nothing is
+            // written — a half-honest program is worse than no program.
+            LogToConsole($"[export] REFUSED: {ex.Message}");
+            SetSliceStatus(vm, $"⚠ Export refused: {ToolpathRpm.Describe(ex.Analysis)}", isError: true);
+            return false;
+        }
         await File.WriteAllTextAsync(path, krl);
+        return true;
     }
 }

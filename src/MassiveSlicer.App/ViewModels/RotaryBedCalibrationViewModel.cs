@@ -58,7 +58,10 @@ public sealed class RotaryBedCalibrationViewModel : ViewModelBase
     /// <summary>Console logger (wired by MainWindowViewModel) for success/diagnostic feedback.</summary>
     internal Action<string>? Log { get; set; }
 
-    /// <summary>Runs the automated E1-sweep capture (deploy KRL, handshake, scan ×10, compute). Wired by MainWindowViewModel.</summary>
+    /// <summary>
+    /// Runs automated bed-cal via MassiveDRIVE Movements master (notes=bed capture) + Zivid
+    /// (wired by MainWindowViewModel). E1 / TCP come from Drive, not local schedules.
+    /// </summary>
     internal Func<Task>? OnAutoCalibrateRequested { get; set; }
 
     // -- Observable state -----------------------------------------------------

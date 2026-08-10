@@ -901,6 +901,109 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "mill",
+            Description = "Milling SELECT AREA / brush / operation (SPSM mill workflow)",
+            Usage = "mill status | mill area <whole|face|box|lasso|brush|clear> | mill brush size <mm> | mill brush falloff <0-1> | mill op <name>",
+            Execute = (ctx, args) =>
+            {
+                var vp = ctx.Main.Viewport;
+                var sub = ctx.Main.RightPanel.Subtractive;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length == 0 || parts[0] is "help" or "?")
+                {
+                    ctx.Log("[mill] status | area <whole|face|box|lasso|brush|clear>");
+                    ctx.Log("[mill] brush size <mm> | brush falloff <0..1>");
+                    ctx.Log("[mill] op <MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf>");
+                    return;
+                }
+
+                switch (parts[0].ToLowerInvariant())
+                {
+                    case "status":
+                        ctx.Log($"[mill] area-tool={vp.MillAreaSelectTool}  brush={vp.MillBrushRadiusMm:0.#}mm  falloff={vp.MillBrushFalloff:0.##}");
+                        ctx.Log($"[mill] paint: {vp.MillPaintedVertices:N0} verts ({vp.MillPaintCoverage * 100:0.#}%)  target={vp.MillAreaTargetRoot?.Name ?? "(none)"}");
+                        ctx.Log($"[mill] layers: {vp.DescribeMillPaint?.Invoke() ?? "n/a"}");
+                        ctx.Log($"[mill] operation={sub.SelectedOperation}");
+                        ctx.Log($"[mill] status: {vp.MillAreaStatusText}");
+                        break;
+
+                    case "area" when parts.Length >= 2:
+                    {
+                        var t = parts[1].ToLowerInvariant();
+                        if (t is "clear" or "none" or "reset")
+                        {
+                            sub.ClearAreaSelectionCommand.Execute(null);
+                            ctx.Log("[mill] area cleared → whole model");
+                            break;
+                        }
+                        var map = t switch
+                        {
+                            "whole" or "all" or "model" => Core.Models.MillAreaSelectTool.WholeModel,
+                            "face" => Core.Models.MillAreaSelectTool.Face,
+                            "box" or "rect" or "square" => Core.Models.MillAreaSelectTool.Box,
+                            "lasso" => Core.Models.MillAreaSelectTool.Lasso,
+                            "brush" or "paint" => Core.Models.MillAreaSelectTool.Brush,
+                            _ => (Core.Models.MillAreaSelectTool?)null,
+                        };
+                        if (map is null)
+                        {
+                            ctx.LogError("[mill] area: whole|face|box|lasso|brush|clear");
+                            break;
+                        }
+                        sub.AreaSelectTool = map.Value;
+                        ctx.Log($"[mill] area tool → {map.Value}");
+                        break;
+                    }
+
+                    case "brush" when parts.Length >= 3:
+                    {
+                        var key = parts[1].ToLowerInvariant();
+                        if (!double.TryParse(parts[2], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out var val))
+                        {
+                            ctx.LogError("[mill] brush size <mm> | brush falloff <0..1>");
+                            break;
+                        }
+                        if (key is "size" or "radius" or "r")
+                        {
+                            vp.MillBrushRadiusMm = val;
+                            ctx.Log($"[mill] brush size → {vp.MillBrushRadiusMm:0.#} mm");
+                        }
+                        else if (key is "falloff" or "soft" or "f")
+                        {
+                            vp.MillBrushFalloff = val;
+                            ctx.Log($"[mill] brush falloff → {vp.MillBrushFalloff:0.##}");
+                        }
+                        else
+                            ctx.LogError("[mill] brush size <mm> | brush falloff <0..1>");
+                        break;
+                    }
+
+                    case "op" or "operation" when parts.Length >= 2:
+                    {
+                        var name = string.Join("", parts.Skip(1));
+                        if (Enum.TryParse<Core.Models.MillOperationKind>(parts[1], ignoreCase: true, out var kind)
+                            || Enum.TryParse(name, ignoreCase: true, out kind))
+                        {
+                            sub.SelectedOperation = kind;
+                            ctx.Log($"[mill] operation → {kind}");
+                        }
+                        else
+                        {
+                            ctx.LogError("[mill] op: MultiAxisFinishing|Drilling|PlanarFacing|PlanarClearing|Cutout|Contouring|Swarf");
+                        }
+                        break;
+                    }
+
+                    default:
+                        ctx.LogError("[mill] unknown — try: mill help");
+                        break;
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpcheck",
             Description = "Printability audit of the active toolpath: position jumps between "
                 + "consecutive moves, extrude runs, travels and seam start/stop events per layer",
@@ -1944,8 +2047,111 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "rpm-report",
+            Description = "Extruder RPM for the selected toolpath, as it will be exported: the nominal "
+                        + "percentage, the peak, and every stretch demanding more than the extruder can "
+                        + "turn. Those stretches are highlighted magenta in the viewport and block export",
+            Usage = "rpm-report",
+            Execute = (ctx, args) =>
+            {
+                var fn = ctx.Main.Viewport.OnRpmReportRequested;
+                if (fn is null) { ctx.LogError("[rpm-report] viewport is not ready yet."); return; }
+                foreach (var line in fn().Split((char)10))
+                    ctx.Log(line.TrimEnd((char)13));
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "layer-flow-report",
+            Description = "Adaptive layer height vs extrusion flow: lists every layer whose real "
+                        + "thickness differs from the nominal layer height, the flow scale it now "
+                        + "gets, and how badly it WOULD have over-extruded without that correction",
+            Usage = "layer-flow-report [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                var want = args.Trim();
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[layer-flow] no toolpath matching '{want}'."
+                        : "[layer-flow] no toolpaths in the scene.");
+                    return;
+                }
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[layer-flow] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    float nominal = snap.LayerHeight;
+                    if (tp.Layers.Count == 0 || nominal <= 1e-4f)
+                    {
+                        ctx.LogError($"[layer-flow] \"{tpItem.Name}\": no layers, or nominal height is 0.");
+                        continue;
+                    }
+
+                    // A layer is "off nominal" when it is thin enough to matter (>0.5 %).
+                    var off = tp.Layers
+                        .Where(l => l.Height > 0f && MathF.Abs(l.Height - nominal) > nominal * 0.005f)
+                        .OrderBy(l => l.Height)
+                        .ToList();
+
+                    ctx.Log($"[layer-flow] \"{tpItem.Name}\": {tp.Layers.Count} layers, nominal {nominal:0.###} mm");
+                    if (off.Count == 0)
+                    {
+                        ctx.Log("[layer-flow]   every layer is at nominal — adaptive layer height changed nothing.");
+                        continue;
+                    }
+
+                    float z0 = tp.Layers[0].Z;
+                    ctx.Log($"[layer-flow]   {off.Count} layer(s) off nominal "
+                          + $"({100f * off.Count / tp.Layers.Count:0}%), thinnest {off[0].Height:0.###} mm");
+                    ctx.Log("[layer-flow]   worst first — Z is relative to the first layer:");
+                    foreach (var l in off.Take(10))
+                    {
+                        float scale = l.Moves.Count > 0 ? l.Moves[0].HeightScale : 1f;
+                        ctx.Log($"[layer-flow]     Z {l.Z - z0,8:0.0} mm   h {l.Height:0.000} mm   "
+                              + $"flow x{scale:0.000}   (uncorrected would be x{nominal / l.Height:0.00})");
+                    }
+                    if (off.Count > 10)
+                        ctx.Log($"[layer-flow]     … and {off.Count - 10} more.");
+
+                    int unscaled = off.Count(l => l.Moves.Count > 0
+                                                  && MathF.Abs(l.Moves[0].HeightScale - 1f) < 1e-6f);
+                    if (unscaled > 0)
+                        ctx.LogError($"[layer-flow]   WARNING: {unscaled} off-nominal layer(s) still at flow x1 — "
+                                   + "these are over-extruding. Re-slice to apply the height/flow correction.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "align-debug",
-            Description = "Diagnostic: compare a piece's mesh world-space AABB against its toolpath's raw world-space move AABB, to check whether they actually occupy the same real-world footprint",
+            Description = "Diagnostic: compare a piece's mesh world AABB against its toolpath, both as the slice produced it and as it is actually drawn (node transform applied), to catch the two coming apart",
             Usage = "align-debug <name>",
             Execute = (ctx, args) =>
             {
@@ -1965,6 +2171,7 @@ public sealed class ConsoleCommandRegistry
                 var piece = Find(ctx.Main.Viewport.OutlinerItems);
                 if (piece is null) { ctx.LogError($"[debug] no outliner item named '{name}'."); return; }
 
+                System.Numerics.Vector3? meshMin = null, meshMax = null;
                 if (piece.Node.Mesh?.PickingData is { } mesh)
                 {
                     var w = piece.Node.WorldTransform;
@@ -1976,6 +2183,7 @@ public sealed class ConsoleCommandRegistry
                         min = System.Numerics.Vector3.Min(min, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
                         max = System.Numerics.Vector3.Max(max, new System.Numerics.Vector3(wp.X, wp.Y, wp.Z));
                     }
+                    meshMin = min; meshMax = max;
                     ctx.Log($"[debug] mesh world AABB: min=({min.X:0.#},{min.Y:0.#},{min.Z:0.#}) max=({max.X:0.#},{max.Y:0.#},{max.Z:0.#})");
                 }
                 else
@@ -2001,7 +2209,74 @@ public sealed class ConsoleCommandRegistry
                     }
                 }
                 if (moveCount == 0) { ctx.LogError("[debug] toolpath has zero moves."); return; }
-                ctx.Log($"[debug] toolpath RAW world AABB ({moveCount} moves): min=({tmin.X:0.#},{tmin.Y:0.#},{tmin.Z:0.#}) max=({tmax.X:0.#},{tmax.Y:0.#},{tmax.Z:0.#})");
+                ctx.Log($"[debug] toolpath SLICE-TIME AABB ({moveCount} moves): min=({tmin.X:0.#},{tmin.Y:0.#},{tmin.Z:0.#}) max=({tmax.X:0.#},{tmax.Y:0.#},{tmax.Z:0.#})");
+
+                // What is actually on screen. The GPU geometry is built relative to the centroid
+                // the toolpath had when it was uploaded, and the node's transform puts it back:
+                // rendered = (move - origin) * node.LocalTransform. Reporting only the line above
+                // — raw move coordinates, labelled "world" — is what let a visibly misplaced
+                // toolpath read as perfectly aligned. Keep both: if they disagree, the node's
+                // transform and the geometry it was built for have come apart.
+                var tpNode = tpItem.Node;
+                var origin = ctx.Main.Viewport.GetToolpathRenderOrigin?.Invoke(tpNode);
+                if (origin is not { } org)
+                {
+                    ctx.LogError("[debug] no render origin recorded for this toolpath — cannot "
+                               + "compute what is on screen. The line above is slice-time data only.");
+                    return;
+                }
+
+                var lt = tpNode.LocalTransform;
+                var rmin = new System.Numerics.Vector3(float.MaxValue);
+                var rmax = new System.Numerics.Vector3(float.MinValue);
+                void Accum(System.Numerics.Vector3 p)
+                {
+                    var local = new OpenTK.Mathematics.Vector3(p.X - org.X, p.Y - org.Y, p.Z - org.Z);
+                    var wp    = OpenTK.Mathematics.Vector3.TransformPosition(local, lt);
+                    var v     = new System.Numerics.Vector3(wp.X, wp.Y, wp.Z);
+                    rmin = System.Numerics.Vector3.Min(rmin, v);
+                    rmax = System.Numerics.Vector3.Max(rmax, v);
+                }
+                foreach (var layer in snap.Smoothed.Layers)
+                foreach (var mv in layer.Moves) { Accum(mv.From); Accum(mv.To); }
+
+                var rsize = rmax - rmin;
+                var ssize = tmax - tmin;
+                ctx.Log($"[debug] toolpath ON-SCREEN AABB: min=({rmin.X:0.#},{rmin.Y:0.#},{rmin.Z:0.#}) "
+                      + $"max=({rmax.X:0.#},{rmax.Y:0.#},{rmax.Z:0.#}) size=({rsize.X:0.#},{rsize.Y:0.#},{rsize.Z:0.#})");
+                ctx.Log($"[debug] toolpath node: origin=({org.X:0.#},{org.Y:0.#},{org.Z:0.#}) "
+                      + $"translation=({lt.M41:0.#},{lt.M42:0.#},{lt.M43:0.#}) "
+                      + $"basisScale=({lt.Row0.Xyz.Length:0.####},{lt.Row1.Xyz.Length:0.####},{lt.Row2.Xyz.Length:0.####})");
+
+                // The verdict compares the drawn toolpath against the MESH, not against slice-time.
+                // Slice-time coordinates go stale the moment the part is moved without re-slicing —
+                // the drag-link carries the toolpath node along, so on-screen legitimately diverges
+                // from them and a slice-time comparison cries wolf. What actually matters, and what
+                // a user can see, is whether the path lines up with the part it belongs to.
+                if (meshMin is not { } mMin || meshMax is not { } mMax)
+                {
+                    ctx.Log("[debug] no mesh AABB to compare against.");
+                    return;
+                }
+                var msize = mMax - mMin;
+                var placeDrift = rmin - mMin;
+                var sizeDrift  = rsize - msize;
+                // Z is expected to sit one first-layer height above the mesh's underside.
+                bool placeOk = MathF.Abs(placeDrift.X) < 0.5f && MathF.Abs(placeDrift.Y) < 0.5f
+                            && placeDrift.Z > -0.5f && placeDrift.Z < 25f;
+                bool sizeOk  = MathF.Abs(sizeDrift.X) < 0.5f && MathF.Abs(sizeDrift.Y) < 0.5f
+                            && MathF.Abs(sizeDrift.Z) < 25f;
+                if (sizeOk && placeOk)
+                    ctx.Log("[debug] drawn toolpath lines up with the mesh.");
+                else
+                    ctx.LogError($"[debug] MISMATCH vs MESH — offset=({placeDrift.X:0.#},{placeDrift.Y:0.#},{placeDrift.Z:0.#}) "
+                               + $"sizeDelta=({sizeDrift.X:0.#},{sizeDrift.Y:0.#},{sizeDrift.Z:0.#}).");
+
+                if (System.Numerics.Vector3.Abs(rmin - tmin).Length() > 0.5f)
+                    ctx.Log("[debug] note: on-screen differs from slice-time, which is normal after "
+                          + "moving the part without re-slicing — the toolpath node followed the mesh.");
+                ctx.Log("[debug] this measures the WHOLE path. How much of it is drawn is the scrub "
+                      + "timeline — run `scrub` if the path looks short rather than misplaced.");
             },
         });
 
@@ -2040,6 +2315,153 @@ public sealed class ConsoleCommandRegistry
                 if (string.IsNullOrWhiteSpace(args)) { ctx.LogError("usage: cell <name>   e.g.  cell LFAM 3"); return; }
                 ctx.Log(ctx.Main.SwitchCellByName(args));
             },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "origin",
+            Aliases = ["pivot"],
+            Description = "Inspect or move the selected part's pivot (the point the gizmo sits on)",
+            Usage = "origin [show|box|points|center|set <x> <y> <z>|snap <±x±y±z>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.OriginCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "xform",
+            Aliases = ["transform", "placement"],
+            Description = "Inspect or set the selected part's position, rotation and scale",
+            Usage = "xform [show|pos <x y z>|rot <x y z>|rotate <x|y|z> <deg>|scale <s|x y z>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.XformCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "move-origin",
+            Aliases = ["origin-mode"],
+            Description = "Show the bounding box and its snap points so a click can reposition the pivot",
+            Usage = "move-origin [on|off]     bare toggles",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.MoveOriginCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scrub",
+            Description = "How much of the toolpath is currently DRAWN (the timeline), and move it — a path that looks short rather than misplaced is this, not the geometry",
+            Usage = "scrub [show|end|<move index>|pct <0-100>]",
+            Execute = (ctx, args) =>
+            {
+                var vp   = ctx.Main.Viewport;
+                var verb = (args ?? string.Empty).Trim();
+                int max  = vp.ToolpathScrubMax;
+
+                if (verb.Length == 0 || verb.Equals("show", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (max <= 0) { ctx.Log("[scrub] no toolpath on the timeline."); return; }
+                    double pct = 100.0 * vp.ToolpathScrubIndex / max;
+                    ctx.Log($"[scrub] {vp.ToolpathScrubIndex}/{max} moves drawn ({pct:0.#}% of the path). "
+                          + $"{(pct > 99.5 ? "Whole path visible." : "The rest is hidden — the part will look unfinished.")}");
+                    return;
+                }
+
+                if (max <= 0) { ctx.LogError("[scrub] no toolpath on the timeline."); return; }
+
+                int target;
+                if (verb.Equals("end", StringComparison.OrdinalIgnoreCase)
+                    || verb.Equals("max", StringComparison.OrdinalIgnoreCase))
+                {
+                    target = max;
+                }
+                else if (verb.StartsWith("pct", StringComparison.OrdinalIgnoreCase))
+                {
+                    var rest = verb[3..].Trim();
+                    if (!double.TryParse(rest, System.Globalization.NumberStyles.Float,
+                                         System.Globalization.CultureInfo.InvariantCulture, out double p))
+                    { ctx.LogError("[scrub] usage: scrub pct <0-100>"); return; }
+                    target = (int)Math.Round(Math.Clamp(p, 0, 100) / 100.0 * max);
+                }
+                else if (int.TryParse(verb, out int n))
+                {
+                    target = n;
+                }
+                else { ctx.LogError("[scrub] usage: scrub [show|end|<move index>|pct <0-100>]"); return; }
+
+                vp.ToolpathScrubIndex = Math.Clamp(target, 0, max);
+                ctx.Log($"[scrub] now {vp.ToolpathScrubIndex}/{max} moves drawn "
+                      + $"({100.0 * vp.ToolpathScrubIndex / max:0.#}% of the path).");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "bounds",
+            Aliases = ["bbox"],
+            Description = "Read-only world bounds, pivot and subtree shape of the selection — changes nothing",
+            Usage = "bounds     run before and after a GUI action to measure what it did",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BoundsCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "recenter",
+            Aliases = ["recentre"],
+            Description = "Recenter the pivot to bottom-centre, reporting world bounds and subtree shape",
+            Usage = "recenter     run again after a frame to see the result",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.RecenterCommandDiag()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drop",
+            Aliases = ["drop-to-plate"],
+            Description = "Drop the selected part onto the bed, reporting its lowest point before and after",
+            Usage = "drop",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.DropCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "scale",
+            Aliases = ["scale-tool"],
+            Description = "The scale tool: size in mm or % of import, proportion chain, Fit to Cell, Reset Scale",
+            Usage = "scale [show|mm|pct|chain [on|off]|reset|fit|x <v>|y <v>|z <v>]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.ScaleCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "bed",
+            Aliases = ["bed-clamp"],
+            Description = "Bed height vs the selected part's lowest point — is it resting, floating or through",
+            Usage = "bed",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BedCommand()),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "step",
+            Aliases = ["step-rotate"],
+            Description = "Snap to the next 90° stop about a world axis (what clicking an axis letter does)",
+            Usage = "step <x|y|z> [-]     '-' goes the other way, same as Alt-clicking the letter",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.StepCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "gizmo",
+            Aliases = ["gizmo-mode"],
+            Description = "Read or set the active transform tool (Move / Rotate / Scale)",
+            Usage = "gizmo [move|rotate|scale|none]",
+            Execute = (ctx, args) => ctx.Log(ctx.Main.Viewport.GizmoCommand(args)),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "basis",
+            Aliases = ["gizmo-basis", "axes"],
+            Description = "Report the gizmo pivot and which way each coloured handle points",
+            Usage = "basis",
+            Execute = (ctx, _) => ctx.Log(ctx.Main.Viewport.BasisCommand()),
         });
 
         Register(new ConsoleCommandDefinition
@@ -2165,7 +2587,7 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "bed-cal",
             Aliases = ["bedcal", "auto-bed-cal", "run-bed-cal"],
-            Description = "Run Auto Bed Calibration (waypoint → CELL MS_AXIS E1 sweep → fit → BASE_DATA)",
+            Description = "Bed cal via MassiveDRIVE (MS_CMD=93 E1 sweep + Zivid). Play LFAM3_RSI_BulkPTP; path idle.",
             Execute = (ctx, _) => ctx.Main.StartBedCalibration(),
         });
 
@@ -2173,8 +2595,42 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "scan-cal",
             Aliases = ["scancal", "auto-scan-cal", "run-scan-cal"],
-            Description = "Run Auto 3D Scan (hand-eye) Calibration (waypoint → CELL MS_AXIS wrist sweep → fit → tool #6)",
+            Description = "Scan hand-eye via MassiveDRIVE (MS_CMD=93 wrist sweep + Zivid → tool #6). Play LFAM3_RSI_BulkPTP.",
             Execute = (ctx, _) => ctx.Main.StartScanCalibration(),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "calibrate",
+            Aliases = ["lfam3-cal", "cal-wizard", "cell-cal"],
+            Description = "LFAM3 cal wizard via MassiveDRIVE: scan-cal → bed-cal. Pendant LFAM3_RSI_BulkPTP.",
+            Usage = "calibrate [scan|bed|full]",
+            Execute = (ctx, args) =>
+            {
+                string? mode = string.IsNullOrWhiteSpace(args) ? null : args.Trim().Split(' ', 2)[0];
+                ctx.Main.StartLfam3CalibrationWizard(mode);
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drive-status",
+            Aliases = ["md-status", "massive-drive-status"],
+            Description = "Query MassiveDRIVE path executor busy state (safe for CELL cal?)",
+            Execute = (ctx, __) => { var _ = ctx.Main.ReportMassiveDriveStatusAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "drive-stop",
+            Aliases = ["md-stop", "stop-path"],
+            Description = "Stop MassiveDRIVE path executor (so CELL bed/scan cal can run)",
+            Usage = "drive-stop [reason]",
+            Execute = (ctx, args) =>
+            {
+                string reason = string.IsNullOrWhiteSpace(args) ? "slicer-cal" : args.Trim();
+                var _ = ctx.Main.StopMassiveDrivePathAsync(reason);
+            },
         });
 
         Register(new ConsoleCommandDefinition
@@ -2183,6 +2639,87 @@ public sealed class ConsoleCommandRegistry
             Aliases = ["export-scans", "diag scans", "export-scan"],
             Description = "Export stashed scan world points (from scan / bed-cal) to scan output/diag/",
             Execute = (ctx, _) => ctx.Log($"[diag] {ctx.Main.ExportScanDiagnostics()}"),
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "recover-scans",
+            Aliases = ["import-zdf", "recover zdf"],
+            Description = "Re-import .zdf scans from the scan output folder (or path) into the viewport, then Save Workspace to keep them. Usage: recover-scans [dir] [since-hours]",
+            Execute = (ctx, args) =>
+            {
+                string? dir = null;
+                double hours = 24;
+                if (!string.IsNullOrWhiteSpace(args))
+                {
+                    var parts = args.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length >= 1 && !double.TryParse(parts[0], out _))
+                        dir = parts[0].Trim('"');
+                    if (parts.Length >= 1 && double.TryParse(parts[^1], out var h) && h > 0 && h < 24 * 90)
+                        hours = h;
+                    if (parts.Length >= 2 && double.TryParse(parts[1], out var h2))
+                        hours = h2;
+                }
+                _ = ctx.Main.RecoverScansFromDirectoryAsync(dir, hours).ContinueWith(t =>
+                {
+                    if (t.IsFaulted && t.Exception is { } ex)
+                        ctx.LogError($"[recover-scans] {ex.GetBaseException().Message}");
+                }, TaskScheduler.FromCurrentSynchronizationContext());
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "krlpost",
+            Aliases = ["krl-post", "krlpostprocess"],
+            Description = "KRL post-processing: show state, toggle Digital Start/Stop (URM), reset or save header/footer defaults",
+            Usage = "krlpost | krlpost open | krlpost urm <on|off> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Execute = (ctx, args) =>
+            {
+                var add  = ctx.Main.RightPanel.Additive;
+                var post = add.KrlPostProcess;
+                var parts = args.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                void Report()
+                {
+                    ctx.Log($"[krlpost] Digital Start/Stop (URM): {(add.DigitalStartStopEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] header {post.HeaderText.Length} chars, saved default: {(post.HasSavedHeaderDefault ? "yes" : "no (built-in)")}");
+                    ctx.Log($"[krlpost] footer {post.FooterText.Length} chars, saved default: {(post.HasSavedFooterDefault ? "yes" : "no (built-in)")}");
+                }
+
+                switch (parts.FirstOrDefault())
+                {
+                    case "open":
+                        ctx.Log(add.RequestOpenKrlPostProcess()
+                            ? "[krlpost] dialog opened"
+                            : "[krlpost] no right panel attached — cannot open the dialog");
+                        break;
+                    case "urm" when parts.Length >= 2:
+                        add.DigitalStartStopEnabled = parts[1] is "on" or "1" or "true";
+                        ctx.Log($"[krlpost] URM {(add.DigitalStartStopEnabled ? "ON" : "off")} — header/footer templates swapped to match");
+                        Report();
+                        break;
+                    case "reset" when parts.Length >= 2 && parts[1].StartsWith("head", StringComparison.OrdinalIgnoreCase):
+                        post.ResetHeaderCommand.Execute(null);
+                        ctx.Log($"[krlpost] header reset ({post.HeaderText.Length} chars)");
+                        break;
+                    case "reset" when parts.Length >= 2 && parts[1].StartsWith("foot", StringComparison.OrdinalIgnoreCase):
+                        post.ResetFooterCommand.Execute(null);
+                        ctx.Log($"[krlpost] footer reset ({post.FooterText.Length} chars)");
+                        break;
+                    case "save-default" or "savedefault" when parts.Length >= 2 && parts[1].StartsWith("head", StringComparison.OrdinalIgnoreCase):
+                        post.SaveHeaderDefaultCommand.Execute(null);
+                        ctx.Log("[krlpost] current header saved as the default (written to assets/krl_postprocess.json)");
+                        break;
+                    case "save-default" or "savedefault" when parts.Length >= 2 && parts[1].StartsWith("foot", StringComparison.OrdinalIgnoreCase):
+                        post.SaveFooterDefaultCommand.Execute(null);
+                        ctx.Log("[krlpost] current footer saved as the default (written to assets/krl_postprocess.json)");
+                        break;
+                    default:
+                        Report();
+                        break;
+                }
+            },
         });
 
         Register(new ConsoleCommandDefinition
@@ -2239,10 +2776,64 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "waypoint",
             Aliases = ["wp", "goto"],
-            Description = "List, recall, or save reusable cell waypoints (scan/bed cal, etc.)",
-            Usage = "waypoint list | waypoint go <name> [vel%] | waypoint save <name>",
+            Description = "List, recall, or save reusable cell waypoints (scan/bed cal, home, etc.)",
+            Usage = "waypoint list | waypoint go <name> [vel%] | waypoint save <name> | waypoint save-scan",
             Execute = (ctx, args) => RunWaypoint(ctx, args),
         });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "mark-scan",
+            Aliases = ["scan-pose", "mark-scan-pose", "teach-scan"],
+            Description = "Save current live pose as scanner-down-bed (scan-cal + bed-cal tags)",
+            Execute = (ctx, __) => { var t = ctx.Main.MarkScanPositionAsync(); },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "home",
+            Aliases = ["xhome"],
+            Description = "Teach or recall cell Home via MassiveDRIVE (joint PTP). Like KUKA XHOME storage in the cell.",
+            Usage = "home save [name] | home go [vel%]",
+            Execute = (ctx, args) => RunHome(ctx, args),
+        });
+    }
+
+    private static void RunHome(ConsoleCommandContext ctx, string args)
+    {
+        var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 0)
+        {
+            // bare `home` → go
+            _ = ctx.Main.GoToSavedHomeAsync();
+            return;
+        }
+
+        var sub = parts[0].ToLowerInvariant();
+        switch (sub)
+        {
+            case "save" or "mark" or "teach" or "set":
+            {
+                string name = parts.Length >= 2 ? parts[1] : "Home";
+                _ = ctx.Main.MarkHomePositionAsync(name);
+                break;
+            }
+            case "go" or "move" or "run":
+            {
+                int vel = 20;
+                if (parts.Length >= 2 && int.TryParse(parts[1], out var v))
+                    vel = v;
+                _ = ctx.Main.GoToSavedHomeAsync(vel);
+                break;
+            }
+            default:
+                // `home 15` → go at 15%
+                if (int.TryParse(parts[0], out var velOnly))
+                    _ = ctx.Main.GoToSavedHomeAsync(velOnly);
+                else
+                    ctx.LogError("usage: home save [name] | home go [vel%]");
+                break;
+        }
     }
 
     private static void RunWaypoint(ConsoleCommandContext ctx, string args)
@@ -2250,7 +2841,7 @@ public sealed class ConsoleCommandRegistry
         var parts = (args ?? string.Empty).Split((char[])[' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         if (parts.Length == 0)
         {
-            ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name>");
+            ctx.LogError("usage: waypoint list | waypoint go <name> [vel%] | waypoint save <name> | waypoint save-scan");
             return;
         }
 
@@ -2274,10 +2865,21 @@ public sealed class ConsoleCommandRegistry
             case "save" or "add" or "store":
                 if (parts.Length < 2)
                 {
-                    ctx.LogError("usage: waypoint save <name>");
+                    ctx.LogError("usage: waypoint save <name>  or  waypoint save-scan");
                     return;
                 }
-                _ = ctx.Main.SaveWaypointFromRobotAsync(parts[1]);
+                if (parts[1].Equals("scan", StringComparison.OrdinalIgnoreCase)
+                    || parts[1].Equals("scan-pose", StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = ctx.Main.MarkScanPositionAsync();
+                }
+                else
+                {
+                    _ = ctx.Main.SaveWaypointFromRobotAsync(parts[1]);
+                }
+                break;
+            case "save-scan" or "mark-scan" or "scan":
+                _ = ctx.Main.MarkScanPositionAsync();
                 break;
             default:
                 // Shorthand: `waypoint scanner-down-bed` → go

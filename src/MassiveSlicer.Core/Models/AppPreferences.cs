@@ -7,6 +7,36 @@ namespace MassiveSlicer.Core.Models;
 /// </summary>
 public sealed class AppPreferences
 {
+    // ── Keep on bed ───────────────────────────────────────────────────────
+    //
+    // A part already sitting on the bed stays on it through an edit, instead of being left hanging
+    // in the air or buried in the plate and needing a Drop to Plate afterwards.
+    //
+    // Deliberately "keep", not "always drop": these only hold down a part that was ALREADY resting
+    // on the bed when the edit began. A part you have deliberately parked in mid-air is left where
+    // you put it. That is the difference between a helpful default and one that keeps undoing your
+    // positioning.
+    //
+    // Separate from the hard floor, which is not optional: a translate drag is always stopped at
+    // the bed and anything pushed through it is always set back down, because printing through the
+    // plate is never what anyone meant. These toggles govern the softer question of whether a part
+    // should FOLLOW the bed down when an edit would otherwise lift it clear.
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a move.</summary>
+    /// <remarks>
+    /// Off by default, unlike the other two. Dragging a part upward IS the gesture for lifting one
+    /// off the plate, so keeping it planted through a move means a resting part cannot be raised at
+    /// all — it drops straight back the moment the drag commits. Useful if you never lift parts and
+    /// want them pinned; surprising otherwise.
+    /// </remarks>
+    public bool KeepOnBedWhenMoving { get; set; }
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a rotation.</summary>
+    public bool KeepOnBedWhenRotating { get; set; } = true;
+
+    /// <summary>Keep a part that was resting on the bed resting on it after a resize.</summary>
+    public bool KeepOnBedWhenScaling { get; set; } = true;
+
     // ── Navigation ────────────────────────────────────────────────────────
 
     /// <summary>
@@ -74,6 +104,13 @@ public sealed class AppPreferences
     /// Restored when the user switches to a cell.
     /// </summary>
     public Dictionary<string, string> DefaultHomePositionNames { get; set; } = [];
+
+    /// <summary>
+    /// Preferred cell to open on a cold start (no workspace on the command line).
+    /// Matched against discovered cell display names (case-insensitive contains).
+    /// Stored in local prefs.json only — per machine. Null/empty falls back to LFAM 2.
+    /// </summary>
+    public string? DefaultCellName { get; set; }
 
     /// <summary>Name of the last selected material preset, or null for none.</summary>
     public string? SelectedMaterialPresetName { get; set; }
@@ -318,6 +355,16 @@ public sealed class AppPreferences
     /// <summary>KRL export: ±% adjustment to extrusion speed ("" = no change).</summary>
     public string ExtrusionSpeedOffset { get; set; } = "";
 
+    /// <summary>
+    /// Calibration-only: forces the exported screw speed (%) regardless of bead geometry.
+    /// 0 = off (normal computed flow). Written ONLY by the purge-and-weigh calibration
+    /// workspace. It previously abused <see cref="ExtrusionSpeedOffset"/> for this, which is
+    /// a field operators use on real jobs — a calibration run could leave a large number in
+    /// it and silently inflate the flow of every part sliced afterwards. Export raises a
+    /// warning whenever this is non-zero so it can never apply unnoticed.
+    /// </summary>
+    public double ExtrusionRpmOverridePercent { get; set; }
+
 
     /// <summary>Active slicing algorithm name (matches SliceMethod enum).</summary>
     public string SliceMethod { get; set; } = "Planar";
@@ -459,7 +506,7 @@ public sealed class AppPreferences
     public double LayerLeanPercent { get; set; }
 
     /// <summary>Layer lean max tilt from vertical (degrees).</summary>
-    public double LayerLeanMaxTiltDeg { get; set; } = 20.0;
+    public double LayerLeanMaxTiltDeg { get; set; } = 0.0;
 
     /// <summary>Forward-biased Gaussian look-ahead for KRL ABC smoothing (mm). 0 = off.</summary>
     public double OrientationLookAheadMm { get; set; }
