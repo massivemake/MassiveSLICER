@@ -3575,8 +3575,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
                 }
                 speed = add.PrintSpeed * sScale;
             }
-            float pct = Math.Min(
-                add.GetEffectiveExtrusionSpeedPercent() * Math.Max(rpmScale, 0f), 100f);
+            // An absolute demand (brim RPM) replaces the nominal-times-scale product outright —
+            // no scale can express it, so reporting the scaled value here would contradict both
+            // the RPM gradient and the exported program.
+            float pct = mv.RpmPercentOverride is { } abs
+                ? Math.Min(Math.Max(abs, 0f), 100f)
+                : Math.Min(add.GetEffectiveExtrusionSpeedPercent() * Math.Max(rpmScale, 0f), 100f);
             return $"{speed:0} mm/s · RPM {pct:0}%";
         }
     }
