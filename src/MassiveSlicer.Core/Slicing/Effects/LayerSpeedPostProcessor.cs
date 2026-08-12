@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing.Effects;
@@ -37,6 +37,7 @@ public static class LayerSpeedPostProcessor
         double maxValue = layerValues.Max();
 
         float brimScale = BrimScale(settings, baseMmS);
+        float? brimRpm  = BrimRpmOverride(settings);
 
         var result = ToolpathClone.Copy(toolpath);
         for (int i = 0; i < result.Layers.Count; i++)
@@ -49,7 +50,11 @@ public static class LayerSpeedPostProcessor
                 if (move.IsBrim)
                 {
                     if (move.Kind == MoveKind.Extrude)
-                        layer.Moves[mi] = move with { PrintSpeedScale = brimScale };
+                        layer.Moves[mi] = move with
+                        {
+                            PrintSpeedScale    = brimScale,
+                            RpmPercentOverride = brimRpm,
+                        };
                     continue;
                 }
                 if (!IsAdaptable(move)) continue;
@@ -95,8 +100,8 @@ public static class LayerSpeedPostProcessor
     }
 
     /// <summary>
-    /// Brim never takes the per-layer adaptive scale — <see cref="Apply"/> assigns it its own
-    /// (the gentler of nominal print speed and the adaptive minimum) before this is reached.
+    /// Brim never takes the per-layer adaptive scale — <see cref="Apply"/> gives it its own
+    /// fixed speed (and optional absolute RPM) before this is reached.
     /// Left adaptable, the brim is the longest "layer" in the part, so it took the maximum
     /// speed — and being full nominal thickness, nothing reduced its flow. That made it the
     /// move that hit the 99 % RPM export gate, which in turn capped how high the maximum
@@ -118,10 +123,21 @@ public static class LayerSpeedPostProcessor
         return brimMmS / Math.Max(basePrintMmS, 0.1f);
     }
 
+    /// <summary>
+    /// Absolute brim RPM (%) to stamp on brim extrude moves, or null to let RPM follow brim
+    /// speed as normal. Lets the brim be deliberately over-extruded for bed adhesion despite
+    /// running slow — the whole reason it is absolute rather than another scale.
+    /// </summary>
+    public static float? BrimRpmOverride(SliceSettings settings)
+        => settings.BrimRpmPercent > 1e-6f
+            ? Math.Clamp(settings.BrimRpmPercent, 1f, SliceSettings.MaxBrimRpmPercent)
+            : null;
+
     private static Toolpath ResetScales(Toolpath toolpath, SliceSettings settings)
     {
         float baseMmS   = settings.PrintSpeedMps * 1000f;
         float brimScale = BrimScale(settings, baseMmS);
+        float? brimRpm  = BrimRpmOverride(settings);
 
         var result = ToolpathClone.Copy(toolpath);
         foreach (var layer in result.Layers)
@@ -129,9 +145,12 @@ public static class LayerSpeedPostProcessor
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
                 var move = layer.Moves[mi];
-                float want = move.IsBrim && move.Kind == MoveKind.Extrude ? brimScale : 1f;
-                if (Math.Abs(move.PrintSpeedScale - want) < 1e-6f) continue;
-                layer.Moves[mi] = move with { PrintSpeedScale = want };
+                bool isBrimBead = move.IsBrim && move.Kind == MoveKind.Extrude;
+                float  want    = isBrimBead ? brimScale : 1f;
+                float? wantRpm = isBrimBead ? brimRpm : null;
+                if (Math.Abs(move.PrintSpeedScale - want) < 1e-6f
+                    && Nullable.Equals(move.RpmPercentOverride, wantRpm)) continue;
+                layer.Moves[mi] = move with { PrintSpeedScale = want, RpmPercentOverride = wantRpm };
             }
         }
         return result;

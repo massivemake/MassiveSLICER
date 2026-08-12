@@ -1,4 +1,4 @@
-namespace MassiveSlicer.Core.Models;
+﻿namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// Serialised workspace state: cell, camera, user models, and application settings.
@@ -424,6 +424,9 @@ public sealed class WorkspaceToolpathMoveData
 
     /// <summary>Lightning Bridge support finger — drives its own display layer.</summary>
     public bool IsLightning { get; set; }
+
+    /// <summary>Absolute RPM (%) for this move; null = derive from speed. Used by the brim.</summary>
+    public float? RpmPercentOverride { get; set; }
 
     /// <summary>
     /// Bed-adhesion brim. MUST round-trip: reprocessing a reloaded workspace re-runs

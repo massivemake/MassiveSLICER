@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.IO;
@@ -38,6 +38,7 @@ public static class ToolpathSerializer
                     ResumeWaitSec    = move.ResumeWaitSec,
                     HeightScale      = move.HeightScale,
                     IsBrim           = move.IsBrim,
+                    RpmPercentOverride = move.RpmPercentOverride,
                     IsLightning      = move.IsLightning,
                     IsMergeConnector = move.IsMergeConnector,
                     TravelSpeedMps   = move.TravelSpeedMps,
@@ -89,6 +90,7 @@ public static class ToolpathSerializer
                     // 0 here is a malformed file — fall back to nominal rather than export dry.
                     HeightScale      = moveDto.HeightScale > 0f ? moveDto.HeightScale : 1f,
                     IsBrim           = moveDto.IsBrim,
+                    RpmPercentOverride = moveDto.RpmPercentOverride,
                     IsLightning      = moveDto.IsLightning,
                     IsMergeConnector = moveDto.IsMergeConnector,
                     TravelSpeedMps   = moveDto.TravelSpeedMps,

@@ -178,6 +178,62 @@ public class LayerSpeedPostProcessorTest
         Assert.Equal(expectedMmS, brim.PrintSpeedScale * baseMmS, 1);
     }
 
+    /// <summary>
+    /// Brim RPM is an ABSOLUTE demand. The whole point is to lay a fat brim for adhesion while
+    /// running slow, so it must not be multiplied by the speed scale (which would pull it back
+    /// toward the speed-derived value) nor by HeightScale.
+    /// </summary>
+    [Theory]
+    [InlineData(0f,   null)]   // off -> RPM follows speed
+    [InlineData(55f,  55f)]    // honoured exactly, not scaled by the 60/85 speed ratio
+    [InlineData(200f, 99f)]    // clamped to the export gate
+    public void Brim_rpm_override_is_absolute(float asked, float? expectedPct)
+    {
+        const float baseMmS = 85f;
+        var settings = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = baseMmS / 1000f,
+            LayerSpeedMinMmS       = 20f,
+            LayerSpeedMaxMmS       = 89f,
+            BrimSpeedMmS           = 30f,
+            BrimRpmPercent         = asked,
+        };
+        var krl = new KrlExportSettings
+        {
+            ProgramName = "brim_rpm_abs", BeadWidthMm = 6f, LayerHeightMm = 3f,
+            PrintSpeedMps = baseMmS / 1000f, FlowRate = 0.5512f,
+        };
+
+        var tp = new Toolpath();
+        var layer0 = MakeLayer(0, 8000);
+        layer0.Moves.Insert(0, new ToolpathMove(
+            Vector3.Zero, new Vector3(7750, 0, 0), MoveKind.Extrude)
+            { IsBrim = true, HeightScale = 0.5f });   // even a thinned layer must not scale it
+        tp.Layers.Add(layer0);
+        tp.Layers.Add(MakeLayer(1, 6000));
+
+        var r = LayerSpeedPostProcessor.Apply(tp, settings);
+        var brim = r.Layers[0].Moves.First(m => m.IsBrim);
+
+        // Speed is unaffected by the RPM override either way.
+        Assert.Equal(30f, brim.PrintSpeedScale * baseMmS, 1);
+
+        if (expectedPct is null)
+        {
+            Assert.Null(brim.RpmPercentOverride);
+            // Falls back to speed-derived flow, halved again by HeightScale.
+            Assert.Equal(ToolpathRpm.BasePercent(krl) * (30f / baseMmS) * 0.5f,
+                         ToolpathRpm.MovePercent(brim, krl), 2);
+        }
+        else
+        {
+            Assert.Equal(expectedPct.Value, brim.RpmPercentOverride!.Value, 2);
+            Assert.Equal(expectedPct.Value, ToolpathRpm.MovePercent(brim, krl), 2);
+        }
+    }
+
     /// <summary>Brim speed applies even with Adaptive Speed switched off.</summary>
     [Fact]
     public void Brim_speed_applies_when_adaptive_speed_is_disabled()

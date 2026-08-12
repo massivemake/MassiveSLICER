@@ -956,6 +956,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimSpeed, Math.Clamp(value, 1.0, SliceSettings.MaxBrimSpeedMmS));
     }
 
+    private double _brimRpmPercent;
+    /// <summary>
+    /// Absolute brim extrusion RPM (%). 0 = off, i.e. RPM follows brim speed as usual.
+    /// Raise it to lay a deliberately fat brim for adhesion despite the slow brim speed —
+    /// this value bypasses every per-move flow scale. Capped at
+    /// <see cref="SliceSettings.MaxBrimRpmPercent"/> so it cannot trip the export gate.
+    /// </summary>
+    public double BrimRpmPercent
+    {
+        get => _brimRpmPercent;
+        set => SetField(ref _brimRpmPercent,
+                        value <= 0.0 ? 0.0 : Math.Clamp(value, 1.0, SliceSettings.MaxBrimRpmPercent));
+    }
+
     // -- X-Bracing Wall ----------------------------------------------------------
 
     private bool _xBracingEnabled;

@@ -4309,6 +4309,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.BrimEnabled            = copy.BrimEnabled;
         live.BrimLoops              = copy.BrimLoops;
         live.BrimSpeedMmS           = copy.BrimSpeedMmS;
+        live.BrimRpmPercent         = copy.BrimRpmPercent;
         live.XBracingEnabled        = copy.XBracingEnabled;
         live.XBracingDepthMm        = copy.XBracingDepthMm;
         live.XBracingDepthBottomMm  = copy.XBracingDepthBottomMm;
@@ -4575,6 +4576,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.BrimEnabled         = p.BrimEnabled;
         add.BrimLoops           = p.BrimLoops;
         add.BrimSpeed           = p.BrimSpeedMmS;
+        add.BrimRpmPercent      = p.BrimRpmPercent;
         add.XBracingEnabled     = p.XBracingEnabled;
         add.XBracingDepthMm     = p.XBracingDepthMm;
         add.XBracingDepthBottomMm = p.XBracingDepthBottomMm;
@@ -4898,6 +4900,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.BrimEnabled          = add.BrimEnabled;
         p.BrimLoops            = add.BrimLoops;
         p.BrimSpeedMmS         = add.BrimSpeed;
+        p.BrimRpmPercent       = add.BrimRpmPercent;
         p.XBracingEnabled      = add.XBracingEnabled;
         p.XBracingDepthMm      = add.XBracingDepthMm;
         p.XBracingDepthBottomMm = add.XBracingDepthBottomMm;

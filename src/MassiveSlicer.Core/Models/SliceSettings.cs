@@ -69,6 +69,16 @@ public sealed class SliceSettings
     /// <summary>Upper bound on <see cref="BrimSpeedMmS"/> — a brim never wants to be quick.</summary>
     public const float MaxBrimSpeedMmS = 60f;
 
+    /// <summary>
+    /// Absolute extrusion RPM (%) for the brim. 0 = off, i.e. let RPM follow brim speed.
+    /// Set it to lay a deliberately fat brim for adhesion despite the slow speed. Capped at
+    /// <see cref="MaxBrimRpmPercent"/> so it can never trip the export gate on its own.
+    /// </summary>
+    public float BrimRpmPercent { get; init; }
+
+    /// <summary>Upper bound on <see cref="BrimRpmPercent"/>, matching the export RPM gate.</summary>
+    public const float MaxBrimRpmPercent = 99f;
+
     /// <summary>Material flow rate (rev/cm³) for RPM ramp scaling.</summary>
     public float FlowRate { get; init; } = 0.463f;
 
