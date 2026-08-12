@@ -12696,7 +12696,10 @@ public partial class ViewportView : UserControl
     private const float ViewTagBandMm = 152.4f;   // 6 inches
     private DispatcherTimer? _viewTagTimer;
     private Toolpath? _viewTagCachedToolpath;
-    private readonly List<(NVec3 Local, float Scale, float TempC)> _viewTagBands = [];
+    /// <summary><c>Scale</c> is the robot speed scale; <c>RpmScale</c> is the full extrusion
+    /// scale from <see cref="ToolpathRpm.MoveScale"/> — they differ on adaptive-height layers,
+    /// where flow is reduced but speed is not.</summary>
+    private readonly List<(NVec3 Local, float Scale, float RpmScale, float TempC)> _viewTagBands = [];
 
     private void StartViewTagTimer(ViewportViewModel vm)
     {
@@ -12736,18 +12739,26 @@ public partial class ViewportView : UserControl
                 foreach (var layer in toolpath.Layers)
                 {
                     if (layer.Z < nextBand) continue;
-                    NVec3 best = default; bool found = false; float scale = 1f;
+                    NVec3 best = default; bool found = false; float scale = 1f, rpmScale = 1f;
                     int stride = Math.Max(1, layer.Moves.Count / 400);
                     for (int i = 0; i < layer.Moves.Count; i += stride)
                     {
                         var m = layer.Moves[i];
                         if (m.Kind != MoveKind.Extrude) continue;
-                        if (!found || m.To.X > best.X) { best = m.To; found = true; scale = m.PrintSpeedScale; }
+                        if (!found || m.To.X > best.X)
+                        {
+                            best = m.To; found = true;
+                            scale    = m.PrintSpeedScale;
+                            // Not PrintSpeedScale: on an adaptive-height layer the flow is cut
+                            // by HeightScale while the speed is not, so the RPM label has to use
+                            // the same scale the exporter and the RPM gradient use.
+                            rpmScale = ToolpathRpm.MoveScale(m);
+                        }
                     }
                     if (found)
                     {
                         _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
-                                           scale, layer.ThermalTempC));
+                                           scale, rpmScale, layer.ThermalTempC));
                         nextBand += ViewTagBandMm;
                     }
                 }
@@ -12765,7 +12776,7 @@ public partial class ViewportView : UserControl
 
         var wt   = node.WorldTransform;
         var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
-        foreach (var (local, scale, tempC) in _viewTagBands)
+        foreach (var (local, scale, rpmScale, tempC) in _viewTagBands)
         {
             var world = new TkVector3(
                 local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
@@ -12781,7 +12792,7 @@ public partial class ViewportView : UserControl
             {
                 "Speed"   => $"{baseSpeed * scale:0} mm/s",
                 "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
-                _         => $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})",
+                _         => $"{rpmBase * rpmScale:0}% RPM (Flowrate {flow:0.###})",
             };
             tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
         }

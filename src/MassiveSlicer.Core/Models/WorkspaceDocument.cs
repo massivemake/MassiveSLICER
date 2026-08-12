@@ -413,4 +413,21 @@ public sealed class WorkspaceToolpathMoveData
     public float PrintSpeedScale { get; set; } = 1f;
     /// <summary>Optional per-travel resume wait (seconds). Null/0 omitted when serializing default.</summary>
     public float? ResumeWaitSec { get; set; }
+
+    /// <summary>
+    /// Local layer thickness relative to nominal (1 = nominal) — the adaptive-layer-height and
+    /// Multi-Planar wedge flow correction. MUST round-trip: without it a reopened workspace
+    /// exports every thin layer at full nominal flow (measured up to 2.9x over-extrusion).
+    /// Absent in files saved before this field existed, which load as 1 — the old behaviour.
+    /// </summary>
+    public float HeightScale { get; set; } = 1f;
+
+    /// <summary>Lightning Bridge support finger — drives its own display layer.</summary>
+    public bool IsLightning { get; set; }
+
+    /// <summary>Travel inserted when merging separate toolpaths.</summary>
+    public bool IsMergeConnector { get; set; }
+
+    /// <summary>Per-move travel speed override (m/s). Null = use the global travel speed.</summary>
+    public float? TravelSpeedMps { get; set; }
 }
