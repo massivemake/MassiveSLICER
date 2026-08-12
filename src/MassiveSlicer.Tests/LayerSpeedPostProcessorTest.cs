@@ -104,6 +104,92 @@ public class LayerSpeedPostProcessorTest
         Assert.Contains("TRIGGER WHEN DISTANCE=0 DELAY=0 DO $ANOUT[4]=0.30 ; RPM on", krl);
     }
 
+    /// <summary>
+    /// Real numbers off the Glider column (Rev 55): a 2-loop brim is 7.75 m while the object's
+    /// own first layer is 8.62 m and the body runs 6.48–8.62 m. Counting the brim made layer 0
+    /// a 16.37 m outlier — 1.9x anything else — so it took the maximum speed and squeezed the
+    /// whole part into the bottom 22 % of the window.
+    /// </summary>
+    [Fact]
+    public void Brim_is_excluded_from_the_layer_metric_so_the_body_gets_the_whole_window()
+    {
+        var settings = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = 0.085f,
+            LayerSpeedMinMmS       = 20f,
+            LayerSpeedMaxMmS       = 89f,
+        };
+
+        var tp = new Toolpath();
+        var layer0 = MakeLayer(0, 8620);                                  // the object's first layer
+        layer0.Moves.Insert(0, new ToolpathMove(                          // prepended, as BrimPlanner does
+            Vector3.Zero, new Vector3(7750, 0, 0), MoveKind.Extrude) { IsBrim = true });
+        tp.Layers.Add(layer0);
+        tp.Layers.Add(MakeLayer(1, 6482));                                // shortest body layer
+        tp.Layers.Add(MakeLayer(2, 8620));                                // longest body layer
+
+        var r = LayerSpeedPostProcessor.Apply(tp, settings);
+        float baseMmS = 85f;
+
+        // Layer 0 measures 8620 (not 16370), so it ties layer 2 for longest.
+        Assert.Equal(89f, ObjectScale(r, 0) * baseMmS, 1);
+        Assert.Equal(20f, ObjectScale(r, 1) * baseMmS, 1);
+        Assert.Equal(89f, ObjectScale(r, 2) * baseMmS, 1);
+
+        // The brim itself is not adaptable: scale 1, i.e. the layer's nominal print speed.
+        var brim = r.Layers[0].Moves.First(m => m.IsBrim);
+        Assert.Equal(1f, brim.PrintSpeedScale, 4);
+    }
+
+    /// <summary>
+    /// The brim used to be the move that hit the 99 % RPM export gate: it took the maximum
+    /// speed and, being full nominal thickness, nothing reduced its flow. That capped how high
+    /// the maximum could be set at all.
+    /// </summary>
+    [Fact]
+    public void Brim_no_longer_drives_the_peak_RPM_of_the_toolpath()
+    {
+        var settings = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = 0.085f,
+            LayerSpeedMinMmS       = 20f,
+            LayerSpeedMaxMmS       = 130f,        // would put the brim at 110 % RPM if adaptable
+        };
+
+        var tp = new Toolpath();
+        var layer0 = MakeLayer(0, 4000);
+        layer0.Moves.Insert(0, new ToolpathMove(
+            Vector3.Zero, new Vector3(20000, 0, 0), MoveKind.Extrude) { IsBrim = true });
+        tp.Layers.Add(layer0);
+        tp.Layers.Add(MakeLayer(1, 4000));
+        var r = LayerSpeedPostProcessor.Apply(tp, settings);
+
+        var krl = new KrlExportSettings
+        {
+            ProgramName   = "brim_rpm",
+            BeadWidthMm   = 7f,
+            LayerHeightMm = 3f,
+            PrintSpeedMps = 0.085f,
+            FlowRate      = 0.5693f,
+        };
+        var analysis = ToolpathRpm.Analyze(r, krl);
+
+        Assert.False(analysis.HasOverLimit);
+        Assert.True(analysis.PeakPercent <= ToolpathRpm.MaxRpmPercent,
+            $"peak RPM {analysis.PeakPercent:0.#} % must stay inside the export gate");
+
+        // The brim runs at the nominal 85 mm/s, so its own demand is the nominal ~61 %.
+        var brim = r.Layers[0].Moves.First(m => m.IsBrim);
+        Assert.Equal(ToolpathRpm.BasePercent(krl), ToolpathRpm.MovePercent(brim, krl), 2);
+    }
+
+    private static float ObjectScale(Toolpath tp, int layerIndex)
+        => tp.Layers[layerIndex].Moves.First(m => m.Kind == MoveKind.Extrude && !m.IsBrim).PrintSpeedScale;
+
     private static float ExtrudeScale(Toolpath tp, int layerIndex)
         => tp.Layers[layerIndex].Moves.First(m => m.Kind == MoveKind.Extrude).PrintSpeedScale;
 

@@ -36,6 +36,7 @@ public static class ToolpathClone
                     PrintSpeedScale   = move.PrintSpeedScale,
                     IsLightning       = move.IsLightning,
                     HeightScale       = move.HeightScale,
+                    IsBrim            = move.IsBrim,
                 });
             }
             copy.Layers.Add(layerCopy);

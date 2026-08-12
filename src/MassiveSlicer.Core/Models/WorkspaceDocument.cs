@@ -425,6 +425,13 @@ public sealed class WorkspaceToolpathMoveData
     /// <summary>Lightning Bridge support finger — drives its own display layer.</summary>
     public bool IsLightning { get; set; }
 
+    /// <summary>
+    /// Bed-adhesion brim. MUST round-trip: reprocessing a reloaded workspace re-runs
+    /// LayerSpeedPostProcessor, which would otherwise put the brim back into the layer-speed
+    /// metric and re-cap the whole part's speed against the 99 % RPM gate.
+    /// </summary>
+    public bool IsBrim { get; set; }
+
     /// <summary>Travel inserted when merging separate toolpaths.</summary>
     public bool IsMergeConnector { get; set; }
 

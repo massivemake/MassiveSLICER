@@ -68,6 +68,7 @@ public static class LayerSpeedPostProcessor
             foreach (var move in layer.Moves)
             {
                 if (!ToolpathMoveKinds.IsCutSegment(move.Kind)) continue;
+                if (move.IsBrim) continue;
                 cutLen += Vector3.Distance(move.From, move.To);
             }
             return cutLen;
@@ -76,14 +77,22 @@ public static class LayerSpeedPostProcessor
         double layerTime = 0.0;
         foreach (var move in layer.Moves)
         {
+            if (move.IsBrim) continue;
             double dist = Vector3.Distance(move.From, move.To);
             layerTime += ToolpathStatistics.MoveTimeSeconds(move, rates, dist);
         }
         return layerTime;
     }
 
+    /// <summary>
+    /// Brim is excluded so it keeps scale 1 and runs at the layer's nominal print speed.
+    /// Left adaptable, the brim is the longest "layer" in the part, so it takes the maximum
+    /// speed — and being full nominal thickness, nothing reduces its flow. That made it the
+    /// move that hit the 99 % RPM export gate, which in turn capped how high the maximum
+    /// could be set and left the rest of the part crawling near the minimum.
+    /// </summary>
     private static bool IsAdaptable(ToolpathMove move)
-        => move.Kind == MoveKind.Extrude && !move.IsWipe && !move.IsLayerStitch;
+        => move.Kind == MoveKind.Extrude && !move.IsWipe && !move.IsLayerStitch && !move.IsBrim;
 
     private static Toolpath ResetScales(Toolpath toolpath)
     {

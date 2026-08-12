@@ -63,17 +63,26 @@ public sealed class ToolpathSerializerTest
             IsMergeConnector = true,
             TravelSpeedMps   = 0.075f,
         });
+        // IsBrim has to survive too: reprocessing a reloaded workspace re-runs
+        // LayerSpeedPostProcessor, which would otherwise put the brim back into the metric.
+        layer.Moves.Add(new ToolpathMove(new Vector3(0, 0, 10), new Vector3(50, 0, 10), MoveKind.Extrude)
+        {
+            IsBrim = true,
+        });
         tp.Layers.Add(layer);
 
         var restored = ToolpathSerializer.FromData(ToolpathSerializer.ToData(tp));
         var m0 = restored.Layers[0].Moves[0];
         var m1 = restored.Layers[0].Moves[1];
+        var m2 = restored.Layers[0].Moves[2];
 
         Assert.Equal(0.3333f, m0.HeightScale, precision: 4);
         Assert.Equal(0.5f, m0.PrintSpeedScale, precision: 4);
         Assert.True(m0.IsLightning);
+        Assert.False(m0.IsBrim);
         Assert.True(m1.IsMergeConnector);
         Assert.Equal(0.075f, m1.TravelSpeedMps!.Value, precision: 4);
+        Assert.True(m2.IsBrim);
     }
 
     /// <summary>The number that actually reaches the machine has to survive the round trip.</summary>

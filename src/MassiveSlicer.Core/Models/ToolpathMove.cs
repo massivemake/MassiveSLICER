@@ -27,6 +27,15 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// <summary>Pre-travel filament wipe extrusion segment.</summary>
     public bool  IsWipe { get; init; }
 
+    /// <summary>
+    /// Bed-adhesion brim, not part of the object. Its length scales with the footprint
+    /// perimeter and loop count, which says nothing about how long the object's own layer
+    /// is — so layer-speed and thermal metrics must exclude it, and it must not take the
+    /// adaptive speed scale (a brim wants the nominal first-layer speed, not the fastest
+    /// speed in the part).
+    /// </summary>
+    public bool  IsBrim { get; init; }
+
     /// <summary>Local layer thickness relative to the layer's nominal height (1 = nominal).
     /// Multi-Planar layers are wedges: the plane tilt changes between layers, so thickness
     /// varies along the path. Scales extrusion RPM in export and bead height in preview.</summary>
