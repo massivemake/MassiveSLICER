@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Core.Slicing.Effects;
@@ -138,9 +138,68 @@ public class LayerSpeedPostProcessorTest
         Assert.Equal(20f, ObjectScale(r, 1) * baseMmS, 1);
         Assert.Equal(89f, ObjectScale(r, 2) * baseMmS, 1);
 
-        // The brim itself is not adaptable: scale 1, i.e. the layer's nominal print speed.
+        // The brim is on its own fixed speed, default 60, regardless of the 20-89 window.
         var brim = r.Layers[0].Moves.First(m => m.IsBrim);
-        Assert.Equal(1f, brim.PrintSpeedScale, 4);
+        Assert.Equal(SliceSettings.MaxBrimSpeedMmS, brim.PrintSpeedScale * baseMmS, 1);
+    }
+
+    /// <summary>
+    /// Brim speed is a fixed field: it must not move when print speed or the Adaptive Speed
+    /// window changes, and it is capped at <see cref="SliceSettings.MaxBrimSpeedMmS"/>.
+    /// </summary>
+    [Theory]
+    [InlineData(85f, 20f, 89f, 45f, 45f)]    // asked 45 -> 45, regardless of the window
+    [InlineData(85f, 95f, 120f, 45f, 45f)]   // window entirely above it -> still 45
+    [InlineData(30f, 20f, 89f, 45f, 45f)]    // print speed below it -> still 45
+    [InlineData(85f, 60f, 99f, 200f, 60f)]   // over the cap -> clamped to 60
+    [InlineData(85f, 60f, 99f, 0f, 1f)]      // zero/unset -> clamped to the 1 mm/s floor
+    public void Brim_speed_is_fixed_and_capped(
+        float baseMmS, float minMmS, float maxMmS, float asked, float expectedMmS)
+    {
+        var settings = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = baseMmS / 1000f,
+            LayerSpeedMinMmS       = minMmS,
+            LayerSpeedMaxMmS       = maxMmS,
+            BrimSpeedMmS           = asked,
+        };
+
+        var tp = new Toolpath();
+        var layer0 = MakeLayer(0, 8000);
+        layer0.Moves.Insert(0, new ToolpathMove(
+            Vector3.Zero, new Vector3(7750, 0, 0), MoveKind.Extrude) { IsBrim = true });
+        tp.Layers.Add(layer0);
+        tp.Layers.Add(MakeLayer(1, 6000));
+
+        var brim = LayerSpeedPostProcessor.Apply(tp, settings)
+                                         .Layers[0].Moves.First(m => m.IsBrim);
+        Assert.Equal(expectedMmS, brim.PrintSpeedScale * baseMmS, 1);
+    }
+
+    /// <summary>Brim speed applies even with Adaptive Speed switched off.</summary>
+    [Fact]
+    public void Brim_speed_applies_when_adaptive_speed_is_disabled()
+    {
+        const float baseMmS = 85f;
+        var settings = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = false,
+            PrintSpeedMps          = baseMmS / 1000f,
+            BrimSpeedMmS           = 40f,
+        };
+
+        var tp = new Toolpath();
+        var layer0 = MakeLayer(0, 8000);
+        layer0.Moves.Insert(0, new ToolpathMove(
+            Vector3.Zero, new Vector3(7750, 0, 0), MoveKind.Extrude) { IsBrim = true });
+        tp.Layers.Add(layer0);
+
+        var r = LayerSpeedPostProcessor.Apply(tp, settings);
+        Assert.Equal(40f, r.Layers[0].Moves.First(m => m.IsBrim).PrintSpeedScale * baseMmS, 1);
+        // The part itself is untouched: full print speed.
+        Assert.Equal(1f, ObjectScale(r, 0), 4);
     }
 
     /// <summary>
@@ -182,9 +241,11 @@ public class LayerSpeedPostProcessorTest
         Assert.True(analysis.PeakPercent <= ToolpathRpm.MaxRpmPercent,
             $"peak RPM {analysis.PeakPercent:0.#} % must stay inside the export gate");
 
-        // The brim runs at the nominal 85 mm/s, so its own demand is the nominal ~61 %.
+        // The brim runs at its own fixed 60 mm/s, so its RPM is the nominal scaled to that —
+        // flow follows speed automatically, no over- or under-extrusion on the brim.
         var brim = r.Layers[0].Moves.First(m => m.IsBrim);
-        Assert.Equal(ToolpathRpm.BasePercent(krl), ToolpathRpm.MovePercent(brim, krl), 2);
+        Assert.Equal(ToolpathRpm.BasePercent(krl) * (SliceSettings.MaxBrimSpeedMmS / 85f),
+                     ToolpathRpm.MovePercent(brim, krl), 2);
     }
 
     private static float ObjectScale(Toolpath tp, int layerIndex)

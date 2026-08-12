@@ -944,6 +944,18 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _brimLoops, Math.Clamp(value, 1, 50));
     }
 
+    private double _brimSpeed = SliceSettings.MaxBrimSpeedMmS;
+    /// <summary>
+    /// Fixed brim speed (mm/s). Deliberately ignores print speed and the Adaptive Speed
+    /// window — the brim is bed adhesion, not part shape. Capped at
+    /// <see cref="SliceSettings.MaxBrimSpeedMmS"/>.
+    /// </summary>
+    public double BrimSpeed
+    {
+        get => _brimSpeed;
+        set => SetField(ref _brimSpeed, Math.Clamp(value, 1.0, SliceSettings.MaxBrimSpeedMmS));
+    }
+
     // -- X-Bracing Wall ----------------------------------------------------------
 
     private bool _xBracingEnabled;
