@@ -234,6 +234,60 @@ public class LayerSpeedPostProcessorTest
         }
     }
 
+    /// <summary>
+    /// The brim RPM override has to reach the WRITTEN PROGRAM, not just ToolpathRpm.MovePercent.
+    /// The exporter has its own scale-based path, so an override honoured only by MovePercent
+    /// showed the right number in the viewport and the gate while the .src still carried the
+    /// speed-derived value — 7.14 % where 30 % was asked for.
+    /// </summary>
+    [Fact]
+    public void Brim_rpm_override_reaches_the_exported_program()
+    {
+        const float baseMmS = 60f;
+        var slice = new SliceSettings
+        {
+            LayerSpeedAdaptEnabled = true,
+            LayerSpeedBasis        = LayerSpeedBasis.CutLength,
+            PrintSpeedMps          = baseMmS / 1000f,
+            LayerSpeedMinMmS       = 60f,
+            LayerSpeedMaxMmS       = 99f,
+            BrimSpeedMmS           = 12f,
+            BrimRpmPercent         = 30f,
+        };
+
+        var tp = new Toolpath();
+        var layer = new ToolpathLayer(0, 3f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
+        layer.Moves.Add(new ToolpathMove(Vector3.Zero, new Vector3(500, 0, 3), MoveKind.Extrude)
+            { IsBrim = true, Normal = Vector3.UnitZ });
+        layer.Moves.Add(new ToolpathMove(new Vector3(500, 0, 3), new Vector3(900, 0, 3), MoveKind.Extrude)
+            { Normal = Vector3.UnitZ });
+        tp.Layers.Add(layer);
+
+        var processed = LayerSpeedPostProcessor.Apply(tp, slice);
+        var krl = new KrlExportSettings
+        {
+            ProgramName             = "brim_rpm_export",
+            BeadWidthMm             = 6f,
+            LayerHeightMm           = 3f,
+            PrintSpeedMps           = baseMmS / 1000f,
+            FlowRate                = 0.5512f,
+            DigitalStartStopEnabled = true,
+            ExtrusionStartWaitSec   = 0f,
+        };
+
+        string src = KrlExporter.Export(processed, krl);
+
+        // The brim's own commanded speed and RPM, as the machine will read them.
+        Assert.Contains("$VEL.CP = 0.012000", src);
+        Assert.Contains("RPM = 30", src);
+        // And the speed-derived value it used to emit must be gone.
+        Assert.DoesNotContain("RPM = 7.1", src);
+
+        // Belt and braces: the gate and the program agree on the same number.
+        var brim = processed.Layers[0].Moves.First(m => m.IsBrim);
+        Assert.Equal(30f, ToolpathRpm.MovePercent(brim, krl), 2);
+    }
+
     /// <summary>Brim speed applies even with Adaptive Speed switched off.</summary>
     [Fact]
     public void Brim_speed_applies_when_adaptive_speed_is_disabled()
