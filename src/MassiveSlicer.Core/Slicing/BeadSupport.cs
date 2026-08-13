@@ -99,13 +99,30 @@ public static class BeadSupport
     /// </summary>
     public static float[] MeasureOffsets(Toolpath toolpath, float beadWidthMm)
     {
-        int total = 0;
-        foreach (var layer in toolpath.Layers)
-            total += layer.Moves.Count;
+        int total = MoveCount(toolpath);
         if (total == 0 || beadWidthMm <= 0f) return [];
 
         var offsets = new float[total];
         Array.Fill(offsets, float.NaN);          // "not measured" until proven otherwise
+        Measure(toolpath, beadWidthMm, offsets);
+        return offsets;
+    }
+
+    private static int MoveCount(Toolpath toolpath)
+    {
+        int total = 0;
+        foreach (var layer in toolpath.Layers)
+            total += layer.Moves.Count;
+        return total;
+    }
+
+    /// <summary>
+    /// The one measurement both entry points share, writing into <paramref name="dest"/> and
+    /// leaving entries it did not measure untouched. Kept single so the render path and the
+    /// report path cannot drift apart.
+    /// </summary>
+    private static void Measure(Toolpath toolpath, float beadWidthMm, float[] dest)
+    {
         float cell = MathF.Max(beadWidthMm, 0.5f);
 
         Dictionary<(int, int), List<(Vector3 a, Vector3 b)>>? prevGrid = null;
@@ -121,7 +138,7 @@ public static class BeadSupport
                     if (prevGrid is { Count: > 0 })
                     {
                         var mid = (move.From + move.To) * 0.5f;
-                        offsets[flat] = NearestSegmentDistance2D(mid, prevGrid, cell);
+                        dest[flat] = NearestSegmentDistance2D(mid, prevGrid, cell);
                     }
                     InsertSegment(curGrid, move.From, move.To, cell);
                 }
@@ -129,8 +146,6 @@ public static class BeadSupport
             }
             prevGrid = curGrid;
         }
-
-        return offsets;
     }
 
     /// <summary>
@@ -144,14 +159,18 @@ public static class BeadSupport
     /// </summary>
     public static float[] Fractions(Toolpath toolpath, float beadWidthMm)
     {
-        var offsets = MeasureOffsets(toolpath, beadWidthMm);
-        var result  = new float[offsets.Length];
-        if (beadWidthMm <= 0f) return result;
-        for (int i = 0; i < offsets.Length; i++)
+        int total = MoveCount(toolpath);
+        var result = new float[total];
+        if (total == 0 || beadWidthMm <= 0f) return result;
+
+        // No NaN prefill and no second array: an unmeasured entry stays at its default 0,
+        // which is the fraction it would map to anyway. One allocation, one measuring pass,
+        // one in-place conversion — the same footprint the pre-Core version had.
+        Measure(toolpath, beadWidthMm, result);
+        for (int i = 0; i < result.Length; i++)
         {
-            float mm = offsets[i];
-            result[i] = float.IsNaN(mm) ? 0f
-                      : float.IsPositiveInfinity(mm) ? 1f
+            float mm = result[i];
+            result[i] = float.IsPositiveInfinity(mm) ? 1f
                       : Math.Clamp(mm / beadWidthMm, 0f, 1f);
         }
         return result;
