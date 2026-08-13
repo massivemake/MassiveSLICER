@@ -17,7 +17,10 @@ public static class SceneBounds
 
         Span<Vector3> corners = stackalloc Vector3[8];
 
-        foreach (var n in root.SelfAndDescendants())
+        // Tolerant walk: this runs on the GL thread every frame via the contact-shadow pass, and
+        // it only accumulates a bounding box — a node missed while the UI thread is attaching
+        // models resolves itself on the next frame.
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (!n.Visible) continue;
             if (n.IsAuthoringOverlay) continue;
