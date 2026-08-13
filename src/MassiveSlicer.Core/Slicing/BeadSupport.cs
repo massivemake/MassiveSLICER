@@ -248,6 +248,97 @@ public static class BeadSupport
     public static IEnumerable<LayerStat> WorstFirst(Analysis a)
         => a.Layers.OrderByDescending(l => l.MaxMm).ThenByDescending(l => l.P99Mm);
 
+    /// <summary>
+    /// One continuous stretch of an upper contour sitting further off the contour below than the
+    /// target. <see cref="LengthMm"/> is measured along the path, which is what a bridging
+    /// tolerance must gate on — a bead spans a gap or it does not, and that is a LOCAL property,
+    /// so the tolerance is an absolute length rather than a share of the layer.
+    /// </summary>
+    public sealed record OffsetRun(float LengthMm, float WorstOffsetMm);
+
+    /// <summary>
+    /// Contour-to-contour measurement, for CHOOSING a layer height before any toolpath exists.
+    ///
+    /// Distinct from <see cref="Analyze"/>, which measures a finished toolpath. This works on the
+    /// sliced boundary, which is the honest input for a thickness decision: the boundary is where
+    /// the mesh is, whereas a toolpath has already had contour offsets, seams and modifiers
+    /// applied. It is also the only version available at the point the decision must be made.
+    ///
+    /// Returns every stretch of <paramref name="upper"/> whose distance to the nearest segment of
+    /// <paramref name="lower"/> exceeds <paramref name="targetOffsetMm"/>. Empty = all within target.
+    /// </summary>
+    public static List<OffsetRun> ContourOffsetRuns(
+        IReadOnlyList<IReadOnlyList<Vector2>> upper,
+        IReadOnlyList<IReadOnlyList<Vector2>> lower,
+        float targetOffsetMm,
+        float searchCellMm)
+    {
+        var runs = new List<OffsetRun>();
+        if (upper.Count == 0 || lower.Count == 0 || targetOffsetMm <= 0f) return runs;
+
+        float cell = MathF.Max(searchCellMm, 0.5f);
+        var grid = new Dictionary<(int, int), List<(Vector2 a, Vector2 b)>>();
+        foreach (var poly in lower)
+            for (int i = 0; i + 1 < poly.Count; i++)
+                Insert2D(grid, poly[i], poly[i + 1], cell);
+        if (grid.Count == 0) return runs;
+
+        foreach (var poly in upper)
+        {
+            float runLen = 0f, runWorst = 0f;
+            for (int i = 0; i + 1 < poly.Count; i++)
+            {
+                var  mid = (poly[i] + poly[i + 1]) * 0.5f;
+                float d   = Nearest2D(mid, grid, cell);
+                float seg = Vector2.Distance(poly[i], poly[i + 1]);
+
+                if (d > targetOffsetMm)
+                {
+                    runLen += seg;
+                    if (d > runWorst) runWorst = d;
+                }
+                else if (runLen > 0f)
+                {
+                    runs.Add(new OffsetRun(runLen, runWorst));
+                    runLen = 0f; runWorst = 0f;
+                }
+            }
+            if (runLen > 0f) runs.Add(new OffsetRun(runLen, runWorst));
+        }
+        return runs;
+    }
+
+    private static void Insert2D(
+        Dictionary<(int, int), List<(Vector2 a, Vector2 b)>> grid, Vector2 a, Vector2 b, float cell)
+    {
+        int x0 = (int)MathF.Floor(MathF.Min(a.X, b.X) / cell), x1 = (int)MathF.Floor(MathF.Max(a.X, b.X) / cell);
+        int y0 = (int)MathF.Floor(MathF.Min(a.Y, b.Y) / cell), y1 = (int)MathF.Floor(MathF.Max(a.Y, b.Y) / cell);
+        for (int x = x0; x <= x1; x++)
+        for (int y = y0; y <= y1; y++)
+        {
+            if (!grid.TryGetValue((x, y), out var list)) grid[(x, y)] = list = [];
+            list.Add((a, b));
+        }
+    }
+
+    private static float Nearest2D(
+        Vector2 p, Dictionary<(int, int), List<(Vector2 a, Vector2 b)>> grid, float cell)
+    {
+        int cx = (int)MathF.Floor(p.X / cell), cy = (int)MathF.Floor(p.Y / cell);
+        float best = float.PositiveInfinity;
+        for (int gx = cx - 1; gx <= cx + 1; gx++)
+        for (int gy = cy - 1; gy <= cy + 1; gy++)
+            if (grid.TryGetValue((gx, gy), out var segs))
+                foreach (var (a, b) in segs)
+                {
+                    float d = SegmentDistance2D(new Vector3(p.X, p.Y, 0f),
+                                                new Vector3(a.X, a.Y, 0f),
+                                                new Vector3(b.X, b.Y, 0f));
+                    if (d < best) best = d;
+                }
+        return best;
+    }
+
     /// <summary>One-line summary for the console and the status bar.</summary>
     public static string Describe(Analysis a)
     {

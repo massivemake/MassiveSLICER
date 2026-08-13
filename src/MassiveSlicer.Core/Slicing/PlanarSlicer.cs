@@ -60,6 +60,23 @@ public static class PlanarSlicer
                   settings.ResolvedMinFaceAreaMm2)
             : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
 
+        // Support-driven thinning (opt-in). Runs on the boundary before any moves exist, and can
+        // only make a layer thinner than the ladder above already chose — so the finish criterion
+        // keeps its say and turning this off reproduces the previous output exactly.
+        if (settings.SupportDrivenLayerHeight && zPositions.Length >= 2)
+        {
+            float minH = settings.MinLayerHeight > 1e-4f
+                ? MathF.Min(settings.MinLayerHeight, settings.LayerHeight)
+                : settings.LayerHeight;
+            zPositions = SupportDrivenLayerHeights.Refine(
+                zPositions, zMax,
+                z => ComputeInsetContours(meshes, z, settings).Contours,
+                settings.SupportTargetOffsetMm,
+                settings.ResolvedBridgeToleranceMm,
+                minH, settings.LayerHeight,
+                searchCellMm: settings.BeadWidth);
+        }
+
         // Tree Support must reach the print bed (Layer 1). If the mesh floats above
         // Z=0, prepend buffer layers so foundation is L1… and the part shifts up —
         // never require "layer −1".

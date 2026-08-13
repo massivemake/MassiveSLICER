@@ -224,6 +224,49 @@ public sealed class SliceSettings
     /// </summary>
     public float AdaptiveMinFaceAreaMm2 { get; init; } = 0f;
 
+    // -- Support-driven layer height (3b) ------------------------------------------
+
+    /// <summary>
+    /// Thin a layer when the boundary steps sideways far enough that the bead would not sit on
+    /// the one below. <b>Off by default</b> — it changes slice output, so it is opt-in.
+    ///
+    /// This is the only rule that chooses thickness from MEASURED overlap rather than from
+    /// triangle normals. <see cref="AdaptiveLayerHeight"/> answers a surface-finish question
+    /// (stairstepping); this answers an adhesion question. They compose: the thinner wins.
+    /// </summary>
+    public bool SupportDrivenLayerHeight { get; init; } = false;
+
+    /// <summary>
+    /// How much of each bead must sit on the one below, as a percentage. 60 means the bead may
+    /// hang off by 40 % of its width, i.e. a sideways step of 0.4 x bead width.
+    ///
+    /// Jeff's minimum is 50 %; 60 is his deliberate overcorrection so an under-extruding bead
+    /// still lands safe — over-extrusion is already safe. Measured cost of 50 -> 60 on a real
+    /// part: layers thinned 20 -> 99, extra layers +1 -> +10 of 377.
+    /// </summary>
+    public float SupportOverlapTargetPercent { get; init; } = 60f;
+
+    /// <summary>
+    /// How long a continuous under-target stretch may be before the layer is thinned (mm).
+    /// 0 = derive it as 2 x bead width. A bead spans a short gap, so a speck of unsupported
+    /// path is not worth thinning a whole layer for.
+    ///
+    /// Deliberately an absolute length, NOT a percentage of the layer: 1 % of a 1500 mm layer
+    /// and 1 % of a 300 mm layer are not the same physical defect. Measured on a real part, the
+    /// stretches a 2x-bead tolerance excuses are 99-of-105 one-offs that never stack, while every
+    /// vertically stacked region (up to 6 layers deep) had stretches of 29 mm or more — so this
+    /// cannot hide the runs that actually fail.
+    /// </summary>
+    public float SupportBridgeToleranceMm { get; init; } = 0f;
+
+    /// <summary>Sideways step (mm) at which a bead is considered under target.</summary>
+    public float SupportTargetOffsetMm
+        => BeadWidth * (1f - Math.Clamp(SupportOverlapTargetPercent, 0f, 100f) / 100f);
+
+    /// <summary><see cref="SupportBridgeToleranceMm"/> with 0 resolved to 2 x bead width.</summary>
+    public float ResolvedBridgeToleranceMm
+        => SupportBridgeToleranceMm > 1e-4f ? SupportBridgeToleranceMm : 2f * BeadWidth;
+
     /// <summary>
     /// <see cref="AdaptiveMinFaceAreaMm2"/> with 0 resolved to the default: one bead's side
     /// footprint, bead width × the thinnest layer the slicer may choose. Returns 0 when the gate
