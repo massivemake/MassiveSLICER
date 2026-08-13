@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Numerics;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -709,7 +709,7 @@ public static class KrlExporter
 
                     if (move.IsResumeRamp)
                     {
-                        float rpmScale  = EffectiveRpmScale(move);
+                        float rpmScale  = EffectiveRpmScale(move, layerS);
                         float speedMps  = EffectivePrintSpeedMps(move, layerS);
                         if (needsRpmOn)
                         {
@@ -744,7 +744,7 @@ public static class KrlExporter
                         continue;
                     }
 
-                    float extrudeRpmScale = EffectiveRpmScale(move);
+                    float extrudeRpmScale = EffectiveRpmScale(move, layerS);
                     float extrudeSpeedMps = EffectivePrintSpeedMps(move, layerS);
                     // Compare the *emitted* KRL text, not raw floats. Multi-planar HeightScale
                     // and layer-speed scales jitter every bead; if ANOUT/VEL round to the same
@@ -1324,7 +1324,23 @@ public static class KrlExporter
         return s.PrintSpeedMps * scale;
     }
 
-    private static float EffectiveRpmScale(ToolpathMove move) => ToolpathRpm.MoveScale(move);
+    /// <summary>
+    /// Scale chosen so that <c>BasePercent(s) * scale</c> equals
+    /// <see cref="ToolpathRpm.MovePercent"/> for this move — the written program, the export
+    /// gate and the viewport then cannot disagree.
+    ///
+    /// An absolute <see cref="ToolpathMove.RpmPercentOverride"/> (the brim) is re-expressed as
+    /// a scale here rather than threaded through every emit site, which keeps the ANOUT/VEL
+    /// change-detection keys downstream working on a single number. The re-expression is exact
+    /// unless the nominal is itself zero — a config with no flow at all, where no scale could
+    /// express an absolute demand anyway.
+    /// </summary>
+    private static float EffectiveRpmScale(ToolpathMove move, KrlExportSettings s)
+    {
+        if (move.RpmPercentOverride is not { } abs) return ToolpathRpm.MoveScale(move);
+        float nominal = ToolpathRpm.BasePercent(s);
+        return nominal > 1e-6f ? Math.Max(abs, 0f) / nominal : 0f;
+    }
 
     private static string ResolveAnout4ExtrudeText(KrlExportSettings s, float rpmScale = 1f)
         => KrlAnout.RpmPercentToAnoutText(ResolveRpmPercent(s, rpmScale));

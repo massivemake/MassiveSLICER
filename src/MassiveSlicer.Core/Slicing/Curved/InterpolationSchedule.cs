@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Slicing.Curved;
+namespace MassiveSlicer.Core.Slicing.Curved;
 
 /// <summary>Layer count and interpolation parameter schedule (compas InterpolationSlicer).</summary>
 public static class InterpolationSchedule

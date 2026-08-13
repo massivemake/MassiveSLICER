@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 
 namespace MassiveSlicer.Core.Kinematics;
 

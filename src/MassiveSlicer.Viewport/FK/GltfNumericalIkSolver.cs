@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.Kinematics;
+using MassiveSlicer.Core.Kinematics;
 using OpenTK.Mathematics;
 
 namespace MassiveSlicer.Viewport.FK;

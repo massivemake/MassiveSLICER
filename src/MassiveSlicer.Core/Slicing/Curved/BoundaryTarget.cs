@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.Slicing;
+using MassiveSlicer.Core.Slicing;
 
 namespace MassiveSlicer.Core.Slicing.Curved;
 

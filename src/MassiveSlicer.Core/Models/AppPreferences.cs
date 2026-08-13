@@ -263,6 +263,12 @@ public sealed class AppPreferences
     /// <summary>Number of brim offset loops.</summary>
     public int BrimLoops { get; set; } = 3;
 
+    /// <summary>Fixed brim print speed (mm/s), independent of print speed and Adaptive Speed.</summary>
+    public double BrimSpeedMmS { get; set; } = 60.0;
+
+    /// <summary>Absolute brim extrusion RPM (%). 0 = let RPM follow brim speed.</summary>
+    public double BrimRpmPercent { get; set; }
+
     /// <summary>X-Bracing Wall: cut dual-wall X notches for structural back-support.</summary>
     public bool XBracingEnabled { get; set; }
 

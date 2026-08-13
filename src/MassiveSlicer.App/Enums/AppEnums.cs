@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer;
+namespace MassiveSlicer;
 
 /// <summary>Top-level application mode toggled by the Prepare / Preview buttons.</summary>
 public enum AppMode

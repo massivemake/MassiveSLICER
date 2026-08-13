@@ -58,9 +58,18 @@ public static class ToolpathRpm
         };
     }
 
-    /// <summary>Raw RPM demand (%) for one move under its layer's settings. Never capped.</summary>
+    /// <summary>
+    /// Raw RPM demand (%) for one move under its layer's settings. Never capped.
+    ///
+    /// <see cref="ToolpathMove.RpmPercentOverride"/> wins outright — it is an absolute demand,
+    /// deliberately not multiplied by <see cref="MoveScale"/>. That is the point: the brim
+    /// wants a fat bead for adhesion even though it runs slow, and every scale in MoveScale
+    /// would drag it back toward the speed-derived value.
+    /// </summary>
     public static float MovePercent(ToolpathMove move, KrlExportSettings layerSettings)
-        => BasePercent(layerSettings) * Math.Max(MoveScale(move), 0f);
+        => move.RpmPercentOverride is { } abs
+            ? Math.Max(abs, 0f)
+            : BasePercent(layerSettings) * Math.Max(MoveScale(move), 0f);
 
     /// <summary>
     /// The whole-percent step the controller actually receives. Matches

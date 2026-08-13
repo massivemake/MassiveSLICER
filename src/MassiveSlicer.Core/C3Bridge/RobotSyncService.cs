@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.C3Bridge;
+namespace MassiveSlicer.Core.C3Bridge;
 
 /// <summary>
 /// High-level robot sync service over C3Bridge.
