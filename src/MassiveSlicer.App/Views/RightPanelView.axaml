@@ -1580,6 +1580,52 @@
                                         <TextBlock Grid.Column="2" Text="Coarse" Classes="LabelMuted" FontSize="10"
                                                    VerticalAlignment="Center" Margin="4,0,0,0"/>
                                     </Grid>
+
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Min feature area (mm²)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.AdaptiveMinFaceAreaMm2, Mode=TwoWay}"
+                                                   ToolTip.Tip="Smallest triangle allowed to dictate a layer's thickness. 0 = one bead footprint (bead width × min layer height); negative = off, every triangle votes.&#x0a;&#x0a;Thickness is the thinnest demand of any single triangle crossing that height, unweighted — so one sliver can outvote the whole cross-section. A triangle smaller than a bead describes a feature the machine cannot print, so it has no business setting thickness. If nothing clears the threshold on a layer, the gate stands down rather than jumping to full thickness."/>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Support-driven thinning. Deliberately OUTSIDE the adaptive block:
+                                     it refines whatever ladder came out, uniform or adaptive, so it
+                                     must stay reachable when Adaptive layer height is off. -->
+                                <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
+                                <CheckBox Content="Support-driven layer height"
+                                          FontSize="11"
+                                          Margin="0,0,0,2"
+                                          IsChecked="{Binding Additive.SupportDrivenLayerHeight, Mode=TwoWay}"
+                                          ToolTip.Tip="Thin a layer when the boundary steps sideways far enough that the bead would not sit on the one below. Works with Adaptive layer height either on or off — it only ever makes a layer thinner than whatever was already chosen."/>
+                                <TextBlock TextWrapping="Wrap" Classes="LabelMuted" FontSize="10"
+                                           Text="Thins for ADHESION, measured from the boundary. Adaptive layer height above thins for surface finish, from face angles — different question, different data."/>
+
+                                <StackPanel IsVisible="{Binding Additive.SupportDrivenLayerHeight}" Spacing="4" Margin="0,4,0,0">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Bead overlap target (%)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.SupportOverlapTargetPercent, Mode=TwoWay}"
+                                                   ToolTip.Tip="How much of each bead must sit on the one below. 60 means it may hang off by 40 % of its width — a sideways step of 0.4 × bead width.&#x0a;&#x0a;50 % is the practical minimum; 60 leaves margin so an under-extruding bead still lands safe. Raising it thins more layers: on a real part, 50→60 took layers thinned from 20 to 99."/>
+                                    </Grid>
+                                    <Grid Margin="0,0,0,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="80"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Bridge tolerance (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBox   Grid.Column="1" Classes="PanelTextBox"
+                                                   Text="{Binding Additive.SupportBridgeToleranceMm, Mode=TwoWay}"
+                                                   ToolTip.Tip="How long a continuous off-target stretch may be before the layer is thinned. 0 = 2 × bead width.&#x0a;&#x0a;A bead spans a short gap, so a speck of unsupported path is not worth thinning a whole layer for. This is an absolute LENGTH, not a share of the layer — 1 % of a long layer and 1 % of a short one are not the same defect. Raising it past ~2 × bead width starts excusing stretches long enough to stack vertically, which is the pattern that actually fails."/>
+                                    </Grid>
                                 </StackPanel>
 
                                 <Border Height="1" Background="{DynamicResource Border1}" Margin="0,4,0,2"/>
