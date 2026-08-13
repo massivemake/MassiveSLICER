@@ -201,6 +201,43 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _adaptiveMinFaceAreaMm2, Math.Clamp(value, -1.0, 100000.0));
     }
 
+    private bool   _supportDrivenLayerHeight;
+    private double _supportOverlapTargetPercent = 60.0;
+    private double _supportBridgeToleranceMm;
+
+    /// <summary>
+    /// Thin a layer when the boundary steps sideways far enough that the bead would not sit on the
+    /// one below. Off by default — it changes slice output. Composes with adaptive layer height by
+    /// taking the thinner, so it can only ever make a layer thinner, never thicker.
+    /// </summary>
+    public bool SupportDrivenLayerHeight
+    {
+        get => _supportDrivenLayerHeight;
+        set => SetField(ref _supportDrivenLayerHeight, value);
+    }
+
+    /// <summary>
+    /// How much of each bead must sit on the one below (%). 60 means it may hang off by 40 % of its
+    /// width. 50 is the stated minimum; 60 is the overcorrection so an under-extruding bead still
+    /// lands safe.
+    /// </summary>
+    public double SupportOverlapTargetPercent
+    {
+        get => _supportOverlapTargetPercent;
+        set => SetField(ref _supportOverlapTargetPercent, Math.Clamp(value, 0.0, 100.0));
+    }
+
+    /// <summary>
+    /// How long a continuous under-target stretch may be before the layer is thinned (mm).
+    /// 0 = derive as 2 x bead width. An absolute length, not a share of the layer — bridging is a
+    /// local property, and 1 % of a long layer is not the same defect as 1 % of a short one.
+    /// </summary>
+    public double SupportBridgeToleranceMm
+    {
+        get => _supportBridgeToleranceMm;
+        set => SetField(ref _supportBridgeToleranceMm, Math.Clamp(value, 0.0, 1000.0));
+    }
+
     // -- Slicing method -------------------------------------------------------
 
     private SliceMethod _method = SliceMethod.Planar;

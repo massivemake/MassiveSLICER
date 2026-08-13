@@ -1845,6 +1845,60 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "support-height-debug",
+            Description = "What support-driven layer height did: how many layers it thinned for "
+                        + "overlap, by how much, and which are still short at the minimum layer "
+                        + "height (geometry a thickness rule cannot fix)",
+            Usage = "support-height-debug [count]",
+            Execute = (ctx, args) =>
+            {
+                var d = SupportDrivenLayerHeights.LastDecisions;
+                if (d.Count == 0)
+                {
+                    ctx.LogError("[support-h] nothing recorded — enable Support-driven layer height "
+                               + "and slice (addset SupportDrivenLayerHeight true).");
+                    return;
+                }
+                int show = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 12;
+                var add  = ctx.Main.RightPanel.Additive;
+
+                int thinned   = d.Count(x => x.Thinned);
+                int unfixable = d.Count(x => x.Unfixable);
+                float target  = (float)(add.BeadWidth * (1.0 - add.SupportOverlapTargetPercent / 100.0));
+                float tol     = add.SupportBridgeToleranceMm > 1e-4
+                                ? (float)add.SupportBridgeToleranceMm : (float)(2.0 * add.BeadWidth);
+
+                ctx.Log($"[support-h] {d.Count} layers · target {add.SupportOverlapTargetPercent:0.#} % "
+                      + $"overlap (step ≤ {target:0.##} mm) · bridges up to {tol:0.#} mm");
+                ctx.Log($"[support-h]   {thinned} thinned for overlap, "
+                      + $"{unfixable} still short at the {add.MinLayerHeight:0.##} mm floor");
+
+                if (thinned > 0)
+                {
+                    var cuts = d.Where(x => x.Thinned)
+                                .Select(x => x.ProposedThicknessMm - x.FinalThicknessMm)
+                                .OrderBy(v => v).ToList();
+                    ctx.Log($"[support-h]   thinning: median {cuts[cuts.Count / 2]:0.###} mm, "
+                          + $"worst {cuts[^1]:0.###} mm");
+                }
+
+                if (unfixable > 0)
+                {
+                    ctx.Log("[support-h]   UNFIXABLE — thinning cannot reach target here; these need a "
+                          + "lower floor, support, or a model change:");
+                    foreach (var x in d.Where(x => x.Unfixable)
+                                       .OrderByDescending(x => x.WorstOffsetMm).Take(show))
+                        ctx.Log($"[support-h]     Z {x.Z,8:0.0}  h {x.FinalThicknessMm:0.000} mm  "
+                              + $"step {x.WorstOffsetMm:0.##} mm over {x.LongestRunMm:0.#} mm  "
+                              + $"(would need h {x.NeededThicknessMm:0.###} mm)");
+                }
+                else
+                    ctx.Log("[support-h]   every off-target stretch was fixable by thinning.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "adaptive-height-debug",
             Description = "Why each adaptive layer got the thickness it did: the triangle that "
                         + "set it, that triangle's AREA against the average of the ones it beat, "

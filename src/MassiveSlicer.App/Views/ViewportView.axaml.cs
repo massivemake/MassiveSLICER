@@ -998,7 +998,10 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveQuality)
                                     or nameof(AdditiveSettingsViewModel.MinLayerHeight)
-                                    or nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2))
+                                    or nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2)
+                                    or nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent)
+                                    or nameof(AdditiveSettingsViewModel.SupportBridgeToleranceMm))
                 {
                     if (additive.ShowLayerPreview)
                         _ = ComputeLayerPreviewAsync(vm);
@@ -4652,6 +4655,9 @@ public partial class ViewportView : UserControl
             AdaptiveQuality     = (float)s.AdaptiveQuality,
             MinLayerHeight      = (float)s.MinLayerHeight,
             AdaptiveMinFaceAreaMm2 = (float)s.AdaptiveMinFaceAreaMm2,
+            SupportDrivenLayerHeight   = s.SupportDrivenLayerHeight,
+            SupportOverlapTargetPercent = (float)s.SupportOverlapTargetPercent,
+            SupportBridgeToleranceMm    = (float)s.SupportBridgeToleranceMm,
             OverhangOrientation = s.OverhangOrientation,
             MaxOverhangTiltDeg  = (float)s.MaxOverhangTiltDeg,
             SmoothRotation                = s.SmoothRotation,
@@ -5770,6 +5776,9 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.AdaptiveQuality),
         nameof(AdditiveSettingsViewModel.MinLayerHeight),
         nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2),
+        nameof(AdditiveSettingsViewModel.SupportDrivenLayerHeight),
+        nameof(AdditiveSettingsViewModel.SupportOverlapTargetPercent),
+        nameof(AdditiveSettingsViewModel.SupportBridgeToleranceMm),
         nameof(AdditiveSettingsViewModel.DisableContourOffset),
         nameof(AdditiveSettingsViewModel.InfillPattern),
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),
