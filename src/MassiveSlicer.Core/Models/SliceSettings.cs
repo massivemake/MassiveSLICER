@@ -208,6 +208,46 @@ public sealed class SliceSettings
     /// <summary>Minimum layer height used by adaptive slicing (mm). Must be ≤ LayerHeight.</summary>
     public float MinLayerHeight      { get; init; } = 1.0f;
 
+    /// <summary>
+    /// Smallest triangle (mm²) allowed to dictate a layer's thickness. 0 = derive it from the
+    /// bead footprint; negative = off, every triangle votes as before.
+    ///
+    /// Layer thickness is the minimum demand of any single triangle crossing that Z, unweighted,
+    /// so one sliver outvotes the whole cross-section. Measured on a real part: 277 of 281
+    /// constrained layers were decided by a triangle under a tenth of the average area it beat,
+    /// with the deciding triangles running 0.95–8 mm² against 2,500–5,000 faces crossing.
+    ///
+    /// The reasoning behind the default: a surface feature smaller than a single bead cannot be
+    /// reproduced by the machine anyway, so it has no business setting layer thickness. Faces
+    /// below the threshold still constrain when NOTHING clears it — a fully slivered cross-section
+    /// falls back to the old behaviour rather than silently going to full thickness.
+    /// </summary>
+    public float AdaptiveMinFaceAreaMm2 { get; init; } = 0f;
+
+    /// <summary>
+    /// <see cref="AdaptiveMinFaceAreaMm2"/> with 0 resolved to the default: one bead's side
+    /// footprint, bead width × the thinnest layer the slicer may choose. Returns 0 when the gate
+    /// is off, which the planner reads as "every triangle votes".
+    ///
+    /// On a real part the deciding triangles measured 0.95–8 mm² against a 12 mm² footprint, while
+    /// the two legitimate ones were 261 and 304 mm² — so the default separates them with room to
+    /// spare rather than splitting a close call.
+    /// </summary>
+    public float ResolvedMinFaceAreaMm2
+    {
+        get
+        {
+            if (AdaptiveMinFaceAreaMm2 < 0f) return 0f;                  // explicitly off
+            if (AdaptiveMinFaceAreaMm2 > 0f) return AdaptiveMinFaceAreaMm2;
+
+            float thinnest = MinLayerHeight > 1e-4f
+                ? MathF.Min(MinLayerHeight, LayerHeight)
+                : LayerHeight;
+            float area = BeadWidth * thinnest;
+            return area > 1e-4f ? area : 0f;
+        }
+    }
+
     // -- X-Bracing wall (structural notches) ------------------------------------
 
     /// <summary>

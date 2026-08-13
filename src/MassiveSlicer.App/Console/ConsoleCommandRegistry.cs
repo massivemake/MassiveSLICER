@@ -1874,6 +1874,15 @@ public sealed class ConsoleCommandRegistry
                 ctx.Log($"[adaptive]   {snapped} layer(s) had their boundary SNAPPED onto a triangle's "
                       + "bottom edge rather than chosen by slope");
 
+                int gatedLayers  = reasons.Count(r => r.FacesGated > 0);
+                int gateMattered = reasons.Count(r => r.GateChangedTheOutcome);
+                if (gatedLayers == 0)
+                    ctx.Log("[adaptive]   min-face-area gate: nothing gated (off, or no sliver "
+                          + "ever tried to decide a layer)");
+                else
+                    ctx.Log($"[adaptive]   min-face-area gate: ignored slivers on {gatedLayers} layer(s); "
+                          + $"on {gateMattered} of those it changed the thickness that came out");
+
                 // The question this command exists for: is the deciding triangle a sliver?
                 var bound = reasons.Where(r => r.BindingArea > 0f && r.MeanStraddlingArea > 0f).ToList();
                 if (bound.Count > 0)

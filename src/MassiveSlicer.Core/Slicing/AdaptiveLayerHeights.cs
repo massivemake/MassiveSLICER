@@ -48,7 +48,9 @@ public static class AdaptiveLayerHeights
         int   FacesStraddling,
         bool  SnappedToFaceBottom,
         bool  AtFloor,
-        bool  AtMax);
+        bool  AtMax,
+        int   FacesGated = 0,
+        bool  GateChangedTheOutcome = false);
 
     /// <summary>
     /// Per-layer reasons from the most recent <see cref="ComputeZPositions"/> call.
@@ -68,12 +70,17 @@ public static class AdaptiveLayerHeights
     /// <param name="minLayerHeight">Minimum allowed layer height (mm).</param>
     /// <param name="maxLayerHeight">Maximum allowed layer height (mm). Typically == nominal LayerHeight.</param>
     /// <param name="qualityFactor">0 = finest detail (min layers), 1 = fastest (max layers).</param>
+    /// <param name="minFaceAreaMm2">
+    /// Smallest triangle allowed to dictate a thickness. 0 or less = every triangle votes.
+    /// See <see cref="Models.SliceSettings.AdaptiveMinFaceAreaMm2"/> for why this exists.
+    /// </param>
     public static float[] ComputeZPositions(
         IReadOnlyList<Vector3[]> meshes,
         float zMin, float zMax,
         float firstLayerHeight,
         float minLayerHeight, float maxLayerHeight,
-        float qualityFactor)
+        float qualityFactor,
+        float minFaceAreaMm2 = 0f)
     {
         qualityFactor = Math.Clamp(qualityFactor, 0f, 1f);
 
@@ -91,7 +98,7 @@ public static class AdaptiveLayerHeights
         {
             positions.Add(z);
             float h = NextLayerHeight(faces, z, qualityFactor,
-                minLayerHeight, maxLayerHeight, ref currentFacet, out var why);
+                minLayerHeight, maxLayerHeight, minFaceAreaMm2, ref currentFacet, out var why);
 
             s_lastReasons.Add(new LayerHeightReason(
                 z, h,
@@ -101,7 +108,9 @@ public static class AdaptiveLayerHeights
                 why.FacesStraddling,
                 why.Snapped,
                 AtFloor: h <= minLayerHeight + 1e-4f,
-                AtMax:   h >= maxLayerHeight - 1e-4f));
+                AtMax:   h >= maxLayerHeight - 1e-4f,
+                FacesGated: why.FacesGated,
+                GateChangedTheOutcome: why.GateChangedTheOutcome));
 
             z += h;
         }
@@ -116,12 +125,14 @@ public static class AdaptiveLayerHeights
         public float BindingSlopeDeg;
         public float MeanStraddlingArea;
         public int   FacesStraddling;
+        public int   FacesGated;
+        public bool  GateChangedTheOutcome;
         public bool  Snapped;
     }
 
     private static float NextLayerHeight(
         List<FaceZ> faces, float printZ, float quality,
-        float minH, float maxH, ref int currentFacet, out HeightReason why)
+        float minH, float maxH, float minFaceAreaMm2, ref int currentFacet, out HeightReason why)
     {
         float height = maxH;
         why = default;
@@ -131,6 +142,30 @@ public static class AdaptiveLayerHeights
         // quality=0 → maxDev=minH  (tight tolerance, thin layers everywhere)
         // quality=1 → maxDev=maxH  (loose tolerance, thick layers where geometry allows)
         float maxDev = minH + quality * (maxH - minH);
+
+        // ── Should the gate apply to THIS layer? ──────────────────────────────────
+        // A cross-section that is nothing but slivers must not silently jump to full thickness —
+        // that would trade a jumpy-but-cautious answer for a confidently wrong one. So decide up
+        // front: if nothing in the widest window this layer could consult clears the gate, stand
+        // the gate down and let every triangle vote, exactly as before.
+        //
+        // Decided BEFORE measuring rather than as a fallback afterwards, because the second pass's
+        // range depends on the tentative height — so a gated and an ungated run would consult
+        // different face sets and could not be compared after the fact. (Getting that wrong is
+        // what made the first version of this silently take full thickness.)
+        bool gating = minFaceAreaMm2 > 0f;
+        if (gating)
+        {
+            bool anyClears = false;
+            for (int i = currentFacet; i < faces.Count; i++)
+            {
+                var f = faces[i];
+                if (f.ZMin >= printZ + maxH) break;          // widest the second pass can reach
+                if (f.ZMax < printZ + 1e-4f) continue;
+                if (f.Area >= minFaceAreaMm2) { anyClears = true; break; }
+            }
+            gating = anyClears;
+        }
 
         // ── First pass: scan active facets from the last known position ────────
         // Facets are sorted by ZMin. We walk forward from currentFacet, looking for
@@ -153,6 +188,14 @@ public static class AdaptiveLayerHeights
                 areaSum += f.Area;
 
                 float h = LayerHeightFromSlope(f, maxDev);
+
+                if (gating && f.Area < minFaceAreaMm2)
+                {
+                    why.FacesGated++;
+                    if (h < height) why.GateChangedTheOutcome = true;
+                    continue;
+                }
+
                 if (h < height) { height = h; RecordBinding(ref why, f, snapped: false); }
             }
         }
@@ -174,6 +217,16 @@ public static class AdaptiveLayerHeights
 
                 float reducedH = LayerHeightFromSlope(f, maxDev);
                 float zDiff    = f.ZMin - printZ;
+
+                // A sliver must not pull the boundary down, and must not snap it onto its own
+                // bottom edge either — that snap is how a tessellation vertex ends up deciding
+                // a thickness. Gate it the same way, on the same fallback rule.
+                if (gating && f.Area < minFaceAreaMm2)
+                {
+                    why.FacesGated++;
+                    if (reducedH < height || reducedH < zDiff) why.GateChangedTheOutcome = true;
+                    continue;
+                }
 
                 if (reducedH < zDiff)
                 {

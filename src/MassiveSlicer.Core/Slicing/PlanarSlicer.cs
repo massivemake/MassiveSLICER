@@ -56,7 +56,8 @@ public static class PlanarSlicer
         float[] zPositions = settings.AdaptiveLayerHeight
             ? AdaptiveLayerHeights.ComputeZPositions(meshes, zMin, zMax,
                   settings.FirstLayerHeight, settings.MinLayerHeight,
-                  settings.LayerHeight, settings.AdaptiveQuality)
+                  settings.LayerHeight, settings.AdaptiveQuality,
+                  settings.ResolvedMinFaceAreaMm2)
             : BuildUniformZPositions(zMin, zMax, settings.FirstLayerHeight, settings.LayerHeight);
 
         // Tree Support must reach the print bed (Layer 1). If the mesh floats above
