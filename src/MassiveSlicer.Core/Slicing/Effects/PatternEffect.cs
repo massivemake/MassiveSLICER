@@ -99,12 +99,44 @@ public static class PatternEffect
             // keeps the phase aligned layer over layer even as seams wander.
             ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx) : null;
 
+            // Skin-only: displace the wall, then carry the structure's ENDS along with it so
+            // braces stay attached without being bowed. The wall is walked first to learn where
+            // it moved, so this pass has to run before the emit loop below.
+            var wallField = new SkinOnlyBracing.WallField();
+            (Vector3 AtFrom, Vector3 AtTo)[]? structureBlend = null;
+            if (settings.PatternSkinOnly)
+            {
+                for (int mi = 0; mi < layer.Moves.Count; mi++)
+                {
+                    var m = layer.Moves[mi];
+                    if (m.Kind != MoveKind.Extrude || m.IsLayerStitch || !m.IsWall) continue;
+                    if (Vector3.Distance(m.From, m.To) < 1e-4f) continue;
+                    var tan = Vector3.Normalize(m.To - m.From);
+                    var pp  = Vector3.Cross(tan, Vector3.UnitZ);
+                    if (pp.LengthSquared() < 1e-9f) continue;
+                    pp = Vector3.Normalize(pp);
+                    var chainW = chainOf?[mi];
+                    float? thetaW = ChainTheta(chainW, ctx, wavelengthMode, wavelength,
+                                               Vector3.Distance(m.From, m.To), 0f);
+                    wallField.Record(m.From, m.From + pp * ctx.Displacement(m.From, thetaW));
+                }
+                structureBlend = SkinOnlyBracing.BlendForStructure(layer.Moves, wallField);
+            }
+
             for (int mi = 0; mi < layer.Moves.Count; mi++)
             {
                 var move = layer.Moves[mi];
                 if (move.Kind != MoveKind.Extrude || move.IsLayerStitch)
                 {
                     newLayer.Moves.Add(move);
+                    continue;
+                }
+
+                // Structure under skin-only: one straight segment, ends riding the wall.
+                if (structureBlend is not null && SkinOnlyBracing.IsStructure(move))
+                {
+                    var (dFrom, dTo) = structureBlend[mi];
+                    newLayer.Moves.Add(move with { From = move.From + dFrom, To = move.To + dTo });
                     continue;
                 }
 
@@ -130,42 +162,44 @@ public static class PatternEffect
                 Vector3 Displaced(float t)
                 {
                     var pt = Vector3.Lerp(move.From, move.To, t);
-                    float? loopTheta = null;
-                    if (chain is { Total: > 1f })
-                    {
-                        if (wavelengthMode)
-                        {
-                            // Constant mm wavelength, phase 0 at the chain start (the seam):
-                            // theta advances 2π per Frequency·λ of path, so P(θ·f) completes
-                            // one cycle every λ mm for every pattern family.
-                            float dist = chain.CumStart + t * len;
-                            loopTheta = TwoPi * dist / (ctx.Frequency * wavelength);
-                        }
-                        else
-                        {
-                            float dist = chain.CumStart + t * len - chain.Anchor;
-                            dist -= MathF.Floor(dist / chain.Total) * chain.Total;
-                            loopTheta = TwoPi * dist / chain.Total;
-                        }
-                    }
-                    return pt + perp * ctx.Displacement(pt, loopTheta);
+                    return pt + perp * ctx.Displacement(
+                        pt, ChainTheta(chain, ctx, wavelengthMode, wavelength, len, t));
                 }
 
                 for (int seg = 0; seg < segments; seg++)
                 {
-                    newLayer.Moves.Add(new ToolpathMove(
-                        Displaced(seg / (float)segments),
-                        Displaced((seg + 1) / (float)segments),
-                        MoveKind.Extrude)
+                    newLayer.Moves.Add(move with
                     {
-                        Normal        = move.Normal,
-                        IsLayerChange = move.IsLayerChange,
+                        From = Displaced(seg / (float)segments),
+                        To   = Displaced((seg + 1) / (float)segments),
                     });
                 }
             }
             result.Layers.Add(newLayer);
         }
         return result;
+    }
+
+    /// <summary>
+    /// Pattern phase at parameter <paramref name="t"/> along a move, or null outside arc modes.
+    /// Shared so the wall sampling pass and the emit pass evaluate identical phase.
+    /// </summary>
+    private static float? ChainTheta(ChainInfo? chain, PatternContext ctx,
+        bool wavelengthMode, float wavelength, float len, float t)
+    {
+        if (chain is not { Total: > 1f }) return null;
+
+        if (wavelengthMode)
+        {
+            // Constant mm wavelength, phase 0 at the chain start (the seam): theta advances
+            // 2π per Frequency·λ of path, so P(θ·f) completes one cycle every λ mm.
+            float d = chain.CumStart + t * len;
+            return TwoPi * d / (ctx.Frequency * wavelength);
+        }
+
+        float dist = chain.CumStart + t * len - chain.Anchor;
+        dist -= MathF.Floor(dist / chain.Total) * chain.Total;
+        return TwoPi * dist / chain.Total;
     }
 
     /// <summary>Per-move chain data for arc-length mapping.</summary>

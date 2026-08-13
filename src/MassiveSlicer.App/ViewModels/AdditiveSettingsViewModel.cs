@@ -721,6 +721,17 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _patternType, value);
     }
 
+    private bool _patternSkinOnly;
+    /// <summary>
+    /// Apply Wave/Pattern to the printed skin only — infill, X-bracing, Formbound fill and
+    /// supports stay straight. Brace ends still ride the wall so they stay bonded to it.
+    /// </summary>
+    public bool PatternSkinOnly
+    {
+        get => _patternSkinOnly;
+        set => SetField(ref _patternSkinOnly, value);
+    }
+
     public string[] PatternMappingOptions { get; } =
         ["Wavelength (mm)", "Even (path length)", "Radial (angle)"];
 

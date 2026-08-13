@@ -1913,6 +1913,11 @@
                                           SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
                             </Grid>
 
+                            <CheckBox Margin="10,8,10,0" FontSize="11"
+                                      Content="Outer skin only"
+                                      IsChecked="{Binding Additive.PatternSkinOnly, Mode=TwoWay}"
+                                      ToolTip.Tip="Wave and Pattern displace the printed skin only. Infill, X-bracing, Formbound fill and supports stay straight — their ends still follow the wall so they stay bonded to it."/>
+
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,80"
                                   IsVisible="{Binding Additive.ShowPatternWavelength}">
                                 <TextBlock Grid.Column="0" Text="Wavelength (mm)" FontSize="11" VerticalAlignment="Center"

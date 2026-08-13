@@ -144,6 +144,14 @@ public sealed class SliceSettings
     /// <summary>Ease-out distance to the top (mm).</summary>
     public float PatternFadeOutMm { get; init; } = 0f;
 
+    /// <summary>
+    /// Apply decorative effects (Wave, Pattern) to the printed skin only, leaving infill,
+    /// X-bracing, Formbound fill and supports straight. Brace ends still follow the wall so
+    /// they stay bonded to it — see <c>SkinOnlyBracing</c>. Off keeps the previous behaviour,
+    /// where every extrusion is displaced.
+    /// </summary>
+    public bool PatternSkinOnly { get; init; } = false;
+
     public float TiltAngle { get; init; } = 0f;
 
     /// <summary>Tilt around the X-axis in degrees for the Angled method (leans the plane toward ±Y).</summary>

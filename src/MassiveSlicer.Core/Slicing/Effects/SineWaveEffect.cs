@@ -37,6 +37,7 @@ public static class WaveEffect
         float shape          = Math.Clamp(settings.WaveShape, 0.01f, 1f);
         float stagger        = settings.WaveStagger;
         var   waveType       = settings.WaveEffect;
+        bool  skinOnly       = settings.PatternSkinOnly;
 
         // Method B requires free-wavelength mode; fixed-cycles always uses Method A.
         bool inherit = settings.WavePhaseMethod == "B" && fixedCycles == 0;
@@ -78,6 +79,13 @@ public static class WaveEffect
 
             inheritor?.BeginLayer();
 
+            // Skin-only: structure runs are copied through untouched on this pass and patched
+            // below, once the whole layer's wall displacement is known. Copying first keeps the
+            // moves in print order — emitting them after the walls would reorder the layer and
+            // rewrite its travels.
+            var wallField = skinOnly ? new SkinOnlyBracing.WallField() : null;
+            var deferred  = skinOnly ? new List<(int NewStart, int OrigStart, int Count)>() : null;
+
             int i = 0;
             while (i < layer.Moves.Count)
             {
@@ -96,13 +104,41 @@ public static class WaveEffect
                        !layer.Moves[i].IsLayerStitch)
                     i++;
 
+                if (deferred is not null && !layer.Moves[contourStart].IsWall)
+                {
+                    deferred.Add((newLayer.Moves.Count, contourStart, i - contourStart));
+                    for (int k = contourStart; k < i; k++) newLayer.Moves.Add(layer.Moves[k]);
+                    continue;
+                }
+
                 if (inheritor is not null)
                     ApplyToContourInherited(layer.Moves, contourStart, i, newLayer,
                         amplitude, wavelength, shape, spacing, waveType,
-                        layer.Z, stagger, inheritor);
+                        layer.Z, stagger, inheritor, wallField);
                 else
                     ApplyToContour(layer.Moves, contourStart, i, newLayer,
-                        amplitude, wavelength, fixedCycles, shape, spacing, waveType, phaseOffset);
+                        amplitude, wavelength, fixedCycles, shape, spacing, waveType, phaseOffset,
+                        wallField);
+            }
+
+            if (deferred is not null && wallField is { IsEmpty: false })
+            {
+                foreach (var (newStart, origStart, count) in deferred)
+                {
+                    var run   = new ToolpathMove[count];
+                    for (int k = 0; k < count; k++) run[k] = layer.Moves[origStart + k];
+                    var blend = SkinOnlyBracing.BlendForStructure(run, wallField);
+
+                    for (int k = 0; k < count; k++)
+                    {
+                        if (!SkinOnlyBracing.IsStructure(run[k])) continue;
+                        newLayer.Moves[newStart + k] = run[k] with
+                        {
+                            From = run[k].From + blend[k].AtFrom,
+                            To   = run[k].To   + blend[k].AtTo,
+                        };
+                    }
+                }
             }
 
             inheritor?.EndLayer(layer.Z);
@@ -137,7 +173,8 @@ public static class WaveEffect
         List<ToolpathMove> moves, int start, int end,
         ToolpathLayer newLayer,
         float amplitude, float wavelength, int fixedCycles, float shape, float spacing,
-        WaveEffectType waveType, float phaseOffset)
+        WaveEffectType waveType, float phaseOffset,
+        SkinOnlyBracing.WallField? wallField = null)
     {
         float totalLength = 0f;
         for (int i = start; i < end; i++)
@@ -180,14 +217,11 @@ public static class WaveEffect
 
             for (int seg = 0; seg < segments; seg++)
             {
-                newLayer.Moves.Add(new ToolpathMove(
-                    DisplacedPoint(seg),
-                    DisplacedPoint(seg + 1),
-                    MoveKind.Extrude)
-                {
-                    Normal        = move.Normal,
-                    IsLayerChange = move.IsLayerChange,
-                });
+                var a = DisplacedPoint(seg);
+                var b = DisplacedPoint(seg + 1);
+                if (move.IsWall)
+                    wallField?.Record(Vector3.Lerp(move.From, move.To, seg / (float)segments), a);
+                newLayer.Moves.Add(move with { From = a, To = b });
             }
 
             arcSoFar += len;
@@ -266,7 +300,8 @@ public static class WaveEffect
         List<ToolpathMove> moves, int start, int end,
         ToolpathLayer newLayer,
         float amplitude, float wavelength, float shape, float spacing,
-        WaveEffectType waveType, float z, float stagger, PhaseInheritor inheritor)
+        WaveEffectType waveType, float z, float stagger, PhaseInheritor inheritor,
+        SkinOnlyBracing.WallField? wallField = null)
     {
         float totalLength = 0f;
         for (int i = start; i < end; i++)
@@ -454,14 +489,11 @@ public static class WaveEffect
 
             for (int seg = 0; seg < segments; seg++)
             {
-                newLayer.Moves.Add(new ToolpathMove(
-                    DisplacedPoint(seg),
-                    DisplacedPoint(seg + 1),
-                    MoveKind.Extrude)
-                {
-                    Normal        = move.Normal,
-                    IsLayerChange = move.IsLayerChange,
-                });
+                var a = DisplacedPoint(seg);
+                var b = DisplacedPoint(seg + 1);
+                if (move.IsWall)
+                    wallField?.Record(Vector3.Lerp(move.From, move.To, seg / (float)segments), a);
+                newLayer.Moves.Add(move with { From = a, To = b });
             }
 
             arcSoFar += len;
