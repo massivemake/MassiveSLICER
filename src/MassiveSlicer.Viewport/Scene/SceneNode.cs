@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Viewport.Rendering;
+using MassiveSlicer.Viewport.Rendering;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 

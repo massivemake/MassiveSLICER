@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Models;
+namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// Application-wide preferences persisted across sessions.

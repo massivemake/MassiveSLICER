@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Models;
+namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// Serialised workspace state: cell, camera, user models, and application settings.

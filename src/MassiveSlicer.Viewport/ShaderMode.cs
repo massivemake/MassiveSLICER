@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Viewport;
+namespace MassiveSlicer.Viewport;
 
 /// <summary>Viewport material/shading mode selected from the toolbar.</summary>
 public enum ShaderMode

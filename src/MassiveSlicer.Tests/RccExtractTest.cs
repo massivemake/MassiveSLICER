@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.IO;
 using Xunit;
 using Xunit.Abstractions;
 

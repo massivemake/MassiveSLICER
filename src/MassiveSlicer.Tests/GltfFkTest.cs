@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using MassiveSlicer.Core.Kinematics;
 using SharpGLTF.Schema2;
 using Xunit.Abstractions;

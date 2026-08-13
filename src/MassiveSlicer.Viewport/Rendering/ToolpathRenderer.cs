@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using MassiveSlicer.Core.Models;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;

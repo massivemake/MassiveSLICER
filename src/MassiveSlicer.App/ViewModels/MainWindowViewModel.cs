@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Windows.Input;
 using Avalonia;
 using Avalonia.Threading;

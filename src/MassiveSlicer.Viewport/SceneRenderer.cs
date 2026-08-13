@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
 using MassiveSlicer.Viewport.Camera;
 using MassiveSlicer.Viewport.Rendering;

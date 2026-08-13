@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.IO;
 #pragma warning disable CA1416  // Windows-only app
 using Avalonia;

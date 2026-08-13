@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Viewport.Scene;
+using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 using SharpGLTF.Schema2;
 using SharpGLTF.Validation;

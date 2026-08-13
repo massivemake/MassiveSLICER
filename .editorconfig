@@ -1,0 +1,14 @@
+root = true
+
+# Write source files as plain UTF-8, with no byte-order mark.
+#
+# A BOM is three invisible bytes (EF BB BF) at the start of a file. Nothing in the
+# build needs them, but an editor that adds one makes line 1 look edited to git, so
+# every later diff and merge of that file carries a phantom change at the top. This
+# setting stops editors and IDEs re-adding them. ("utf-8" means no BOM; the opt-in
+# spelling would be "utf-8-bom".)
+#
+# It cannot stop a script that writes a BOM explicitly — if they reappear on files
+# nobody edited, look at tooling rather than at the editors.
+[*.{cs,csx,csproj,props,targets,axaml,xaml,json,md,sh}]
+charset = utf-8

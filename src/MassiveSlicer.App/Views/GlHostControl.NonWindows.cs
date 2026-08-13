@@ -1,4 +1,4 @@
-﻿// -- Non-Windows GL host (macOS / Linux) --------------------------------------
+// -- Non-Windows GL host (macOS / Linux) --------------------------------------
 //
 // This file is compiled on macOS and Linux only (see MassiveSlicer.App.csproj).
 // The Windows implementation is in GlHostControl.Windows.cs -- see that file for

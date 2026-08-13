@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Models;
+namespace MassiveSlicer.Core.Models;
 
 /// <summary>
 /// A named material profile used by the additive slicer.
