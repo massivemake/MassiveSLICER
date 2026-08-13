@@ -1838,7 +1838,7 @@ public partial class ViewportView : UserControl
                 // Detach from the node's actual parent — scans live under the rotary pivot, not SceneRoot.
                 (removing.Parent ?? _renderer.SceneRoot).RemoveChild(removing);
                 if (_renderer.SelectedNode is not null &&
-                    removing.SelfAndDescendants().Any(n => n == _renderer.SelectedNode))
+                    removing.SelfAndDescendantsForRender().Any(n => n == _renderer.SelectedNode))
                     _renderer.Select(null);
             }
 
@@ -2616,9 +2616,10 @@ public partial class ViewportView : UserControl
         }
     }
 
+    // Runs on the GL thread from the PendingNodes drain — tolerant traversal, as above.
     private static void MarkUserImportSubtree(SceneNode root)
     {
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             n.Selectable = true;
             n.PickTier   = PickTier.Content;
@@ -3011,9 +3012,13 @@ public partial class ViewportView : UserControl
         });
     }
 
+    // Every walk in this region runs on the GL thread, so all of them use the mutation-tolerant
+    // traversal: the UI thread can be attaching models, toolpaths and cut-modifier gizmos to the
+    // same subtree while these run (opening a workspace does exactly that), and a plain foreach
+    // over the live child lists takes the whole app down when it does.
     private static void UploadPendingMeshes(SceneNode root)
     {
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is not { } data) continue;
             n.Mesh        = GpuMeshCache.Acquire(data);
@@ -3023,7 +3028,7 @@ public partial class ViewportView : UserControl
 
     private static void UploadVisiblePendingMeshes(SceneNode root)
     {
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is not { } data) continue;
             if (!IsInVisibleSubtree(n)) continue;
@@ -3037,7 +3042,7 @@ public partial class ViewportView : UserControl
         if (root is null) return;
         if (root.Parent is null)
             _renderer.SceneRoot.AddChild(root);
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is null) continue;
             if (!IsInVisibleSubtree(n)) continue;
@@ -3047,7 +3052,7 @@ public partial class ViewportView : UserControl
 
     private static bool HasPendingVisibleMesh(SceneNode root)
     {
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.PendingMesh is null) continue;
             if (IsInVisibleSubtree(n)) return true;

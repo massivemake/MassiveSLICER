@@ -28,7 +28,7 @@ public static class ContactShadowBuilder
     {
         var buckets = new Dictionary<int, (float FloorZ, Vector3 Min, Vector3 Max, float MaxZ)>();
 
-        foreach (var child in sceneRoot.Children)
+        foreach (var child in sceneRoot.ChildrenForRender())
         {
             if (!ShouldCastShadow(child))
                 continue;
@@ -85,7 +85,7 @@ public static class ContactShadowBuilder
         if (IsRobotAssemblyRoot(root))
             return false;
 
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (!n.Visible || n.TranslucentPass) continue;
             if (n.Mesh?.PickingData is not null || n.PendingMesh is not null)
