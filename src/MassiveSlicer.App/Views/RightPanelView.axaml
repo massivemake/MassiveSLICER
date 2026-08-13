@@ -1913,10 +1913,13 @@
                                           SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
                             </Grid>
 
-                            <CheckBox Margin="10,8,10,0" FontSize="11"
-                                      Content="Outer skin only"
-                                      IsChecked="{Binding Additive.PatternSkinOnly, Mode=TwoWay}"
-                                      ToolTip.Tip="Wave and Pattern displace the printed skin only. Infill, X-bracing, Formbound fill and supports stay straight — their ends still follow the wall so they stay bonded to it."/>
+                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Apply to" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Outer surface only: just the visible skin — interior walls and modelled braces stay straight too. Whatever is left out keeps its ends on the wall so it stays bonded."/>
+                                <ComboBox Grid.Column="1" MinWidth="150"
+                                          ItemsSource="{Binding Additive.PatternScopeOptions}"
+                                          SelectedItem="{Binding Additive.PatternScope, Mode=TwoWay}"/>
+                            </Grid>
 
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,80"
                                   IsVisible="{Binding Additive.ShowPatternWavelength}">

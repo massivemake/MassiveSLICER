@@ -4346,7 +4346,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.ExtrusionRpmOverridePercent = copy.ExtrusionRpmOverridePercent;
         live.PatternType            = copy.PatternType;
         live.PatternMapping         = copy.PatternMapping;
-        live.PatternSkinOnly        = copy.PatternSkinOnly;
+        live.PatternScope           = copy.PatternScope;
         live.PatternWavelengthMm    = copy.PatternWavelengthMm;
         live.PatternAmplitude       = copy.PatternAmplitude;
         live.PatternFrequency       = copy.PatternFrequency;
@@ -4629,7 +4629,8 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.PatternType         = p.PatternType;
         add.PatternMapping      = add.PatternMappingOptions.Contains(p.PatternMapping)
             ? p.PatternMapping : "Wavelength (mm)";
-        add.PatternSkinOnly     = p.PatternSkinOnly;
+        add.PatternScope        = add.PatternScopeOptions.Contains(p.PatternScope)
+            ? p.PatternScope : "Everything";
         add.PatternWavelengthMm = p.PatternWavelengthMm;
         add.PatternAmplitude    = p.PatternAmplitude;
         add.PatternFrequency    = p.PatternFrequency;
@@ -4939,7 +4940,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.ExtrusionRpmOverridePercent = add.ExtrusionRpmOverridePercent;
         p.PatternType          = add.PatternType;
         p.PatternMapping       = add.PatternMapping;
-        p.PatternSkinOnly      = add.PatternSkinOnly;
+        p.PatternScope         = add.PatternScope;
         p.PatternWavelengthMm  = add.PatternWavelengthMm;
         p.PatternAmplitude     = add.PatternAmplitude;
         p.PatternFrequency     = add.PatternFrequency;

@@ -37,7 +37,8 @@ public static class WaveEffect
         float shape          = Math.Clamp(settings.WaveShape, 0.01f, 1f);
         float stagger        = settings.WaveStagger;
         var   waveType       = settings.WaveEffect;
-        bool  skinOnly       = settings.PatternSkinOnly;
+        var   scope          = settings.PatternScope;
+        bool  skinOnly       = scope != PatternScope.Everything;
 
         // Method B requires free-wavelength mode; fixed-cycles always uses Method A.
         bool inherit = settings.WavePhaseMethod == "B" && fixedCycles == 0;
@@ -104,7 +105,7 @@ public static class WaveEffect
                        !layer.Moves[i].IsLayerStitch)
                     i++;
 
-                if (deferred is not null && !layer.Moves[contourStart].IsWall)
+                if (deferred is not null && SkinOnlyBracing.IsStructure(layer.Moves[contourStart], scope))
                 {
                     deferred.Add((newLayer.Moves.Count, contourStart, i - contourStart));
                     for (int k = contourStart; k < i; k++) newLayer.Moves.Add(layer.Moves[k]);
@@ -127,11 +128,11 @@ public static class WaveEffect
                 {
                     var run   = new ToolpathMove[count];
                     for (int k = 0; k < count; k++) run[k] = layer.Moves[origStart + k];
-                    var blend = SkinOnlyBracing.BlendForStructure(run, wallField);
+                    var blend = SkinOnlyBracing.BlendForStructure(run, wallField, scope);
 
                     for (int k = 0; k < count; k++)
                     {
-                        if (!SkinOnlyBracing.IsStructure(run[k])) continue;
+                        if (!SkinOnlyBracing.IsStructure(run[k], scope)) continue;
                         newLayer.Moves[newStart + k] = run[k] with
                         {
                             From = run[k].From + blend[k].AtFrom,
@@ -219,6 +220,8 @@ public static class WaveEffect
             {
                 var a = DisplacedPoint(seg);
                 var b = DisplacedPoint(seg + 1);
+                // Runs out of scope never reach here — they are deferred above — so any wall
+                // arriving with a field is one the effect is allowed to displace.
                 if (move.IsWall)
                     wallField?.Record(Vector3.Lerp(move.From, move.To, seg / (float)segments), a);
                 newLayer.Moves.Add(move with { From = a, To = b });
@@ -491,6 +494,8 @@ public static class WaveEffect
             {
                 var a = DisplacedPoint(seg);
                 var b = DisplacedPoint(seg + 1);
+                // Runs out of scope never reach here — they are deferred above — so any wall
+                // arriving with a field is one the effect is allowed to displace.
                 if (move.IsWall)
                     wallField?.Record(Vector3.Lerp(move.From, move.To, seg / (float)segments), a);
                 newLayer.Moves.Add(move with { From = a, To = b });

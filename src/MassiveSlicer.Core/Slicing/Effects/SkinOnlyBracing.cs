@@ -65,7 +65,7 @@ internal static class SkinOnlyBracing
     /// zero and should be ignored by the caller.
     /// </summary>
     internal static (Vector3 AtFrom, Vector3 AtTo)[] BlendForStructure(
-        IReadOnlyList<ToolpathMove> moves, WallField wall)
+        IReadOnlyList<ToolpathMove> moves, WallField wall, PatternScope scope)
     {
         var result = new (Vector3, Vector3)[moves.Count];
         if (wall.IsEmpty) return result;
@@ -73,7 +73,7 @@ internal static class SkinOnlyBracing
         int i = 0;
         while (i < moves.Count)
         {
-            if (!IsStructure(moves[i])) { i++; continue; }
+            if (!IsStructure(moves[i], scope)) { i++; continue; }
 
             // Contiguous run of structure moves = one brace / one fill line.
             int start = i;
@@ -81,7 +81,7 @@ internal static class SkinOnlyBracing
             var cum = new List<float> { 0f };
             var prevTo = moves[i].From;
             int j = i;
-            while (j < moves.Count && IsStructure(moves[j])
+            while (j < moves.Count && IsStructure(moves[j], scope)
                    && Vector3.DistanceSquared(moves[j].From, prevTo) <= 1.0f)
             {
                 total += Vector3.Distance(moves[j].From, moves[j].To);
@@ -89,6 +89,13 @@ internal static class SkinOnlyBracing
                 prevTo = moves[j].To;
                 j++;
             }
+
+            // A CLOSED run is a cavity boundary — an interior wall or modelled rib — not
+            // something spanning wall to wall. It has no ends to keep attached, and translating
+            // the whole loop toward one side of a wavy skin only drags it off true. Leave it
+            // exactly where the slicer put it.
+            bool closed = Vector3.DistanceSquared(moves[start].From, moves[j - 1].To) <= 1.0f;
+            if (closed) { i = Math.Max(j, i + 1); continue; }
 
             var dStart = wall.DeltaNear(moves[start].From);
             var dEnd   = wall.DeltaNear(moves[j - 1].To);
@@ -106,7 +113,22 @@ internal static class SkinOnlyBracing
         return result;
     }
 
-    /// <summary>Extrusion that is not skin — what should stay straight.</summary>
-    internal static bool IsStructure(ToolpathMove m)
-        => m.Kind == MoveKind.Extrude && !m.IsWall && !m.IsLayerStitch;
+    /// <summary>
+    /// Extrusion outside the effect's scope — what should stay straight.
+    /// <list type="bullet">
+    /// <item><c>WallsOnly</c>: slicer infill, X-bracing, Formbound fill, supports.</item>
+    /// <item><c>OuterSurfaceOnly</c>: the above plus every interior wall — cavity boundaries
+    /// and modelled ribs, which are perimeters and so would otherwise be textured.</item>
+    /// </list>
+    /// </summary>
+    internal static bool IsStructure(ToolpathMove m, PatternScope scope)
+    {
+        if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) return false;
+        return scope switch
+        {
+            PatternScope.WallsOnly        => !m.IsWall,
+            PatternScope.OuterSurfaceOnly => !m.IsWall || !m.IsOuterWall,
+            _                             => false,
+        };
+    }
 }

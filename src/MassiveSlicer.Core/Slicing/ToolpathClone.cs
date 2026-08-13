@@ -38,6 +38,7 @@ public static class ToolpathClone
                     HeightScale       = move.HeightScale,
                     IsBrim            = move.IsBrim,
                     IsWall            = move.IsWall,
+                    IsOuterWall       = move.IsOuterWall,
                     RpmPercentOverride = move.RpmPercentOverride,
                 });
             }

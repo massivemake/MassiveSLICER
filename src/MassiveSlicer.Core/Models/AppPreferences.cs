@@ -346,8 +346,8 @@ public sealed class AppPreferences
 
     /// <summary>Pattern distribution: "Wavelength (mm)", "Even (path length)", or "Radial (angle)".</summary>
     public string PatternMapping { get; set; } = "Wavelength (mm)";
-    /// <summary>Wave/Pattern displace the skin only, leaving structure straight.</summary>
-    public bool PatternSkinOnly { get; set; }
+    /// <summary>How far Wave/Pattern reach: Everything / Walls only / Outer surface only.</summary>
+    public string PatternScope { get; set; } = "Everything";
 
     public double PatternWavelengthMm { get; set; } = 60.0;
     public double PatternAmplitude { get; set; }

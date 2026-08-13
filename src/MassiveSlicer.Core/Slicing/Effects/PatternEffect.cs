@@ -88,6 +88,8 @@ public static class PatternEffect
         if (wavelengthMode)
             ctx.CellMm = wavelength;   // square texture cells: z cell = path cell
 
+        var scope = settings.PatternScope;
+
         var result = new Toolpath();
         foreach (var layer in toolpath.Layers)
         {
@@ -104,12 +106,13 @@ public static class PatternEffect
             // it moved, so this pass has to run before the emit loop below.
             var wallField = new SkinOnlyBracing.WallField();
             (Vector3 AtFrom, Vector3 AtTo)[]? structureBlend = null;
-            if (settings.PatternSkinOnly)
+            if (scope != PatternScope.Everything)
             {
                 for (int mi = 0; mi < layer.Moves.Count; mi++)
                 {
                     var m = layer.Moves[mi];
-                    if (m.Kind != MoveKind.Extrude || m.IsLayerStitch || !m.IsWall) continue;
+                    if (SkinOnlyBracing.IsStructure(m, scope)) continue;
+                    if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
                     if (Vector3.Distance(m.From, m.To) < 1e-4f) continue;
                     var tan = Vector3.Normalize(m.To - m.From);
                     var pp  = Vector3.Cross(tan, Vector3.UnitZ);
@@ -120,7 +123,7 @@ public static class PatternEffect
                                                Vector3.Distance(m.From, m.To), 0f);
                     wallField.Record(m.From, m.From + pp * ctx.Displacement(m.From, thetaW));
                 }
-                structureBlend = SkinOnlyBracing.BlendForStructure(layer.Moves, wallField);
+                structureBlend = SkinOnlyBracing.BlendForStructure(layer.Moves, wallField, scope);
             }
 
             for (int mi = 0; mi < layer.Moves.Count; mi++)
@@ -133,7 +136,7 @@ public static class PatternEffect
                 }
 
                 // Structure under skin-only: one straight segment, ends riding the wall.
-                if (structureBlend is not null && SkinOnlyBracing.IsStructure(move))
+                if (structureBlend is not null && SkinOnlyBracing.IsStructure(move, scope))
                 {
                     var (dFrom, dTo) = structureBlend[mi];
                     newLayer.Moves.Add(move with { From = move.From + dFrom, To = move.To + dTo });

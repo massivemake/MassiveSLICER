@@ -145,12 +145,11 @@ public sealed class SliceSettings
     public float PatternFadeOutMm { get; init; } = 0f;
 
     /// <summary>
-    /// Apply decorative effects (Wave, Pattern) to the printed skin only, leaving infill,
-    /// X-bracing, Formbound fill and supports straight. Brace ends still follow the wall so
-    /// they stay bonded to it — see <c>SkinOnlyBracing</c>. Off keeps the previous behaviour,
-    /// where every extrusion is displaced.
+    /// How far decorative effects (Wave, Pattern) reach into the part. Structure left out of
+    /// scope stays straight, but its ends still follow the wall so it stays bonded — see
+    /// <c>SkinOnlyBracing</c>.
     /// </summary>
-    public bool PatternSkinOnly { get; init; } = false;
+    public PatternScope PatternScope { get; init; } = PatternScope.Everything;
 
     public float TiltAngle { get; init; } = 0f;
 
@@ -561,6 +560,19 @@ public sealed class SliceSettings
 }
 
 /// <summary>Live effector behaviour inside the influence radius.</summary>
+/// <summary>What decorative effects (Wave, Pattern) are allowed to displace.</summary>
+public enum PatternScope
+{
+    /// <summary>Every extrusion, including infill and bracing. Original behaviour.</summary>
+    Everything,
+    /// <summary>Perimeters only — slicer infill, X-bracing, Formbound fill and supports
+    /// stay straight. Interior walls (cavity boundaries, modelled ribs) are still textured.</summary>
+    WallsOnly,
+    /// <summary>The part's outer surface only — nesting depth 0. Interior walls and modelled
+    /// braces stay straight along with the slicer's own structure.</summary>
+    OuterSurfaceOnly,
+}
+
 public enum EffectorMode
 {
     /// <summary>Boost the local pattern amplitude (smoothstep bell × strength).</summary>

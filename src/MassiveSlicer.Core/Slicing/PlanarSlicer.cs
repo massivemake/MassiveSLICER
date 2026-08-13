@@ -74,7 +74,7 @@ public static class PlanarSlicer
         // ── Lightning Bridge pre-pass: contours for every layer first (pass A),
         //    then the top-down finger plan (pass B). Pass C below reuses the cached
         //    contours verbatim so plan and geometry cannot drift.
-        List<(List<List<Vector2>> Contours, List<bool> Closed)>? lightningCache = null;
+        List<(List<List<Vector2>> Contours, List<bool> Closed, List<int> Depth)>? lightningCache = null;
         Lightning.LightningPlan? lightningPlan = null;
         TreeSupport.TreeSupportPlan? treePlan = null;
         bool hasFormboundPaint = PaintSupportStyleUtil.HasFormboundPaint(settings.PaintMarks);
@@ -338,7 +338,7 @@ public static class PlanarSlicer
         List<ContourTrack> prevTracks,
         ToolpathLayer layer,
         bool isLastLayer = false,
-        (List<List<Vector2>> Contours, List<bool> Closed)? cachedContours = null,
+        (List<List<Vector2>> Contours, List<bool> Closed, List<int> Depth)? cachedContours = null,
         Lightning.LightningLayerPlan? lightningPlan = null,
         TreeSupport.TreeSupportLayerPlan? treePlan = null,
         Lightning.XBracingPlanner.OpenPathDetourState? xDetourState = null,
@@ -348,6 +348,7 @@ public static class PlanarSlicer
 
         List<List<Vector2>> insetContours;
         List<bool> insetClosed;
+        List<int>  insetDepth;
         List<(Vector2 pos, Vector3 normal)>? normalLookup = null;
 
         if (cachedContours is { } cc)
@@ -357,13 +358,14 @@ public static class PlanarSlicer
             // Clone lists: single-skin / X detours mutate contours in place.
             insetContours = cc.Contours.Select(c => new List<Vector2>(c)).ToList();
             insetClosed = new List<bool>(cc.Closed);
+            insetDepth  = new List<int>(cc.Depth);
         }
         else
         {
             normalLookup = settings.OverhangOrientation
                 ? new List<(Vector2 pos, Vector3 normal)>()
                 : null;
-            (insetContours, insetClosed) = ComputeInsetContours(meshes, z, settings, normalLookup);
+            (insetContours, insetClosed, insetDepth) = ComputeInsetContours(meshes, z, settings, normalLookup);
         }
         // Empty mesh cut: still emit freestanding tree columns (bed foundation under
         // overhangs where lower planes miss the solid).
@@ -373,7 +375,7 @@ public static class PlanarSlicer
             return new List<ContourTrack>();
         }
 
-        return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed,
+        return BuildLayerBody(settings, layer, z, isLastLayer, insetContours, insetClosed, insetDepth,
             normalLookup, seamOrigin, seamDir, prevTracks, lightningPlan, treePlan, xDetourState, prevEnd);
     }
 
@@ -382,14 +384,14 @@ public static class PlanarSlicer
     /// nesting/orientation/offset. Extracted so the Lightning pre-pass can compute
     /// (and cache) every layer's contours before any moves are emitted.
     /// </summary>
-    private static (List<List<Vector2>> Contours, List<bool> Closed) ComputeInsetContours(
+    private static (List<List<Vector2>> Contours, List<bool> Closed, List<int> Depth) ComputeInsetContours(
         IReadOnlyList<Vector3[]> meshes,
         float z,
         SliceSettings settings,
         List<(Vector2 pos, Vector3 normal)>? normalLookup = null)
     {
         bool surfaceMode = settings.SlicingMode == SlicingMode.Surface;
-        var empty = (new List<List<Vector2>>(), new List<bool>());
+        var empty = (new List<List<Vector2>>(), new List<bool>(), new List<int>());
 
         var perMeshSegs = new List<List<(Vector2 A, Vector2 B)>>(meshes.Count);
         foreach (var verts in meshes)
@@ -449,6 +451,9 @@ public static class PlanarSlicer
         bool  skipInset = settings.DisableContourOffset || surfaceMode;
         var insetContours = new List<List<Vector2>>(nc);
         var insetClosed   = new List<bool>(nc);
+        // Nesting depth per EMITTED contour. Not index-aligned with rawContours: inset can
+        // split one contour into several or drop it, so depth is appended alongside.
+        var insetDepth    = new List<int>(nc);
         for (int ci = 0; ci < nc; ci++)
         {
             var  c      = rawContours[ci];
@@ -470,6 +475,7 @@ public static class PlanarSlicer
                     bool closed = Dist2(ol[0], ol[^1]) <= 1.0f;
                     insetContours.Add(simpTol > 0f ? SimplifyContour2D(ol, simpTol) : ol);
                     insetClosed.Add(closed);
+                    insetDepth.Add(depths[ci]);
                 }
             }
             else
@@ -483,16 +489,17 @@ public static class PlanarSlicer
                         {
                             insetContours.Add(simpTol > 0f ? SimplifyContour2D(r, simpTol) : r);
                             insetClosed.Add(true); // Clipper2 output is always a closed polygon
+                            insetDepth.Add(depths[ci]);
                         }
                 }
             }
         }
-        return (insetContours, insetClosed);
+        return (insetContours, insetClosed, insetDepth);
     }
 
     private static List<ContourTrack> BuildLayerBody(
         SliceSettings settings, ToolpathLayer layer, float z, bool isLastLayer,
-        List<List<Vector2>> insetContours, List<bool> insetClosed,
+        List<List<Vector2>> insetContours, List<bool> insetClosed, List<int> insetDepth,
         List<(Vector2 pos, Vector3 normal)>? normalLookup,
         Vector2 seamOrigin, Vector2 seamDir, List<ContourTrack> prevTracks,
         Lightning.LightningLayerPlan? lightningPlan,
@@ -663,7 +670,8 @@ public static class PlanarSlicer
 
         ShellPath:
         var guideXY = settings.SeamGuidePoints.Select(g => g.ToXY()).ToList();
-        var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir, guideXY);
+        var tracks = AssignSeams(insetContours, insetClosed, prevTracks, seamOrigin, seamDir,
+            guideXY, insetDepth);
 
         // Assign per-vertex normals for overhang orientation: aim the EXTRUDER AT
         // THE PREVIOUS LAYER'S BEAD. Tilt direction = this vertex's XY shift from
@@ -1256,7 +1264,8 @@ public static class PlanarSlicer
         List<bool>          closedFlags,
         List<ContourTrack>  prevTracks,
         Vector2 seamOrigin, Vector2 seamDir,
-        IReadOnlyList<Vector2> seamGuides)
+        IReadOnlyList<Vector2> seamGuides,
+        IReadOnlyList<int>? depths = null)
     {
         var tracks = new List<ContourTrack>(contours.Count);
         for (int i = 0; i < contours.Count; i++)
@@ -1289,7 +1298,8 @@ public static class PlanarSlicer
                 else
                     ContourSeamPlanner.AlignSeamFromRay(contour, seamOrigin, seamDir, ref seamRef);
             }
-            tracks.Add(new ContourTrack(contour, seamRef, closedFlags[i]));
+            tracks.Add(new ContourTrack(contour, seamRef, closedFlags[i],
+                depths is not null && i < depths.Count ? depths[i] : 0));
         }
         return tracks;
     }
@@ -1322,11 +1332,14 @@ public static class PlanarSlicer
 
     // -- Per-contour seam tracking ---------------------------------------------
 
-    public sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY, bool isClosed)
+    public sealed class ContourTrack(List<Vector2> contour, Vector2 seamXY, bool isClosed, int depth = 0)
     {
         public readonly List<Vector2>  Contour  = contour;
         public readonly Vector2        SeamXY   = seamXY;
         public readonly bool           IsClosed = isClosed;
+        /// <summary>Nesting depth: 0 = outer surface, odd = a cavity/hole boundary (an interior
+        /// wall or modelled rib), even &gt; 0 = an island inside a cavity.</summary>
+        public readonly int            Depth    = depth;
         // Per-vertex surface normals from mesh face intersection. Null = use layer.PlaneNormal.
         public List<Vector3>?          Normals;
     }
