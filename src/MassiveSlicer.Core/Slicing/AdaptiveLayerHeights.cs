@@ -21,7 +21,42 @@ public static class AdaptiveLayerHeights
         public float ZMax { get; init; }
         public float NCos { get; init; }  // |n.z|            — vertical component of unit normal
         public float NSin { get; init; }  // sqrt(n.x²+n.y²) — horizontal component
+        /// <summary>
+        /// Triangle area (mm²). NOT used to choose a layer height — the height is a plain
+        /// minimum over every straddling face, so a sliver has the same authority as a wall.
+        /// Recorded so <see cref="LastReasons"/> can say whether that is actually happening.
+        /// </summary>
+        public float Area { get; init; }
     }
+
+    /// <summary>
+    /// Why one layer ended up the thickness it did. Diagnostics only — nothing reads this
+    /// to make a decision.
+    ///
+    /// The open question it exists to answer: layer thickness is the minimum demand of any
+    /// single triangle crossing that Z, unweighted, so one tiny sliver can pin a whole layer
+    /// thin. If <see cref="BindingArea"/> on the thin layers turns out to be small relative
+    /// to the rest, area-weighting the minimum is worth doing. If it does not, the jumping
+    /// has another cause and weighting would be a fix for the wrong thing.
+    /// </summary>
+    public sealed record LayerHeightReason(
+        float Z,
+        float Height,
+        float BindingArea,
+        float BindingSlopeDeg,
+        float MeanStraddlingArea,
+        int   FacesStraddling,
+        bool  SnappedToFaceBottom,
+        bool  AtFloor,
+        bool  AtMax);
+
+    /// <summary>
+    /// Per-layer reasons from the most recent <see cref="ComputeZPositions"/> call.
+    /// Same single-slice-at-a-time assumption as <c>PlanarSlicer</c>'s dropped-contour list.
+    /// </summary>
+    public static IReadOnlyList<LayerHeightReason> LastReasons => s_lastReasons;
+
+    private static readonly List<LayerHeightReason> s_lastReasons = [];
 
     /// <summary>
     /// Returns the list of Z values to slice at.
@@ -50,22 +85,47 @@ public static class AdaptiveLayerHeights
         float z = zMin + firstLayerHeight;
         int currentFacet = 0;
 
+        s_lastReasons.Clear();
+
         while (z < zMax - 1e-4f)
         {
             positions.Add(z);
             float h = NextLayerHeight(faces, z, qualityFactor,
-                minLayerHeight, maxLayerHeight, ref currentFacet);
+                minLayerHeight, maxLayerHeight, ref currentFacet, out var why);
+
+            s_lastReasons.Add(new LayerHeightReason(
+                z, h,
+                why.BindingArea,
+                why.BindingSlopeDeg,
+                why.MeanStraddlingArea,
+                why.FacesStraddling,
+                why.Snapped,
+                AtFloor: h <= minLayerHeight + 1e-4f,
+                AtMax:   h >= maxLayerHeight - 1e-4f));
+
             z += h;
         }
 
         return [.. positions];
     }
 
+    /// <summary>What decided one layer's height. Populated alongside the height, never read by it.</summary>
+    private struct HeightReason
+    {
+        public float BindingArea;
+        public float BindingSlopeDeg;
+        public float MeanStraddlingArea;
+        public int   FacesStraddling;
+        public bool  Snapped;
+    }
+
     private static float NextLayerHeight(
         List<FaceZ> faces, float printZ, float quality,
-        float minH, float maxH, ref int currentFacet)
+        float minH, float maxH, ref int currentFacet, out HeightReason why)
     {
         float height = maxH;
+        why = default;
+        double areaSum = 0.0;
 
         // Map quality [0,1] → max allowed surface deviation [minH, maxH].
         // quality=0 → maxDev=minH  (tight tolerance, thin layers everywhere)
@@ -88,8 +148,12 @@ public static class AdaptiveLayerHeights
                 if (!firstHit) { firstHit = true; currentFacet = orderedId; }
                 // Skip faces whose top just barely touches printZ (degenerate contact).
                 if (f.ZMax < printZ + 1e-4f) continue;
+
+                why.FacesStraddling++;
+                areaSum += f.Area;
+
                 float h = LayerHeightFromSlope(f, maxDev);
-                if (h < height) height = h;
+                if (h < height) { height = h; RecordBinding(ref why, f, snapped: false); }
             }
         }
 
@@ -105,19 +169,43 @@ public static class AdaptiveLayerHeights
                 if (f.ZMin >= printZ + height) break;
                 if (f.ZMax < printZ + 1e-4f) continue;
 
+                why.FacesStraddling++;
+                areaSum += f.Area;
+
                 float reducedH = LayerHeightFromSlope(f, maxDev);
                 float zDiff    = f.ZMin - printZ;
 
                 if (reducedH < zDiff)
+                {
                     // The face's bottom is already above the proposed layer — snap to it.
                     height = zDiff;
+                    RecordBinding(ref why, f, snapped: true);
+                }
                 else if (reducedH < height)
+                {
                     height = reducedH;
+                    RecordBinding(ref why, f, snapped: false);
+                }
             }
             height = MathF.Max(height, minH);
         }
 
+        why.MeanStraddlingArea = why.FacesStraddling > 0
+            ? (float)(areaSum / why.FacesStraddling) : 0f;
+
         return height;
+    }
+
+    /// <summary>
+    /// Notes which face is currently setting the height. Observational only — it never
+    /// feeds back into the choice.
+    /// </summary>
+    private static void RecordBinding(ref HeightReason why, in FaceZ f, bool snapped)
+    {
+        why.BindingArea = f.Area;
+        // NSin/NCos = tan(surface slope from horizontal): 0° is a flat face, 90° a vertical wall.
+        why.BindingSlopeDeg = MathF.Atan2(f.NSin, f.NCos) * (180f / MathF.PI);
+        why.Snapped = snapped;
     }
 
     // Vojtech's triangle-area error metric (from OrcaSlicer/PrusaSlicer SlicingAdaptive.cpp).
@@ -149,7 +237,9 @@ public static class AdaptiveLayerHeights
                     ZMin = MathF.Min(MathF.Min(v0.Z, v1.Z), v2.Z),
                     ZMax = MathF.Max(MathF.Max(v0.Z, v1.Z), v2.Z),
                     NCos = MathF.Abs(n.Z),
-                    NSin = MathF.Sqrt(n.X * n.X + n.Y * n.Y)
+                    NSin = MathF.Sqrt(n.X * n.X + n.Y * n.Y),
+                    // len is the cross-product magnitude, i.e. twice the triangle area.
+                    Area = len * 0.5f
                 });
             }
         }

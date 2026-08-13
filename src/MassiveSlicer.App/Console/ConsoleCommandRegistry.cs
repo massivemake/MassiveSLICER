@@ -1845,6 +1845,66 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "adaptive-height-debug",
+            Description = "Why each adaptive layer got the thickness it did: the triangle that "
+                        + "set it, that triangle's AREA against the average of the ones it beat, "
+                        + "its slope, and whether the layer boundary was snapped onto a triangle "
+                        + "edge. Answers whether tiny slivers are pinning whole layers thin",
+            Usage = "adaptive-height-debug [count]",
+            Execute = (ctx, args) =>
+            {
+                var reasons = AdaptiveLayerHeights.LastReasons;
+                if (reasons.Count == 0)
+                {
+                    ctx.LogError("[adaptive] nothing recorded — slice with Adaptive layer height on first.");
+                    return;
+                }
+
+                int show = int.TryParse(args.Trim(), out var n) && n > 0 ? n : 12;
+
+                float minH = reasons.Min(r => r.Height);
+                float maxH = reasons.Max(r => r.Height);
+                int atFloor = reasons.Count(r => r.AtFloor);
+                int atMax   = reasons.Count(r => r.AtMax);
+                int snapped = reasons.Count(r => r.SnappedToFaceBottom);
+
+                ctx.Log($"[adaptive] {reasons.Count} layers, thickness {minH:0.###}-{maxH:0.###} mm");
+                ctx.Log($"[adaptive]   {atMax} at the maximum (nothing constrained them), "
+                      + $"{atFloor} at the minimum floor");
+                ctx.Log($"[adaptive]   {snapped} layer(s) had their boundary SNAPPED onto a triangle's "
+                      + "bottom edge rather than chosen by slope");
+
+                // The question this command exists for: is the deciding triangle a sliver?
+                var bound = reasons.Where(r => r.BindingArea > 0f && r.MeanStraddlingArea > 0f).ToList();
+                if (bound.Count > 0)
+                {
+                    var ratios = bound.Select(r => r.BindingArea / r.MeanStraddlingArea)
+                                      .OrderBy(v => v).ToList();
+                    float median = ratios[ratios.Count / 2];
+                    int slivers  = ratios.Count(v => v < 0.1f);
+                    ctx.Log($"[adaptive]   deciding triangle vs the average triangle it beat: "
+                          + $"median {median:0.###}x  (1.0 = typical size, <0.1 = a sliver)");
+                    ctx.Log($"[adaptive]   {slivers} of {bound.Count} layers were decided by a triangle "
+                          + $"under a tenth of average area ({100f * slivers / bound.Count:0.#} %)");
+                    ctx.Log(slivers * 4 > bound.Count
+                        ? "[adaptive]   -> slivers ARE pinning layers. Area-weighting the minimum is worth doing."
+                        : "[adaptive]   -> slivers are NOT the main cause. Area-weighting would fix the wrong thing.");
+                }
+
+                ctx.Log("[adaptive]   thinnest layers first:");
+                foreach (var r in reasons.OrderBy(r => r.Height).Take(show))
+                {
+                    string tag = r.SnappedToFaceBottom ? " SNAP" : "";
+                    float rel  = r.MeanStraddlingArea > 0f ? r.BindingArea / r.MeanStraddlingArea : 0f;
+                    ctx.Log($"[adaptive]     Z {r.Z,8:0.0}  h {r.Height:0.000} mm   "
+                          + $"set by a {r.BindingArea,8:0.###} mm2 triangle at {r.BindingSlopeDeg,5:0.#}deg "
+                          + $"({rel:0.##}x avg, {r.FacesStraddling} faces crossing){tag}");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "support-report",
             Description = "Bead support: how far sideways each bead sits from the material under it, "
                         + "in mm. The number behind the Bead overhang heatmap, as text — overall "
