@@ -5024,7 +5024,8 @@ public partial class ViewportView : UserControl
             }
 
             SliceLogger.Step("ComputeOverhangPerFlatMove");
-            var overhang = BeadSupport.Analyze(entry.Toolpath, entry.BeadWidth).Fractions();
+            // Fractions(), not Analyze() — this runs on the GL thread, so no statistics here.
+            var overhang = BeadSupport.Fractions(entry.Toolpath, entry.BeadWidth);
             SliceLogger.Step("UpdateToolpathBeadOverhang");
             _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
             SliceLogger.Step("ComputeOrientationRatePerFlatMove");

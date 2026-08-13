@@ -60,92 +60,141 @@ public static class BeadSupport
         /// <summary>
         /// Offset as a fraction of the nominal bead width, clamped to 0..1 — 0 is stacked
         /// squarely on the bead below, 1 is a full bead width off with nothing under it.
-        /// This is what the bead-overhang heatmap colours by.
+        /// Moves that were never measured (NaN) also read 0, which is what keeps the heatmap
+        /// identical to before this moved into Core.
         /// </summary>
         public float FractionAt(int flatIndex)
         {
             if (BeadWidthMm <= 0f || flatIndex < 0 || flatIndex >= OffsetMm.Length) return 0f;
             float mm = OffsetMm[flatIndex];
+            if (float.IsNaN(mm)) return 0f;
             if (float.IsPositiveInfinity(mm)) return 1f;
             return Math.Clamp(mm / BeadWidthMm, 0f, 1f);
         }
 
         /// <summary>How much of the bead sits over material, as a percentage of nominal width.</summary>
         public float OverlapPercentAt(int flatIndex) => 100f * (1f - FractionAt(flatIndex));
-
-        /// <summary>The 0..1 array the viewport renderer takes.</summary>
-        public float[] Fractions()
-        {
-            var f = new float[OffsetMm.Length];
-            for (int i = 0; i < f.Length; i++) f[i] = FractionAt(i);
-            return f;
-        }
     }
 
     /// <summary>
     /// Measures every extrusion move against the layer below it.
     ///
-    /// Beads in the first layer, and moves that are not cut segments, are recorded as 0 —
-    /// the first layer is on the bed, and a travel move has no bead to support. A bead with
-    /// nothing found within roughly one bead width is recorded as
-    /// <see cref="float.PositiveInfinity"/>: the search cannot say how far away the nearest
-    /// material is, only that it is too far to matter.
+    /// Three distinct results, and they must not be conflated:
+    /// <list type="bullet">
+    /// <item><b>NaN</b> — not measured. A travel move has no bead, and the first layer (or any
+    /// layer whose predecessor laid nothing) has nothing beneath it to measure against.</item>
+    /// <item><b>0</b> — measured, and stacked squarely on the bead below.</item>
+    /// <item><b>PositiveInfinity</b> — measured, and nothing was found within roughly one bead
+    /// width. The search cannot say how far the nearest material is, only that it is too far
+    /// to matter.</item>
+    /// </list>
+    /// Treating NaN as a measured 0 would count phantom perfectly-supported beads and drag the
+    /// median down; <see cref="Analysis.FractionAt"/> still maps it to 0 for the heatmap, which
+    /// is what the pre-Core version did.
     ///
     /// Spatially hashed on a bead-width grid and scanned 3x3, which is exact for this
     /// purpose — a segment outside that neighbourhood is at least one bead width away, so it
     /// could not change any decision. One pass over the moves, not a per-layer pairwise
     /// search.
     /// </summary>
-    public static Analysis Analyze(Toolpath toolpath, float beadWidthMm)
+    public static float[] MeasureOffsets(Toolpath toolpath, float beadWidthMm)
     {
         int total = 0;
         foreach (var layer in toolpath.Layers)
             total += layer.Moves.Count;
-        if (total == 0 || beadWidthMm <= 0f) return Analysis.Empty;
+        if (total == 0 || beadWidthMm <= 0f) return [];
 
         var offsets = new float[total];
-        float cell   = MathF.Max(beadWidthMm, 0.5f);
+        Array.Fill(offsets, float.NaN);          // "not measured" until proven otherwise
+        float cell = MathF.Max(beadWidthMm, 0.5f);
+
+        Dictionary<(int, int), List<(Vector3 a, Vector3 b)>>? prevGrid = null;
+        int flat = 0;
+
+        foreach (var layer in toolpath.Layers)
+        {
+            var curGrid = new Dictionary<(int, int), List<(Vector3 a, Vector3 b)>>();
+            foreach (var move in layer.Moves)
+            {
+                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                {
+                    if (prevGrid is { Count: > 0 })
+                    {
+                        var mid = (move.From + move.To) * 0.5f;
+                        offsets[flat] = NearestSegmentDistance2D(mid, prevGrid, cell);
+                    }
+                    InsertSegment(curGrid, move.From, move.To, cell);
+                }
+                flat++;
+            }
+            prevGrid = curGrid;
+        }
+
+        return offsets;
+    }
+
+    /// <summary>
+    /// The 0..1 array the viewport heatmap colours by, and nothing else.
+    ///
+    /// ⚠️ This is called from <c>UploadToolpathEntry</c>, which runs inside <c>OnRender</c> on
+    /// the GL thread. It must do only the work the picture needs — no statistics, no sorting,
+    /// no per-layer lists. Building those here added a ~292k-element sort to every toolpath
+    /// upload on a real part, which lengthens the GL frame and widens the window on the
+    /// workspace-restore scene-graph race. Use <see cref="Analyze"/> off the render path.
+    /// </summary>
+    public static float[] Fractions(Toolpath toolpath, float beadWidthMm)
+    {
+        var offsets = MeasureOffsets(toolpath, beadWidthMm);
+        var result  = new float[offsets.Length];
+        if (beadWidthMm <= 0f) return result;
+        for (int i = 0; i < offsets.Length; i++)
+        {
+            float mm = offsets[i];
+            result[i] = float.IsNaN(mm) ? 0f
+                      : float.IsPositiveInfinity(mm) ? 1f
+                      : Math.Clamp(mm / beadWidthMm, 0f, 1f);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Full measurement plus the statistics a report needs. Sorts and allocates, so keep it
+    /// off the render path — see <see cref="Fractions"/>.
+    /// </summary>
+    public static Analysis Analyze(Toolpath toolpath, float beadWidthMm)
+    {
+        var offsets = MeasureOffsets(toolpath, beadWidthMm);
+        if (offsets.Length == 0 || beadWidthMm <= 0f) return Analysis.Empty;
 
         var layerStats  = new List<LayerStat>();
         var allMeasured = new List<float>();
         float totalExtruded = 0f, underHalf = 0f, underThreeQuarter = 0f;
 
-        Dictionary<(int, int), List<(Vector3 a, Vector3 b)>>? prevGrid = null;
         int flat = 0;
-
         for (int li = 0; li < toolpath.Layers.Count; li++)
         {
-            var layer   = toolpath.Layers[li];
-            var curGrid = new Dictionary<(int, int), List<(Vector3 a, Vector3 b)>>();
+            var layer = toolpath.Layers[li];
             var layerMeasured = new List<float>();
             float layerExtruded = 0f;
 
             foreach (var move in layer.Moves)
             {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
+                // NaN means it was never measured — not a bead sitting perfectly supported.
+                if (!float.IsNaN(offsets[flat]))
                 {
+                    float d   = offsets[flat];
                     float len = Vector3.Distance(move.From, move.To);
 
-                    if (prevGrid is { Count: > 0 })
-                    {
-                        var mid = (move.From + move.To) * 0.5f;
-                        float d = NearestSegmentDistance2D(mid, prevGrid, cell);
+                    layerMeasured.Add(d);
+                    allMeasured.Add(d);
+                    layerExtruded += len;
+                    totalExtruded += len;
 
-                        offsets[flat] = d;
-                        layerMeasured.Add(d);
-                        allMeasured.Add(d);
-
-                        layerExtruded += len;
-                        totalExtruded += len;
-
-                        float frac = float.IsPositiveInfinity(d)
-                            ? 1f
-                            : Math.Clamp(d / beadWidthMm, 0f, 1f);
-                        if (frac > 0.50f) underHalf         += len;
-                        if (frac > 0.25f) underThreeQuarter += len;
-                    }
-
-                    InsertSegment(curGrid, move.From, move.To, cell);
+                    float frac = float.IsPositiveInfinity(d)
+                        ? 1f
+                        : Math.Clamp(d / beadWidthMm, 0f, 1f);
+                    if (frac > 0.50f) underHalf         += len;
+                    if (frac > 0.25f) underThreeQuarter += len;
                 }
                 flat++;
             }
@@ -160,8 +209,6 @@ public static class BeadSupport
                     layerMeasured[^1],
                     layerExtruded));
             }
-
-            prevGrid = curGrid;
         }
 
         allMeasured.Sort();

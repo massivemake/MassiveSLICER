@@ -93,11 +93,12 @@ public class BeadSupportTest
     }
 
     /// <summary>
-    /// The first layer sits on the bed and travel moves have no bead, so both read 0 —
-    /// which is what keeps the heatmap unchanged by moving this into Core.
+    /// The first layer sits on the bed and travel moves have no bead, so neither is a
+    /// measurement — they read NaN, not a measured 0. Counting them as 0 would invent
+    /// perfectly-supported beads and drag the median down. The heatmap still sees 0.
     /// </summary>
     [Fact]
-    public void First_layer_and_travel_moves_read_as_fully_supported()
+    public void First_layer_and_travel_moves_are_not_measured_at_all()
     {
         var first = new ToolpathLayer(0, 0f) { Height = 3f, PlaneNormal = Vector3.UnitZ };
         first.Moves.Add(new ToolpathMove(
@@ -115,10 +116,42 @@ public class BeadSupportTest
 
         var a = BeadSupport.Analyze(tp, Bead);
 
-        Assert.Equal(0f, a.OffsetMm[0], 4);   // first layer, on the bed
-        Assert.Equal(0f, a.OffsetMm[1], 4);   // the travel move, despite ending 400 mm away
-        Assert.Equal(0f, a.OffsetMm[2], 4);   // stacked extrude
+        Assert.True(float.IsNaN(a.OffsetMm[0]), "first layer has nothing beneath it to measure");
+        Assert.True(float.IsNaN(a.OffsetMm[1]), "a travel move has no bead, despite ending 400 mm away");
+        Assert.Equal(0f, a.OffsetMm[2], 4);   // stacked extrude — a real measurement of zero
         Assert.Equal(1, a.MeasuredMoves);     // only the extrude on layer 1 counts
+
+        // But the heatmap must still see 0 for the unmeasured ones, exactly as before.
+        var f = BeadSupport.Fractions(tp, Bead);
+        Assert.Equal(0f, f[0], 4);
+        Assert.Equal(0f, f[1], 4);
+        Assert.Equal(0f, f[2], 4);
+    }
+
+    /// <summary>
+    /// The render path and the report path must not drift. Fractions() is the cheap GL-thread
+    /// call; Analyze() adds statistics. They share one measurement, and this pins that.
+    /// </summary>
+    [Fact]
+    public void The_render_path_and_the_report_path_agree_move_for_move()
+    {
+        var tp = new Toolpath();
+        tp.Layers.Add(Line(0, z: 0f, y: 0f));
+        tp.Layers.Add(Line(1, z: 3f, y: 1.1f));
+        tp.Layers.Add(Line(2, z: 6f, y: 4.9f));
+        tp.Layers.Add(Line(3, z: 9f, y: 400f));   // unsupported
+
+        var cheap = BeadSupport.Fractions(tp, Bead);
+        var full  = BeadSupport.Analyze(tp, Bead);
+
+        Assert.Equal(cheap.Length, full.OffsetMm.Length);
+        for (int i = 0; i < cheap.Length; i++)
+            Assert.Equal(cheap[i], full.FractionAt(i), 5);
+
+        // Not vacuous: the values actually span the range.
+        Assert.Contains(cheap, v => v == 0f);
+        Assert.Contains(cheap, v => v > 0f && v < 1f);
+        Assert.Contains(cheap, v => v == 1f);
     }
 
     /// <summary>
