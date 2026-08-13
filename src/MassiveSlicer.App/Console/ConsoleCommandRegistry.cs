@@ -1,6 +1,7 @@
 using MassiveSlicer.Commands;
 using MassiveSlicer.Core.IO;
 using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Slicing;
 using MassiveSlicer.ViewModels;
 
 namespace MassiveSlicer.App.Console;
@@ -1838,6 +1839,107 @@ public sealed class ConsoleCommandRegistry
                     if (unscaled > 0)
                         ctx.LogError($"[layer-flow]   WARNING: {unscaled} off-nominal layer(s) still at flow x1 — "
                                    + "these are over-extruding. Re-slice to apply the height/flow correction.");
+                }
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
+            Name = "support-report",
+            Description = "Bead support: how far sideways each bead sits from the material under it, "
+                        + "in mm. The number behind the Bead overhang heatmap, as text — overall "
+                        + "spread, how much bead length is poorly supported, and the worst layers",
+            Usage = "support-report [toolpath name]",
+            Execute = (ctx, args) =>
+            {
+                var want = args.Trim();
+
+                void Walk(IEnumerable<OutlinerItemViewModel> items, List<OutlinerItemViewModel> into)
+                {
+                    foreach (var item in items)
+                    {
+                        if (item.IsToolpath) into.Add(item);
+                        Walk(item.Children, into);
+                    }
+                }
+
+                var toolpaths = new List<OutlinerItemViewModel>();
+                Walk(ctx.Main.Viewport.OutlinerItems, toolpaths);
+                if (want.Length > 0)
+                    toolpaths = toolpaths
+                        .Where(t => t.Name.Contains(want, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+
+                if (toolpaths.Count == 0)
+                {
+                    ctx.LogError(want.Length > 0
+                        ? $"[support] no toolpath matching '{want}'."
+                        : "[support] no toolpaths in the scene.");
+                    return;
+                }
+
+                foreach (var tpItem in toolpaths)
+                {
+                    var snap = ctx.Main.Viewport.GetToolpathSnapshot?.Invoke(tpItem.Node);
+                    if (snap is null)
+                    {
+                        ctx.LogError($"[support] \"{tpItem.Name}\": no snapshot (not staged yet).");
+                        continue;
+                    }
+
+                    // Same toolpath the heatmap colours, so the numbers and the picture agree.
+                    var tp = snap.Smoothed.Layers.Count > 0 ? snap.Smoothed : snap.Raw;
+                    var a  = BeadSupport.Analyze(tp, snap.BeadWidth);
+                    if (a.MeasuredMoves == 0)
+                    {
+                        ctx.LogError($"[support] \"{tpItem.Name}\": nothing to measure — "
+                                   + "needs at least two layers of extrusion.");
+                        continue;
+                    }
+
+                    ctx.Log($"[support] \"{tpItem.Name}\": {tp.Layers.Count} layers, "
+                          + $"bead {a.BeadWidthMm:0.##} mm, {a.MeasuredMoves:N0} beads measured");
+                    ctx.Log($"[support]   sideways offset — median {a.MedianMm:0.##} mm, "
+                          + $"p99 {BeadSupport.Mm(a.P99Mm)}, worst {BeadSupport.Mm(a.MaxMm)}");
+
+                    // Length-weighted, because a long badly-supported bead matters more than a short one.
+                    if (a.TotalExtrudedMm > 0f)
+                    {
+                        ctx.Log($"[support]   {a.TotalExtrudedMm / 1000f:0.#} m of bead total; "
+                              + $"{100f * a.ExtrudedMmUnderThreeQuarterOverlap / a.TotalExtrudedMm:0.##} % "
+                              + $"is over a quarter bead off ({0.25f * a.BeadWidthMm:0.##} mm), "
+                              + $"{100f * a.ExtrudedMmUnderHalfOverlap / a.TotalExtrudedMm:0.###} % "
+                              + $"is over half ({0.5f * a.BeadWidthMm:0.##} mm)");
+                    }
+
+                    ctx.Log("[support]   worst layers first — offset in mm, overlap % against nominal bead:");
+                    foreach (var l in BeadSupport.WorstFirst(a).Take(12))
+                    {
+                        float overlapAtMax = a.BeadWidthMm > 0f && !float.IsPositiveInfinity(l.MaxMm)
+                            ? 100f * (1f - Math.Clamp(l.MaxMm / a.BeadWidthMm, 0f, 1f))
+                            : 0f;
+                        ctx.Log($"[support]     layer {l.LayerIndex,4}  Z {l.Z,8:0.0} mm   "
+                              + $"median {l.MedianMm,5:0.##}   p99 {l.P99Mm,5:0.##}   "
+                              + $"worst {BeadSupport.Mm(l.MaxMm),9}   -> {overlapAtMax:0.#} % overlap");
+                    }
+
+                    // A run of poorly-supported layers is what actually fails; a lone spike usually does not.
+                    var bad = a.Layers
+                        .Where(l => !float.IsPositiveInfinity(l.P99Mm) && l.P99Mm > 0.5f * a.BeadWidthMm)
+                        .Select(l => l.LayerIndex)
+                        .ToHashSet();
+                    int longestRun = 0, run = 0;
+                    for (int i = 0; i < tp.Layers.Count; i++)
+                    {
+                        run = bad.Contains(i) ? run + 1 : 0;
+                        if (run > longestRun) longestRun = run;
+                    }
+                    if (bad.Count == 0)
+                        ctx.Log("[support]   no layer has 1 % of its length past half a bead off.");
+                    else
+                        ctx.Log($"[support]   {bad.Count} layer(s) have 1 % of their length past half a "
+                              + $"bead off; longest consecutive run is {longestRun} layer(s). "
+                              + "Runs are what fail — a lone layer usually rides through.");
                 }
             },
         });

@@ -5024,7 +5024,7 @@ public partial class ViewportView : UserControl
             }
 
             SliceLogger.Step("ComputeOverhangPerFlatMove");
-            var overhang = ComputeOverhangPerFlatMove(entry.Toolpath, entry.BeadWidth);
+            var overhang = BeadSupport.Analyze(entry.Toolpath, entry.BeadWidth).Fractions();
             SliceLogger.Step("UpdateToolpathBeadOverhang");
             _renderer.UpdateToolpathBeadOverhang(entry.Node, overhang);
             SliceLogger.Step("ComputeOrientationRatePerFlatMove");
@@ -13753,90 +13753,6 @@ public partial class ViewportView : UserControl
             ApplyToolpathStats(vm, active);
 
         GlCanvas.RequestNextFrameRendering();
-    }
-
-    /// <summary>
-    /// Computes a per-flat-move overhang score in [0,1].
-    /// 0 = move midpoint is within beadWidth of the previous layer (fully supported).
-    /// 1 = move midpoint has no nearby segment in the previous layer (unsupported).
-    /// Travel moves always score 0.
-    /// </summary>
-    private static float[] ComputeOverhangPerFlatMove(Toolpath tp, float beadWidth)
-    {
-        int total = tp.Layers.Sum(l => l.Moves.Count);
-        var result = new float[total];
-        if (total == 0 || beadWidth <= 0f) return result;
-
-        // Spatial hash over the previous layer's cut segments (cell = bead width).
-        // Any segment outside the 3×3 neighbourhood is ≥ one bead away, which already
-        // clamps to score 1 — so the ring query is exact, and the whole pass is O(n).
-        // (The old per-layer pairwise search was O(n×m) and silently bailed above
-        // 600k moves, leaving wave-expanded toolpaths entirely white.)
-        float cell = MathF.Max(beadWidth, 0.5f);
-        Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>? prevGrid = null;
-        int fi = 0;
-        foreach (var layer in tp.Layers)
-        {
-            var curGrid = new Dictionary<(int, int), List<(NVec3 a, NVec3 b)>>();
-            foreach (var move in layer.Moves)
-            {
-                if (ToolpathMoveKinds.IsCutSegment(move.Kind))
-                {
-                    if (prevGrid is { Count: > 0 })
-                    {
-                        var mid = (move.From + move.To) * 0.5f;
-                        int cx = (int)MathF.Floor(mid.X / cell);
-                        int cy = (int)MathF.Floor(mid.Y / cell);
-                        float minD = float.MaxValue;
-                        for (int gx = cx - 1; gx <= cx + 1; gx++)
-                        for (int gy = cy - 1; gy <= cy + 1; gy++)
-                            if (prevGrid.TryGetValue((gx, gy), out var segs))
-                                foreach (var (a, b) in segs)
-                                {
-                                    float d = SegDist2D(mid, a, b);
-                                    if (d < minD) minD = d;
-                                }
-                        result[fi] = minD == float.MaxValue
-                            ? 1f
-                            : Math.Clamp(minD / beadWidth, 0f, 1f);
-                    }
-                    InsertSegment(curGrid, move.From, move.To, cell);
-                }
-                fi++;
-            }
-            prevGrid = curGrid;
-        }
-        return result;
-
-        static void InsertSegment(
-            Dictionary<(int, int), List<(NVec3 a, NVec3 b)>> grid, NVec3 a, NVec3 b, float cell)
-        {
-            int x0 = (int)MathF.Floor(MathF.Min(a.X, b.X) / cell);
-            int x1 = (int)MathF.Floor(MathF.Max(a.X, b.X) / cell);
-            int y0 = (int)MathF.Floor(MathF.Min(a.Y, b.Y) / cell);
-            int y1 = (int)MathF.Floor(MathF.Max(a.Y, b.Y) / cell);
-            for (int x = x0; x <= x1; x++)
-            for (int y = y0; y <= y1; y++)
-            {
-                if (!grid.TryGetValue((x, y), out var list))
-                    grid[(x, y)] = list = [];
-                list.Add((a, b));
-            }
-        }
-
-        static float SegDist2D(NVec3 p, NVec3 a, NVec3 b)
-        {
-            float dx = b.X - a.X, dy = b.Y - a.Y;
-            float lenSq = dx * dx + dy * dy;
-            if (lenSq < 1e-10f)
-            {
-                float ex = p.X - a.X, ey = p.Y - a.Y;
-                return MathF.Sqrt(ex * ex + ey * ey);
-            }
-            float t = Math.Clamp(((p.X - a.X) * dx + (p.Y - a.Y) * dy) / lenSq, 0f, 1f);
-            float cx = a.X + t * dx - p.X, cy = a.Y + t * dy - p.Y;
-            return MathF.Sqrt(cx * cx + cy * cy);
-        }
     }
 
     /// <summary>
