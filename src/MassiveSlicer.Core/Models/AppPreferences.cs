@@ -190,6 +190,18 @@ public sealed class AppPreferences
     /// <summary>Minimum layer height used by adaptive slicing (mm).</summary>
     public double MinLayerHeight { get; set; } = 1.0;
 
+    /// <summary>Smallest triangle (mm2) allowed to dictate a layer thickness. 0 = bead footprint, negative = off.</summary>
+    public double AdaptiveMinFaceAreaMm2 { get; set; }
+
+    /// <summary>Thin layers when the bead would not sit on the one below. Off by default.</summary>
+    public bool SupportDrivenLayerHeight { get; set; }
+
+    /// <summary>How much of each bead must sit on the one below (%).</summary>
+    public double SupportOverlapTargetPercent { get; set; } = 60.0;
+
+    /// <summary>Longest off-target stretch a bead may bridge (mm). 0 = 2 x bead width.</summary>
+    public double SupportBridgeToleranceMm { get; set; }
+
     /// <summary>Skip bead-width/2 contour inset; print centerline on surface.</summary>
     public bool DisableContourOffset { get; set; }
 

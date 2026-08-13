@@ -4288,6 +4288,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         live.AdaptiveLayerHeight    = copy.AdaptiveLayerHeight;
         live.AdaptiveQuality        = copy.AdaptiveQuality;
         live.MinLayerHeight         = copy.MinLayerHeight;
+        live.AdaptiveMinFaceAreaMm2 = copy.AdaptiveMinFaceAreaMm2;
+        live.SupportDrivenLayerHeight    = copy.SupportDrivenLayerHeight;
+        live.SupportOverlapTargetPercent = copy.SupportOverlapTargetPercent;
+        live.SupportBridgeToleranceMm    = copy.SupportBridgeToleranceMm;
         live.DisableContourOffset   = copy.DisableContourOffset;
         live.SeamMode               = copy.SeamMode;
         live.ZigZagAllowSameLayerTravel = copy.ZigZagAllowSameLayerTravel;
@@ -4547,6 +4551,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         add.AdaptiveLayerHeight = p.AdaptiveLayerHeight;
         add.AdaptiveQuality     = p.AdaptiveQuality;
         add.MinLayerHeight      = p.MinLayerHeight;
+        add.AdaptiveMinFaceAreaMm2      = p.AdaptiveMinFaceAreaMm2;
+        add.SupportDrivenLayerHeight    = p.SupportDrivenLayerHeight;
+        add.SupportOverlapTargetPercent = p.SupportOverlapTargetPercent;
+        add.SupportBridgeToleranceMm    = p.SupportBridgeToleranceMm;
         add.DisableContourOffset = p.DisableContourOffset;
         add.SeamMode = add.SeamModeOptions.Contains(p.SeamMode) ? p.SeamMode : "Normal";
         add.ZigZagAllowSameLayerTravel = p.ZigZagAllowSameLayerTravel;
@@ -4883,6 +4891,10 @@ public sealed class MainWindowViewModel : ViewModelBase
         p.AdaptiveLayerHeight = add.AdaptiveLayerHeight;
         p.AdaptiveQuality     = add.AdaptiveQuality;
         p.MinLayerHeight      = add.MinLayerHeight;
+        p.AdaptiveMinFaceAreaMm2      = add.AdaptiveMinFaceAreaMm2;
+        p.SupportDrivenLayerHeight    = add.SupportDrivenLayerHeight;
+        p.SupportOverlapTargetPercent = add.SupportOverlapTargetPercent;
+        p.SupportBridgeToleranceMm    = add.SupportBridgeToleranceMm;
         p.DisableContourOffset = add.DisableContourOffset;
         p.SeamMode            = add.SeamMode;
         p.ZigZagAllowSameLayerTravel = add.ZigZagAllowSameLayerTravel;
