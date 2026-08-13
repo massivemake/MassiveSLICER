@@ -183,6 +183,24 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _minLayerHeight, Math.Clamp(value, 0.1, 100.0));
     }
 
+    private double _adaptiveMinFaceAreaMm2;
+
+    /// <summary>
+    /// Smallest triangle (mm²) allowed to dictate a layer's thickness.
+    /// 0 = derive it from the bead footprint; negative = off, every triangle votes.
+    ///
+    /// Triangle SIZE is not physically meaningful to stairstepping — a shallow surface steps the
+    /// same whether it is one big triangle or a thousand small ones. Size is a proxy for whether
+    /// the triangle's NORMAL can be trusted: a real shallow feature occupies real area, whereas a
+    /// sliver's orientation is an artefact of how the file was tessellated, and a triangle smaller
+    /// than the bead describes a feature the machine cannot print anyway.
+    /// </summary>
+    public double AdaptiveMinFaceAreaMm2
+    {
+        get => _adaptiveMinFaceAreaMm2;
+        set => SetField(ref _adaptiveMinFaceAreaMm2, Math.Clamp(value, -1.0, 100000.0));
+    }
+
     // -- Slicing method -------------------------------------------------------
 
     private SliceMethod _method = SliceMethod.Planar;

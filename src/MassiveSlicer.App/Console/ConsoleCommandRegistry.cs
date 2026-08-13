@@ -1883,21 +1883,41 @@ public sealed class ConsoleCommandRegistry
                     ctx.Log($"[adaptive]   min-face-area gate: ignored slivers on {gatedLayers} layer(s); "
                           + $"on {gateMattered} of those it changed the thickness that came out");
 
-                // The question this command exists for: is the deciding triangle a sliver?
-                var bound = reasons.Where(r => r.BindingArea > 0f && r.MeanStraddlingArea > 0f).ToList();
+                // The question this command exists for: is the deciding triangle too small to be
+                // describing anything the machine could print?
+                //
+                // Judged on ABSOLUTE area against the bead footprint, not against the average of
+                // the faces it beat. That ratio is unreliable — a handful of huge triangles drags
+                // the mean up and then everything reads as a sliver. Measured live: with the gate
+                // ON and every deciding face 12-304 mm², the ratio still called 49 of 54 layers
+                // slivers. The absolute number is the trustworthy one.
+                var bound = reasons.Where(r => r.BindingArea > 0f).OrderBy(r => r.BindingArea).ToList();
                 if (bound.Count > 0)
                 {
-                    var ratios = bound.Select(r => r.BindingArea / r.MeanStraddlingArea)
-                                      .OrderBy(v => v).ToList();
-                    float median = ratios[ratios.Count / 2];
-                    int slivers  = ratios.Count(v => v < 0.1f);
-                    ctx.Log($"[adaptive]   deciding triangle vs the average triangle it beat: "
-                          + $"median {median:0.###}x  (1.0 = typical size, <0.1 = a sliver)");
-                    ctx.Log($"[adaptive]   {slivers} of {bound.Count} layers were decided by a triangle "
-                          + $"under a tenth of average area ({100f * slivers / bound.Count:0.#} %)");
-                    ctx.Log(slivers * 4 > bound.Count
-                        ? "[adaptive]   -> slivers ARE pinning layers. Area-weighting the minimum is worth doing."
-                        : "[adaptive]   -> slivers are NOT the main cause. Area-weighting would fix the wrong thing.");
+                    var add = ctx.Main.RightPanel.Additive;
+                    float beadFootprint = (float)(add.BeadWidth
+                                                * Math.Min(add.MinLayerHeight, add.LayerHeight));
+                    float medianArea = bound[bound.Count / 2].BindingArea;
+                    int   tooSmall   = bound.Count(r => r.BindingArea < beadFootprint);
+
+                    ctx.Log($"[adaptive]   deciding triangle area: median {medianArea:0.##} mm2, "
+                          + $"smallest {bound[0].BindingArea:0.###} mm2  "
+                          + $"(one bead footprint = {beadFootprint:0.#} mm2)");
+                    ctx.Log($"[adaptive]   {tooSmall} of {bound.Count} constrained layers were decided by a "
+                          + $"triangle SMALLER than one bead ({100f * tooSmall / bound.Count:0.#} %)");
+                    ctx.Log(tooSmall * 4 > bound.Count
+                        ? "[adaptive]   -> sub-bead triangles ARE deciding layers. The min-face-area gate applies."
+                        : "[adaptive]   -> deciding triangles are bead-scale or larger; the gate has little left to do.");
+
+                    // Secondary, and explicitly not load-bearing.
+                    var withMean = bound.Where(r => r.MeanStraddlingArea > 0f).ToList();
+                    if (withMean.Count > 0)
+                    {
+                        var ratios = withMean.Select(r => r.BindingArea / r.MeanStraddlingArea)
+                                             .OrderBy(v => v).ToList();
+                        ctx.Log($"[adaptive]   (for reference only, mean is skewed by large faces: "
+                              + $"median {ratios[ratios.Count / 2]:0.###}x the average face it beat)");
+                    }
                 }
 
                 ctx.Log("[adaptive]   thinnest layers first:");

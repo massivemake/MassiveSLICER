@@ -53,12 +53,16 @@ public static class AdaptiveLayerHeights
         bool  GateChangedTheOutcome = false);
 
     /// <summary>
-    /// Per-layer reasons from the most recent <see cref="ComputeZPositions"/> call.
-    /// Same single-slice-at-a-time assumption as <c>PlanarSlicer</c>'s dropped-contour list.
+    /// Per-layer reasons from the most recent completed <see cref="ComputeZPositions"/> call.
+    ///
+    /// Published as a finished array in one reference assignment, never built in place: slicing
+    /// runs off the UI thread, so a reader (the console command) would otherwise enumerate a list
+    /// that is still being appended to and throw "Collection was modified". A reader now sees
+    /// either the previous complete set or the new complete set — never a torn one.
     /// </summary>
     public static IReadOnlyList<LayerHeightReason> LastReasons => s_lastReasons;
 
-    private static readonly List<LayerHeightReason> s_lastReasons = [];
+    private static LayerHeightReason[] s_lastReasons = [];
 
     /// <summary>
     /// Returns the list of Z values to slice at.
@@ -92,7 +96,8 @@ public static class AdaptiveLayerHeights
         float z = zMin + firstLayerHeight;
         int currentFacet = 0;
 
-        s_lastReasons.Clear();
+        // Accumulated locally and published at the end — see LastReasons.
+        var reasons = new List<LayerHeightReason>();
 
         while (z < zMax - 1e-4f)
         {
@@ -100,7 +105,7 @@ public static class AdaptiveLayerHeights
             float h = NextLayerHeight(faces, z, qualityFactor,
                 minLayerHeight, maxLayerHeight, minFaceAreaMm2, ref currentFacet, out var why);
 
-            s_lastReasons.Add(new LayerHeightReason(
+            reasons.Add(new LayerHeightReason(
                 z, h,
                 why.BindingArea,
                 why.BindingSlopeDeg,
@@ -114,6 +119,10 @@ public static class AdaptiveLayerHeights
 
             z += h;
         }
+
+        // One reference assignment, after the walk is finished: a concurrent reader gets the old
+        // complete array or the new complete array, never a partially built one.
+        s_lastReasons = [.. reasons];
 
         return [.. positions];
     }

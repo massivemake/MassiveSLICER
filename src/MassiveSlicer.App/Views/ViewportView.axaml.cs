@@ -997,7 +997,8 @@ public partial class ViewportView : UserControl
                                     or nameof(AdditiveSettingsViewModel.FirstLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight)
                                     or nameof(AdditiveSettingsViewModel.AdaptiveQuality)
-                                    or nameof(AdditiveSettingsViewModel.MinLayerHeight))
+                                    or nameof(AdditiveSettingsViewModel.MinLayerHeight)
+                                    or nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2))
                 {
                     if (additive.ShowLayerPreview)
                         _ = ComputeLayerPreviewAsync(vm);
@@ -4650,6 +4651,7 @@ public partial class ViewportView : UserControl
             AdaptiveLayerHeight = s.AdaptiveLayerHeight,
             AdaptiveQuality     = (float)s.AdaptiveQuality,
             MinLayerHeight      = (float)s.MinLayerHeight,
+            AdaptiveMinFaceAreaMm2 = (float)s.AdaptiveMinFaceAreaMm2,
             OverhangOrientation = s.OverhangOrientation,
             MaxOverhangTiltDeg  = (float)s.MaxOverhangTiltDeg,
             SmoothRotation                = s.SmoothRotation,
@@ -5767,6 +5769,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.AdaptiveLayerHeight),
         nameof(AdditiveSettingsViewModel.AdaptiveQuality),
         nameof(AdditiveSettingsViewModel.MinLayerHeight),
+        nameof(AdditiveSettingsViewModel.AdaptiveMinFaceAreaMm2),
         nameof(AdditiveSettingsViewModel.DisableContourOffset),
         nameof(AdditiveSettingsViewModel.InfillPattern),
         nameof(AdditiveSettingsViewModel.InfillSpacingMm),

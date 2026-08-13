@@ -17,6 +17,12 @@ namespace MassiveSlicer.Tests;
 /// near-horizontal sliver of 0.51 mm² spanning Z 50.0–50.2 — the only thing in the scene that can
 /// demand a thin layer.
 /// </summary>
+/// <remarks>
+/// Same xunit collection as <see cref="AdaptiveLayerHeightReasonTest"/> — both read
+/// <c>AdaptiveLayerHeights.LastReasons</c>, which is a static, and xunit parallelises across
+/// classes. See that class for the full reasoning.
+/// </remarks>
+[Collection("AdaptiveLayerHeights")]
 public class AdaptiveMinFaceAreaTest
 {
     private const float MinH = 1f, MaxH = 3f, Quality = 0f;

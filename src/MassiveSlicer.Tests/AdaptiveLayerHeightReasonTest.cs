@@ -17,6 +17,14 @@ namespace MassiveSlicer.Tests;
 /// 0.51 mm² sitting at Z 50.0-50.2. The sliver is the only thing in the scene that can
 /// demand a thin layer.
 /// </summary>
+/// <remarks>
+/// Shares an xunit collection with <see cref="AdaptiveMinFaceAreaTest"/> so the two never run in
+/// parallel. <c>AdaptiveLayerHeights.LastReasons</c> is a static publishing the most recent call,
+/// which matches the app's one-slice-at-a-time assumption (same as PlanarSlicer's dropped-contour
+/// list) — but xunit parallelises across CLASSES, so without this the two classes overwrite each
+/// other's reasons and the assertions become order-dependent.
+/// </remarks>
+[Collection("AdaptiveLayerHeights")]
 public class AdaptiveLayerHeightReasonTest
 {
     private const float MinH  = 1f;
