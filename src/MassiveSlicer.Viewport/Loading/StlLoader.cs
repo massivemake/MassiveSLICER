@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;
 

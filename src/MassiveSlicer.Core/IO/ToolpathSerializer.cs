@@ -1,4 +1,4 @@
-﻿using System.Numerics;
+using System.Numerics;
 using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.IO;

@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Slicing.Curved;
+namespace MassiveSlicer.Core.Slicing.Curved;
 
 /// <summary>Topological ordering of split mesh parts for consistent layer indexing.</summary>
 public static class SplitMeshGraph

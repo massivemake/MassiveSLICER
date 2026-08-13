@@ -1,4 +1,4 @@
-﻿using System.Windows.Input;
+using System.Windows.Input;
 using MassiveSlicer.App.Undo;
 using MassiveSlicer.Commands;
 using MassiveSlicer.ViewModels.Base;

@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.Models;
+using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing;
 

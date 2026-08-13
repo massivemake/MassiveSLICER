@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.Numerics;
 using System.Windows.Input;
 using Avalonia.Threading;

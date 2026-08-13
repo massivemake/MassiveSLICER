@@ -1,4 +1,4 @@
-﻿using MassiveSlicer.Core.IO;
+using MassiveSlicer.Core.IO;
 using MassiveSlicer.Viewport.Loading;
 using MassiveSlicer.Viewport.Scene;
 using OpenTK.Mathematics;

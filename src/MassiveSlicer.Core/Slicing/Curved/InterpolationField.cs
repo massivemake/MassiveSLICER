@@ -1,4 +1,4 @@
-﻿namespace MassiveSlicer.Core.Slicing.Curved;
+namespace MassiveSlicer.Core.Slicing.Curved;
 
 /// <summary>Weighted interpolation scalar field between LOW and HIGH boundary targets.</summary>
 public static class InterpolationField

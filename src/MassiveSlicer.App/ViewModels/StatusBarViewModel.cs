@@ -1,4 +1,4 @@
-﻿using Avalonia.Input.Platform;
+using Avalonia.Input.Platform;
 using Avalonia.Media;
 using MassiveSlicer.App;
 using MassiveSlicer.ViewModels.Base;
