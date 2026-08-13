@@ -254,9 +254,24 @@ public sealed class SceneNode
             if (AlwaysOnTop) GL.Enable(EnableCap.DepthTest);
         }
 
-        foreach (var child in Children)
-            if (!child.TranslucentPass)
+        // Index walk, not foreach: this runs on the GL thread every frame and the UI thread can
+        // be attaching models to this very subtree at the same time (see
+        // SelfAndDescendantsForRender for the full reasoning).
+        var children = Children;
+        for (int i = 0; i < children.Count; i++)
+        {
+            SceneNode? child = null;
+            try
+            {
+                if (i < children.Count) child = children[i];
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                // Removed mid-frame — skip it; the next frame draws the settled graph.
+            }
+            if (child is not null && !child.TranslucentPass)
                 child.Draw(viewProj, viewPos, lightDir, lightIntensity);
+        }
     }
 
     // -- Traversal -------------------------------------------------------------
@@ -272,12 +287,105 @@ public sealed class SceneNode
     }
 
     /// <summary>Returns this node and all its descendants in depth-first order.</summary>
+    /// <remarks>
+    /// This walks the LIVE <see cref="Children"/> lists, so it throws
+    /// <see cref="InvalidOperationException"/> ("Collection was modified") if the graph is
+    /// mutated while it runs. That is deliberate for UI-thread callers: a walk that races the
+    /// scene being built is also resolving against a half-built tree, and failing loudly beats
+    /// returning a confidently wrong answer. Render-thread callers cannot afford to die and
+    /// have nothing to resolve, so they use <see cref="SelfAndDescendantsForRender"/> instead.
+    /// </remarks>
     public IEnumerable<SceneNode> SelfAndDescendants()
     {
         yield return this;
         foreach (var child in Children)
             foreach (var desc in child.SelfAndDescendants())
                 yield return desc;
+    }
+
+    /// <summary>
+    /// Depth-first walk of this node and its descendants that tolerates another thread mutating
+    /// the graph while it runs. <b>Render thread only</b> — see the remarks before using it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The GL thread walks the scene graph every frame (mesh upload, translucent pass, bounds)
+    /// while the UI thread is still adding models and toolpaths to it — opening a workspace does
+    /// exactly that. <see cref="SelfAndDescendants"/> is a <c>foreach</c> over live
+    /// <see cref="List{T}"/>s, and <c>List&lt;T&gt;</c>'s enumerator throws the moment its version
+    /// counter moves, which killed the app outright (no dialog, straight to the crash log) roughly
+    /// one open in three on a large <c>.mass</c>.
+    /// </para>
+    /// <para>
+    /// This walks by index instead. <c>List&lt;T&gt;</c>'s indexer does no version check, so a
+    /// concurrent add or remove cannot throw here. The trade is that the result is a
+    /// point-in-time view rather than a transaction: a node attached mid-walk may be missed, and a
+    /// node detached mid-walk may still be returned. Both are harmless for the render path — a
+    /// missed node is picked up on the next frame, and a detached one is at worst one wasted mesh
+    /// upload — but they are NOT harmless for anything resolving identity or parentage, which is
+    /// why the outliner search deliberately still uses the throwing version above.
+    /// </para>
+    /// <para>Also cheaper than the recursive iterator: one <see cref="Stack{T}"/> for the whole
+    /// walk rather than a nested iterator object per level per node.</para>
+    /// </remarks>
+    /// <summary>
+    /// Snapshot of this node's direct children, safe to iterate while another thread mutates the
+    /// graph. <b>Render thread only</b> — same trade-offs as <see cref="SelfAndDescendantsForRender"/>.
+    /// </summary>
+    /// <remarks>
+    /// For render-path loops over a single level (typically <c>SceneRoot</c>'s own children, once
+    /// per frame). Deliberately NOT used by <see cref="Draw"/> or
+    /// <see cref="SelfAndDescendantsForRender"/>: those touch every node in the scene every frame,
+    /// where a per-node array would be a real allocation cost, so they inline the same index walk
+    /// instead.
+    /// </remarks>
+    public SceneNode[] ChildrenForRender()
+    {
+        var children = Children;
+        var copy = new List<SceneNode>(children.Count);
+        for (int i = 0; i < children.Count; i++)
+        {
+            SceneNode? child = null;
+            try
+            {
+                if (i < children.Count) child = children[i];
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                // Removed between the bounds check and the read.
+            }
+            if (child is not null) copy.Add(child);
+        }
+        return [.. copy];
+    }
+
+    public IEnumerable<SceneNode> SelfAndDescendantsForRender()
+    {
+        var stack = new Stack<SceneNode>();
+        stack.Push(this);
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            yield return node;
+
+            var children = node.Children;
+            // Reverse so children pop in their original order. Re-read Count every step: the
+            // list can shrink under us, and the bounds check can still go stale between the
+            // test and the read, hence the catch — it costs nothing unless it actually races.
+            for (int i = children.Count - 1; i >= 0; i--)
+            {
+                SceneNode? child = null;
+                try
+                {
+                    if (i < children.Count) child = children[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // Removed between the bounds check and the read — nothing to visit.
+                }
+                if (child is not null) stack.Push(child);
+            }
+        }
     }
 
     /// <summary>

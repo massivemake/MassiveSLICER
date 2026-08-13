@@ -1336,7 +1336,9 @@ public sealed class SceneRenderer : IDisposable
             || MathF.Abs(_layerColorZMax - _appliedLayerZMax) > 0.0001f
             || _layerBoundaryCount != _appliedLayerBoundaryCount)
         {
-            foreach (var child in SceneRoot.Children)
+            // ChildrenForRender, not Children: the UI thread can be attaching models while this
+            // frame renders, and a plain foreach over the live list kills the app when it does.
+            foreach (var child in SceneRoot.ChildrenForRender())
             {
                 if (child.Overlay) continue;
                 ApplyShaderModeToSubtree(child, hasEnv);
@@ -1353,7 +1355,7 @@ public sealed class SceneRenderer : IDisposable
 
         GL.Enable(EnableCap.PolygonOffsetFill);
         GL.PolygonOffset(1f, 1f);
-        foreach (var child in SceneRoot.Children)
+        foreach (var child in SceneRoot.ChildrenForRender())
         {
             if (child.Overlay) continue; // drawn in overlay pass instead
             if (!child.CullFaces) GL.Disable(EnableCap.CullFace);
@@ -1439,7 +1441,7 @@ public sealed class SceneRenderer : IDisposable
         GL.Enable(EnableCap.Blend);
         GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
         GL.DepthMask(false);
-        foreach (var n in SceneRoot.SelfAndDescendants())
+        foreach (var n in SceneRoot.SelfAndDescendantsForRender())
         {
             if (!n.TranslucentPass) continue;
             bool ancestorsVisible = true;
@@ -1545,7 +1547,7 @@ public sealed class SceneRenderer : IDisposable
                 _maskShader.Use();
                 foreach (var root in maskRoots)
                 {
-                    foreach (var n in root.SelfAndDescendants())
+                    foreach (var n in root.SelfAndDescendantsForRender())
                     {
                         if (n.Mesh is null) continue;
                         var nodeMvp = n.WorldTransform * mvp;
@@ -1636,14 +1638,14 @@ public sealed class SceneRenderer : IDisposable
         // composite with depth cleared so they always appear on top.
         bool hasOverlay = ShowTcpFrame &&
             (TcpFrameMatrix is not null || FlangeFrameMatrix is not null || SensorOriginFrameMatrix is not null);
-        foreach (var child in SceneRoot.Children)
+        foreach (var child in SceneRoot.ChildrenForRender())
             if (child.Overlay) { hasOverlay = true; break; }
 
         if (hasOverlay)
         {
             GL.Clear(ClearBufferMask.DepthBufferBit);
             GL.Disable(EnableCap.CullFace);
-            foreach (var child in SceneRoot.Children)
+            foreach (var child in SceneRoot.ChildrenForRender())
             {
                 if (!child.Overlay) continue;
                 child.Draw(mvp, Camera.Eye, ComputeLightDir(), LightIntensity);
@@ -2327,7 +2329,7 @@ public sealed class SceneRenderer : IDisposable
         bool debugChannel = IsMaterialDebug(_shaderMode);
         bool wireframe = _shaderMode == ShaderMode.Wireframe;
         bool arctic = _shaderMode == ShaderMode.Arctic;
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             if (n.Mesh is not { } mesh) continue;
             if (n.KeepOwnMaterial)

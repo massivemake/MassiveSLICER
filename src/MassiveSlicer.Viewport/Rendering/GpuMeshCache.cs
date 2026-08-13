@@ -49,9 +49,10 @@ public static class GpuMeshCache
         _entries.Clear();
     }
 
+    // Called from the GL thread's node-removal drain, so it uses the tolerant traversal.
     public static void ReleaseSubtree(SceneNode root)
     {
-        foreach (var n in root.SelfAndDescendants())
+        foreach (var n in root.SelfAndDescendantsForRender())
         {
             Release(n.Mesh);
             n.Mesh = null;
