@@ -69,13 +69,13 @@ public static class BrimPlanner
             foreach (var p in ring) pts.Add(new Vector3((float)p.x, (float)p.y, z));
             pts.Add(pts[0]); // close the loop
             if (cur is { } c)
-                brim.Add(new ToolpathMove(c, pts[0], MoveKind.Travel));
+                brim.Add(new ToolpathMove(c, pts[0], MoveKind.Travel) { IsBrim = true });
             for (int i = 1; i < pts.Count; i++)
-                brim.Add(new ToolpathMove(pts[i - 1], pts[i], MoveKind.Extrude));
+                brim.Add(new ToolpathMove(pts[i - 1], pts[i], MoveKind.Extrude) { IsBrim = true });
             cur = pts[^1];
         }
         if (cur is { } last)
-            brim.Add(new ToolpathMove(last, layer0.Moves[0].From, MoveKind.Travel));
+            brim.Add(new ToolpathMove(last, layer0.Moves[0].From, MoveKind.Travel) { IsBrim = true });
 
         layer0.Moves.InsertRange(0, brim);
     }

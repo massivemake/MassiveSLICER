@@ -27,6 +27,24 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     /// <summary>Pre-travel filament wipe extrusion segment.</summary>
     public bool  IsWipe { get; init; }
 
+    /// <summary>
+    /// Absolute extrusion RPM (%) for this move, bypassing every per-move scale in
+    /// <see cref="IO.ToolpathRpm.MoveScale"/> — including <see cref="PrintSpeedScale"/> and
+    /// <see cref="HeightScale"/>. Null = derive RPM from speed as usual.
+    /// Used by the brim, which wants a deliberately fat bead for adhesion even though it runs
+    /// slow; any scale-based mechanism would drag it back to the speed-derived value.
+    /// </summary>
+    public float? RpmPercentOverride { get; init; }
+
+    /// <summary>
+    /// Bed-adhesion brim, not part of the object. Its length scales with the footprint
+    /// perimeter and loop count, which says nothing about how long the object's own layer
+    /// is — so layer-speed and thermal metrics must exclude it, and it must not take the
+    /// adaptive speed scale (a brim wants the nominal first-layer speed, not the fastest
+    /// speed in the part).
+    /// </summary>
+    public bool  IsBrim { get; init; }
+
     /// <summary>Local layer thickness relative to the layer's nominal height (1 = nominal).
     /// Multi-Planar layers are wedges: the plane tilt changes between layers, so thickness
     /// varies along the path. Scales extrusion RPM in export and bead height in preview.</summary>

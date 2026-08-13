@@ -1,4 +1,4 @@
-using MassiveSlicer.Core.Models;
+﻿using MassiveSlicer.Core.Models;
 
 namespace MassiveSlicer.Core.Slicing;
 
@@ -36,6 +36,8 @@ public static class ToolpathClone
                     PrintSpeedScale   = move.PrintSpeedScale,
                     IsLightning       = move.IsLightning,
                     HeightScale       = move.HeightScale,
+                    IsBrim            = move.IsBrim,
+                    RpmPercentOverride = move.RpmPercentOverride,
                 });
             }
             copy.Layers.Add(layerCopy);

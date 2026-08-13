@@ -4599,6 +4599,8 @@ public partial class ViewportView : UserControl
             Spiralize              = s.SeamMode.StartsWith("Spiral", StringComparison.OrdinalIgnoreCase),
             BrimEnabled         = s.BrimEnabled,
             BrimLoops           = s.BrimLoops,
+            BrimSpeedMmS        = (float)s.BrimSpeed,
+            BrimRpmPercent      = (float)s.BrimRpmPercent,
             XBracingEnabled     = s.XBracingEnabled,
             XBracingDepthMm     = (float)s.XBracingDepthMm,
             XBracingDepthBottomMm = (float)s.XBracingDepthBottomMm,
@@ -5795,6 +5797,8 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.PaintStamp),
         nameof(AdditiveSettingsViewModel.BrimEnabled),
         nameof(AdditiveSettingsViewModel.BrimLoops),
+        nameof(AdditiveSettingsViewModel.BrimSpeed),
+        nameof(AdditiveSettingsViewModel.BrimRpmPercent),
         nameof(AdditiveSettingsViewModel.XBracingEnabled),
         nameof(AdditiveSettingsViewModel.XBracingDepthMm),
         nameof(AdditiveSettingsViewModel.XBracingDepthBottomMm),
@@ -12696,7 +12700,15 @@ public partial class ViewportView : UserControl
     private const float ViewTagBandMm = 152.4f;   // 6 inches
     private DispatcherTimer? _viewTagTimer;
     private Toolpath? _viewTagCachedToolpath;
-    private readonly List<(NVec3 Local, float Scale, float TempC)> _viewTagBands = [];
+    /// <summary>
+    /// <c>Scale</c> is the robot speed scale; <c>RpmScale</c> is the full extrusion scale from
+    /// <see cref="ToolpathRpm.MoveScale"/> — they differ on adaptive-height layers, where flow
+    /// is reduced but speed is not. <c>RpmAbs</c> is an absolute RPM demand
+    /// (<see cref="ToolpathMove.RpmPercentOverride"/>, e.g. the brim) which replaces the
+    /// nominal-times-scale product entirely; a scale cannot express it.
+    /// </summary>
+    private readonly List<(NVec3 Local, float Scale, float RpmScale, float? RpmAbs, float TempC)>
+        _viewTagBands = [];
 
     private void StartViewTagTimer(ViewportViewModel vm)
     {
@@ -12736,18 +12748,31 @@ public partial class ViewportView : UserControl
                 foreach (var layer in toolpath.Layers)
                 {
                     if (layer.Z < nextBand) continue;
-                    NVec3 best = default; bool found = false; float scale = 1f;
+                    NVec3 best = default; bool found = false; float scale = 1f, rpmScale = 1f;
+                    float? rpmAbs = null;
                     int stride = Math.Max(1, layer.Moves.Count / 400);
                     for (int i = 0; i < layer.Moves.Count; i += stride)
                     {
                         var m = layer.Moves[i];
                         if (m.Kind != MoveKind.Extrude) continue;
-                        if (!found || m.To.X > best.X) { best = m.To; found = true; scale = m.PrintSpeedScale; }
+                        if (!found || m.To.X > best.X)
+                        {
+                            best = m.To; found = true;
+                            scale    = m.PrintSpeedScale;
+                            // Not PrintSpeedScale: on an adaptive-height layer the flow is cut
+                            // by HeightScale while the speed is not, so the RPM label has to use
+                            // the same scale the exporter and the RPM gradient use.
+                            rpmScale = ToolpathRpm.MoveScale(m);
+                            // An absolute demand (brim RPM) bypasses every scale, so carry it
+                            // separately — otherwise the label shows the speed-derived value
+                            // while the gradient and the export show the real one.
+                            rpmAbs   = m.RpmPercentOverride;
+                        }
                     }
                     if (found)
                     {
                         _viewTagBands.Add((new NVec3(best.X - origin.X, best.Y - origin.Y, best.Z - origin.Z),
-                                           scale, layer.ThermalTempC));
+                                           scale, rpmScale, rpmAbs, layer.ThermalTempC));
                         nextBand += ViewTagBandMm;
                     }
                 }
@@ -12765,7 +12790,7 @@ public partial class ViewportView : UserControl
 
         var wt   = node.WorldTransform;
         var tags = new List<ViewportViewModel.ViewTag>(_viewTagBands.Count);
-        foreach (var (local, scale, tempC) in _viewTagBands)
+        foreach (var (local, scale, rpmScale, rpmAbs, tempC) in _viewTagBands)
         {
             var world = new TkVector3(
                 local.X * wt.M11 + local.Y * wt.M21 + local.Z * wt.M31 + wt.M41,
@@ -12781,7 +12806,7 @@ public partial class ViewportView : UserControl
             {
                 "Speed"   => $"{baseSpeed * scale:0} mm/s",
                 "Thermal" => float.IsNaN(tempC) ? "— °C" : $"{tempC:0} °C interface",
-                _         => $"{rpmBase * scale:0}% RPM (Flowrate {flow:0.###})",
+                _         => $"{rpmAbs ?? rpmBase * rpmScale:0}% RPM (Flowrate {flow:0.###})",
             };
             tags.Add(new ViewportViewModel.ViewTag(overlayPt.X, overlayPt.Y, text));
         }
