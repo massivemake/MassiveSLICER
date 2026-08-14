@@ -118,8 +118,6 @@ internal static class SkinOnlyBracing
     /// Extrusion outside the effect's scope — what should stay straight.
     /// <list type="bullet">
     /// <item><c>WallsOnly</c>: slicer infill, X-bracing, Formbound fill, supports.</item>
-    /// <item><c>OuterSurfaceOnly</c>: the above plus every interior wall — cavity boundaries
-    /// and modelled ribs, which are perimeters and so would otherwise be textured.</item>
     /// <item><c>VisibleSkin</c>: whatever no horizontal ray could reach, from the precomputed
     /// <paramref name="interior"/> mask. This one cannot be answered from a move alone — it is a
     /// whole-layer question — so the mask is built once per layer and indexed here.</item>
@@ -135,7 +133,6 @@ internal static class SkinOnlyBracing
         return scope switch
         {
             PatternScope.WallsOnly        => !m.IsWall,
-            PatternScope.OuterSurfaceOnly => !m.IsWall || !m.IsOuterWall,
             PatternScope.VisibleSkin      => interior is not null
                                              && (uint)index < (uint)interior.Length
                                              && interior[index],

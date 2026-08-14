@@ -4586,11 +4586,9 @@ public partial class ViewportView : UserControl
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
             PatternScope     = s.PatternScope.StartsWith("Visible", StringComparison.OrdinalIgnoreCase)
                                    ? MassiveSlicer.Core.Models.PatternScope.VisibleSkin
-                                   : s.PatternScope.StartsWith("Outer", StringComparison.OrdinalIgnoreCase)
-                                       ? MassiveSlicer.Core.Models.PatternScope.OuterSurfaceOnly
-                                       : s.PatternScope.StartsWith("Walls", StringComparison.OrdinalIgnoreCase)
-                                           ? MassiveSlicer.Core.Models.PatternScope.WallsOnly
-                                           : MassiveSlicer.Core.Models.PatternScope.Everything,
+                                   : s.PatternScope.StartsWith("Walls", StringComparison.OrdinalIgnoreCase)
+                                       ? MassiveSlicer.Core.Models.PatternScope.WallsOnly
+                                       : MassiveSlicer.Core.Models.PatternScope.Everything,
             PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
                                    ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
                                    : s.PatternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase)

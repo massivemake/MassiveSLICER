@@ -9,13 +9,14 @@ namespace MassiveSlicer.Core.Slicing.Effects;
 /// skin. Rays never travel in Z, so this is a purely per-layer 2D question.
 ///
 /// <para>
-/// This exists because the nesting-depth test behind <see cref="PatternScope.OuterSurfaceOnly"/>
-/// asks "is this contour inside another one", which needs closed contours to mean anything. Parts
-/// that slice into open chains — scanned, organic or non-watertight meshes — come back with every
-/// contour at depth 0, so every wall is flagged outer and the scope silently has nothing to
-/// exclude. Measured on a real part: 6,676,002 wall moves, 6,676,002 of them "outer", zero
-/// interior. Visibility needs no closure, no nesting and no watertight mesh, so it still
-/// separates skin from structure where depth cannot.
+/// This exists because the obvious approach — nesting depth, "is this contour inside another
+/// one" — is a point-in-polygon test and needs closed contours to mean anything. Parts that slice
+/// into open chains (scanned, organic or non-watertight meshes) come back with every contour at
+/// depth 0, so everything reads as outermost and nothing can be excluded. Measured on a real
+/// part: 6,676,002 wall moves, every one of them at depth 0, zero interior. A depth-based scope
+/// was tried first and removed for exactly that reason; do not reach for it again without
+/// checking whether the target geometry actually closes. Visibility needs no closure, no nesting
+/// and no watertight mesh, so it separates skin from structure where depth cannot.
 /// </para>
 ///
 /// <para>

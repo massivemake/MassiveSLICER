@@ -568,16 +568,13 @@ public enum PatternScope
     /// <summary>Perimeters only — slicer infill, X-bracing, Formbound fill and supports
     /// stay straight. Interior walls (cavity boundaries, modelled ribs) are still textured.</summary>
     WallsOnly,
-    /// <summary>The part's outer surface only — nesting depth 0. Interior walls and modelled
-    /// braces stay straight along with the slicer's own structure.</summary>
-    OuterSurfaceOnly,
     /// <summary>
     /// Whatever a horizontal ray can reach. Rays sweep each layer from every compass direction
     /// and the first thing hit is skin; everything shadowed behind it stays straight.
     /// <para>
-    /// Unlike <see cref="OuterSurfaceOnly"/> this needs no closed contours, so it is the option
-    /// that works on scanned/organic parts, where every contour slices open and nesting depth
-    /// comes back 0 for the whole part.
+    /// Needs no closed contours, which is why this rather than a nesting-depth test: scanned and
+    /// organic parts slice into open chains, and "is this contour inside another one" has no
+    /// answer for those — measured on one, all 6,676,002 wall moves came back at depth 0.
     /// </para>
     /// </summary>
     VisibleSkin,

@@ -143,15 +143,15 @@ public sealed class PatternSkinOnlyTest
 
     /// <summary>
     /// Outer skin plus an INTERIOR wall — a cavity boundary, which is what a modelled rib or
-    /// brace slices into. Both are perimeters, so IsWall alone cannot separate them; only the
-    /// nesting depth carried on IsOuterWall can.
+    /// brace slices into. Both are perimeters, so <see cref="ToolpathMove.IsWall"/> is true for
+    /// both and cannot tell them apart; the inner loop is identified here by position instead.
     /// </summary>
     private static Toolpath BoxWithInteriorRibWall(float half = 100f, float z = 3f)
     {
         var layer = new ToolpathLayer(0, z);
         Vector3 P(float x, float y) => new(x, y, z);
 
-        void Loop(Vector3[] pts, bool outer)
+        void Loop(Vector3[] pts)
         {
             for (int c = 0; c < pts.Length; c++)
             {
@@ -162,13 +162,13 @@ public sealed class PatternSkinOnlyTest
                     layer.Moves.Add(new ToolpathMove(
                         Vector3.Lerp(a, b, st / (float)Steps),
                         Vector3.Lerp(a, b, (st + 1) / (float)Steps),
-                        MoveKind.Extrude) { IsWall = true, IsOuterWall = outer });
+                        MoveKind.Extrude) { IsWall = true });
             }
         }
 
-        Loop([P(-half, -half), P(half, -half), P(half, half), P(-half, half)], outer: true);
+        Loop([P(-half, -half), P(half, -half), P(half, half), P(-half, half)]);
         layer.Moves.Add(new ToolpathMove(P(-half, half), P(-40f, -40f), MoveKind.Travel));
-        Loop([P(-40f, -40f), P(40f, -40f), P(40f, 40f), P(-40f, 40f)], outer: false);
+        Loop([P(-40f, -40f), P(40f, -40f), P(40f, 40f), P(-40f, 40f)]);
 
         var tp = new Toolpath();
         tp.Layers.Add(layer);
@@ -176,44 +176,20 @@ public sealed class PatternSkinOnlyTest
     }
 
     [Fact]
-    public void OuterSurfaceOnlyLeavesAnInteriorWallStraight()
-    {
-        var outp = WaveEffect.Apply(BoxWithInteriorRibWall(), Wave(PatternScope.OuterSurfaceOnly));
-
-        // The interior loop's bottom run sits at y = -40 and must stay there.
-        float worst = outp.Layers[0].Moves
-            .Where(m => m.Kind == MoveKind.Extrude && m.IsWall && !m.IsOuterWall)
-            .Select(m => OffSquare(m.From, 40f))
-            .DefaultIfEmpty(0f).Max();
-
-        Assert.True(worst < 0.05f, $"interior wall was displaced by {worst:F3}mm");
-    }
-
-    [Fact]
     public void WallsOnlyStillTexturesAnInteriorWall()
     {
-        // The discriminator: under WallsOnly an interior wall IS a wall, so it must still be
-        // waved. If both modes behaved alike the new setting would be doing nothing.
+        // WallsOnly draws its line at wall-vs-structure, not outer-vs-inner: an interior wall IS
+        // a wall and must still be waved. Anyone wanting interior geometry left straight wants
+        // VisibleSkin, which decides by what a ray can actually see.
         var outp = WaveEffect.Apply(BoxWithInteriorRibWall(), Wave(PatternScope.WallsOnly));
 
+        // The inner loop is the run that lives within ~50mm of centre.
         float worst = outp.Layers[0].Moves
-            .Where(m => m.Kind == MoveKind.Extrude && m.IsWall && !m.IsOuterWall)
+            .Where(m => m.Kind == MoveKind.Extrude
+                        && MathF.Max(MathF.Abs(m.From.X), MathF.Abs(m.From.Y)) <= 60f)
             .Select(m => OffSquare(m.From, 40f))
             .DefaultIfEmpty(0f).Max();
 
         Assert.True(worst > 1f, $"interior wall should be waved under WallsOnly, moved {worst:F3}mm");
-    }
-
-    [Fact]
-    public void OuterSurfaceOnlyStillTexturesTheOuterSkin()
-    {
-        var outp = WaveEffect.Apply(BoxWithInteriorRibWall(), Wave(PatternScope.OuterSurfaceOnly));
-
-        float worst = outp.Layers[0].Moves
-            .Where(m => m.Kind == MoveKind.Extrude && m.IsOuterWall)
-            .Select(m => OffSquare(m.From, 100f))
-            .DefaultIfEmpty(0f).Max();
-
-        Assert.True(worst > 1f, $"outer skin was not displaced (max {worst:F3}mm)");
     }
 }

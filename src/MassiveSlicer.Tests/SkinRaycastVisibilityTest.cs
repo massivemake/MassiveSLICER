@@ -11,9 +11,10 @@ namespace MassiveSlicer.Tests;
 /// <para>
 /// The case that motivated it: a part whose contours all slice OPEN. Nesting depth is a
 /// point-in-polygon test, so an open chain is never "inside" anything and the whole part comes
-/// back at depth 0 — every wall flagged outer, nothing for <see cref="PatternScope.OuterSurfaceOnly"/>
-/// to exclude. Several tests here deliberately use open contours for that reason; a version of
-/// this that only ever saw closed loops would pass while the real part failed.
+/// back at depth 0 — every wall reading as outermost, nothing to exclude. Several tests here
+/// deliberately use open or fragmented contours for that reason; a version of this that only
+/// ever saw closed loops would pass while the real part failed, which is precisely how the
+/// earlier depth-based scope shipped looking correct.
 /// </para>
 /// </summary>
 public class SkinRaycastVisibilityTest

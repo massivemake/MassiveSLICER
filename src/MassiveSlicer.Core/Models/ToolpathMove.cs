@@ -39,14 +39,6 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     public bool  IsWall { get; init; }
 
     /// <summary>
-    /// This wall is the part's <b>outer surface</b> — nesting depth 0. A perimeter around a
-    /// cavity (an interior rib, a modelled brace, the inside of a hole) is a wall too but not
-    /// outer, so decorative effects can texture the visible skin and leave interior structure
-    /// alone. Meaningless unless <see cref="IsWall"/>.
-    /// </summary>
-    public bool  IsOuterWall { get; init; }
-
-    /// <summary>
     /// Absolute extrusion RPM (%) for this move, bypassing every per-move scale in
     /// <see cref="IO.ToolpathRpm.MoveScale"/> — including <see cref="PrintSpeedScale"/> and
     /// <see cref="HeightScale"/>. Null = derive RPM from speed as usual.

@@ -166,8 +166,7 @@ public static class ContourSeamPlanner
             if (chosen.IsClosed || !zigZag)
                 PrepareContourEntry(contour, normals, chosen.IsClosed, bestEntry, bestReverse);
 
-            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, zigZagReverse,
-                isOuter: chosen.Depth == 0);
+            EmitSingleContour(contour, normals, chosen.IsClosed, z, layer, ref lastPos, printed, zigZagReverse);
         }
     }
 
@@ -211,8 +210,7 @@ public static class ContourSeamPlanner
         ToolpathLayer layer,
         ref Vector2 lastPos,
         List<(Vector2 a, Vector2 b)> printed,
-        bool reversed,
-        bool isOuter = true)
+        bool reversed)
     {
         int n = c.Count;
         int spanMoveStart = layer.Moves.Count; // first move index this contour will emit
@@ -238,7 +236,7 @@ public static class ContourSeamPlanner
             else
             {
                 layer.Moves.Add(new ToolpathMove(prev, p, MoveKind.Extrude)
-                    { Normal = norm, IsWall = true, IsOuterWall = isOuter });
+                    { Normal = norm, IsWall = true });
                 printed.Add((new Vector2(prev.X, prev.Y), new Vector2(p.X, p.Y)));
             }
 
@@ -249,7 +247,7 @@ public static class ContourSeamPlanner
         if (count > 2 && first.HasValue && isClosed)
         {
             layer.Moves.Add(new ToolpathMove(prev, new Vector3(first.Value.X, first.Value.Y, z), MoveKind.Extrude)
-                { Normal = firstNorm, IsWall = true, IsOuterWall = isOuter });
+                { Normal = firstNorm, IsWall = true });
             printed.Add((new Vector2(prev.X, prev.Y), first.Value));
         }
 

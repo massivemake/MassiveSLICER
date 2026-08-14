@@ -5,21 +5,16 @@ using MassiveSlicer.Core.Slicing;
 namespace MassiveSlicer.Tests;
 
 /// <summary>
-/// Does the SLICER actually stamp the wall flags the pattern scope depends on?
+/// Does the SLICER actually stamp <see cref="ToolpathMove.IsWall"/>, which
+/// <see cref="PatternScope.WallsOnly"/> depends on?
 ///
 /// <para>
-/// <see cref="PatternSkinOnlyTest"/> builds its toolpaths by hand and sets
-/// <see cref="ToolpathMove.IsWall"/>/<see cref="ToolpathMove.IsOuterWall"/> itself, so it proves
-/// the effects honour the flags — it cannot prove anything ever produces them. This drives the
-/// real <see cref="PlanarSlicer"/> over a real mesh instead, which is the half of the path a user
-/// running "Outer surface only" depends on.
-/// </para>
-///
-/// <para>
-/// The model is a square tube: a 200mm box with a 40mm square bore through it. At any Z the
-/// cross-section is two nested loops — the outer surface (nesting depth 0) and the bore wall
-/// (depth 1) — which is the minimal stand-in for a part whose skin should be patterned while a
-/// modelled hole through it stays straight.
+/// <see cref="PatternSkinOnlyTest"/> builds its toolpaths by hand and sets the flag itself, so it
+/// proves the effects honour it — it cannot prove anything ever produces it. This drives the real
+/// <see cref="PlanarSlicer"/> over a real mesh instead, which is the half of the path a user
+/// running "Walls only" depends on. That gap is not theoretical: a scope setting that looked
+/// correct in every test still did nothing on a real part, because nothing tested the seam
+/// between the slicer and the effect.
 /// </para>
 /// </summary>
 public class PatternScopeSlicerFlagsTest
@@ -51,21 +46,14 @@ public class PatternScopeSlicerFlagsTest
         Box(80f, 80f, 120f, 120f, 0f, 20f),
     ];
 
-    private static SliceSettings Settings() => new()
+    private static SliceSettings Settings(SlicingMode mode = SlicingMode.Normal) => new()
     {
+        SlicingMode      = mode,
         LayerHeight      = 2f,
         FirstLayerHeight = 2f,
         BeadWidth        = 8f,
         InfillPattern    = InfillPattern.None,
     };
-
-    /// <summary>
-    /// Chebyshev distance from the part centre. The bore wall sits near 20-25mm out, the outer
-    /// surface near 96mm, so a 50mm split cleanly separates the two loops however the inset
-    /// nudges them.
-    /// </summary>
-    private static float FromCentre(Vector3 p)
-        => MathF.Max(MathF.Abs(p.X - 100f), MathF.Abs(p.Y - 100f));
 
     private static List<ToolpathMove> Walls(Toolpath tp) =>
         [.. tp.Layers.SelectMany(l => l.Moves)
@@ -81,66 +69,17 @@ public class PatternScopeSlicerFlagsTest
         int walls = Walls(tp).Count;
 
         Assert.True(walls > 0,
-            $"slicer marked NO move as a wall ({extrudes} extrude moves) — every pattern scope " +
-            "other than Everything treats the whole part as internal structure");
+            $"slicer marked NO move as a wall ({extrudes} extrude moves) — 'Walls only' would " +
+            "treat the whole part as internal structure and the pattern would vanish");
     }
 
+    /// <summary>Surface mode skips the contour inset entirely, so it reaches the flag by a
+    /// different path and deserves its own check.</summary>
     [Fact]
-    public void OuterSurfaceIsMarkedOuter()
+    public void SurfaceModeAlsoMarksPerimetersAsWalls()
     {
-        var tp = PlanarSlicer.Slice(TubeWithBore(), Settings());
+        var tp = PlanarSlicer.Slice(TubeWithBore(), Settings(SlicingMode.Surface));
 
-        var outerLoop = Walls(tp).Where(m => FromCentre(m.From) > 50f).ToList();
-        Assert.True(outerLoop.Count > 0, "no wall moves found on the outer surface");
-
-        int notOuter = outerLoop.Count(m => !m.IsOuterWall);
-        Assert.True(notOuter == 0,
-            $"{notOuter}/{outerLoop.Count} outer-surface wall moves were NOT flagged IsOuterWall — " +
-            "under 'Outer surface only' the visible skin would be left unpatterned");
-    }
-
-    [Fact]
-    public void BoreWallIsNotMarkedOuter()
-    {
-        var tp = PlanarSlicer.Slice(TubeWithBore(), Settings());
-
-        var boreLoop = Walls(tp).Where(m => FromCentre(m.From) <= 50f).ToList();
-        Assert.True(boreLoop.Count > 0, "no wall moves found on the bore");
-
-        int wronglyOuter = boreLoop.Count(m => m.IsOuterWall);
-        Assert.True(wronglyOuter == 0,
-            $"{wronglyOuter}/{boreLoop.Count} bore-wall moves were flagged IsOuterWall — " +
-            "the slicer is calling a depth-1 hole part of the outer surface, so 'Outer surface " +
-            "only' cannot exclude it and the pattern lands everywhere");
-    }
-
-    /// <summary>
-    /// Same tube, sliced in Surface mode. Surface mode skips the contour inset and re-derives
-    /// depths through <c>SurfaceSlicing.FilterContours</c>, so it is a genuinely different path
-    /// to the same flag — and it is the mode scanned/organic parts tend to be sliced in.
-    /// </summary>
-    [Fact]
-    public void BoreWallIsNotMarkedOuterInSurfaceMode()
-    {
-        var settings = new SliceSettings
-        {
-            SlicingMode      = SlicingMode.Surface,
-            LayerHeight      = 2f,
-            FirstLayerHeight = 2f,
-            BeadWidth        = 8f,
-            InfillPattern    = InfillPattern.None,
-        };
-        var tp = PlanarSlicer.Slice(TubeWithBore(), settings);
-
-        var walls = Walls(tp);
-        Assert.True(walls.Count > 0, "Surface mode marked no move as a wall at all");
-
-        var boreLoop = walls.Where(m => FromCentre(m.From) <= 50f).ToList();
-        Assert.True(boreLoop.Count > 0, "no wall moves found on the bore in Surface mode");
-
-        int wronglyOuter = boreLoop.Count(m => m.IsOuterWall);
-        Assert.True(wronglyOuter == 0,
-            $"Surface mode: {wronglyOuter}/{boreLoop.Count} bore-wall moves flagged IsOuterWall " +
-            "— 'Outer surface only' cannot exclude a hole in this mode");
+        Assert.True(Walls(tp).Count > 0, "Surface mode marked no move as a wall at all");
     }
 }

@@ -722,7 +722,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     }
 
     public string[] PatternScopeOptions { get; } =
-        ["Everything", "Walls only (no infill/bracing)", "Outer surface only", "Visible skin (raycast)"];
+        ["Everything", "Walls only (no infill/bracing)", "Visible skin (raycast)"];
 
     private string _patternScope = "Everything";
     /// <summary>
