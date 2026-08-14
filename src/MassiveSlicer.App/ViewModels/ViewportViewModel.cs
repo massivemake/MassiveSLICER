@@ -5193,6 +5193,14 @@ public sealed partial class ViewportViewModel : ViewModelBase
             execute:    () => _ = OnSliceRequested?.Invoke(),
             canExecute: () => !IsSlicing && HasMeshSelected);
 
+        // Deliberately NOT gated on HasMeshSelected. Selecting an effector or a modifier gizmo
+        // clears that flag, so the one control that could rescue a scene above the auto-slice
+        // size limit switched itself off exactly when it was needed. This resolves the print
+        // object itself rather than trusting the selection.
+        SliceNowCommand = new RelayCommand(
+            execute:    () => _ = OnSliceNowRequested?.Invoke(),
+            canExecute: () => !IsSlicing);
+
         // Relief milling: guard inside RunMillAsync (no canExecute predicate to avoid
         // threading RaiseCanExecuteChanged through every selection-change site).
         MillCommand = new RelayCommand(() => _ = OnMillRequested?.Invoke());
@@ -5660,6 +5668,7 @@ public sealed partial class ViewportViewModel : ViewModelBase
             if (SetField(ref _isSlicing, value))
             {
                 SliceCommand?.RaiseCanExecuteChanged();
+                SliceNowCommand?.RaiseCanExecuteChanged();
                 UpdateSliceCommand?.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(ShowSliceStatus));
             }
@@ -6107,6 +6116,12 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
     public RelayCommand SliceCommand { get; }
+
+    /// <summary>Slice the active print object regardless of what is selected in the outliner.</summary>
+    public RelayCommand SliceNowCommand { get; }
+
+    /// <summary>Wired by the viewport; resolves the print object and slices or re-slices it.</summary>
+    internal Func<System.Threading.Tasks.Task>? OnSliceNowRequested { get; set; }
 
     /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
     public RelayCommand MillCommand { get; }

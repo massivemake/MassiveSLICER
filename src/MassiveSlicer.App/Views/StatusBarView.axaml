@@ -66,8 +66,8 @@
                      limit nothing re-slices on its own, and the only other way to run one was
                      the console — easy to read a stale toolpath as "the setting did nothing". -->
                 <Button Content="Slice now" Padding="10,2" FontSize="11"
-                        IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceNowButton}"
-                        Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+                        ToolTip.Tip="Slice the print object now. Always available — above the auto-slice size limit nothing re-slices on its own, and selecting an effector used to disable the only control that could."
+                        Command="{Binding $parent[Window].DataContext.Viewport.SliceNowCommand}"/>
             </StackPanel>
         </Grid>
     </Border>

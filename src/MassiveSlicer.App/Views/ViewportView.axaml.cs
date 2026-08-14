@@ -973,6 +973,7 @@ public partial class ViewportView : UserControl
             SchedulePanelTransformUndo(vm, node, "Scale", old);
         };
 
+        vm.OnSliceNowRequested = () => ForceSliceActiveAsync(vm);
         vm.GetToolWorldPose = ComputeToolWorldPose;
         vm.GetFlangeInBaseForCalibration = GetFlangeInBaseForCalibration;
 
@@ -6083,6 +6084,24 @@ public partial class ViewportView : UserControl
         return n;
     }
 
+    /// <summary>
+    /// Slices the active print object on demand, bypassing the auto-slice size guard. Resolves
+    /// the object the same way the realtime path does, so it works with an effector or a
+    /// modifier selected — the case where the selection-based Slice command switches itself off.
+    /// </summary>
+    private async Task ForceSliceActiveAsync(ViewportViewModel vm)
+    {
+        var item = vm.OwningModelItem(vm.ResolveActivePrintObjectItem())
+                   ?? vm.EnumerateUserModelItems().FirstOrDefault(i => i.Children.Any(c => c.IsToolpath))
+                   ?? vm.EnumerateUserModelItems().FirstOrDefault();
+        if (item is null) return;
+
+        if (item.Children.FirstOrDefault(c => c.IsToolpath) is { } existing)
+            await RunUpdateSliceAsync(vm, (item, existing));
+        else
+            await RunSliceAsync(vm);
+    }
+
     private async Task RunRealtimeSliceAsync(ViewportViewModel vm)
     {
         if (HasProtectedBakedToolpath(vm))
@@ -6093,6 +6112,20 @@ public partial class ViewportView : UserControl
         if (item is null) return;
 
         var toolpathChild = item.Children.FirstOrDefault(c => c.IsToolpath);
+
+        // Selecting something that is not a print object — an effector, a modifier gizmo — makes
+        // the active-object lookup land on an item with no toolpath. That sent every re-slice
+        // down the fresh-import path and straight into the size guard, so auto-slice appeared to
+        // stop dead the moment an effector was placed. A settings change on a sliced scene is a
+        // RE-slice request: prefer whatever already carries a toolpath.
+        if (toolpathChild is null
+            && vm.EnumerateUserModelItems().FirstOrDefault(i => i.Children.Any(c => c.IsToolpath))
+               is { } sliced)
+        {
+            item = sliced;
+            toolpathChild = sliced.Children.First(c => c.IsToolpath);
+        }
+
         if (toolpathChild is null)
         {
             // No toolpath yet — this is a fresh import, so produce the FIRST slice rather
