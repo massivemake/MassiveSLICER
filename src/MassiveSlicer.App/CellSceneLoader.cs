@@ -208,38 +208,9 @@ internal static class CellSceneLoader
 
     private static SceneNode BuildToolHolder(ToolCellConfig tool)
     {
-        bool isGlb = tool.ModelPath.EndsWith(".glb",  StringComparison.OrdinalIgnoreCase)
-                  || tool.ModelPath.EndsWith(".gltf", StringComparison.OrdinalIgnoreCase);
-
-        if (isGlb)
-        {
-            var toolRoot = GltfLoader.Load(AssetPaths.Resolve(tool.ModelPath));
-            var children = toolRoot.Children.ToList();
-            foreach (var child in children)
-                toolRoot.RemoveChild(child);
-
-            var holder = new SceneNode
-            {
-                Name           = "Tool",
-                LocalTransform = Matrix4.CreateRotationY(MathF.PI / 2f),
-                Selectable     = false,
-            };
-            foreach (var child in children)
-                holder.AddChild(child);
-            return holder;
-        }
-
-        var stlNode = StlLoader.Load(AssetPaths.Resolve(tool.ModelPath), "Tool");
-        var stlHolder = new SceneNode
-        {
-            Name           = "Tool",
-            LocalTransform = Matrix4.CreateScale(1f / 1000f)
-                           * Matrix4.CreateRotationX(-MathF.PI / 2f)
-                           * Matrix4.CreateRotationY(MathF.PI / 2f),
-            Selectable     = false,
-        };
-        stlHolder.AddChild(stlNode);
-        return stlHolder;
+        // Same prep path as multi-tool docks (bake Blender TRS / mm→m).
+        return CellEnvironmentBuilder.BuildToolHolderMesh(tool)
+            ?? throw new InvalidOperationException($"Failed to load tool model: {tool.ModelPath}");
     }
 
     private static void ApplyBedMaterialTint(SceneNode root)
