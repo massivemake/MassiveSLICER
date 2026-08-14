@@ -101,6 +101,15 @@ public static class PatternEffect
             // keeps the phase aligned layer over layer even as seams wander.
             ChainInfo[]? chainOf = arcMode ? BuildChains(layer, ctx) : null;
 
+            // VisibleSkin asks a whole-layer question — "could a horizontal ray reach this" —
+            // so the answer is computed once here and indexed per move below. Penetration is
+            // one bead width: the geometry within a bead behind the first hit is the same
+            // surface the pattern is pushing in and out.
+            bool[]? interior = scope == PatternScope.VisibleSkin
+                ? SkinRaycastVisibility.BuildInteriorMask(
+                      layer.Moves, settings.BeadWidth, settings.BeadWidth)
+                : null;
+
             // Skin-only: displace the wall, then carry the structure's ENDS along with it so
             // braces stay attached without being bowed. The wall is walked first to learn where
             // it moved, so this pass has to run before the emit loop below.
@@ -111,7 +120,7 @@ public static class PatternEffect
                 for (int mi = 0; mi < layer.Moves.Count; mi++)
                 {
                     var m = layer.Moves[mi];
-                    if (SkinOnlyBracing.IsStructure(m, scope)) continue;
+                    if (SkinOnlyBracing.IsStructure(m, scope, interior, mi)) continue;
                     if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
                     if (Vector3.Distance(m.From, m.To) < 1e-4f) continue;
                     var tan = Vector3.Normalize(m.To - m.From);
@@ -123,7 +132,7 @@ public static class PatternEffect
                                                Vector3.Distance(m.From, m.To), 0f);
                     wallField.Record(m.From, m.From + pp * ctx.Displacement(m.From, thetaW));
                 }
-                structureBlend = SkinOnlyBracing.BlendForStructure(layer.Moves, wallField, scope);
+                structureBlend = SkinOnlyBracing.BlendForStructure(layer.Moves, wallField, scope, interior);
             }
 
             for (int mi = 0; mi < layer.Moves.Count; mi++)
@@ -136,7 +145,7 @@ public static class PatternEffect
                 }
 
                 // Structure under skin-only: one straight segment, ends riding the wall.
-                if (structureBlend is not null && SkinOnlyBracing.IsStructure(move, scope))
+                if (structureBlend is not null && SkinOnlyBracing.IsStructure(move, scope, interior, mi))
                 {
                     var (dFrom, dTo) = structureBlend[mi];
                     newLayer.Moves.Add(move with { From = move.From + dFrom, To = move.To + dTo });

@@ -1756,7 +1756,7 @@
 
                             <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
                                 <TextBlock Grid.Column="0" Text="Apply to" FontSize="11" VerticalAlignment="Center"
-                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Outer surface only: just the visible skin — interior walls and modelled braces stay straight too. Whatever is left out keeps its ends on the wall so it stays bonded."/>
+                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Outer surface only: just the visible skin — interior walls and modelled braces stay straight too, but this needs closed contours, so a scanned or non-watertight part reads as all-outer and nothing is excluded. Visible skin (raycast): sweeps horizontal rays across each layer and patterns whatever they reach first — works when nesting does not. Whatever is left out keeps its ends on the wall so it stays bonded."/>
                                 <ComboBox Grid.Column="1" MinWidth="150"
                                           ItemsSource="{Binding Additive.PatternScopeOptions}"
                                           SelectedItem="{Binding Additive.PatternScope, Mode=TwoWay}"/>

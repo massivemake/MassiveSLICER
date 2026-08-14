@@ -87,6 +87,16 @@ public static class WaveEffect
             var wallField = skinOnly ? new SkinOnlyBracing.WallField() : null;
             var deferred  = skinOnly ? new List<(int NewStart, int OrigStart, int Count)>() : null;
 
+            // Horizontal-visibility scope: one whole-layer raycast, settled per contour because
+            // a wave's phase runs continuously along a loop and cannot stop partway.
+            bool[]? interior = null;
+            if (scope == PatternScope.VisibleSkin)
+            {
+                interior = SkinRaycastVisibility.BuildInteriorMask(
+                    layer.Moves, settings.BeadWidth, settings.BeadWidth);
+                SkinRaycastVisibility.HomogenizeByContour(layer.Moves, interior);
+            }
+
             int i = 0;
             while (i < layer.Moves.Count)
             {
@@ -105,7 +115,8 @@ public static class WaveEffect
                        !layer.Moves[i].IsLayerStitch)
                     i++;
 
-                if (deferred is not null && SkinOnlyBracing.IsStructure(layer.Moves[contourStart], scope))
+                if (deferred is not null &&
+                    SkinOnlyBracing.IsStructure(layer.Moves[contourStart], scope, interior, contourStart))
                 {
                     deferred.Add((newLayer.Moves.Count, contourStart, i - contourStart));
                     for (int k = contourStart; k < i; k++) newLayer.Moves.Add(layer.Moves[k]);
@@ -128,11 +139,11 @@ public static class WaveEffect
                 {
                     var run   = new ToolpathMove[count];
                     for (int k = 0; k < count; k++) run[k] = layer.Moves[origStart + k];
-                    var blend = SkinOnlyBracing.BlendForStructure(run, wallField, scope);
+                    var blend = SkinOnlyBracing.BlendForStructure(run, wallField, scope, interior, origStart);
 
                     for (int k = 0; k < count; k++)
                     {
-                        if (!SkinOnlyBracing.IsStructure(run[k], scope)) continue;
+                        if (!SkinOnlyBracing.IsStructure(run[k], scope, interior, origStart + k)) continue;
                         newLayer.Moves[newStart + k] = run[k] with
                         {
                             From = run[k].From + blend[k].AtFrom,

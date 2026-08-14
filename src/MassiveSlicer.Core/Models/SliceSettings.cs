@@ -571,6 +571,16 @@ public enum PatternScope
     /// <summary>The part's outer surface only — nesting depth 0. Interior walls and modelled
     /// braces stay straight along with the slicer's own structure.</summary>
     OuterSurfaceOnly,
+    /// <summary>
+    /// Whatever a horizontal ray can reach. Rays sweep each layer from every compass direction
+    /// and the first thing hit is skin; everything shadowed behind it stays straight.
+    /// <para>
+    /// Unlike <see cref="OuterSurfaceOnly"/> this needs no closed contours, so it is the option
+    /// that works on scanned/organic parts, where every contour slices open and nesting depth
+    /// comes back 0 for the whole part.
+    /// </para>
+    /// </summary>
+    VisibleSkin,
 }
 
 public enum EffectorMode

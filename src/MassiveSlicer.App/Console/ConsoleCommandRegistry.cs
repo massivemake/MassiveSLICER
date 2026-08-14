@@ -314,8 +314,11 @@ public sealed class ConsoleCommandRegistry
                 string path = string.IsNullOrWhiteSpace(args)
                     ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "toolpath-dump.csv")
                     : args.Trim();
+                // wall/outer are what every PatternScope decision reads. Without them a dump
+                // cannot answer "why did the pattern land here", which is the question the
+                // scope setting actually gets asked.
                 var sb = new System.Text.StringBuilder(
-                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz\n");
+                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz,wall,outer\n");
                 for (int li = 0; li < tp.Layers.Count; li++)
                 {
                     var lyr = tp.Layers[li];
@@ -334,11 +337,29 @@ public sealed class ConsoleCommandRegistry
                           .Append(m.HeightScale.ToString("0.###")).Append(',')
                           .Append(n.X.ToString("0.####")).Append(',')
                           .Append(n.Y.ToString("0.####")).Append(',')
-                          .Append(n.Z.ToString("0.####")).Append('\n');
+                          .Append(n.Z.ToString("0.####")).Append(',')
+                          .Append(m.IsWall ? 1 : 0).Append(',')
+                          .Append(m.IsOuterWall ? 1 : 0).Append('\n');
                     }
                 }
                 System.IO.File.WriteAllText(path, sb.ToString());
                 ctx.Log($"[tpdump] {tp.Layers.Count} layer(s) → {path}");
+
+                // Scope summary. "outer == wall" is the tell that every contour came back at
+                // nesting depth 0, which makes "Outer surface only" identical to "Walls only"
+                // and looks exactly like the setting being ignored.
+                var ex = tp.Layers.SelectMany(l => l.Moves)
+                           .Where(m => m.Kind == MoveKind.Extrude && !m.IsLayerStitch).ToList();
+                int wall = ex.Count(m => m.IsWall);
+                int outer = ex.Count(m => m.IsWall && m.IsOuterWall);
+                ctx.Log($"[tpdump] extrude={ex.Count:N0}  wall={wall:N0}  outer={outer:N0}  " +
+                        $"inner-wall={wall - outer:N0}  non-wall={ex.Count - wall:N0}");
+                if (wall == 0)
+                    ctx.LogError("[tpdump] NO walls flagged — every pattern scope but 'Everything' " +
+                                 "treats the whole part as internal structure (pattern disappears)");
+                else if (wall == outer)
+                    ctx.LogError("[tpdump] every wall is flagged OUTER — no contour came back nested, " +
+                                 "so 'Outer surface only' cannot exclude anything (pattern lands everywhere)");
             },
         });
 

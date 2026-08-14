@@ -65,7 +65,8 @@ internal static class SkinOnlyBracing
     /// zero and should be ignored by the caller.
     /// </summary>
     internal static (Vector3 AtFrom, Vector3 AtTo)[] BlendForStructure(
-        IReadOnlyList<ToolpathMove> moves, WallField wall, PatternScope scope)
+        IReadOnlyList<ToolpathMove> moves, WallField wall, PatternScope scope,
+        bool[]? interior = null, int indexOffset = 0)
     {
         var result = new (Vector3, Vector3)[moves.Count];
         if (wall.IsEmpty) return result;
@@ -73,7 +74,7 @@ internal static class SkinOnlyBracing
         int i = 0;
         while (i < moves.Count)
         {
-            if (!IsStructure(moves[i], scope)) { i++; continue; }
+            if (!IsStructure(moves[i], scope, interior, indexOffset + i)) { i++; continue; }
 
             // Contiguous run of structure moves = one brace / one fill line.
             int start = i;
@@ -81,7 +82,7 @@ internal static class SkinOnlyBracing
             var cum = new List<float> { 0f };
             var prevTo = moves[i].From;
             int j = i;
-            while (j < moves.Count && IsStructure(moves[j], scope)
+            while (j < moves.Count && IsStructure(moves[j], scope, interior, indexOffset + j)
                    && Vector3.DistanceSquared(moves[j].From, prevTo) <= 1.0f)
             {
                 total += Vector3.Distance(moves[j].From, moves[j].To);
@@ -119,15 +120,25 @@ internal static class SkinOnlyBracing
     /// <item><c>WallsOnly</c>: slicer infill, X-bracing, Formbound fill, supports.</item>
     /// <item><c>OuterSurfaceOnly</c>: the above plus every interior wall — cavity boundaries
     /// and modelled ribs, which are perimeters and so would otherwise be textured.</item>
+    /// <item><c>VisibleSkin</c>: whatever no horizontal ray could reach, from the precomputed
+    /// <paramref name="interior"/> mask. This one cannot be answered from a move alone — it is a
+    /// whole-layer question — so the mask is built once per layer and indexed here.</item>
     /// </list>
     /// </summary>
-    internal static bool IsStructure(ToolpathMove m, PatternScope scope)
+    /// <param name="interior">Per-move interior mask for <c>VisibleSkin</c>, indexed by position
+    /// in the layer. Null for every other scope.</param>
+    /// <param name="index">This move's index in the layer, for <paramref name="interior"/>.</param>
+    internal static bool IsStructure(ToolpathMove m, PatternScope scope,
+        bool[]? interior = null, int index = -1)
     {
         if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) return false;
         return scope switch
         {
             PatternScope.WallsOnly        => !m.IsWall,
             PatternScope.OuterSurfaceOnly => !m.IsWall || !m.IsOuterWall,
+            PatternScope.VisibleSkin      => interior is not null
+                                             && (uint)index < (uint)interior.Length
+                                             && interior[index],
             _                             => false,
         };
     }
