@@ -533,6 +533,13 @@ public static class PlanarSlicer
             ExtractSingleSkinOpenFaces(insetContours, insetClosed, settings.BeadWidth);
             if (!settings.ZigZagAllowSameLayerTravel)
                 KeepLongestOpenFaceOnly(insetContours, insetClosed);
+
+            // Both rewrite the contour list in place — splitting and pruning entries — so the
+            // depths gathered alongside no longer line up. Single-skin leaves one open skin per
+            // face, which IS the outer surface, so depth 0 across the board is both correct and
+            // realigned. Without this the wall/interior split would read from stale indices.
+            insetDepth.Clear();
+            for (int i = 0; i < insetContours.Count; i++) insetDepth.Add(0);
         }
 
         // Single-skin X-bracing: hairpin detours into the wall along the open path.
