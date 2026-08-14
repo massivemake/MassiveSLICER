@@ -57,10 +57,18 @@
                            Classes="LabelMuted BuildLabel"
                            Classes.Stale="{Binding IsBuildStale}"/>
             </Border>
-            <TextBlock Text="{Binding OperationFeedback}"
-                       VerticalAlignment="Center"
-                       HorizontalAlignment="Right"
-                       Classes="LabelMuted"/>
+            <StackPanel Orientation="Horizontal" Spacing="8"
+                        VerticalAlignment="Center" HorizontalAlignment="Right">
+                <TextBlock Text="{Binding OperationFeedback}"
+                           VerticalAlignment="Center"
+                           Classes="LabelMuted"/>
+                <!-- Sits beside the message that asks for it. Above the auto-slice triangle
+                     limit nothing re-slices on its own, and the only other way to run one was
+                     the console — easy to read a stale toolpath as "the setting did nothing". -->
+                <Button Content="Slice now" Padding="10,2" FontSize="11"
+                        IsVisible="{Binding $parent[Window].DataContext.Viewport.ShowSliceNowButton}"
+                        Command="{Binding $parent[Window].DataContext.Viewport.SliceCommand}"/>
+            </StackPanel>
         </Grid>
     </Border>
 
