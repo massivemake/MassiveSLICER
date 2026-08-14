@@ -90,9 +90,17 @@
                         <TextBlock Grid.Column="1" Text="{Binding Viewport.SliceStatusMessage}"
                                    Foreground="#FFFF7070" FontSize="11" TextWrapping="Wrap"
                                    VerticalAlignment="Center"/>
-                        <Button Grid.Column="2" Content="Go to issue" Padding="10,2" Margin="8,0,0,0"
-                                IsVisible="{Binding Viewport.HasValidationIssueJump}"
-                                Click="OnGoToValidationIssue"/>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" Margin="8,0,0,0">
+                            <!-- Auto-slice is skipped above the triangle limit, and the message
+                                 said "Press Slice" when nothing in the UI was bound to
+                                 SliceCommand — it was reachable only from the console. -->
+                            <Button Content="Slice now" Padding="10,2"
+                                    IsVisible="{Binding Viewport.ShowSliceNowButton}"
+                                    Command="{Binding Viewport.SliceCommand}"/>
+                            <Button Content="Go to issue" Padding="10,2"
+                                    IsVisible="{Binding Viewport.HasValidationIssueJump}"
+                                    Click="OnGoToValidationIssue"/>
+                        </StackPanel>
                     </Grid>
 
                     <Grid Height="24" Margin="8,0">

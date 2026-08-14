@@ -5686,6 +5686,18 @@ public sealed partial class ViewportViewModel : ViewModelBase
 
     public bool HasValidationIssueJump => _firstValidationIssueIndex >= 0;
 
+    private bool _showSliceNowButton;
+    /// <summary>
+    /// Auto-slice is skipped above the triangle limit, and until now the status told the user to
+    /// "Press Slice" when no button in the UI was bound to <see cref="SliceCommand"/> — it was
+    /// reachable only from the console. Shown whenever a slice is waiting on the user.
+    /// </summary>
+    public bool ShowSliceNowButton
+    {
+        get => _showSliceNowButton;
+        set => SetField(ref _showSliceNowButton, value);
+    }
+
     /// <summary>Jumps the scrubber to the first flagged move so the failing pose is visible.</summary>
     public void JumpToValidationIssue()
     {

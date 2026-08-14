@@ -5228,6 +5228,7 @@ public partial class ViewportView : UserControl
         _sliceStatusClearGen++;
         vm.IsSlicing = true;
         vm.SliceStatusIsError = false;
+        vm.ShowSliceNowButton = false;   // the slice the prompt asked for is now running
         SetSliceStatus(vm, "Slicing…");
 
         try
@@ -6102,7 +6103,9 @@ public partial class ViewportView : UserControl
             if (tris > AutoSliceMaxTriangles)
             {
                 SetSliceStatus(vm,
-                    $"Auto-slice skipped — {tris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). Press Slice to run it.");
+                    $"Auto-slice skipped — {tris:N0} triangles (limit {AutoSliceMaxTriangles:N0}). " +
+                    "Use Slice now, or the console `slice` command.");
+                vm.ShowSliceNowButton = true;
                 return;
             }
             await RunSliceAsync(vm);
