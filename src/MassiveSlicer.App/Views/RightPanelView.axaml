@@ -1754,6 +1754,15 @@
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                        Text="Decorative wall pattern applied to the toolpath when slicing."/>
 
+                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Apply to" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Outer surface only: just the visible skin — interior walls and modelled braces stay straight too. Whatever is left out keeps its ends on the wall so it stays bonded."/>
+                                <ComboBox Grid.Column="1" MinWidth="150"
+                                          ItemsSource="{Binding Additive.PatternScopeOptions}"
+                                          SelectedItem="{Binding Additive.PatternScope, Mode=TwoWay}"/>
+                            </Grid>
+
+
                             <Expander Classes="SectionExpander" Header="PATTERN TOOLS" IsExpanded="False" Margin="0,0,0,4">
                             <StackPanel>
 
@@ -1911,14 +1920,6 @@
                                 <ComboBox Grid.Column="1" MinWidth="150"
                                           ItemsSource="{Binding Additive.PatternMappingOptions}"
                                           SelectedItem="{Binding Additive.PatternMapping, Mode=TwoWay}"/>
-                            </Grid>
-
-                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
-                                <TextBlock Grid.Column="0" Text="Apply to" FontSize="11" VerticalAlignment="Center"
-                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Outer surface only: just the visible skin — interior walls and modelled braces stay straight too. Whatever is left out keeps its ends on the wall so it stays bonded."/>
-                                <ComboBox Grid.Column="1" MinWidth="150"
-                                          ItemsSource="{Binding Additive.PatternScopeOptions}"
-                                          SelectedItem="{Binding Additive.PatternScope, Mode=TwoWay}"/>
                             </Grid>
 
                             <Grid Margin="10,6,10,0" ColumnDefinitions="*,80"
