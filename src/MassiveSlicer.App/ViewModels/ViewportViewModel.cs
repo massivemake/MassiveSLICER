@@ -5716,7 +5716,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     public bool SliceStatusIsError
     {
         get => _sliceStatusIsError;
-        set => SetField(ref _sliceStatusIsError, value);
+        set
+        {
+            // ShowSliceStatus gates on this too — without the notify the banner only
+            // re-evaluates when the message text also changes.
+            if (SetField(ref _sliceStatusIsError, value))
+                OnPropertyChanged(nameof(ShowSliceStatus));
+        }
     }
 
     /// <summary>True when a slice error message should be shown in-panel (progress uses footer line + console).</summary>
