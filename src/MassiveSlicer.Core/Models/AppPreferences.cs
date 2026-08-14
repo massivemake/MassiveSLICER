@@ -358,6 +358,10 @@ public sealed class AppPreferences
 
     /// <summary>Pattern distribution: "Wavelength (mm)", "Even (path length)", or "Radial (angle)".</summary>
     public string PatternMapping { get; set; } = "Wavelength (mm)";
+    /// <summary>How far Wave/Pattern reach: Everything / Walls only / Visible skin (raycast).
+    /// An unrecognised value falls back to Everything, so workspaces saved with a retired
+    /// option still load.</summary>
+    public string PatternScope { get; set; } = "Everything";
 
     public double PatternWavelengthMm { get; set; } = 60.0;
     public double PatternAmplitude { get; set; }

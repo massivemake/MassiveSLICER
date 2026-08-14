@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-07** (Seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+Last updated: **2026-08-14** (Pattern scope — skin vs bracing, raycast visibility; seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
 
 ---
 
@@ -483,6 +483,46 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-14 — Pattern scope: texture the skin, leave bracing straight (main 571)
+
+**Shipped** (`PatternScope` in `SliceSettings`, picker at the top of PATTERN AND TEXTURE):
+`Everything` / `WallsOnly` / `VisibleSkin`. Wave and Pattern displace only what is in scope.
+
+- `ToolpathMove.IsWall`, set only by `ContourSeamPlanner` — the one place perimeters are
+  emitted, so infill / X-bracing / Formbound / supports default to structure.
+- `SkinOnlyBracing`: structure left out of scope stays straight, but an **open** run's ends
+  take the displacement of the nearest wall point, blended linearly along the run. Linear
+  blending is what keeps a brace straight — a straight segment under a linearly varying
+  displacement is still straight. **Closed** runs (cavity boundaries) are left exactly where
+  the slicer put them: they have no ends to keep attached, and translating a whole loop toward
+  one side of a wavy skin only drags it off true.
+- Fixed en route: both effects rebuilt moves keeping only `Normal`/`IsLayerChange`, silently
+  dropping `IsBrim`, `HeightScale`, `PrintSpeedScale`, `IsWipe` — so brim RPM and adaptive
+  layer-height flow were discarded on any patterned wall.
+
+**A nesting-depth scope was built, shipped, and then REMOVED by taqotaqo** (`2474456`),
+superseded by their raycast (`d7fd2bb`). Worth knowing why, because the reasoning generalises:
+classifying a wall as outer-vs-interior by contour nesting asks "is this contour inside
+another one", and **open chains have no answer**. Scanned and organic parts slice into open
+chains — measured on one, all **6,676,002** wall moves came back at depth 0, so every interior
+rib was classified as outer surface and got textured. `VisibleSkin` instead sweeps horizontal
+rays from every compass direction per layer: first thing hit is skin, anything shadowed behind
+it stays straight. No closed contours required.
+
+**Do not reach for contour nesting on this codebase's real parts.** It is correct only for
+clean solid models; the LFAM workload is largely scanned/organic.
+
+**Still open — on `feature/pattern-skin-only`, NOT merged, may still reproduce on main:**
+selecting a non-print-object (an effector, a modifier gizmo) breaks slicing two ways. Auto-slice
+resolves to an item with no toolpath and takes the fresh-import path into the size guard; and
+`SliceCommand` requires `HasMeshSelected`, which an effector selection clears — so the only
+control that could rescue a scene above the auto-slice triangle limit disables itself exactly
+when it is needed. Combined with the 1M-triangle guard this reads as "the setting did nothing"
+while the toolpath is simply stale. Verify against main before porting the fix.
+
+**Also on that branch and now dead:** the `walls` console command and the single-skin depth
+realignment both depend on the removed nesting mechanism.
 
 ### 2026-08-07 — Seam guide traces the model surface (merged; five failed attempts first)
 

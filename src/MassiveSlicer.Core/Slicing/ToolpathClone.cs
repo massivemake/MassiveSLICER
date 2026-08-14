@@ -37,6 +37,7 @@ public static class ToolpathClone
                     IsLightning       = move.IsLightning,
                     HeightScale       = move.HeightScale,
                     IsBrim            = move.IsBrim,
+                    IsWall            = move.IsWall,
                     RpmPercentOverride = move.RpmPercentOverride,
                 });
             }
