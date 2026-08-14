@@ -28,6 +28,17 @@ public sealed record ToolpathMove(Vector3 From, Vector3 To, MoveKind Kind)
     public bool  IsWipe { get; init; }
 
     /// <summary>
+    /// Part of a perimeter/shell loop — the printed skin, as opposed to infill, X-bracing,
+    /// Formbound fill, supports or brim. Set only by <c>ContourSeamPlanner</c>, the single
+    /// place walls are emitted, so everything else defaults to false.
+    /// <para>
+    /// Decorative effects use this to pattern the skin while leaving structure straight.
+    /// Without it every extrude move looks identical to a post-processor.
+    /// </para>
+    /// </summary>
+    public bool  IsWall { get; init; }
+
+    /// <summary>
     /// Absolute extrusion RPM (%) for this move, bypassing every per-move scale in
     /// <see cref="IO.ToolpathRpm.MoveScale"/> — including <see cref="PrintSpeedScale"/> and
     /// <see cref="HeightScale"/>. Null = derive RPM from speed as usual.

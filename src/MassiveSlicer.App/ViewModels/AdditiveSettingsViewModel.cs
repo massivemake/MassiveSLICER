@@ -721,6 +721,20 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _patternType, value);
     }
 
+    public string[] PatternScopeOptions { get; } =
+        ["Everything", "Walls only (no infill/bracing)", "Visible skin (raycast)"];
+
+    private string _patternScope = "Everything";
+    /// <summary>
+    /// How far Wave/Pattern reach into the part. Anything left out stays straight, but its ends
+    /// still ride the wall so it stays bonded.
+    /// </summary>
+    public string PatternScope
+    {
+        get => _patternScope;
+        set => SetField(ref _patternScope, value);
+    }
+
     public string[] PatternMappingOptions { get; } =
         ["Wavelength (mm)", "Even (path length)", "Radial (angle)"];
 

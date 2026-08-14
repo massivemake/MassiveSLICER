@@ -235,7 +235,8 @@ public static class ContourSeamPlanner
             }
             else
             {
-                layer.Moves.Add(new ToolpathMove(prev, p, MoveKind.Extrude) { Normal = norm });
+                layer.Moves.Add(new ToolpathMove(prev, p, MoveKind.Extrude)
+                    { Normal = norm, IsWall = true });
                 printed.Add((new Vector2(prev.X, prev.Y), new Vector2(p.X, p.Y)));
             }
 
@@ -246,7 +247,7 @@ public static class ContourSeamPlanner
         if (count > 2 && first.HasValue && isClosed)
         {
             layer.Moves.Add(new ToolpathMove(prev, new Vector3(first.Value.X, first.Value.Y, z), MoveKind.Extrude)
-                { Normal = firstNorm });
+                { Normal = firstNorm, IsWall = true });
             printed.Add((new Vector2(prev.X, prev.Y), first.Value));
         }
 

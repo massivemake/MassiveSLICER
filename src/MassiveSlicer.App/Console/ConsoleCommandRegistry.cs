@@ -314,8 +314,10 @@ public sealed class ConsoleCommandRegistry
                 string path = string.IsNullOrWhiteSpace(args)
                     ? System.IO.Path.Combine(System.IO.Path.GetTempPath(), "toolpath-dump.csv")
                     : args.Trim();
+                // wall is what Walls-only reads. Without it a dump cannot answer "why did the
+                // pattern land here", which is the question the scope setting actually gets asked.
                 var sb = new System.Text.StringBuilder(
-                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz\n");
+                    "layer,z,kind,fx,fy,fz,tx,ty,tz,lightning,hscale,nx,ny,nz,wall\n");
                 for (int li = 0; li < tp.Layers.Count; li++)
                 {
                     var lyr = tp.Layers[li];
@@ -334,11 +336,23 @@ public sealed class ConsoleCommandRegistry
                           .Append(m.HeightScale.ToString("0.###")).Append(',')
                           .Append(n.X.ToString("0.####")).Append(',')
                           .Append(n.Y.ToString("0.####")).Append(',')
-                          .Append(n.Z.ToString("0.####")).Append('\n');
+                          .Append(n.Z.ToString("0.####")).Append(',')
+                          .Append(m.IsWall ? 1 : 0).Append('\n');
                     }
                 }
                 System.IO.File.WriteAllText(path, sb.ToString());
                 ctx.Log($"[tpdump] {tp.Layers.Count} layer(s) → {path}");
+
+                // Scope summary. The pattern subdivides every move it displaces, so the extrude
+                // count is the cheapest read on whether a scope excluded anything at all: a mask
+                // that is working drops it sharply against an Everything run of the same part.
+                var ex = tp.Layers.SelectMany(l => l.Moves)
+                           .Where(m => m.Kind == MoveKind.Extrude && !m.IsLayerStitch).ToList();
+                int wall = ex.Count(m => m.IsWall);
+                ctx.Log($"[tpdump] extrude={ex.Count:N0}  wall={wall:N0}  non-wall={ex.Count - wall:N0}");
+                if (wall == 0)
+                    ctx.LogError("[tpdump] NO walls flagged — 'Walls only' treats the whole part as " +
+                                 "internal structure (pattern disappears). Use 'Visible skin (raycast)'.");
             },
         });
 

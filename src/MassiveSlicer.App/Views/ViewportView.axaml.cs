@@ -4584,6 +4584,11 @@ public partial class ViewportView : UserControl
             ApproachZ        = (float)s.ApproachZ,
             PatternType      = Enum.TryParse<MassiveSlicer.Core.Slicing.Effects.PatternType>(s.PatternType, out var pt)
                                    ? pt : MassiveSlicer.Core.Slicing.Effects.PatternType.Smooth,
+            PatternScope     = s.PatternScope.StartsWith("Visible", StringComparison.OrdinalIgnoreCase)
+                                   ? MassiveSlicer.Core.Models.PatternScope.VisibleSkin
+                                   : s.PatternScope.StartsWith("Walls", StringComparison.OrdinalIgnoreCase)
+                                       ? MassiveSlicer.Core.Models.PatternScope.WallsOnly
+                                       : MassiveSlicer.Core.Models.PatternScope.Everything,
             PatternMapping   = s.PatternMapping.StartsWith("Radial", StringComparison.OrdinalIgnoreCase)
                                    ? MassiveSlicer.Core.Slicing.Effects.PatternMappingMode.Radial
                                    : s.PatternMapping.StartsWith("Wavelength", StringComparison.OrdinalIgnoreCase)
@@ -5820,6 +5825,7 @@ public partial class ViewportView : UserControl
         nameof(AdditiveSettingsViewModel.XBracingCylinderY),
         nameof(AdditiveSettingsViewModel.XBracingCylinderFlipDirection),
         nameof(AdditiveSettingsViewModel.WaveEffect),
+        nameof(AdditiveSettingsViewModel.PatternScope),
         nameof(AdditiveSettingsViewModel.WaveAmplitude),
         nameof(AdditiveSettingsViewModel.WaveWavelength),
     ];

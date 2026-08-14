@@ -1754,6 +1754,15 @@
                             <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.6" Margin="10,4,10,6"
                                        Text="Decorative wall pattern applied to the toolpath when slicing."/>
 
+                            <Grid Margin="10,8,10,0" ColumnDefinitions="*,Auto">
+                                <TextBlock Grid.Column="0" Text="Apply to" FontSize="11" VerticalAlignment="Center"
+                                           ToolTip.Tip="Everything: every extrusion, including infill and bracing. Walls only: perimeters, leaving the slicer's infill and X-bracing straight. Visible skin (raycast): sweeps horizontal rays across each layer and patterns only what they reach first, so interior walls and modelled braces stay straight too — this is the one to use on scanned or organic parts. Whatever is left out keeps its ends on the wall so it stays bonded."/>
+                                <ComboBox Grid.Column="1" MinWidth="150"
+                                          ItemsSource="{Binding Additive.PatternScopeOptions}"
+                                          SelectedItem="{Binding Additive.PatternScope, Mode=TwoWay}"/>
+                            </Grid>
+
+
                             <Expander Classes="SectionExpander" Header="PATTERN TOOLS" IsExpanded="False" Margin="0,0,0,4">
                             <StackPanel>
 
