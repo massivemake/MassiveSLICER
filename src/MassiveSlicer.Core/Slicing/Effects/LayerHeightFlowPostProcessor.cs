@@ -33,16 +33,20 @@ public static class LayerHeightFlowPostProcessor
     /// <summary>
     /// Stamps <see cref="ToolpathMove.HeightScale"/> from each layer's real thickness.
     ///
-    /// No-op unless <see cref="SliceSettings.AdaptiveLayerHeight"/> is on — with uniform
-    /// layers every scale is 1 and the nominal height is already correct, so gating here
-    /// keeps existing prints bit-identical.
+    /// No-op unless <see cref="SliceSettings.VariesLayerThickness"/> — with genuinely uniform
+    /// layers every scale is 1 and the nominal height is already correct, so gating here keeps
+    /// existing prints bit-identical.
+    ///
+    /// It gates on that ONE property rather than on <see cref="SliceSettings.AdaptiveLayerHeight"/>
+    /// alone, because support-driven thinning also moves slice planes. Keyed to the adaptive flag
+    /// this pass simply did not run for it, and every thinned layer went out at full nominal flow.
     ///
     /// Mutates <paramref name="toolpath"/> in place, and is idempotent: the scale is assigned
     /// rather than accumulated, so calling it twice cannot compound.
     /// </summary>
     public static void Apply(Toolpath toolpath, SliceSettings settings)
     {
-        if (!settings.AdaptiveLayerHeight) return;
+        if (!settings.VariesLayerThickness) return;
 
         float nominal = settings.LayerHeight;
         if (nominal <= 1e-4f) return;

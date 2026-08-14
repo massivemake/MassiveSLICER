@@ -259,6 +259,19 @@ public sealed class SliceSettings
     /// </summary>
     public float SupportBridgeToleranceMm { get; init; } = 0f;
 
+    /// <summary>
+    /// True when any enabled rule can make a layer's REAL thickness differ from
+    /// <see cref="LayerHeight"/> — so extrusion flow must follow the measured thickness rather
+    /// than the nominal one.
+    ///
+    /// This exists so the flow correction keys off ONE named concept instead of a growing list of
+    /// feature flags. <see cref="SupportDrivenLayerHeight"/> was added without joining that list
+    /// and silently handed every layer it thinned a full nominal layer's worth of material —
+    /// measured at 1.5x over-extrusion on 37 % of layers. Any future rule that moves a slice
+    /// plane belongs in this property, not in a new condition somewhere downstream.
+    /// </summary>
+    public bool VariesLayerThickness => AdaptiveLayerHeight || SupportDrivenLayerHeight;
+
     /// <summary>Sideways step (mm) at which a bead is considered under target.</summary>
     public float SupportTargetOffsetMm
         => BeadWidth * (1f - Math.Clamp(SupportOverlapTargetPercent, 0f, 100f) / 100f);
