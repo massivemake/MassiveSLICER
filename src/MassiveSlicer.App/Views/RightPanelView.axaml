@@ -1555,16 +1555,24 @@
                                            IsVisible="{Binding Additive.ShowAdaptiveLayerHeight}"
                                            Text="Thinner layers on shallow surfaces. Extrusion follows the real thickness, so a thin layer is commanded less material."/>
 
-                                <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
+                                <!-- Min layer height is the floor for EVERY thickness rule below, not
+                                     just the adaptive one — support-driven reads it as its floor too.
+                                     It is deliberately outside the adaptive block: when it lived inside,
+                                     turning adaptive off hid the control while it still governed how thin
+                                     support-driven could go. -->
+                                <StackPanel IsVisible="{Binding Additive.ShowMinLayerHeight}" Spacing="4" Margin="0,4,0,0">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>
                                             <ColumnDefinition Width="80"/>
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"/>
+                                        <TextBlock Grid.Column="0" Text="Min layer height (mm)" VerticalAlignment="Center" Classes="LabelMuted" FontSize="10"
+                                                   ToolTip.Tip="The thinnest layer any rule may choose. Floor for both Adaptive layer height and Support-driven layer height. Set equal to Layer height and neither rule can do anything — there is no room between floor and ceiling."/>
                                         <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.MinLayerHeight, Mode=TwoWay}"/>
                                     </Grid>
+                                </StackPanel>
 
+                                <StackPanel IsVisible="{Binding Additive.ShowAdaptiveControls}" Spacing="4" Margin="0,4,0,0">
                                     <Grid Margin="0,0,0,4">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>

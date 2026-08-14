@@ -128,12 +128,22 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
                 OnPropertyChanged(nameof(ShowLayerPreview));
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
             }
         }
     }
 
     /// <summary>Visible when adaptive is checked and method is Planar.</summary>
     public bool ShowAdaptiveControls => _adaptiveLayerHeight && _method == SliceMethod.Planar;
+
+    /// <summary>
+    /// Min layer height is the floor for EVERY rule that varies thickness, not just the adaptive
+    /// one — support-driven thinning reads it as its floor too. It used to live inside the
+    /// adaptive-only block, so turning adaptive off hid the one control deciding how thin
+    /// support-driven could go while it silently kept governing the result.
+    /// </summary>
+    public bool ShowMinLayerHeight
+        => (_adaptiveLayerHeight || _supportDrivenLayerHeight) && _method == SliceMethod.Planar;
 
     /// <summary>Visible when method is Planar (for the checkbox itself).</summary>
     public bool ShowAdaptiveLayerHeight => _method == SliceMethod.Planar;
@@ -213,7 +223,11 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
     public bool SupportDrivenLayerHeight
     {
         get => _supportDrivenLayerHeight;
-        set => SetField(ref _supportDrivenLayerHeight, value);
+        set
+        {
+            if (SetField(ref _supportDrivenLayerHeight, value))
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
+        }
     }
 
     /// <summary>
@@ -257,6 +271,7 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
                 OnPropertyChanged(nameof(ShowPlanarSeamExtras));
                 OnPropertyChanged(nameof(ShowAdaptiveLayerHeight));
                 OnPropertyChanged(nameof(ShowAdaptiveControls));
+                OnPropertyChanged(nameof(ShowMinLayerHeight));
                 OnPropertyChanged(nameof(ShowSlicingMode));
                 OnPropertyChanged(nameof(ShowCurvedControls));
                 OnPropertyChanged(nameof(IsCurvedMethod));
