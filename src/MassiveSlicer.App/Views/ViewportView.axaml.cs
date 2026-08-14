@@ -5147,16 +5147,28 @@ public partial class ViewportView : UserControl
         vm.StatsShortestLayerTime   = "";
     }
 
+    /// <summary>How long an error banner stays in the footer before it self-clears.
+    /// The message is mirrored to the console first, so it is never lost.</summary>
+    private const int ErrorBannerMs = 6000;
+
     private void SetSliceStatus(ViewportViewModel vm, string message, bool isError = false)
     {
         Dispatcher.UIThread.Post(() =>
         {
             vm.SliceStatusIsError = isError;
             vm.SliceStatusMessage = message;
+            // Errors are transient in the footer, permanent in the console. Only the
+            // success paths used to schedule a clear, so any error banner — robot
+            // validation especially — sat there until the next slice overwrote it.
+            if (isError && !string.IsNullOrWhiteSpace(message))
+                ScheduleClearSliceStatus(vm, ErrorBannerMs, clearWhileSlicing: true);
         });
     }
 
-    private void ScheduleClearSliceStatus(ViewportViewModel vm, int delayMs = 6000)
+    /// <param name="clearWhileSlicing">Error banners clear even mid-slice; progress
+    /// results do not, so an in-flight slice keeps showing its own status.</param>
+    private void ScheduleClearSliceStatus(ViewportViewModel vm, int delayMs = 6000,
+                                          bool clearWhileSlicing = false)
     {
         int gen = ++_sliceStatusClearGen;
         _ = Task.Run(async () =>
@@ -5164,9 +5176,12 @@ public partial class ViewportView : UserControl
             await Task.Delay(delayMs);
             Dispatcher.UIThread.Post(() =>
             {
-                if (gen != _sliceStatusClearGen || vm.IsSlicing) return;
-                vm.SliceStatusMessage = string.Empty;
+                if (gen != _sliceStatusClearGen) return;
+                if (vm.IsSlicing && !clearWhileSlicing) return;
+                // IsError first: ShowSliceStatus gates on it, and clearing the message
+                // while IsError is still true would re-log an empty error line.
                 vm.SliceStatusIsError = false;
+                vm.SliceStatusMessage = string.Empty;
             });
         });
     }

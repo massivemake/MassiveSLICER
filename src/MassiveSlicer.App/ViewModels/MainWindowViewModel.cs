@@ -328,7 +328,18 @@ public sealed class MainWindowViewModel : ViewModelBase
 
             if (e.PropertyName is nameof(ViewportViewModel.SliceStatusMessage))
             {
-                if (Viewport.IsSlicing)
+                if (Viewport.SliceStatusIsError && !string.IsNullOrWhiteSpace(Viewport.SliceStatusMessage))
+                {
+                    // The footer banner auto-dismisses after a few seconds, so the console
+                    // is the durable record — log unconditionally. Previously this only
+                    // happened via LogProgressDetail below, i.e. when a slice happened to
+                    // be running; robot validation finishes *after* IsSlicing goes false,
+                    // so its warnings never reached the console except by race.
+                    Console.LogError(Viewport.SliceStatusMessage);
+                    StatusBar.OperationFeedback = Viewport.SliceStatusMessage;
+                    _lastProgressLogMessage = Viewport.SliceStatusMessage;
+                }
+                else if (Viewport.IsSlicing)
                 {
                     LogProgressDetail(Viewport.SliceStatusMessage);
                     UpdateBusy(Viewport.SliceStatusMessage);
