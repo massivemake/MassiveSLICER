@@ -520,8 +520,8 @@ public sealed class AppPreferences
     /// <summary>Width of the KRL orientation transition ramp (mm).</summary>
     public double OrientationSigmaMm { get; set; } = 30.0;
 
-    /// <summary>KUKA $APO.CVEL value (0–100) used by the simulation velocity profile.</summary>
-    public double ApoCvel { get; set; } = 100.0;
+    /// <summary>KUKA $APO.CVEL value (0–100). Written to the SRC header and used by the simulation velocity profile.</summary>
+    public double ApoCvel { get; set; }
 
     // ── Scan (Zivid) ──────────────────────────────────────────────────────
 

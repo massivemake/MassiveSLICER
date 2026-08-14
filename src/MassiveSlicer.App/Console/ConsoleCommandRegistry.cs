@@ -2320,8 +2320,8 @@ public sealed class ConsoleCommandRegistry
         {
             Name = "krlpost",
             Aliases = ["krl-post", "krlpostprocess"],
-            Description = "KRL post-processing: show state, toggle Digital Start/Stop (URM), reset or save header/footer defaults",
-            Usage = "krlpost | krlpost open | krlpost urm <on|off> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
+            Description = "KRL post-processing: show state, toggle Digital Start/Stop (URM), set $APO.CVEL, reset or save header/footer defaults",
+            Usage = "krlpost | krlpost open | krlpost urm <on|off> | krlpost apocvel <0-100> | krlpost reset <header|footer> | krlpost save-default <header|footer>",
             Execute = (ctx, args) =>
             {
                 var add  = ctx.Main.RightPanel.Additive;
@@ -2331,6 +2331,7 @@ public sealed class ConsoleCommandRegistry
                 void Report()
                 {
                     ctx.Log($"[krlpost] Digital Start/Stop (URM): {(add.DigitalStartStopEnabled ? "ON" : "off")}");
+                    ctx.Log($"[krlpost] $APO.CVEL: {add.ApoCvel:0.##}%");
                     ctx.Log($"[krlpost] header {post.HeaderText.Length} chars, saved default: {(post.HasSavedHeaderDefault ? "yes" : "no (built-in)")}");
                     ctx.Log($"[krlpost] footer {post.FooterText.Length} chars, saved default: {(post.HasSavedFooterDefault ? "yes" : "no (built-in)")}");
                 }
@@ -2346,6 +2347,16 @@ public sealed class ConsoleCommandRegistry
                         add.DigitalStartStopEnabled = parts[1] is "on" or "1" or "true";
                         ctx.Log($"[krlpost] URM {(add.DigitalStartStopEnabled ? "ON" : "off")} — header/footer templates swapped to match");
                         Report();
+                        break;
+                    case "apocvel" or "apo-cvel" or "cvel" when parts.Length >= 2:
+                        if (double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                                System.Globalization.CultureInfo.InvariantCulture, out double cvel))
+                        {
+                            add.ApoCvel = cvel;
+                            ctx.Log($"[krlpost] $APO.CVEL = {add.ApoCvel:0.##}% (clamped 0-100)");
+                        }
+                        else
+                            ctx.LogError($"[krlpost] '{parts[1]}' is not a number — usage: krlpost apocvel <0-100>");
                         break;
                     case "reset" when parts.Length >= 2 && parts[1].StartsWith("head", StringComparison.OrdinalIgnoreCase):
                         post.ResetHeaderCommand.Execute(null);

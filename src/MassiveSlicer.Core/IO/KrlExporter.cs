@@ -164,7 +164,7 @@ public sealed record KrlExportSettings
     /// 0 = disabled (raw per-move normals used directly).
     /// </summary>
     /// <summary>KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction at path corners.</summary>
-    public int ApoCvel { get; init; } = 100;
+    public int ApoCvel { get; init; }
     public float OrientationLookAheadMm { get; init; } = 0f;
     /// <summary>
     /// Standard deviation (mm) of the Gaussian kernel used to smooth normals before ABC
