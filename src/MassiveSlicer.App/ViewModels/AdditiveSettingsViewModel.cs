@@ -952,18 +952,25 @@ public sealed class AdditiveSettingsViewModel : ViewModelBase
         set => SetField(ref _travelSpeed, Math.Clamp(value, 1.0, 2000.0));
     }
 
-    private double _apoCvel = 100.0;
+    private double _apoCvel;
 
     /// <summary>
     /// KUKA $APO.CVEL value (0–100). Controls the minimum speed fraction the robot
     /// must maintain through corners. 50 = slow to at most 50% of programmed speed
     /// at a sharp turn; 100 = maintain full speed (no blending slowdown).
-    /// Used only by the simulation velocity profile — set this to match your KRL preset.
+    /// Written to the SRC header via the <c>{{APO_CVEL}}</c> placeholder, and also
+    /// used by the simulation velocity profile behind the print-time estimate.
+    /// Edited on the KRL Post-Processing dialog's Rules tab.
     /// </summary>
     public double ApoCvel
     {
         get => _apoCvel;
-        set => SetField(ref _apoCvel, Math.Clamp(value, 0.0, 100.0));
+        set
+        {
+            if (!SetField(ref _apoCvel, Math.Clamp(value, 0.0, 100.0))) return;
+            // The field lives on the KRL dialog's Rules tab and proxies back to here.
+            KrlPostProcess.NotifyApoCvelChanged();
+        }
     }
 
     private int _acceleration = 100;

@@ -2874,20 +2874,6 @@
 
                         <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
 
-                        <TextBlock Text="SIMULATION" Classes="SectionHeader"/>
-
-                        <Grid Margin="8,0,8,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="80"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="$APO.CVEL (%)" VerticalAlignment="Center" Classes="LabelMuted"
-                                       ToolTip.Tip="Minimum speed fraction at corners (KUKA $APO.CVEL). 50 = slow to 50% on sharp turns. Set this to match your KRL preset to get accurate timing."/>
-                            <TextBox   Grid.Column="1" Classes="PanelTextBox" Text="{Binding Additive.ApoCvel}"/>
-                        </Grid>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
-
                         <TextBlock Text="ORIENTATION SMOOTHING" Classes="SectionHeader"
                                    ToolTip.Tip="Averages toolhead ABC angles across neighbouring moves to prevent sharp reorientation jumps that can over-accelerate the robot. Positions are unchanged."/>
 

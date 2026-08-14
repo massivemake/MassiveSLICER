@@ -39,6 +39,25 @@ public sealed class KrlPostProcessSettingsViewModel : ViewModelBase
     /// <summary>Re-reads the proxied URM flag after the owner changes it (preset or prefs load).</summary>
     public void NotifyDigitalStartStopChanged() => OnPropertyChanged(nameof(DigitalStartStopEnabled));
 
+    /// <summary>
+    /// KUKA <c>$APO.CVEL</c> (0–100), proxied from <see cref="Owner"/> for the same reason as
+    /// the URM flag: prefs, presets and the exporter all read it off
+    /// <see cref="AdditiveSettingsViewModel"/>.
+    /// </summary>
+    public double ApoCvel
+    {
+        get => Owner?.ApoCvel ?? 0.0;
+        set
+        {
+            if (Owner is null) return;
+            Owner.ApoCvel = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>Re-reads the proxied $APO.CVEL after the owner changes it (preset or prefs load).</summary>
+    public void NotifyApoCvelChanged() => OnPropertyChanged(nameof(ApoCvel));
+
     public string HeaderText
     {
         get => _headerText;
