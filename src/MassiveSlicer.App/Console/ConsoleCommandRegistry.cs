@@ -304,6 +304,46 @@ public sealed class ConsoleCommandRegistry
 
         Register(new ConsoleCommandDefinition
         {
+            Name = "walls",
+            Description = "Report how the active toolpath splits into outer skin / interior walls / structure",
+            Execute = (ctx, _) =>
+            {
+                var tp = ctx.Main.Viewport.ActiveScrubToolpath;
+                if (tp is null) { ctx.LogError("[walls] no active toolpath — slice first"); return; }
+
+                long outer = 0, interior = 0, structure = 0;
+                int layersWithInterior = 0;
+                foreach (var lyr in tp.Layers)
+                {
+                    bool anyInterior = false;
+                    foreach (var m in lyr.Moves)
+                    {
+                        if (m.Kind != MoveKind.Extrude || m.IsLayerStitch) continue;
+                        if (!m.IsWall) structure++;
+                        else if (m.IsOuterWall) outer++;
+                        else { interior++; anyInterior = true; }
+                    }
+                    if (anyInterior) layersWithInterior++;
+                }
+
+                ctx.Log($"[walls] outer skin {outer:N0} · interior walls {interior:N0} " +
+                        $"({layersWithInterior} of {tp.Layers.Count} layers) · structure {structure:N0}");
+
+                // The question this command exists to answer: can "Outer surface only" actually
+                // spare this part's interior? Nesting can only separate an interior wall that
+                // bounds a cavity. A rib fused into the shell with no void either side shares the
+                // outer loop, and no amount of classification will pull it out.
+                if (interior == 0)
+                    ctx.Log("[walls] no interior walls found — 'Outer surface only' behaves the " +
+                            "same as 'Walls only' here. Interior features are fused into the outer " +
+                            "loop rather than bounding a cavity, so use a live effector to mask them.");
+                else
+                    ctx.Log("[walls] interior walls detected — 'Outer surface only' will leave them straight.");
+            },
+        });
+
+        Register(new ConsoleCommandDefinition
+        {
             Name = "tpdump",
             Description = "Debug: dump the active toolpath moves to a CSV file",
             Usage = "tpdump <path.csv>",
