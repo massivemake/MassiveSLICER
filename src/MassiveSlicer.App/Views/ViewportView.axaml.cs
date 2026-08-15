@@ -6533,9 +6533,13 @@ public partial class ViewportView : UserControl
     private void DropToPlate()
     {
         if (_renderer.SelectedNode is not { } node) return;
-        if (LayFlatMinZ(node) >= float.MaxValue) return;
+        // Toolpath-aware: an imported KRL program has no mesh at all — its geometry is line
+        // data — so the mesh-only LayFlatMinZ returned MaxValue and Drop to Plate bailed out
+        // silently, leaving a program hanging wherever its BASE put it.
+        float minZ = NodeMinZWithToolpaths(node);
+        if (minZ >= float.MaxValue) return;
         var old = node.LocalTransform;
-        DropNodeToBed(node, _renderer.BedZ);
+        TranslateNodeWorld(node, new TkVector3(0f, 0f, _renderer.BedZ - minZ));
         // Drop moves the part, so its cut planes ride along and drift out of step with their own
         // fields. Every other path that moves a part already re-levels them; this one did not,
         // which is how a horizontal plane ended up travelling down under the mesh.
@@ -7611,6 +7615,52 @@ public partial class ViewportView : UserControl
         if (IsToolNodeSelected()) return false;
         if (DataContext is ViewportViewModel vm && vm.IsModifierNode(node)) return false;
         return true;
+    }
+
+    /// <summary>
+    /// Lowest world Z of everything <paramref name="node"/> carries — mesh vertices AND any
+    /// printed toolpath registered against it or a descendant.
+    /// <para>
+    /// Kept separate from <see cref="LayFlatMinZ"/>, which is mesh-only by design: lay-flat needs
+    /// a face to rest on, whereas dropping only needs a lowest point, and an imported KRL program
+    /// has one without having a mesh.
+    /// </para>
+    /// </summary>
+    private float NodeMinZWithToolpaths(SceneNode node)
+    {
+        float minZ = LayFlatMinZ(node);
+
+        foreach (var (tpNode, tp) in _toolpathByNode)
+        {
+            if (!ReferenceEquals(tpNode, node) && !IsUnder(tpNode, node)) continue;
+            float z = ToolpathMinZ(tp, tpNode.WorldTransform);
+            if (z < minZ) minZ = z;
+        }
+
+        return minZ;
+    }
+
+    /// <summary>Lowest world Z reached by any move in <paramref name="tp"/>.</summary>
+    internal static float ToolpathMinZ(MassiveSlicer.Core.Models.Toolpath tp, TkMatrix4 world)
+    {
+        float minZ = float.MaxValue;
+        foreach (var layer in tp.Layers)
+            foreach (var m in layer.Moves)
+            {
+                var a = TkVector3.TransformPosition(new TkVector3(m.From.X, m.From.Y, m.From.Z), world);
+                if (a.Z < minZ) minZ = a.Z;
+                var b = TkVector3.TransformPosition(new TkVector3(m.To.X, m.To.Y, m.To.Z), world);
+                if (b.Z < minZ) minZ = b.Z;
+            }
+        return minZ;
+    }
+
+    /// <summary>True when <paramref name="candidate"/> sits somewhere under <paramref name="root"/>.</summary>
+    private static bool IsUnder(SceneNode candidate, SceneNode root)
+    {
+        for (var p = candidate.Parent; p is not null; p = p.Parent)
+            if (ReferenceEquals(p, root)) return true;
+        return false;
     }
 
     /// <summary>Drops <paramref name="node"/> straight down (world −Z) until its lowest

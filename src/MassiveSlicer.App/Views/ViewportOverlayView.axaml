@@ -717,8 +717,7 @@
 
                     <!-- Placing the part on the plate. Moved here from the top-left focus overlay:
                          these belong with the transform tools, not with the camera controls. -->
-                    <Border Width="1" Background="#3D3D3D" Margin="4,3"
-                            IsVisible="{Binding !IsToolpathSelected}"/>
+                    <Border Width="1" Background="#3D3D3D" Margin="4,3"/>
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Classes.active="{Binding IsLayFlatMode}"
                             Command="{Binding LayFlatCommand}"
@@ -726,9 +725,11 @@
                             ToolTip.Tip="Lay on Face — click a face to align it flat on the build plate (Esc to cancel)">
                         <ia:Icon Value="mdi-format-vertical-align-bottom" FontSize="14"/>
                     </Button>
+                    <!-- Available for toolpaths too, unlike Lay on Face which needs a face to
+                         rest on. An imported KRL program lands wherever its BASE puts it, so
+                         dropping it onto the plate is exactly what you want. -->
                     <Button Classes="ToolbarButton" Padding="12,4"
                             Command="{Binding DropToPlateCommand}"
-                            IsVisible="{Binding !IsToolpathSelected}"
                             ToolTip.Tip="Drop to Plate — translate the object down so its lowest point sits on the build plate">
                         <ia:Icon Value="mdi-arrow-collapse-down" FontSize="14"/>
                     </Button>
