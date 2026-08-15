@@ -15,8 +15,23 @@ public class RobotRailCellConfigTest
 
         Assert.NotNull(rail);
         Assert.Equal("Y", rail!.Axis, ignoreCase: true);
-        Assert.Equal(-4650f, rail.MinMm);
+        Assert.Equal(-4641f, rail.MinMm);
         Assert.Equal(150f, rail.MaxMm);
+
+        var j = cell.Robot.Joints;
+        Assert.True(j.Count >= 6);
+        Assert.Equal(-70f, j[0].MinDeg);
+        Assert.Equal(70f, j[0].MaxDeg);
+        Assert.Equal(-125f, j[1].MinDeg);
+        Assert.Equal(0f, j[1].MaxDeg);
+        Assert.Equal(-120f, j[2].MinDeg);
+        Assert.Equal(168f, j[2].MaxDeg);
+        Assert.Equal(-350f, j[3].MinDeg);
+        Assert.Equal(350f, j[3].MaxDeg);
+        Assert.Equal(-125f, j[4].MinDeg);
+        Assert.Equal(125f, j[4].MaxDeg);
+        Assert.Equal(-350f, j[5].MinDeg);
+        Assert.Equal(350f, j[5].MaxDeg);
     }
 
     [Theory]

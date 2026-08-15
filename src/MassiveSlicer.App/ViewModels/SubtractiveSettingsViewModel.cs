@@ -149,6 +149,7 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         ToolDiameterMm = bit.DiameterMm;
         BallEnd = bit.IsBallEnd;
         MaxDepthMm = bit.MaxDepthMm;
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
         SpindleRpm = cut.SpindleRpm;
         SpindleDirection = cut.SpindleDirection;
         CuttingFeedMmS = cut.CuttingFeedMmS > 0 ? cut.CuttingFeedMmS : cut.CuttingFeedMmMin / 60.0;
@@ -158,6 +159,22 @@ public sealed class SubtractiveSettingsViewModel : ViewModelBase
         FinishAllowanceMm = cut.FinishAllowanceMm;
         RapidZMm = cut.RapidZMm;
         OnPropertyChanged(nameof(BitName));
+        OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+    }
+
+    /// <summary>Live preview stick-out (mm). Changing this rebuilds the spindle cylinder.</summary>
+    public double PreviewCylinderLengthMm
+    {
+        get => SelectedBit?.EffectiveCylinderLengthMm ?? 50;
+        set
+        {
+            if (SelectedBit is null) return;
+            var next = Math.Max(0, value);
+            if (Math.Abs(SelectedBit.CylinderLengthMm - next) < 1e-4) return;
+            SelectedBit.CylinderLengthMm = next;
+            PersistBitLibrary();
+            OnPropertyChanged(nameof(PreviewCylinderLengthMm));
+        }
     }
 
     // -- Operation type (step 2 OPERATION) ------------------------------------

@@ -3439,6 +3439,19 @@
                                             <TextBlock FontSize="10" Opacity="0.55"
                                                        Text="{Binding Subtractive.SelectedBit.ToolNumber, StringFormat={}Tool #{0}}"/>
                                         </StackPanel>
+                                        <Grid ColumnDefinitions="*,120">
+                                            <TextBlock Text="Cylinder length" Classes="LabelMuted" FontSize="11"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip.Tip="Stick-out from the disc centre along the SpindleBit face normal. Does not change cutter diameter."/>
+                                            <Grid Grid.Column="1" ColumnDefinitions="*,Auto" ColumnSpacing="6">
+                                                <NumericUpDown Value="{Binding Subtractive.PreviewCylinderLengthMm, Mode=TwoWay}"
+                                                               Minimum="0.5" Maximum="400" Increment="1"
+                                                               FormatString="F1" FontSize="11"
+                                                               MinHeight="30"/>
+                                                <TextBlock Grid.Column="1" Text="mm" Classes="LabelMuted"
+                                                           VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Grid>
                                         <!-- Same SpindleRpm as TOOLPATHING → MOVEMENT; either side updates both. -->
                                         <Grid ColumnDefinitions="*,120">
                                             <TextBlock Text="Spindle speed" Classes="LabelMuted" FontSize="11"

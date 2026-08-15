@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-14** (Pattern scope — skin vs bracing, raycast visibility; seam guide traces the model surface, one guide per part; seam guides work on a sliced part; auto-slice on import restored; per-head material calibration + calibration flow-offset leak fixed; panel ADVANCED sections)
+Last updated: **2026-08-15** (5% software-limit envelope; LFAM 3 T12; shop path Z:\Research\LFAM\MassiveSLICER)
 
 ---
 
@@ -132,7 +132,8 @@ dotnet format
 
 | What | Path |
 |------|------|
-| Repo (this machine / MassiveMAKE PC) | `C:\Users\MassiveMAKE\MassiveSLICER` |
+| Repo (MassiveFILES / this Mac) | `/Volumes/MassiveFILES/Research/LFAM/MassiveSLICER` |
+| Repo (shop PC) | `Z:\Research\LFAM\MassiveSLICER` (same MassiveFILES tree — **not** `C:\Users\MassiveMAKE\MassiveSLICER`) |
 | Repo (NAS historical) | `\\192.168.0.191\MassiveFILES\Research\LFAM\MassiveSLICER V2\` |
 | GitHub (canonical) | https://github.com/massivemake/MassiveSLICER |
 | Active branch | **`feature/spsm`** |
@@ -148,7 +149,7 @@ dotnet format
 
 ```powershell
 Stop-Process -Name "MassiveSlicer.App" -Force -ErrorAction SilentlyContinue
-Set-Location 'C:\Users\MassiveMAKE\MassiveSLICER'
+Set-Location 'Z:\Research\LFAM\MassiveSLICER'
 dotnet build 'src/MassiveSlicer.App/MassiveSlicer.App.csproj' -c Release
 if ($LASTEXITCODE -eq 0) {
     Start-Process -FilePath '.\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
@@ -161,8 +162,8 @@ Publish variant (optional): `scripts\publish-and-run.ps1` → `%LOCALAPPDATA%\Ma
 ### Start only (no rebuild)
 
 ```powershell
-Start-Process -FilePath 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
-  -WorkingDirectory 'C:\Users\MassiveMAKE\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
+Start-Process -FilePath 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows\MassiveSlicer.App.exe' `
+  -WorkingDirectory 'Z:\Research\LFAM\MassiveSLICER\src\MassiveSlicer.App\bin\Release\net8.0-windows'
 ```
 
 ---
@@ -483,6 +484,28 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-15 — 5% software-limit envelope on sim / IK / export
+
+- Shared `JointLimitEnvelope` (5% of each axis travel inside `$SOFTN_END`/`$SOFTP_END`).
+- Viewport sliders, numerical IK, analytic IK `InLimits`, E1 rail planner, and toolpath validation all use the envelope.
+- LIMITS expander still shows/edits the raw KRC stops. Export warns on moves outside the envelope.
+- Wrist singularity still `|A5| < 5°`.
+
+### 2026-08-14 — ROBOT LIMITS editor (LFAM 1 $machine.dat)
+
+- Left **ROBOT** card: **LIMITS** expander — A1–A6 + E1 min/max (`$SOFTN_END` / `$SOFTP_END`).
+- Seeded **LFAM 1** from live `\\192.168.0.151\krc\ROBOTER\KRC\R1\Mada\$machine.dat`.
+- Edit writes to the connected KRC via C3Bridge. **Requires KUKA cold reboot** banner on change.
+
+### 2026-08-14 — LFAM 3 Tool 12 re-taught on KRC
+
+- Live `.153` `$ACT_TOOL=12`: `TOOL_DATA[12] = X -78.399, Y 325.229, Z 637.358, A 103.677, B -43.719, C 40.483`
+- Synced three `lfam3.json` copies. LOAD_DATA[12] unset after pendant save.
+
+### 2026-08-14 — Mill bit library: spindle cylinder locked to SpindleBit
+
+- Tool library **Cutter** tab: **SPINDLE CYLINDER**. Origin = disc centroid; length along rotational-symmetry axis (not vertex-normal average).
 
 ### 2026-08-14 — Pattern scope: texture the skin, leave bracing straight (main 571)
 

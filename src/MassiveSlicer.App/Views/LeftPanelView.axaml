@@ -275,16 +275,6 @@
                               HorizontalScrollBarVisibility="Disabled">
                     <StackPanel Margin="0,8">
 
-                        <TextBlock Text="TOOL" Classes="SectionHeader"/>
-                        <ComboBox Margin="8,0,8,8"
-                                  ItemsSource="{Binding DataContext.RightPanel.Settings.Robot.ToolNames,
-                                                RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                  SelectedIndex="{Binding DataContext.RightPanel.Settings.Robot.SelectedToolIndex,
-                                                  RelativeSource={RelativeSource AncestorType={x:Type Window}},
-                                                  Mode=TwoWay}"
-                                  HorizontalAlignment="Stretch"/>
-
-                        <Border Height="1" Background="{DynamicResource Border1}" Margin="8,4"/>
                         <TextBlock Text="JOINT ANGLES" Classes="SectionHeader"/>
 
                         <!-- A1 -->
@@ -296,8 +286,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A1" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -315,8 +305,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A2" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A2, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -334,8 +324,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A3" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A3, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -353,8 +343,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A4" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A4, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -372,8 +362,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A5" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A5, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -391,8 +381,8 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="A6" Classes="LabelMuted" VerticalAlignment="Center"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.A6, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -413,8 +403,8 @@
                             <TextBlock Grid.Column="0" Text="E1" Classes="LabelMuted" VerticalAlignment="Center"
                                        ToolTip.Tip="Rotary bed (external axis 1), KRL degrees"/>
                             <Slider    Grid.Column="1"
-                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.MinE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
-                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.MaxE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Minimum="{Binding DataContext.RightPanel.Settings.Robot.SimMinE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Maximum="{Binding DataContext.RightPanel.Settings.Robot.SimMaxE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
                                        Value="{Binding DataContext.RightPanel.Settings.Robot.E1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"
                                        VerticalAlignment="Center"/>
                             <TextBox   Grid.Column="2" Classes="PanelTextBox"
@@ -422,6 +412,94 @@
                                        TextAlignment="Right" Padding="4,2" VerticalContentAlignment="Center"
                                        KeyDown="JointAngle_KeyDown"/>
                         </Grid>
+
+                        <Expander Classes="SectionExpander" Header="LIMITS" IsExpanded="False" Margin="0,4,0,0">
+                          <StackPanel>
+                            <TextBlock TextWrapping="Wrap" FontSize="10" Opacity="0.65" Margin="8,2,8,6"
+                                       Text="KUKA software end-switches ($SOFTN_END / $SOFTP_END). Simulation, IK, and export stay 5% of travel inside these stops. Edits write to the connected robot. A KUKA cold reboot is required before they take effect."/>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="1" Text="Min" Classes="LabelMuted" FontSize="10"/>
+                                <TextBlock Grid.Column="2" Text="Max" Classes="LabelMuted" FontSize="10"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A1" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A2" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA2, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A3" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA3, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A4" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA4, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A5" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA5, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="A6" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-5000" Maximum="5000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxA6, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Text="°" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"/>
+                            </Grid>
+                            <Grid Margin="8,2,8,2" ColumnDefinitions="28,*,*,36">
+                                <TextBlock Grid.Column="0" Text="E1" Classes="LabelMuted" VerticalAlignment="Center"/>
+                                <NumericUpDown Grid.Column="1" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-10000" Maximum="10000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MinE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <NumericUpDown Grid.Column="2" FontSize="11" MinHeight="28" Increment="1" FormatString="F1"
+                                               Minimum="-10000" Maximum="10000"
+                                               Value="{Binding DataContext.RightPanel.Settings.Robot.MaxE1, RelativeSource={RelativeSource AncestorType={x:Type Window}}, Mode=TwoWay}"/>
+                                <TextBlock Grid.Column="3" Classes="LabelMuted" VerticalAlignment="Center" Margin="4,0,0,0"
+                                           Text="{Binding DataContext.RightPanel.Settings.Robot.E1UnitLabel, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                            </Grid>
+                            <TextBlock Margin="8,8,8,4" FontSize="11" TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Accent}"
+                                       IsVisible="{Binding DataContext.RightPanel.Settings.Robot.LimitsRequireColdReboot, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"
+                                       Text="Requires KUKA cold reboot"/>
+                            <TextBlock Margin="8,0,8,8" FontSize="10" Opacity="0.7" TextWrapping="Wrap"
+                                       Text="{Binding DataContext.RightPanel.Settings.Robot.LimitsStatus, RelativeSource={RelativeSource AncestorType={x:Type Window}}}"/>
+                          </StackPanel>
+                        </Expander>
 
                         <Button Content="GO TO BED CENTER"
                                 Command="{Binding DataContext.RightPanel.Settings.Robot.GoToBedCenterCommand,

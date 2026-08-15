@@ -77,8 +77,8 @@ public sealed class GltfNumericalIkSolver
         for (int i = 0; i <= Steps; i++)
         for (int j = 0; j <= Steps; j++)
         {
-            θ[1] = _jcfg[1].MinDeg + (_jcfg[1].MaxDeg - _jcfg[1].MinDeg) * i / Steps;
-            θ[2] = _jcfg[2].MinDeg + (_jcfg[2].MaxDeg - _jcfg[2].MinDeg) * j / Steps;
+            θ[1] = _jcfg[1].UsableMinDeg + (_jcfg[1].UsableMaxDeg - _jcfg[1].UsableMinDeg) * i / Steps;
+            θ[2] = _jcfg[2].UsableMinDeg + (_jcfg[2].UsableMaxDeg - _jcfg[2].UsableMinDeg) * j / Steps;
             float d = (ComputeTcpPosScene(θ) - shoulderScene).Length;
             if (d < minD) minD = d;
             if (d > maxD) maxD = d;
@@ -488,7 +488,7 @@ public sealed class GltfNumericalIkSolver
                               m02, m12, m22, error);
 
             for (int j = 0; j < 6; j++)
-                θ[j] = Math.Clamp(θ[j] + Vector3.Dot(J[j], x), _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
+                θ[j] = Math.Clamp(θ[j] + Vector3.Dot(J[j], x), _jcfg[j].UsableMinDeg, _jcfg[j].UsableMaxDeg);
         }
 
         return (ComputeTcpPosScene(θ) - targetScene).Length <= finalTolerance ? θ : null;
@@ -587,7 +587,7 @@ public sealed class GltfNumericalIkSolver
                 float dθ = 0f;
                 for (int r = 0; r < 6; r++)
                     dθ += cv[r] * (aug[r * 7 + 6] / aug[r * 7 + r]);
-                θ[j] = Math.Clamp(θ[j] + dθ, _jcfg[j].MinDeg, _jcfg[j].MaxDeg);
+                θ[j] = Math.Clamp(θ[j] + dθ, _jcfg[j].UsableMinDeg, _jcfg[j].UsableMaxDeg);
             }
         }
 

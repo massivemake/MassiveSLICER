@@ -41,6 +41,8 @@ public partial class ViewportView : UserControl
     private RobotFkController?     _fkController;
     private GltfNumericalIkSolver? _ikSolver;
     private SceneNode?             _currentToolNode;
+    private bool                   _pendingSpindleCylinderRefresh;
+    private bool                   _spindleBitPreviewHooked;
     private Matrix4                _toolCorrectionMatrix = Matrix4.Identity;
     private CellEnvironmentBuilder.CellMultiToolSet? _multiTools;
     private SceneNode?             _rotaryBedPivot;
@@ -318,6 +320,7 @@ public partial class ViewportView : UserControl
         if (_vmGlWired || DataContext is not ViewportViewModel vm) return;
         _vmGlWired = true;
         _vm = vm;
+        HookSpindleBitPreview(vm);
 
         {
             vm.PropertyChanged += (_, pe) =>
@@ -1916,6 +1919,7 @@ public partial class ViewportView : UserControl
                 _renderer.SceneRoot.AddChild(toolNode);
                 UploadPendingMeshes(toolNode);
                 _currentToolNode = toolNode;
+                _pendingSpindleCylinderRefresh = true;
             }
 
             while (vm.PendingToolSwap.TryDequeue(out var swap))
@@ -1953,6 +1957,7 @@ public partial class ViewportView : UserControl
                 _renderer.SceneRoot.AddChild(swap.Node);
                 UploadPendingMeshes(swap.Node);
                 _currentToolNode = swap.Node;
+                _pendingSpindleCylinderRefresh = true;
 
                 RebuildIkSolver(vm);
 
@@ -1978,6 +1983,10 @@ public partial class ViewportView : UserControl
                     }
                 }
             }
+
+            HookSpindleBitPreview(vm);
+            if (_pendingSpindleCylinderRefresh)
+                ApplySpindleBitCylinder(vm);
 
             while (_pendingOrientationUpdate.TryDequeue(out var upd))
                 _renderer.UpdateToolpathBeadOrientation(upd.node, upd.rates);
@@ -2923,6 +2932,7 @@ public partial class ViewportView : UserControl
                 _renderer.SceneRoot.AddChild(swap.ToolHolder);
                 UploadVisiblePendingMeshes(swap.ToolHolder);
                 _currentToolNode = swap.ToolHolder;
+                _pendingSpindleCylinderRefresh = true;
             }
         }
         else if (_multiTools is { } mtNoFlange)
@@ -3150,6 +3160,73 @@ public partial class ViewportView : UserControl
         stlHolder.AddChild(stlNode);
         return stlHolder;
     }
+
+    void HookSpindleBitPreview(ViewportViewModel vm)
+    {
+        if (_spindleBitPreviewHooked) return;
+        if (vm.SubtractiveSettings is not { } sub) return;
+        _spindleBitPreviewHooked = true;
+        sub.PropertyChanged += (_, pe) =>
+        {
+            if (pe.PropertyName is
+                nameof(SubtractiveSettingsViewModel.SelectedBit)
+                or nameof(SubtractiveSettingsViewModel.ToolDiameterMm)
+                or nameof(SubtractiveSettingsViewModel.PreviewCylinderLengthMm))
+            {
+                _pendingSpindleCylinderRefresh = true;
+                vm.NotifyRenderNeeded();
+            }
+        };
+        _pendingSpindleCylinderRefresh = true;
+        vm.NotifyRenderNeeded();
+    }
+
+    void ApplySpindleBitCylinder(ViewportViewModel vm)
+    {
+        _pendingSpindleCylinderRefresh = false;
+        if (_currentToolNode is null) return;
+
+        // Strip a previous preview (and any leftover under other tool holders).
+        foreach (var n in _currentToolNode.SelfAndDescendants().ToList())
+        {
+            if (n.Name != SpindleBitCylinder.NodeName) continue;
+            GpuMeshCache.ReleaseSubtree(n);
+            n.Parent?.RemoveChild(n);
+        }
+
+        var bit = vm.SubtractiveSettings?.SelectedBit;
+        if (bit is null || !bit.ShowSpindleCylinder)
+            return;
+
+        var anchor = SpindleBitCylinder.FindAnchor(_currentToolNode);
+        if (anchor is null) return;
+
+        var mesh = anchor.PendingMesh ?? TryMeshFromRenderer(anchor);
+        if (mesh is null) return;
+
+        Vector3? bodyCentroid = null;
+        foreach (var n in _currentToolNode.SelfAndDescendants())
+        {
+            if (ReferenceEquals(n, anchor) || n.Name == SpindleBitCylinder.NodeName)
+                continue;
+            var other = n.PendingMesh ?? TryMeshFromRenderer(n);
+            if (other is null || other.Positions.Length < 8) continue;
+            bodyCentroid = SpindleBitCylinder.MeshCentroid(other);
+            break;
+        }
+
+        var local = SpindleBitCylinder.ComputeLocalTransform(mesh, bodyCentroid, bit.CylinderFlip);
+        float dia = (float)(vm.SubtractiveSettings!.ToolDiameterMm > 0.05
+            ? vm.SubtractiveSettings.ToolDiameterMm
+            : bit.DiameterMm);
+        float len = (float)bit.EffectiveCylinderLengthMm;
+        var cyl = SpindleBitCylinder.BuildNode(dia, len, local);
+        anchor.AddChild(cyl);
+        UploadPendingMeshes(cyl);
+    }
+
+    static MeshData? TryMeshFromRenderer(SceneNode node)
+        => node.Mesh?.PickingData;
 
     // -- Navigation helpers ----------------------------------------------------
 
@@ -4440,6 +4517,7 @@ public partial class ViewportView : UserControl
         {
             active.FlangeHolder.LocalTransform = _toolMeshMatrix;
             _currentToolNode = active.FlangeHolder;
+            _pendingSpindleCylinderRefresh = true;
         }
 
         RefreshMultiToolSelectability();
@@ -13373,6 +13451,7 @@ public partial class ViewportView : UserControl
                         && vm?.ActiveCell?.RobotRail is not null;
         float homeE1 = (float)robot.E1;
         var cellForE1 = vm?.ActiveCell;
+        var cellJoints = cellForE1?.Robot.Joints is { Count: >= 6 } j ? j : null;
         var homeWorld = cellForE1 is not null
             ? new NVec3(cellForE1.Robot.WorldPosition.X, cellForE1.Robot.WorldPosition.Y, cellForE1.Robot.WorldPosition.Z)
             : new NVec3(robroot.X, robroot.Y, robroot.Z);
@@ -13487,9 +13566,11 @@ public partial class ViewportView : UserControl
                         {
                             if (cts.IsCancellationRequested) return;
                             var sol = solver.Solve(targets[i], chunkSeed, targetRots[i], maxIterations: 40);
-                            result[i]      = sol is not null;
-                            ikSolutions[i] = sol;
-                            if (sol is not null) chunkSeed = sol;
+                            bool inEnv = sol is not null &&
+                                (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
+                            result[i]      = inEnv;
+                            ikSolutions[i] = inEnv ? sol : null;
+                            if (inEnv) chunkSeed = sol!;
                         }
                     });
             }
@@ -13604,8 +13685,10 @@ public partial class ViewportView : UserControl
                                 var rot = solver.TargetRotFromGlobalOrientation(
                                     normals[i], offA, offB, offC + yawByMove[i]);
                                 var sol = solver.Solve(targets[i], chunkSeed, rot, maxIterations: 40);
-                                result[i] = sol is not null;
-                                if (sol is not null) { solutions[i] = sol; chunkSeed = sol; }
+                                bool inEnv = sol is not null &&
+                                    (cellJoints is null || JointLimitEnvelope.JointsInside(sol, cellJoints));
+                                result[i] = inEnv;
+                                if (inEnv) { solutions[i] = sol!; chunkSeed = sol!; }
                                 singularity[i] = MathF.Abs(solutions[i][4]) < 5f;
                             }
                         }
@@ -16332,7 +16415,7 @@ public partial class ViewportView : UserControl
         var msg = new TextBlock
         {
             Text = $"⚠ This toolpath has {vi.Singular:N0} singularity-risk moves and " +
-                   $"{vi.Unreachable:N0} unreachable moves{zRange}.\n\n" +
+                   $"{vi.Unreachable:N0} unreachable moves{zRange} (outside the 5% software-limit envelope or workspace).\n\n" +
                    "The robot is likely to fault mid-print. " +
                    "Scrub the timeline to the purple/red markers to inspect, or adjust the toolhead " +
                    "orientation before exporting.",
