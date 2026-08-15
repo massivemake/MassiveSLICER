@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-15** (KRL import E1 rail + Print Bed 0,0,0)
+Last updated: **2026-08-15** (save.ps1: no stash on SMB)
 
 ---
 
@@ -484,6 +484,12 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-15 — save.ps1: no stash on SMB
+
+- Stash failed on shop PC: `unable to create file save.sh: File exists` while resetting the index (SMB).
+- Flow is now **commit → pull → push** (no stash). Leftover `save.* auto-stash` is cleared.
+- Every git call still uses `-c safe.directory=*`.
 
 ### 2026-08-15 — save.sh is SMB-safe (no more 700-file chmod dumps)
 
