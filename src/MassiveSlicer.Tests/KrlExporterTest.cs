@@ -420,6 +420,41 @@ public sealed class KrlExporterTest
     }
 
     [Fact]
+    public void Import_uses_print_bed_surface_not_kuka_base_z()
+    {
+        // LFAM 1: visual plate Z=70, KUKA BASE Z = robroot 500 + base 278 = 778.
+        var robroot = new Vector3(0, 0, 500);
+        var baseData = new Vector3(1475.5131f, -609.29846f, 278f);
+        const float bedZ = 70f;
+
+        var off = KrlExporter.ImportWorldOffset(robroot, baseData, bedZ);
+        Assert.Equal(1475.5131f, off.X, 3);
+        Assert.Equal(-609.29846f, off.Y, 3);
+        Assert.Equal(70f, off.Z, 3); // print bed, not 778
+
+        // Round-trip: a first-layer world point exports to KRL Z≈3 and re-imports to the plate.
+        var world = new Vector3(1500f, 900f, 73f);
+        var krl = KrlExporter.WorldToBase(world, robroot, baseData, bedZ);
+        Assert.InRange(krl.Z, 2.5f, 3.5f);
+        var back = KrlExporter.BaseToWorld(krl, robroot, baseData, bedZ);
+        Assert.Equal(world.X, back.X, 3);
+        Assert.Equal(world.Y, back.Y, 3);
+        Assert.Equal(world.Z, back.Z, 3);
+    }
+
+    [Fact]
+    public void Import_lfam3_bed_matches_robroot_plus_base()
+    {
+        var robroot = new Vector3(0, 0, 1000);
+        var baseData = new Vector3(2135.45f, -52.54f, -83.69f);
+        const float bedZ = 916.31f;
+        var off = KrlExporter.ImportWorldOffset(robroot, baseData, bedZ);
+        Assert.Equal(2135.45f, off.X, 2);
+        Assert.Equal(-52.54f, off.Y, 2);
+        Assert.Equal(916.31f, off.Z, 2);
+    }
+
+    [Fact]
     public void Export_lfam1_home_ptp_includes_e1_rail_position()
     {
         var tp = new Toolpath();

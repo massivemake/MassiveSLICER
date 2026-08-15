@@ -3514,11 +3514,9 @@ public sealed class MainWindowViewModel : ViewModelBase
         Console.Log("[workspace] New workspace — scene cleared, cell reloaded.");
     }
 
-    /// <summary>Imports a model file into the scene and logs material diagnostics.</summary>
     /// <summary>
     /// Imports a KUKA KRL (.src) program's Cartesian motion as a scrubbable toolpath in the outliner.
-    /// Positions are placed in world space using the active cell's robroot + base offset (inverse of
-    /// the exporter). Logs success/failure to the console.
+    /// <c>{X 0, Y 0, Z 0}</c> is the cell <c>bed.origin</c> (Print Bed 0,0,0) — not ROBROOT + BASE_DATA.
     /// </summary>
     public bool ImportKrlToolpath(string path)
     {
@@ -3534,12 +3532,13 @@ public sealed class MainWindowViewModel : ViewModelBase
             var text = System.IO.File.ReadAllText(path);
             var off  = System.Numerics.Vector3.Zero;
             if (Viewport.ActiveCell is { } cell)
-                off = new System.Numerics.Vector3(
-                    cell.Robot.WorldPosition.X + cell.Bed.BaseData.X,
-                    cell.Robot.WorldPosition.Y + cell.Bed.BaseData.Y,
-                    cell.Robot.WorldPosition.Z + cell.Bed.BaseData.Z);
+            {
+                // Drawn Print Bed 0,0,0 (blue BASE marker), not ROBROOT+BASE Z.
+                var m = cell.Bed.BaseMarkerWorld(cell.Robot.WorldPosition);
+                off = new System.Numerics.Vector3(m.X, m.Y, m.Z);
+            }
             else
-                Console.Log("[krl] No active cell â€” placing the toolpath in raw KRL base coordinates.");
+                Console.Log("[krl] No active cell — placing the toolpath in raw KRL base coordinates.");
 
             var tp = KrlToolpathParser.Parse(text, off, out int moves);
             if (moves == 0)

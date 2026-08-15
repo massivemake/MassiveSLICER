@@ -56,7 +56,11 @@ logs/
 *.tmp
 *.bak
 *.swp
+*.orig
 **/__pycache__/
+
+# Accidental drop of the Hermes installer into this repo
+/install.sh
 
 # Published executables
 *.exe

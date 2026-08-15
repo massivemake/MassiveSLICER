@@ -1996,6 +1996,8 @@ public partial class ViewportView : UserControl
             {
                 uploadedPending = true;
                 UploadToolpathEntry(entry, addToScene: true);
+                if (KrlToolpathParser.HasProgrammedE1(entry.Toolpath))
+                    _e1MmByNode[entry.Node] = KrlToolpathParser.E1PerMove(entry.Toolpath);
                 // Keep the current selection (usually the model) — auto-selecting the
                 // toolpath would flip the sidebar to the Toolpath view mid-workflow.
                 var adoptNode = entry.Node;
@@ -2024,6 +2026,7 @@ public partial class ViewportView : UserControl
                             adoptTp,
                             preservePosition: canPreserve);
                         vmAdopt.IsScrubSessionActive = true;
+                        ValidateToolpathAsync(adoptNode, adoptTp);
                     }
                     UpdateFocusOverlay();
                 });
@@ -13269,6 +13272,8 @@ public partial class ViewportView : UserControl
         }
 
         // Fallback live IK: target relative to planned (or live) rail pose.
+        bool programmedScrubE1 = _toolpathByNode.TryGetValue(scrubNode, out var tpE1Flag)
+                                 && KrlToolpathParser.HasProgrammedE1(tpE1Flag);
         float scrubE1 = (float)robot.E1;
         if (_e1MmByNode.TryGetValue(scrubNode, out var e1Arr) && e1Arr.Length > 0)
             scrubE1 = e1Arr[Math.Clamp(moveIdx, 0, e1Arr.Length - 1)];
@@ -13291,7 +13296,7 @@ public partial class ViewportView : UserControl
         var cell = vm.ActiveCell;
         TkVector3 targetRobroot;
         if (robot.IsRobotRail && cell?.RobotRail is { } rail
-            && vm.AdditiveSettings is { E1MotionEnabled: true })
+            && (vm.AdditiveSettings is { E1MotionEnabled: true } || programmedScrubE1))
         {
             var homeWorld = new NVec3(
                 cell.Robot.WorldPosition.X, cell.Robot.WorldPosition.Y, cell.Robot.WorldPosition.Z);
@@ -13326,7 +13331,8 @@ public partial class ViewportView : UserControl
         _scrubIkCts = new CancellationTokenSource();
         var cts = _scrubIkCts;
         float e1Capture = scrubE1;
-        bool setE1 = robot.IsRobotRail && vm.AdditiveSettings is { E1MotionEnabled: true };
+        bool setE1 = robot.IsRobotRail
+                     && (vm.AdditiveSettings is { E1MotionEnabled: true } || programmedScrubE1);
 
         Task.Run(() =>
         {
@@ -13446,8 +13452,9 @@ public partial class ViewportView : UserControl
             (float)robot.A1, (float)robot.A2, (float)robot.A3,
             (float)robot.A4, (float)robot.A5, (float)robot.A6,
         };
-        // Plan E1 (reachability-aware) before IK when rail motion is enabled.
-        bool e1Motion = addSettings is { E1MotionEnabled: true }
+        // Plan E1 before IK when rail motion is enabled, or replay E1 baked into an imported .src.
+        bool programmedE1 = KrlToolpathParser.HasProgrammedE1(toolpath);
+        bool e1Motion = (addSettings is { E1MotionEnabled: true } || programmedE1)
                         && vm?.ActiveCell?.RobotRail is not null;
         float homeE1 = (float)robot.E1;
         var cellForE1 = vm?.ActiveCell;
@@ -13471,8 +13478,12 @@ public partial class ViewportView : UserControl
             foreach (var layer in toolpath.Layers) total += layer.Moves.Count;
             if (total == 0) return;
 
-            // Bake planned E1 onto moves (workspace envelope + mid-reach scoring).
-            if (e1Motion && cellForE1?.RobotRail is { } railPlan && addSettings is not null)
+            // Bake planned E1 onto moves unless the toolpath already carries program E1 (imported KRL).
+            if (programmedE1)
+            {
+                // SRC E1 is authoritative — do not replan or wipe.
+            }
+            else if (e1Motion && cellForE1?.RobotRail is { } railPlan && addSettings is not null)
             {
                 PlanRailE1ForExport(toolpath, cellForE1, addSettings, origin, wt, homeE1);
             }
@@ -14048,7 +14059,7 @@ public partial class ViewportView : UserControl
         robot.A4 = Math.Round(angles[3], 2);
         robot.A5 = Math.Round(angles[4], 2);
         robot.A6 = Math.Round(angles[5], 2);
-        if (e1Mm is { } e && robot.IsRobotRail)
+        if (e1Mm is { } e && !float.IsNaN(e) && robot.IsRobotRail)
             robot.E1 = Math.Round(e, 2);
         GlCanvas.RequestNextFrameRendering();
     }
