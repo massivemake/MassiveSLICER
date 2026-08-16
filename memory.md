@@ -640,6 +640,40 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 - First pass scrolled on a single Loaded post, before the expander body measured — Extent was still collapsed, so ROBOT stayed put.
 - Now retries across layout/render (up to 10 frames) and targets `LeftPanelHost`, not the ROBOT card’s inner disabled ScrollViewer.
 
+### 2026-08-15 — Imported KRL: drop it to the plate, and drag-drop it in
+
+**Drop to Plate works on an imported toolpath.** Two separate blockers: the button was hidden
+whenever a toolpath was selected (`IsVisible="{Binding !IsToolpathSelected}"`), and
+`DropToPlate` bailed on `LayFlatMinZ` returning `MaxValue` — that walks mesh vertices, and a
+KRL program has no mesh, only move endpoints. `NodeMinZWithToolpaths` now measures both.
+Lay on Face stays mesh-only and stays hidden: it needs a face to rest on, a drop only needs a
+lowest point. Travels count — one dipping below the extrusions still hits the bed.
+
+**Trap, and it shipped a broken build before being caught: a registered toolpath keeps
+ABSOLUTE points, but `SceneRenderer` sets the node transform to the toolpath CENTROID and both
+renderer and exporter draw `(point − origin) × world`.** Transforming the raw point
+double-counts the centroid. The first version did exactly that, so the drop overshot by the
+centroid height and buried the part under the bed. Use `_toolpathOriginByNode` — the same
+origin the exporter passes as `NodeOrigin`.
+
+*Why the tests missed it:* all five used an identity transform and a zero origin, where the
+bug is invisible. Added two that model how the scene really holds a toolpath. **A fixture that
+cannot express the bug is not coverage.**
+
+**Dropping a `.src` onto the app imports it.** Both targets were mesh-only: the viewport
+filtered on `ImportHelper.IsSupported` and discarded it silently, while the left panel's drop
+zone handed it to the mesh loader and logged an import failure it never deserved. Both now
+route `.src`/`.krl` to `ImportKrlToolpath`, the same call the menu item makes.
+
+**Related, landed on main separately (`374b534`):** KRL import now offsets by the drawn Print
+Bed 0,0,0 (`Bed.BaseMarkerWorld`) rather than ROBROOT + BASE_DATA — the actual reason imported
+programs floated metres in the air — plus E1 rail replay for programs carrying baked E1
+(`KrlToolpathParser.HasProgrammedE1`; SRC E1 is authoritative and is never replanned).
+
+**Safe to move a toolpath:** `KrlExporter` applies `NodeWorldTransform` to every point
+(`KrlExporter.cs` ~1054), so a drop shifts exported coordinates, not just the display. Verified
+before building — a version that moved only the render would have printed in the old place.
+
 ### 2026-08-15 — save.ps1: no stash on SMB
 
 - Stash failed on shop PC: `unable to create file save.sh: File exists` while resetting the index (SMB).

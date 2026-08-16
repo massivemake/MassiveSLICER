@@ -165,6 +165,7 @@ public sealed class MainWindowViewModel : ViewModelBase
         Viewport.Erp.FindWorkspaceFiles = FindErpWorkspaceFiles;
 
         Viewport.Erp.OpenWorkspaceFile  = p => OpenWorkspace(p);
+        Viewport.ImportKrlFile          = p => ImportKrlToolpath(p);
 
         Viewport.Erp.BuildSlicePayloadAsync = BuildErpSlicePayloadAsync;
 

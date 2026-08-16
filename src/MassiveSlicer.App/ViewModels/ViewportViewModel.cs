@@ -6126,6 +6126,13 @@ public sealed partial class ViewportViewModel : ViewModelBase
     internal Action<int>? OnToolChangeScrubRequested { get; set; }
 
     /// <summary>Triggers a planar slice using the current additive settings.</summary>
+    /// <summary>
+    /// Imports a KRL .src as a toolpath. Wired by <c>MainWindowViewModel</c> to the same
+    /// <c>ImportKrlToolpath</c> the Import KRL menu item uses, so a dropped file and a picked
+    /// file take an identical path.
+    /// </summary>
+    public Action<string>? ImportKrlFile { get; set; }
+
     public RelayCommand SliceCommand { get; }
 
     /// <summary>Generates a relief-milling toolpath from the subtractive settings' heightmap.</summary>
