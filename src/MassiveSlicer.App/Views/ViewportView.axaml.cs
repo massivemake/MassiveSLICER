@@ -4572,6 +4572,13 @@ public partial class ViewportView : UserControl
             return;
         }
 
+        // A dropped KRL program is a toolpath, not a mesh, so it never matched IsSupported and
+        // the drop silently did nothing — the file had to be fetched again through Import KRL.
+        var krl = paths.Where(p => p.EndsWith(".src", StringComparison.OrdinalIgnoreCase)
+                               || p.EndsWith(".krl", StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var k in krl)
+            vm.ImportKrlFile?.Invoke(k);
+
         var files = paths.Where(ImportHelper.IsSupported).ToList();
 
         if (files.Count == 0) return;
