@@ -10,7 +10,7 @@
 - Mill tool library: `%LOCALAPPDATA%\MassiveSlicer\mill_tools.json` (v3 schema)
 - STEP converter venv: `%APPDATA%\MassiveSlicer\step-env` (`numpy` + `cascadio`)
 
-Last updated: **2026-08-15** (5% software-limit envelope; LFAM 3 T12; shop path Z:\Research\LFAM\MassiveSLICER)
+Last updated: **2026-08-15** (save.ps1: no stash on SMB)
 
 ---
 
@@ -484,6 +484,35 @@ The June-2026 snapshot that used to live here is in `docs/memory-archive.md`.
 ---
 
 ## Session changelog (reverse chronological)
+
+### 2026-08-15 — save.ps1: no stash on SMB
+
+- Stash failed on shop PC: `unable to create file save.sh: File exists` while resetting the index (SMB).
+- Flow is now **commit → pull → push** (no stash). Leftover `save.* auto-stash` is cleared.
+- Every git call still uses `-c safe.directory=*`.
+
+### 2026-08-15 — save.sh is SMB-safe (no more 700-file chmod dumps)
+
+- `core.filemode=false`, `core.trustctime=false`. Stale `index.lock` dropped if no git process.
+- After `git add -A`, chmod-only (`numstat 0/0`) is unstaged. `/install.sh` (Hermes installer) is gitignored.
+- Tree is otherwise clean: only real KRL-import / sidebar work remains until the next save.
+
+### 2026-08-15 — KRL import replays LFAM 1 E1 rail
+
+- Parser now keeps inline `E1` on each LIN/PTP (holds last value when a later frame omits it).
+- Imported E1 is authoritative: validation does **not** wipe or replan it. Rail moves on scrub/play even when Additive **E1 motion** is off.
+- Import populates `_e1MmByNode` and kicks reachability so IK is rail-relative.
+
+### 2026-08-15 — KRL import uses Print Bed 0,0,0
+
+- Offset is the drawn **BASE / Print Bed 0,0,0 marker** (`Bed.BaseMarkerWorld` = ROBROOT XY + `baseData` XY, Z = `bed.origin.Z`).
+- Do **not** parent the path under the bed node: toolpaths are drawn with `LocalTransform * mvp` (not world), so parenting put LFAM 1 imports on the rail at Z≈0, below the plate.
+- LFAM 1 marker `(1475.51, -609.30, 70)`. LFAM 3 `(2135.45, -52.54, 916.31)`.
+
+### 2026-08-15 — Left sidebar: expand a bottom card scrolls it to the top
+
+- Expanding a collapsed left **StepCard** (ROBOT, VIEW, …) scrolls `LeftPanelHost` so that card’s header sits at the top of the column.
+- Skips PersistExpander restore-on-load so startup doesn’t jump.
 
 ### 2026-08-15 — 5% software-limit envelope on sim / IK / export
 

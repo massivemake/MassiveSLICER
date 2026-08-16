@@ -56,7 +56,14 @@ logs/
 *.tmp
 *.bak
 *.swp
+*.orig
 **/__pycache__/
+
+# Accidental drop of the Hermes installer into this repo
+/install.sh
+
+# SMB delete leftovers (Synology / macOS smbfs)
+.smbdelete*
 
 # Published executables
 *.exe

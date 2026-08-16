@@ -1047,15 +1047,39 @@ public static class KrlExporter
 
     // -- Coordinate transform --------------------------------------------------
 
+    /// <summary>
+    /// World-space point that KRL <c>{X 0, Y 0, Z 0}</c> maps to: BASE XY on the
+    /// visual print-bed surface (<paramref name="sliceBedWorldZ"/>), not KUKA BASE Z
+    /// when those differ (LFAM 1). Inverse of <see cref="WorldToBase"/>.
+    /// </summary>
+    public static Vector3 ImportWorldOffset(Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+        => BaseToWorld(Vector3.Zero, robroot, baseData, sliceBedWorldZ);
+
+    /// <summary>KRL BASE frame → scene/world. Inverse of <see cref="WorldToBase"/>.</summary>
+    public static Vector3 BaseToWorld(Vector3 krl, Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+    {
+        var world = krl + robroot + baseData;
+        float kukaBedZ = robroot.Z + baseData.Z;
+        if (!float.IsNaN(sliceBedWorldZ) && MathF.Abs(sliceBedWorldZ - kukaBedZ) > 0.5f)
+            world.Z -= kukaBedZ - sliceBedWorldZ;
+        return world;
+    }
+
+    /// <summary>Scene/world → KRL BASE frame (zero BASE rotation).</summary>
+    public static Vector3 WorldToBase(Vector3 world, Vector3 robroot, Vector3 baseData, float sliceBedWorldZ)
+    {
+        float kukaBedZ = robroot.Z + baseData.Z;
+        if (!float.IsNaN(sliceBedWorldZ) && MathF.Abs(sliceBedWorldZ - kukaBedZ) > 0.5f)
+            world.Z += kukaBedZ - sliceBedWorldZ;
+        return world - robroot - baseData;
+    }
+
     private static Vector3 ToBase(Vector3 stored, KrlExportSettings s)
     {
         // stored positions are in original slice world space;
         // (stored - origin) * wt maps them to current world space.
         var world = Vector3.Transform(stored - s.NodeOrigin, s.NodeWorldTransform);
-        float kukaBedZ = s.RobrootWorldPos.Z + s.BaseDataOffset.Z;
-        if (!float.IsNaN(s.SliceBedWorldZ) && MathF.Abs(s.SliceBedWorldZ - kukaBedZ) > 0.5f)
-            world.Z += kukaBedZ - s.SliceBedWorldZ;
-        return world - s.RobrootWorldPos - s.BaseDataOffset;
+        return WorldToBase(world, s.RobrootWorldPos, s.BaseDataOffset, s.SliceBedWorldZ);
     }
 
     // -- ABC orientation -------------------------------------------------------
